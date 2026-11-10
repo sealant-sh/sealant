@@ -114,6 +114,28 @@ describe("fake Boat API", () => {
     });
   });
 
+  it("can accept a DELETE and drop its reply; a second DELETE answers the same operation", async () => {
+    const { call } = await start();
+    const id = (await call("/sandboxes", "POST", input, { "Idempotency-Key": "l" })).body.sandbox
+      .id;
+    await idle(call, id);
+    const fake = boat;
+    if (fake === undefined) throw new Error("no fake Boat");
+    let lost = 0;
+    fake.faults.deleteReply = () => (lost++ === 0 ? "lose" : undefined);
+    await expect(
+      call(`/sandboxes/${id}`, "DELETE", undefined, { "X-Ascii-Confirm-Delete": id }),
+    ).rejects.toThrow();
+    const [started] = fake.events.filter((event) => event.kind === "delete");
+    expect(started).toMatchObject({ sandboxId: id });
+    const again = await call(`/sandboxes/${id}`, "DELETE", undefined, {
+      "X-Ascii-Confirm-Delete": id,
+    });
+    expect(again.status).toBe(202);
+    expect(again.body.operation.id).toBe(started?.detail);
+    expect(fake.events.filter((event) => event.kind === "delete")).toHaveLength(1);
+  });
+
   it("requires resume's body fields", async () => {
     const { call } = await start();
     const id = (await call("/sandboxes", "POST", input, { "Idempotency-Key": "r" })).body.sandbox

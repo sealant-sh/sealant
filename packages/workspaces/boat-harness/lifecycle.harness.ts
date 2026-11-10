@@ -12,7 +12,9 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { agentBrieflyUnreachable, daemonKilled } from "./daemon-scenario.js";
 import { DEFECTS } from "./defects.js";
+import { deleteReplyLost, deleteReplyLostWhileDeleting } from "./deletion-scenario.js";
 import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
 import { docker } from "./docker.js";
 import { scenarios } from "./faults.js";
@@ -315,6 +317,25 @@ describe("workspaces without resources", () => {
   );
   // Restarts the worker without its gateway, and with it again when it ends.
   scenario("worker without a resource gateway", undefined, () => gatewaylessWorker(stack, project));
+});
+
+// A ready session's daemon watched through `inspect`, and a DELETE whose reply is lost (#598).
+describe("a ready session's daemon and its deletion", () => {
+  scenario("agent unreachable, then 503, for a few polls: the session goes on", undefined, () =>
+    agentBrieflyUnreachable(stack, project),
+  );
+  scenario(
+    "sealantd killed in a ready session: failed, FINAL, one DELETE, edit restored",
+    undefined,
+    () => daemonKilled(stack, project),
+    40 * 60_000,
+  );
+  scenario("DELETE reply lost while the deletion runs: one operation, confirmed", undefined, () =>
+    deleteReplyLostWhileDeleting(stack, project),
+  );
+  scenario("DELETE reply lost, VM gone by the next pass: one operation", undefined, () =>
+    deleteReplyLost(stack, project),
+  );
 });
 
 // Last, after every other scenario's allocation rows: a link must reach a live session's gateway

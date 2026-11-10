@@ -103,6 +103,11 @@ export interface FakeBoatFaults {
   /** Runs before the hosted proxy forwards a request, e.g. to break the host side first. */
   beforeProxy?: (path: string, method: string, sandbox: FakeSandbox) => Promise<void>;
   deletion?: (sandbox: FakeSandbox) => "stuck" | undefined;
+  /**
+   * `lose`: Boat accepts this DELETE (the deletion starts, or the one under way goes on), then the
+   * HTTP reply is dropped, so Core never learns the operation from it.
+   */
+  deleteReply?: (sandbox: FakeSandbox) => "lose" | undefined;
   snapshot?: (name: string) => "failed" | undefined;
 }
 
@@ -447,11 +452,15 @@ export class FakeBoat {
         if (method === "DELETE") {
           if (request.headers["x-ascii-confirm-delete"] !== id)
             throw new HttpError(400, "delete_confirmation_required");
+          const sandbox = this.#sandbox(id);
           // Recorded: Boat accepts a deletion with 202 and an operation to poll.
-          return send(202, {
-            ok: true,
-            operation: this.#delete(this.#sandbox(id)),
-          });
+          const operation = this.#delete(sandbox);
+          if (this.faults.deleteReply?.(sandbox) === "lose") {
+            this.#record("fault:delete-reply-lost", sandbox.id, operation.id);
+            response.destroy();
+            return;
+          }
+          return send(202, { ok: true, operation });
         }
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/commands$/)) && method === "POST") {

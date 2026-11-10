@@ -390,6 +390,19 @@ export const cleanStop = async (
   await run.workspace.stop();
 };
 
+/** What the invariants read of the stack: its database and the fake Boat's VMs and events. */
+type InvariantStack = Pick<HarnessStack, "query"> & {
+  readonly boat: {
+    readonly sandboxes: ReadonlyMap<string, Pick<FakeSandbox, "id" | "labels">>;
+    readonly events: readonly FakeBoatEvent[];
+  };
+};
+
+/** What the invariants read of a launch. */
+type InvariantRun = Pick<Launch, "runId" | "startedAt"> & {
+  readonly capture: { readonly state: () => Promise<Pick<CaptureState, "registers">> };
+};
+
 /**
  * What no Boat change may break, checked for every launch after every scenario (no marker excuses
  * them):
@@ -399,15 +412,8 @@ export const cleanStop = async (
  *    delete, and the capture channel answered that FINAL's head (if it names one) before it too.
  */
 export const assertInvariants = async (
-  stack: Pick<HarnessStack, "query"> & {
-    readonly boat: {
-      readonly sandboxes: ReadonlyMap<string, Pick<FakeSandbox, "id" | "labels">>;
-      readonly events: readonly FakeBoatEvent[];
-    };
-  },
-  run: Pick<Launch, "runId" | "startedAt"> & {
-    readonly capture: { readonly state: () => Promise<Pick<CaptureState, "registers">> };
-  },
+  stack: InvariantStack,
+  run: InvariantRun,
   options: { readonly discarded: boolean },
 ): Promise<FinalCheck> => {
   const vms = [...stack.boat.sandboxes.values()].filter(
@@ -423,12 +429,32 @@ export const assertInvariants = async (
     return { final: "skipped", reason: `stop_reason ${JSON.stringify(view.stop_reason)}` };
   if (view.error_code !== null)
     return { final: "skipped", reason: `error_code ${JSON.stringify(view.error_code)}` };
-  const ids = new Set(vms.map((vm) => vm.id));
+  const checked = await assertFinalBeforeDelete(stack, run, "was stopped cleanly");
+  return checked === "checked"
+    ? { final: "checked" }
+    : { final: "skipped", reason: "Boat was never asked to delete its VM" };
+};
+
+/**
+ * A run's FINAL was captured before the fake Boat was first asked to delete one of its VMs: Core
+ * recorded the FINAL drain complete before the delete, and the capture channel answered that
+ * FINAL's head (if it names one) before it too. `no-delete` if Boat was never asked; throws, naming
+ * `how` the run ended, otherwise.
+ */
+export const assertFinalBeforeDelete = async (
+  stack: InvariantStack,
+  run: InvariantRun,
+  how: string,
+): Promise<"checked" | "no-delete"> => {
+  const ids = new Set(
+    [...stack.boat.sandboxes.values()]
+      .filter((sandbox) => sandbox.labels["sealant-run"] === run.runId)
+      .map((vm) => vm.id),
+  );
   const deletedAt = stack.boat.events.find(
     (event) => event.kind === "delete" && ids.has(event.sandboxId ?? ""),
   )?.at;
-  if (deletedAt === undefined)
-    return { final: "skipped", reason: "Boat was never asked to delete its VM" };
+  if (deletedAt === undefined) return "no-delete";
   // Core recorded the FINAL drain complete before it asked Boat to delete; when that FINAL names a
   // head, the channel answered that register before the delete too. Heads only grow on a session,
   // so the number also covers a head a resumed run restored and left unchanged (no new register).
@@ -454,9 +480,9 @@ export const assertInvariants = async (
     registers.some((register) => register.n === status?.head_n && register.at <= deletedAt);
   if (!completeBeforeDelete || !headBeforeDelete)
     throw new Error(
-      `invariant broken (no marker excuses this): run ${run.runId} was stopped cleanly, but no FINAL was captured before Boat was asked to delete ${[...ids].join(", ")} at ${new Date(deletedAt).toISOString()}; Core's drain ${JSON.stringify(status ?? null)}; registers ${JSON.stringify(registers.filter((register) => register.at >= run.startedAt))}`,
+      `invariant broken (no marker excuses this): run ${run.runId} ${how}, but no FINAL was captured before Boat was asked to delete ${[...ids].join(", ")} at ${new Date(deletedAt).toISOString()}; Core's drain ${JSON.stringify(status ?? null)}; registers ${JSON.stringify(registers.filter((register) => register.at >= run.startedAt))}`,
     );
-  return { final: "checked" };
+  return "checked";
 };
 
 /** The guest's answers through the hosted proxy for a run's VMs, newest last. */
