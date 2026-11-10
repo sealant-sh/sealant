@@ -21,10 +21,6 @@ import { boatExecutions } from "../schema/boat-executions.js";
 import { boatObservations } from "../schema/boat-observations.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 import { workspaceCaptureDrains } from "../schema/workspace-build-jobs.js";
-import {
-  WorkspaceCaptureDrainRepo,
-  WorkspaceCaptureDrainRepoLive,
-} from "./workspace-capture-drains.js";
 
 /** Store errors never include SQL, ciphertext or serialized key material. */
 export class BoatTunnelStoreError extends Error {
@@ -135,13 +131,11 @@ const update = (
 const uuid = (value: string) =>
   parse(() => boatTunnelReservationSchema.shape.closeId.unwrap().parse(value));
 
-type Dependencies = SealantDB | WorkspaceCaptureDrainRepo | Scope.Scope;
+type Dependencies = SealantDB | Scope.Scope;
 const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effect.gen(
   function* () {
     const scope = yield* Effect.scope;
     const db = yield* SealantDB;
-    const canonical = yield* WorkspaceCaptureDrainRepo;
-    const custody = yield* canonical.preservation;
     const get = Effect.fn("BoatTunnelRepo.get")(function* (
       id: string,
       connection: Pick<DB, "select"> = db,
@@ -318,13 +312,6 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, before.binding.target.runId))
                 .for("update");
-              const parking =
-                root?.custodyContract === 3 &&
-                (yield* custody.tunnelRemovalAuthorized(
-                  before.binding.target,
-                  operation.id,
-                  false,
-                ));
               const saved = yield* get(before.binding.target.runtimeInstanceId, tx);
               if (
                 saved === undefined ||
@@ -332,9 +319,8 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                 saved.closeId !== before.closeId ||
                 before.closeId === undefined ||
                 operation.targetId !== before.binding.target.sandboxId ||
-                // Canonical deletion, parking custody, or the owner's discard authorizes removal.
+                // Canonical deletion or the owner's discard authorizes removal.
                 (!["deleting-issued", "deleted"].includes(root?.deletionState ?? "") &&
-                  !parking &&
                   (root?.discardRequestedAt ?? null) === null) ||
                 (saved.updates?.length ?? 0) !== 0 ||
                 (saved.removal !== undefined && saved.removal.id !== removal.id)
@@ -367,10 +353,6 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
               const execution = yield* parse(() =>
                 boatExecutionRecordSchema.parse(executed?.record),
               );
-              const [root] = yield* tx
-                .select()
-                .from(workspaceCaptureDrains)
-                .where(eq(workspaceCaptureDrains.runId, target.runId));
               if (
                 allocation.phase !== "deleted" ||
                 allocation.removal === undefined ||
@@ -379,7 +361,6 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                 !isDeepStrictEqual(allocation.target, target) ||
                 execution.phase !== "aborted" ||
                 !isDeepStrictEqual(execution.target, target) ||
-                root?.custodyContract === 3 ||
                 before.closeId === undefined ||
                 (before.updates?.length ?? 0) !== 0
               )
@@ -416,15 +397,10 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                 .select()
                 .from(boatObservations)
                 .where(eq(boatObservations.runtimeInstanceId, target.runtimeInstanceId));
-              const [root] = yield* tx
-                .select()
-                .from(workspaceCaptureDrains)
-                .where(eq(workspaceCaptureDrains.runId, target.runId));
               if (
                 observed?.presence !== "absent" ||
                 observed.sandboxId !== target.sandboxId ||
                 observed.deploymentId !== target.deploymentId ||
-                root?.custodyContract === 3 ||
                 before.closeId === undefined ||
                 (before.updates?.length ?? 0) !== 0
               )
@@ -468,13 +444,6 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                   eq(boatExecutions.runtimeInstanceId, before.binding.target.runtimeInstanceId),
                 );
               const execution = yield* parse(() => boatExecutionRecordSchema.parse(row?.record));
-              const parking =
-                root?.custodyContract === 3 &&
-                (yield* custody.tunnelRemovalAuthorized(
-                  before.binding.target,
-                  before.removal?.id ?? "",
-                  true,
-                ));
               const saved = yield* get(before.binding.target.runtimeInstanceId, tx);
               if (
                 row === undefined ||
@@ -482,7 +451,7 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                 execution.target.sandboxId !== row.sandboxId ||
                 execution.target.deploymentId !== row.deploymentId ||
                 execution.target.diskLineage !== row.diskLineage ||
-                (root?.deletionState !== "deleted" && !parking) ||
+                root?.deletionState !== "deleted" ||
                 execution.phase !== "held" ||
                 !isDeepStrictEqual(execution.target, before.binding.target) ||
                 before.closeId === undefined ||
@@ -641,4 +610,4 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
 export const boatTunnelRepoLayer: Layer.Layer<BoatTunnelRepo, never, SealantDB> = Layer.effect(
   BoatTunnelRepo,
   make,
-).pipe(Layer.provide(WorkspaceCaptureDrainRepoLive));
+);

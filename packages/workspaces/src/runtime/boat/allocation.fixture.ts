@@ -1,6 +1,5 @@
 import {
   constants,
-  createHash,
   createPrivateKey,
   createPublicKey,
   publicEncrypt,
@@ -31,27 +30,6 @@ export class ProviderFixture {
   state: BoatSandbox["state"] = "running";
   hydrated = true;
   bootId = randomUUID();
-  childBootId = randomUUID();
-  parking = false;
-  saveLost = false;
-  recoveryCreateLost = false;
-  corruptCapsule = false;
-  stopped = false;
-  saved:
-    | {
-        name: string;
-        sourceSandboxId: string;
-        snapshotId: string;
-        status: "ready";
-        createdAt: string;
-      }
-    | undefined;
-  readonly savedRecords = new Map<string, NonNullable<ProviderFixture["saved"]>>();
-  capsule = Buffer.from("faithful immutable capsule HTTP boundary");
-  saves = 0;
-  retirements = 0;
-  retirementLost = false;
-  childLabels: Record<string, string> | undefined;
   sandboxMissing = false;
   beforeSandboxRead: () => Promise<void> = async () => {};
   deleteCalls = 0;
@@ -101,8 +79,6 @@ export class ProviderFixture {
       snapshots: true,
       monitoring: false,
       hydrated: this.hydrated,
-      ...(this.stopped ? { stop: { status: "completed" } } : {}),
-      ...(id === "bx_3456789a" ? { labels: this.childLabels } : {}),
     };
   }
   async serve(request: http.IncomingMessage, response: http.ServerResponse) {
@@ -117,15 +93,6 @@ export class ProviderFixture {
       const body = z.record(z.string(), z.unknown()).parse(JSON.parse(raw));
       const header = request.headers["idempotency-key"];
       this.creates.push({ key: typeof header === "string" ? header : undefined, body });
-      if (this.parking && this.creates.length > 1) {
-        this.childLabels = z.record(z.string(), z.string()).parse(body.labels);
-        if (this.recoveryCreateLost) {
-          response.destroy();
-          return;
-        }
-        send({ ok: true, sandbox: this.sandbox("bx_3456789a") });
-        return;
-      }
       if (!this.noAllocation) this.labels = z.record(z.string(), z.string()).parse(body.labels);
       await this.beforeCreateReply();
       if (this.lostCreate) {
@@ -147,78 +114,6 @@ export class ProviderFixture {
       });
       return;
     }
-    if (this.parking) {
-      if (url.pathname === "/api/v1/saved-snapshots") {
-        if (request.method === "POST") {
-          const body = z.object({ name: z.string(), sandboxId: z.string() }).parse(JSON.parse(raw));
-          this.saves++;
-          this.saved = {
-            name: body.name,
-            sourceSandboxId: body.sandboxId,
-            snapshotId: "immutable-parking-file-" + this.saves,
-            status: "ready",
-            createdAt: "2026-11-08T00:00:00Z",
-          };
-          this.savedRecords.set(this.saved.name, this.saved);
-          if (this.saveLost) {
-            response.destroy();
-            return;
-          }
-          send({ ok: true, snapshot: this.saved });
-        } else
-          send({
-            ok: true,
-            snapshots: [...this.savedRecords.values()],
-            allowance: {
-              org: null,
-              included: 10,
-              used: this.savedRecords.size,
-              extra: 0,
-              extraDailyDollars: 0,
-            },
-          });
-        return;
-      }
-      if (/^\/api\/v1\/snapshots\/immutable-parking-file-\d+\/files$/.test(url.pathname)) {
-        response.writeHead(200, { "Content-Type": "application/octet-stream" });
-        response.end(this.corruptCapsule ? Buffer.from("wrong preserved bytes") : this.capsule);
-        return;
-      }
-      if (url.pathname.endsWith("/stop")) {
-        this.stopped = true;
-        send({ ok: true });
-        return;
-      }
-      const savedRecord = this.savedRecords.get(
-        decodeURIComponent(url.pathname.split("/").at(-1) ?? ""),
-      );
-      if (savedRecord !== undefined) {
-        if (request.method === "DELETE") {
-          this.retirements++;
-          const name = savedRecord.name;
-          this.savedRecords.delete(name);
-          this.saved = undefined;
-          if (this.retirementLost) {
-            response.destroy();
-            return;
-          }
-          send({ ok: true, name, status: "deleted" });
-          return;
-        }
-        send({ ok: true, snapshot: savedRecord });
-        return;
-      }
-      if (url.pathname === "/api/v1/sandboxes/bx_3456789a" && request.method === "DELETE") {
-        this.deleteCalls++;
-        send({ ok: true, operation: this.deletion("bx_3456789a") });
-        return;
-      }
-      if (url.pathname === "/api/v1/sandboxes/bx_3456789a") {
-        send({ ok: true, sandbox: this.sandbox("bx_3456789a") });
-        return;
-      }
-    }
-
     if (url.pathname.startsWith("/api/v1/saved-snapshots/")) {
       send({
         ok: true,
@@ -245,10 +140,7 @@ export class ProviderFixture {
             ? []
             : this.conflict
               ? [this.sandbox(), this.sandbox("bx_6789abcd")]
-              : [
-                  this.sandbox(),
-                  ...(this.childLabels === undefined ? [] : [this.sandbox("bx_3456789a")]),
-                ],
+              : [this.sandbox()],
         pageInfo: { hasMore: !second, nextCursor: second ? null : "next", limit: 200 },
       });
       return;
@@ -307,7 +199,7 @@ export class ProviderFixture {
         ok: true,
         exitCode: 0,
         timedOut: false,
-        stdout: (url.pathname.includes("bx_3456789a") ? this.childBootId : this.bootId) + "\n",
+        stdout: this.bootId + "\n",
         stderr: "",
       });
       return;
@@ -508,18 +400,7 @@ export class GuestFixture implements BoatGuestTransport {
         };
       return { status: 409, body: { reason: this.recovery } };
     }
-    const park = z.object({ operationId: z.string() }).parse(JSON.parse(raw));
-    return {
-      status: 200,
-      body: {
-        outcome: "closed",
-        receipt: {
-          path: `/var/lib/sealant/agent/park-${park.operationId}.json`,
-          sha256: createHash("sha256").update(this.capsule).digest("hex"),
-          bytes: this.capsule.length,
-        },
-      },
-    };
+    return { status: 404, body: { message: "unknown route" } };
   }
 }
 export class GatewayFixture {
@@ -567,7 +448,7 @@ export class GatewayFixture {
   }
   remove() {
     return Effect.suspend(() => {
-      if (!this.allowRemoval) return Effect.die("reconciliation must not remove custody");
+      if (!this.allowRemoval) return Effect.die("reconciliation must not remove the gateway");
       this.removeCalls++;
       return Effect.promise(() => this.beforeRemove()).pipe(
         Effect.andThen(() =>

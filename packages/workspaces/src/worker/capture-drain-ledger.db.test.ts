@@ -285,6 +285,137 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(released.readable && released.entry?.retained).toBeUndefined();
   });
 
+  // `markRetained` is every runtime's (Docker, Kubernetes, MicroVM, Boat): it writes the retention
+  // and nothing else, on the database's clock, whatever else the row already holds.
+  it.each(["docker", "k8s", "microvm"] as const)(
+    "retains a %s executor touching only its retention: the first instant and the schedule stand",
+    async (adapter) => {
+      const runId = await newRun();
+      const repo = <A, E>(use: (drains: WorkspaceCaptureDrainRepoService) => Effect.Effect<A, E>) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            return yield* use(yield* WorkspaceCaptureDrainRepo);
+          }).pipe(
+            Effect.provide(
+              WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+            ),
+          ),
+        );
+      const read = async () => {
+        const row = await repo((drains) => drains.getByRunId(runId));
+        if (row === undefined) throw new Error("no drain row");
+        return row;
+      };
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const instances = yield* WorkspaceRuntimeInstanceRepo;
+          yield* instances.upsertRuntimeInstance({ runId, adapter, status: "failed" });
+        }).pipe(
+          Effect.provide(
+            WorkspaceRuntimeInstanceRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+          ),
+        ),
+      );
+      // No row yet: the retention creates it, due for recovery at once.
+      await repo((drains) => drains.markRetained({ runId, reason: "executor exited · exit 75" }));
+      const first = await read();
+      expect(first).toMatchObject({
+        state: "kept",
+        detail: "not saved · retained · executor exited · exit 75",
+        retainedReason: "executor exited · exit 75",
+        recoveryAttempts: 0,
+        evidenceVersion: 0,
+        deletionState: null,
+        leaseOwner: null,
+        discardRequestedAt: null,
+      });
+      expect(first.retainedAt).not.toBeNull();
+      expect(first.nextRecoveryAt).toEqual(first.retainedAt);
+      expect(first.observedAt).toEqual(first.retainedAt);
+      expect(
+        (await repo((drains) => drains.listRetainedDue({ limit: 10, runIds: [runId] }))).map(
+          (due) => due.runId,
+        ),
+      ).toEqual([runId]);
+
+      // What the row holds besides the retention: an unsaved answer, the capture token, a drain
+      // lease, the owner's discard and a recovery already scheduled.
+      const unsaved = captureStatus({
+        complete: false,
+        incompleteReason: "ship-failed",
+        pending: 1,
+      });
+      const scheduled = new Date(Date.now() + 3_600_000);
+      await repo((drains) =>
+        Effect.gen(function* () {
+          yield* drains.recordStatus({
+            runId,
+            status: storedCaptureStatus(unsaved),
+            observedAt: new Date(),
+          });
+          yield* drains.storeCaptureToken({ runId, sealed: "sealed-token" });
+          yield* drains.claimLease({ runId, owner: "worker-a", leaseMs: 60_000 });
+          yield* drains.requestDiscard({ runId, requestedBy: "user_owner" });
+          yield* drains.recordRecoveryAttempt({
+            runId,
+            error: "start failed",
+            nextRecoveryAt: scheduled,
+          });
+        }),
+      );
+      const before = await read();
+      await repo((drains) => drains.markRetained({ runId, reason: "executor exited · again" }));
+      const after = await read();
+      // Only the reason, what the observation reads and when it was made moved.
+      expect({
+        ...after,
+        retainedReason: before.retainedReason,
+        detail: before.detail,
+        state: before.state,
+        observedAt: before.observedAt,
+        updatedAt: before.updatedAt,
+      }).toEqual(before);
+      expect(after).toMatchObject({
+        state: "kept",
+        detail: "not saved · retained · executor exited · again",
+        retainedReason: "executor exited · again",
+        retainedAt: first.retainedAt,
+        nextRecoveryAt: scheduled,
+        recoveryAttempts: 1,
+        lastRecoveryError: "start failed",
+        captureTokenSealed: "sealed-token",
+        leaseOwner: "worker-a",
+        discardRequestedBy: "user_owner",
+        evidenceVersion: before.evidenceVersion,
+      });
+      expect(after.unsavedStatuses).toEqual(before.unsavedStatuses);
+      expect(after.observedAt?.getTime()).toBeGreaterThanOrEqual(before.observedAt?.getTime() ?? 0);
+      // Scheduled an hour out, it is not due; the owner's request makes it due now, and it is
+      // listed again like any other runtime's retained executor.
+      const dueNow = async () =>
+        (await repo((drains) => drains.listRetainedDue({ limit: 10, runIds: [runId] }))).map(
+          (due) => due.runId,
+        );
+      expect(await dueNow()).toEqual([]);
+      const requested = await repo((drains) => drains.requestRecovery(runId));
+      expect(requested?.retainedAt).toEqual(first.retainedAt);
+      expect(requested?.nextRecoveryAt?.getTime()).toBeLessThan(scheduled.getTime());
+      expect(await dueNow()).toEqual([runId]);
+      // The retention ends with the executor; nothing is left to recover, or to ask for.
+      await repo((drains) =>
+        drains.recordObservation({ runId, state: "stopped", detail: "removed" }),
+      );
+      expect(await read()).toMatchObject({
+        state: "stopped",
+        retainedAt: null,
+        nextRecoveryAt: null,
+        captureTokenSealed: null,
+      });
+      expect(await repo((drains) => drains.requestRecovery(runId))).toBeUndefined();
+      expect(await dueNow()).toEqual([]);
+    },
+  );
+
   it("reads a completion attestation back through the ledger", async () => {
     const runId = await newRun();
     const layer = WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
@@ -1579,6 +1710,31 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       expect((await row(runId))?.deletionState).toBe("deleting-issued");
       // Settled on the row: allowed.
       await release([{ ...request, outcome: "refused" }]);
+      expect((await row(runId))?.deletionState).toBeNull();
+    });
+
+    // Contract '3' was Boat custody. The release that marks it is the previous one: the trigger
+    // trusts only the current value, so its writes meet the old-writer guards like any other.
+    it("holds a writer that marks the retired custody contract to the old-writer guards", async () => {
+      const runId = await newRun();
+      const a = worker(dbA, "current");
+      await Effect.runPromise(a.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+      const authorized = await Effect.runPromise(
+        a.authorizeDeletion(runId, (await row(runId))?.evidenceVersion ?? 0),
+      );
+      if (authorized.kind !== "authorized") throw new Error(authorized.kind);
+      expect(await Effect.runPromise(a.issueDeletion(runId, authorized.ticket))).toBe(true);
+      const [request] = (await row(runId))?.deletionRequests ?? [];
+      if (request === undefined) throw new Error("no request recorded");
+      const settled = [{ ...request, outcome: "refused" as const }];
+      // A current writer may give the removal up once its request is settled on the row. The
+      // previous release's same write is not trusted to know that: the removal stays issued.
+      await Effect.runPromise(ledgerWrites.releaseRemovalAsContract(dbB, runId, settled, "3"));
+      expect(await row(runId)).toMatchObject({
+        deletionState: "deleting-issued",
+        deletionRequests: [request],
+      });
+      await Effect.runPromise(ledgerWrites.releaseRemovalAsCurrentWriter(dbA, runId, settled));
       expect((await row(runId))?.deletionState).toBeNull();
     });
 

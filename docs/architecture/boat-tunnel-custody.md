@@ -64,5 +64,4 @@ remains the gateway's responsibility.
 Next, configure the guest network namespace and peer from these exact credentials, then integrate
 worker/resource reconciliation and authenticated readiness. The first end-to-end session on VM 131
 will need operator-approved tailnet join, Funnel on 443/8443/10000 and host UDP DNAT for
-40000–40015. This layer makes no box changes. FINAL close/recovery and executable parking remain
-later layers; parking will run a plain `sync` before stop as hygiene.
+40000–40015. This layer makes no box changes. FINAL close and recovery remain later layers.

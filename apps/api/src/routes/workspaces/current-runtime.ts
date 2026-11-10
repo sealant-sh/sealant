@@ -5,37 +5,20 @@ import {
 } from "@sealant/db";
 import { Effect, Option } from "effect";
 
-/** Historical runtime rows stay immutable; interactive consumers resolve the canonical child. */
+/**
+ * A Boat VM kept because its capture is not confirmed saved reads as a retained launch for as long
+ * as the VM exists, whatever its runtime row says. Every other runtime's row is already current.
+ */
 export const currentWorkspaceRuntime = (instance: WorkspaceRuntimeInstance | undefined) =>
   Effect.gen(function* () {
     if (instance?.adapter !== "boat") return instance;
     const selected = yield* Effect.serviceOption(WorkspaceCaptureDrainRepo);
     if (Option.isNone(selected))
-      return yield* Effect.fail(new Error("Boat current custody is unavailable"));
-    const canonical = selected.value;
-    const root = yield* canonical.getByRunId(instance.runId);
-    if (root?.custodyContract !== 3)
-      return root?.retainedAt == null || instance.removedAt !== null
-        ? instance
-        : { ...instance, status: "failed" as const, errorCode: LAUNCH_RETAINED_ERROR_CODE };
-    const custody = yield* canonical.preservation;
-    const facts = yield* custody.read(instance.runId);
-    const target = yield* custody.resolveExecution(instance.runId);
-    const status: WorkspaceRuntimeInstance["status"] =
-      facts?.state === "active" ? "ready" : facts?.state === "closed" ? "stopped" : "failed";
-    return {
-      ...instance,
-      status,
-      adapter: "boat" as const,
-      resourceId: target?.sandboxId ?? null,
-      reference: target?.sandboxId ?? null,
-      endpoint: null,
-      // The custody lineage, not the historical source row, says whether anything is still kept.
-      removedAt: status === "stopped" ? instance.removedAt : null,
-      errorCode: status === "failed" ? LAUNCH_RETAINED_ERROR_CODE : null,
-      errorMessage: null,
-      stopReason: null,
-    };
+      return yield* Effect.fail(new Error("The Boat capture ledger is unavailable"));
+    const root = yield* selected.value.getByRunId(instance.runId);
+    return root?.retainedAt == null || instance.removedAt !== null
+      ? instance
+      : { ...instance, status: "failed" as const, errorCode: LAUNCH_RETAINED_ERROR_CODE };
   });
 
 export const currentWorkspaceRuntimes = (

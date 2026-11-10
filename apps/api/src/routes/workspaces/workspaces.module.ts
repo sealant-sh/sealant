@@ -2349,51 +2349,6 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
             launchId: attempt?.id === runtimeInstance.runId ? attempt.launchId : null,
           },
     );
-    if (captureDrain?.custodyContract === 3 && observed !== undefined) {
-      const custody = yield* (yield* WorkspaceCaptureDrainRepo).preservation;
-      const preservation = yield* withInternalError(
-        custody.read(workspace.latestRunId),
-        "Failed to load workspace preservation.",
-      );
-      const current = yield* withInternalError(
-        custody.resolveExecution(workspace.latestRunId),
-        "Failed to load the current workspace.",
-      );
-      const { executor: _historicalExecutor, retained: oldRetention, ...facts } = observed;
-      const { runtime: _historicalRuntime, ...workspaceFacts } = details;
-      const status: WorkspaceDetails["status"] =
-        preservation?.state === "active"
-          ? "ready"
-          : preservation?.state === "closed"
-            ? "stopped"
-            : "retained";
-      return {
-        ...workspaceFacts,
-        status,
-        ...(current === undefined
-          ? {}
-          : {
-              runtime: {
-                adapter: "boat" as const,
-                resourceId: current.sandboxId,
-                reference: current.sandboxId,
-                status: status === "ready" ? ("ready" as const) : ("retained" as const),
-              },
-            }),
-        captureDrain: {
-          ...facts,
-          ...(preservation === undefined ? {} : { preservation }),
-          ...(status !== "retained" || oldRetention === undefined
-            ? {}
-            : { retained: { ...oldRetention, recoverable: true } }),
-          ...(current === undefined
-            ? {}
-            : {
-                executor: { runId: current.runId, adapter: "boat", resourceId: current.sandboxId },
-              }),
-        },
-      };
-    }
     return observed === undefined ? details : { ...details, captureDrain: observed };
   });
 };
@@ -3638,53 +3593,6 @@ export const stopWorkspace = (input: {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
     const discard = input.payload.discardUnsaved === true;
     const attestation = input.payload.completion;
-    if (workspace.latestRunId !== null) {
-      const drains = yield* WorkspaceCaptureDrainRepo;
-      const root = yield* withInternalError(
-        drains.getByRunId(workspace.latestRunId),
-        "Failed to load workspace custody.",
-      );
-      if (root?.custodyContract === 3) {
-        const custody = yield* drains.preservation;
-        const facts = yield* withInternalError(
-          custody.read(workspace.latestRunId),
-          "Failed to load workspace preservation.",
-        );
-        if (facts?.state === "closed")
-          return { workspaceId: workspace.id, status: "stopped" } satisfies StopWorkspaceResponse;
-        // Canonical custody owns the current child. Generic stop must never target the historical VM.
-        yield* withInternalError(
-          drains.markRetained({ runId: workspace.latestRunId, reason: "stop requested" }),
-          "Failed to retain the current workspace.",
-        );
-        if (discard)
-          yield* withInternalError(
-            drains.requestDiscard({
-              runId: workspace.latestRunId,
-              requestedBy: input.payload.ownerUserId,
-            }),
-            "Failed to record workspace discard.",
-          );
-        yield* withInternalError(
-          (yield* WorkspaceRepo).setWorkspaceStatus({ id: workspace.id, status: "stopped" }),
-          "Failed to record workspace stop.",
-        );
-        const response: StopWorkspaceResponse = {
-          workspaceId: workspace.id,
-          status: "retained",
-          ...(attestation === undefined
-            ? {}
-            : {
-                completion: {
-                  outcome: "ignored",
-                  detail:
-                    "The current Boat incarnation requires its authenticated FINAL observation.",
-                },
-              }),
-        };
-        return response;
-      }
-    }
 
     // A discard, or a completion attestation, is accepted on a workspace whose stop was already
     // recorded: that is exactly the workspace a drain keeps because its work is not confirmed
@@ -3921,8 +3829,7 @@ export const recoverWorkspace = (input: {
         .pipe(Effect.flatMap(currentWorkspaceRuntime)),
       "Failed to load the workspace runtime.",
     );
-    const recoverable =
-      row.custodyContract === 3 || runtimeRestartsRetainedExecutors(instance?.adapter);
+    const recoverable = runtimeRestartsRetainedExecutors(instance?.adapter);
     yield* Effect.logWarning(
       `Workspace ${workspace.id}: ${input.payload.ownerUserId} asked to recover run ${latestRunId}'s retained executor (${instance?.adapter ?? "unknown runtime"}); a recovery attempt is due now${recoverable ? "" : " (this runtime cannot restart it; it is reported and kept)"}.`,
     );

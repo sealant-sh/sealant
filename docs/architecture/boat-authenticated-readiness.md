@@ -18,8 +18,8 @@ exchanged bearer as `controlToken`; the boot environment; the secret environment
 0600 before `sealantd boot`). The record moves `installed` to `issued` before the push and to
 `running` after an accepted push or an adopted `409 already booted`: the agent's launch record is
 durable per boot, so a push whose reply was lost is adopted, never repeated. The sealed launch
-envelope is erased on `running`; the resume copy stays for recovery and parking. A held execution
-refuses the push.
+envelope is erased on `running`; the resume copy stays for recovery. A held execution refuses the
+push.
 
 ## Readiness
 

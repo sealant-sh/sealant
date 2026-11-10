@@ -127,7 +127,6 @@ export const nativeConsumerStateSchema = z.enum([
   "pending",
   "live",
   "retained",
-  "parked",
   "unknown",
   "released",
 ]);

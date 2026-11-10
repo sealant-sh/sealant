@@ -11,7 +11,6 @@
     "./testing/review9-capture-drains": "./src/testing/review9-workspace-capture-drains.ts",
     "./testing/review11-capture-drains": "./src/testing/review11-workspace-capture-drains.ts",
     "./testing/capture-ledger-writes": "./src/testing/capture-ledger-writes.ts",
-    "./testing/capture-preservation": "./src/testing/capture-preservation.ts",
     "./testing/credential-homes": "./src/testing/credential-homes.ts",
     "./testing/native-publications": "./src/testing/native-publications.ts",
     "./testing/workspace-publications": "./src/testing/workspace-publications.ts",

@@ -16,7 +16,6 @@ export default defineConfig({
     "./src/schema/boat-allocations.ts",
     "./src/schema/boat-tunnels.ts",
     "./src/schema/boat-observations.ts",
-    "./src/schema/capture-preservation.ts",
     "./src/schema/telemetry.ts",
   ],
   out: "./drizzle",

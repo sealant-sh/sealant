@@ -53,8 +53,7 @@ The resource reconciler currently derives live executors from Docker runtime row
 gateway into a live Boat launch until that reconciler also retains the gateway identity and
 converges its attachments. Remote network namespaces, CPU/memory/PID limits, guest peer setup,
 authenticated handshake/readiness and execution-permit issuance remain separate gates. A host
-endpoint receipt alone must never authorize a permit. FINAL close/recovery and executable parking
-remain unavailable; parking will use a plain `sync` before stop as hygiene.
+endpoint receipt alone must never authorize a permit. FINAL close and recovery remain unavailable.
 
 The bounded visible-failure policy for a crash after allocation issuance and before create is
 tracked in [#461](https://github.com/sealant-sh/sealant/issues/461). Empty inventory never

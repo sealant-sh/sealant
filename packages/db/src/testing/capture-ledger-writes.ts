@@ -3,7 +3,7 @@
  * (`CAPTURE_LEDGER_CONTRACT`), so tests can check what the table's trigger enforces for every
  * writer, the current one included (review 12 #3, rule (G)). Not used by any production path.
  */
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 
 import type { DB } from "../client.js";
@@ -19,6 +19,26 @@ export const releaseRemovalAsCurrentWriter = (
   db.transaction((tx) =>
     Effect.gen(function* () {
       yield* markCurrentWriter(tx);
+      yield* tx
+        .update(workspaceCaptureDrains)
+        .set({ deletionState: null, deletionToken: null, deletionRequests: [...requests] })
+        .where(eq(workspaceCaptureDrains.runId, runId));
+    }),
+  );
+
+/**
+ * The same release by a writer that marks `contract` instead of the current value: a release
+ * still running in a rolling deploy (e.g. '3', the last one with Boat custody).
+ */
+export const releaseRemovalAsContract = (
+  db: DB,
+  runId: string,
+  requests: readonly WorkspaceCaptureDeletionRequest[],
+  contract: string,
+) =>
+  db.transaction((tx) =>
+    Effect.gen(function* () {
+      yield* tx.execute(sql`SELECT set_config('sealant.capture_ledger', ${contract}, true)`);
       yield* tx
         .update(workspaceCaptureDrains)
         .set({ deletionState: null, deletionToken: null, deletionRequests: [...requests] })

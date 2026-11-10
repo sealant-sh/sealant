@@ -44,10 +44,6 @@ import {
   restoreUnprogressedCaptureDrain,
   strandBoatLaunch,
 } from "@sealant/db/testing/boat-allocations";
-import {
-  makeParkingActionDue,
-  backdateUnenrolledParkingRetention,
-} from "@sealant/db/testing/capture-preservation";
 import { nativeConsumerRows } from "@sealant/db/testing/native-publications";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import {
@@ -70,7 +66,6 @@ import { makeBoatProofCore } from "../../operator/boat-proof-core.js";
 import { BoatTunnelError } from "../../resources/boat-tunnel.js";
 import { makeResourceReconciler } from "../../resources/reconciler.js";
 import { postgresSpec } from "../../resources/resource.fixture.js";
-import { BoatParking, BoatParkingProvider, boatParkingLayer } from "../../runtime/boat/parking.js";
 import { adoptStrandedLaunchesEffect } from "../../worker/adopt-stranded-launches.js";
 import {
   boatAllocationWorkerLayer,
@@ -243,9 +238,6 @@ const test = async (
     db: DB;
     input: BoatAllocationInput;
     allocations: BoatAllocation["Service"];
-    parking: (
-      script: readonly CaptureDaemonScriptEntry[],
-    ) => Effect.Effect<BoatParking["Service"], CredentialCipherError>;
     executor: BoatExecution["Service"];
     resourceOwner: BoatResources["Service"];
     readiness: BoatReadiness["Service"];
@@ -438,25 +430,6 @@ const test = async (
             db,
             input,
             allocations,
-            parking: (script) =>
-              Layer.buildWithScope(
-                boatParkingLayer.pipe(
-                  Layer.provide(
-                    Layer.mergeAll(
-                      Exchange,
-                      boatReadinessLayer.pipe(Layer.provide(Layer.merge(ResourceLayer, Exchange))),
-                      fakeCaptureDaemon(script).layer,
-                      Layer.succeed(BoatParkingProvider, {
-                        api: api.value,
-                        automaticParkingEnabled: true,
-                        retainedParkingDelaySeconds: 300,
-                      }),
-                    ),
-                  ),
-                  Layer.provide(Layer.merge(Infra, hostLayer())),
-                ),
-                scope,
-              ).pipe(Effect.map((ctx) => Context.get(ctx, BoatParking))),
             executor,
             resourceOwner,
             readiness: Context.get(context, BoatReadiness),
@@ -1910,260 +1883,6 @@ describe.runIf(databaseUrl !== undefined)(
           await execute(s.carried[0]?.connection ?? Effect.die("")),
         );
         expect(connection.url).toMatch(/\/sealant\/tunnel$/);
-      }));
-    const parkingSource = async (
-      s: Parameters<Parameters<typeof test>[0]>[0],
-      script: readonly CaptureDaemonScriptEntry[] = [
-        captureStatus({ complete: false, incompleteReason: "ship-failed", pending: 1 }),
-        captureStatus({ epoch: 2 }),
-      ],
-    ) => {
-      s.provider.parking = true;
-      const target = await execute(s.allocations.prepare(s.input));
-      const launch = {
-        format: "sealant-daemon-launch-v1",
-        boot_env: {
-          SEALANT_WORKSPACE_SOURCE: "capture",
-          SEALANT_CAPTURE_ENDPOINT: "https://capture.invalid/session",
-          SEALANT_CAPTURE_WORKTREE_ID: "wt_1",
-          SEALANT_CAPTURE_LAUNCH_ID: "parking-launch",
-          SEALANT_LIFECYCLE_SETUP_JSON: "[]",
-          SEALANT_LIFECYCLE_STARTUP_JSON: "[]",
-          SEALANT_FOREGROUND_COMMAND: "sleep infinity",
-        },
-      };
-      await execute(
-        s.readiness.launch(
-          target,
-          Redacted.make({
-            bootEnv: launch.boot_env,
-            secretEnv: { SEALANT_CAPTURE_TOKEN: "local-proof-token" },
-            pins: { credentialVersions: [], dotfiles: [] },
-            docker: false,
-          }),
-        ),
-      );
-      const parking = await execute(s.parking(script));
-      await execute(parking.retain(target));
-      await execute(backdateUnenrolledParkingRetention(s.db, target.runId));
-      s.gateway.allowRemoval = true;
-      const custody = await execute(s.canonical.preservation);
-      return { target, parking, custody };
-    };
-    it("observes a lost save reply and a pending removal without issuing another save or delete", () =>
-      test(async (s) => {
-        const { target, parking, custody } = await parkingSource(s);
-        s.provider.saveLost = true;
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("unavailable");
-        expect(s.provider.saves).toBe(1);
-        expect(s.provider.deleteCalls).toBe(0);
-        s.provider.saveLost = false;
-        s.provider.deletionCompleted = false;
-        await execute(makeParkingActionDue(s.db, target.runId));
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("pending");
-        expect(await execute(custody.read(target.runId))).toMatchObject({ snapshotOnly: false });
-        await expect(execute(parking.park(target))).rejects.toThrow("pending");
-        s.provider.deletionCompleted = true;
-        expect(await execute(parking.park(target))).toBe("parked");
-        expect(s.provider.saves).toBe(1);
-        expect(s.provider.deleteCalls).toBe(1);
-      }));
-    it("keeps the source VM and slot when immutable snapshot bytes fail verification", () =>
-      test(async (s) => {
-        const { target, parking, custody } = await parkingSource(s);
-        s.provider.corruptCapsule = true;
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("unavailable");
-        expect(s.provider.deleteCalls).toBe(0);
-        expect((await execute(s.tunnels.get(target.runtimeInstanceId)))?.released).not.toBe(true);
-        expect(await execute(custody.read(target.runId))).toMatchObject({ snapshotOnly: false });
-        s.provider.corruptCapsule = false;
-        expect(await execute(parking.park(target))).toBe("parked");
-        expect(await execute(parking.park(target))).toBe("parked");
-        expect(s.provider.saves).toBe(1);
-      }));
-    it("finishes custody for an early resume request and adopts the same child after its create reply is lost", () =>
-      test(async (s) => {
-        const { target, parking, custody } = await parkingSource(s);
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("pending");
-        await execute(s.canonical.requestRecovery(target.runId));
-        await execute(makeParkingActionDue(s.db, target.runId));
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("parked");
-        s.provider.recoveryCreateLost = true;
-        await expect(execute(parking.resume(target.runId))).rejects.toThrow("unavailable");
-        s.provider.recoveryCreateLost = false;
-        const restored = await execute(
-          Effect.gen(function* () {
-            yield* TestClock.setTime(Date.now() + 60_000);
-            return yield* parking.resume(target.runId);
-          }).pipe(Effect.provide(TestClock.layer())),
-        );
-        expect(await execute(parking.resume(target.runId))).toEqual(restored);
-        expect(await execute(custody.read(target.runId))).toMatchObject({
-          state: "active",
-          snapshotOnly: false,
-        });
-        expect(await execute(custody.resolveExecution(target.runId))).toEqual(restored);
-        expect(s.provider.creates).toHaveLength(2);
-        expect(s.provider.saves).toBe(1);
-        expect(s.provider.deleteCalls).toBe(1);
-      }));
-    it("retires parked snapshots and releases the publication only after canonical owner discard", () =>
-      test(async (s) => {
-        const { target, parking, custody } = await parkingSource(s);
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("pending");
-        expect(await execute(parking.park(target))).toBe("parked");
-        expect(s.provider.retirements).toBe(0);
-        await execute(
-          s.canonical.requestDiscard({ runId: target.runId, requestedBy: "local-owner" }),
-        );
-        expect(await execute(parking.park(target))).toBe("parked");
-        expect(s.provider.retirements).toBe(1);
-        expect(await execute(custody.read(target.runId))).toMatchObject({
-          state: "closed",
-          snapshotOnly: false,
-          snapshots: [{ state: "removed" }],
-        });
-        expect(await execute(custody.resolveExecution(target.runId))).toBeUndefined();
-        expect(await execute(s.canonical.requestRecovery(target.runId))).toBeUndefined();
-        expect(
-          (await execute(s.executions.get(target.runtimeInstanceId)))?.admission
-            ?.sealedResumeEnvelope,
-        ).toBeUndefined();
-      }));
-    it("discharges a completed authenticated FINAL without requiring owner discard", () =>
-      test(async (s) => {
-        const { target, parking, custody } = await parkingSource(s, [savedStatus()]);
-        await execute(parking.reconcile());
-        expect(await execute(parking.park(target))).toBe("parked");
-        expect(s.provider.deleteCalls).toBe(1);
-        expect(s.provider.retirements).toBe(1);
-        expect(await execute(custody.read(target.runId))).toMatchObject({ state: "closed" });
-      }));
-    it("retains an unknown snapshot deletion and never invents completion from absence", () =>
-      test(async (s) => {
-        const { target, parking, custody } = await parkingSource(s);
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("pending");
-        expect(await execute(parking.park(target))).toBe("parked");
-        await execute(
-          s.canonical.requestDiscard({ runId: target.runId, requestedBy: "local-owner" }),
-        );
-        s.provider.retirementLost = true;
-        await expect(execute(parking.park(target))).rejects.toThrow("unavailable");
-        await expect(execute(parking.park(target))).rejects.toThrow("pending");
-        expect(s.provider.retirements).toBe(1);
-        expect(await execute(custody.read(target.runId))).toMatchObject({
-          snapshots: [{ state: "retiring" }],
-        });
-      }));
-    it("automatically saves an idle session, positively removes its VM and resumes a fresh current incarnation", () =>
-      test(async (s) => {
-        s.provider.parking = true;
-        const target = await execute(s.allocations.prepare(s.input));
-        const launch = {
-          format: "sealant-daemon-launch-v1",
-          boot_env: {
-            SEALANT_WORKSPACE_SOURCE: "capture",
-            SEALANT_CAPTURE_ENDPOINT: "https://capture.invalid/session",
-            SEALANT_CAPTURE_WORKTREE_ID: "wt_1",
-            SEALANT_CAPTURE_LAUNCH_ID: "parking-launch",
-            SEALANT_LIFECYCLE_SETUP_JSON: "[]",
-            SEALANT_LIFECYCLE_STARTUP_JSON: "[]",
-            SEALANT_FOREGROUND_COMMAND: "sleep infinity",
-          },
-        };
-        await execute(
-          s.readiness.launch(
-            target,
-            Redacted.make({
-              bootEnv: launch.boot_env,
-              secretEnv: { SEALANT_CAPTURE_TOKEN: "local-proof-token" },
-              pins: { credentialVersions: [], dotfiles: [] },
-              docker: false,
-            }),
-          ),
-        );
-        const parking = await execute(
-          s.parking([
-            captureStatus({ complete: false, incompleteReason: "ship-failed", pending: 1 }),
-            captureStatus({ epoch: 2 }),
-          ]),
-        );
-        await execute(parking.retain(target));
-        await execute(backdateUnenrolledParkingRetention(s.db, target.runId));
-        s.gateway.allowRemoval = true;
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("pending");
-        const custody = await execute(s.canonical.preservation);
-        expect(await execute(custody.read(target.runId))).toMatchObject({ state: "parking" });
-        // Advance the database policy clock using the existing test-only due helper and episode.
-        await execute(makeParkingActionDue(s.db, target.runId));
-        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("parked");
-        expect(await execute(parking.park(target))).toBe("parked");
-        expect(s.provider.saves).toBe(1);
-        expect(s.provider.deleteCalls).toBe(1);
-        expect(await execute(s.tunnels.get(target.runtimeInstanceId))).toMatchObject({
-          released: true,
-          removal: { completed: true },
-        });
-        expect(await execute(custody.read(target.runId))).toMatchObject({
-          state: "parked",
-          snapshotOnly: true,
-        });
-        await execute(s.canonical.requestRecovery(target.runId));
-        const restored = await execute(
-          Effect.gen(function* () {
-            yield* TestClock.setTime(Date.now() + 60_000);
-            return yield* parking.resume(target.runId);
-          }).pipe(Effect.provide(TestClock.layer())),
-        );
-        expect(restored.runtimeInstanceId).not.toBe(target.runtimeInstanceId);
-        expect(restored.sandboxId).toBe("bx_3456789a");
-        expect(await execute(custody.resolveExecution(target.runId))).toEqual(restored);
-        expect(
-          (await execute(s.runtimes.getRuntimeInstanceByRunId(target.runId)))?.resourceId,
-        ).toBe(target.sandboxId);
-        expect(s.provider.creates).toHaveLength(2);
-        await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("held");
-      }));
-    it("parks the resumed child after its own idle delay and discharges every saved ancestor on discard", () =>
-      test(async (s) => {
-        const { target, parking, custody } = await parkingSource(s, [
-          captureStatus({ complete: false, incompleteReason: "ship-failed", pending: 1 }),
-          captureStatus({ epoch: 2 }),
-          captureStatus({ epoch: 2, complete: false, incompleteReason: "ship-failed", pending: 1 }),
-        ]);
-        await execute(parking.reconcile());
-        expect(await execute(parking.park(target))).toBe("parked");
-        await execute(s.canonical.requestRecovery(target.runId));
-        const restored = await execute(
-          Effect.gen(function* () {
-            yield* TestClock.setTime(Date.now() + 60_000);
-            return yield* parking.resume(target.runId);
-          }).pipe(Effect.provide(TestClock.layer())),
-        );
-        await execute(parking.retain(restored));
-        // The original episode has expired, but this incarnation's retention delay has not.
-        await expect(execute(parking.park(restored))).rejects.toThrow("held");
-        expect(s.provider.saves).toBe(1);
-        await execute(makeParkingActionDue(s.db, target.runId));
-        expect(await execute(parking.park(restored))).toBe("pending");
-        expect(await execute(parking.park(restored))).toBe("parked");
-        expect(s.provider.saves).toBe(2);
-        expect(s.provider.deleteCalls).toBe(2);
-        expect(await execute(custody.read(target.runId))).toMatchObject({
-          state: "parked",
-          snapshotOnly: true,
-        });
-        expect((await execute(s.tunnels.get(restored.runtimeInstanceId)))?.released).toBe(true);
-        await execute(
-          s.canonical.requestDiscard({ runId: target.runId, requestedBy: "local-owner" }),
-        );
-        expect(await execute(parking.park(restored))).toBe("parked");
-        expect(s.provider.retirements).toBe(2);
-        expect(s.provider.savedRecords.size).toBe(0);
-        expect(await execute(custody.read(target.runId))).toMatchObject({
-          state: "closed",
-          snapshots: [{ state: "removed" }, { state: "removed" }],
-        });
       }));
     it("repeated FINAL of an early-aborted resource failure stays closed without resource setup", () =>
       test(async (s) => {

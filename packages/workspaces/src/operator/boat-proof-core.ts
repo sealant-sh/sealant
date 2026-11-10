@@ -17,8 +17,6 @@ import {
   WorkspaceRepoLive,
   WorkspaceBuildJobRepo,
   WorkspaceBuildJobRepoLive,
-  WorkspaceCaptureDrainRepo,
-  WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   makeSealantDBLayer,
@@ -54,7 +52,6 @@ export const makeBoatProofCore = (input: {
     WorkspaceAttemptRepoLive,
     WorkspaceRepoLive,
     WorkspaceBuildJobRepoLive,
-    WorkspaceCaptureDrainRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
   ).pipe(Layer.provide(DB));
   const Catalog = boatNativeCatalogLayer({
@@ -152,7 +149,6 @@ export const makeBoatProofCore = (input: {
           );
           const execution = yield* (yield* BoatExecutionRepo).get(target.runId);
           const tunnel = yield* (yield* BoatTunnelRepo).get(target.runtimeInstanceId);
-          const capture = yield* (yield* WorkspaceCaptureDrainRepo).getByRunId(target.runId);
           // Closed means Boat said the VM is gone and every obligation of it was discharged.
           const observed = yield* (yield* BoatObservationRepo).get(target.runtimeInstanceId);
           return {
@@ -177,7 +173,6 @@ export const makeBoatProofCore = (input: {
               instance.resourceId === target.sandboxId &&
               instance.status === "stopped" &&
               instance.removedAt !== null &&
-              capture?.custodyContract !== 3 &&
               tunnel?.released === true &&
               observed?.presence === "absent" &&
               observed.sandboxId === target.sandboxId &&

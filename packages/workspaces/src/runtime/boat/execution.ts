@@ -51,13 +51,11 @@ import {
 import {
   BOAT_AGENT_BIND_REFUSALS,
   BOAT_AGENT_NETWORK_ROUTE,
-  BOAT_AGENT_PARK_ROUTE,
   BOAT_AGENT_RECOVER_REFUSALS,
   boatAgentBindReplySchema,
   boatAgentIdentitySchema,
   boatAgentNetworkResponseSchema,
   boatAgentNetworkStatusSchema,
-  boatAgentParkResponseSchema,
   boatAgentRecoverResponseSchema,
   boatAgentRefusalSchema,
   type BoatAgentBindRequest,
@@ -129,13 +127,7 @@ const exchangeSchema = z.strictObject({ privateKey: z.string() });
  * The agent routes Core calls over the hosted proxy, each with the budget Core gives one request
  * and the statuses whose body the caller reads itself (every other status is a typed failure).
  */
-export type BoatAgentRoute =
-  | "launch"
-  | "health"
-  | "network"
-  | "network-status"
-  | "recover"
-  | "park";
+export type BoatAgentRoute = "launch" | "health" | "network" | "network-status" | "recover";
 interface BoatAgentRouteSpec {
   readonly method: "GET" | "POST";
   readonly pathClass: NonNullable<BoatLaunchDiagnostic["agent"]>["pathClass"];
@@ -164,13 +156,6 @@ export const boatAgentRoutes: Readonly<Record<BoatAgentRoute, BoatAgentRouteSpec
     budgetMs: 45_000,
     answered: [200, 409],
   },
-  // A park kills the daemon, stops Docker and runs `sync` (bounded at 60 s in the agent).
-  park: {
-    method: "POST",
-    pathClass: BOAT_AGENT_PARK_ROUTE,
-    budgetMs: 120_000,
-    answered: [200, 409],
-  },
 };
 
 /** An answered agent request: a status the caller reads, with its parsed JSON body. */
@@ -183,8 +168,8 @@ export interface BoatAgentReply {
  * The agent's status decides, never its text: 400 is a request Core built wrong, 401 a bearer the
  * agent does not hold, 404 an agent without the route, 409 a refusal whose reason the body names.
  * 502/503/504 (the proxy's VM still booting, an agent not yet listening, or the agent's own
- * `503 {reason: daemon-stop-unverified | docker-stop-unverified}` on a park or recovery it could
- * not finish) and lost transport are the only retryable failures; their reason, when the body
+ * `503 {reason: daemon-stop-unverified | docker-stop-unverified}` on a recovery it could not
+ * finish) and lost transport are the only retryable failures; their reason, when the body
  * names one, is kept.
  */
 export type BoatAgentFailureCode =
@@ -598,10 +583,6 @@ export type BoatRecoveryOutcome =
 
 /** Owns sealed bootstrap and one frozen admission. Running acknowledges an accepted launch, not daemon readiness. */
 export interface BoatExecutionService {
-  /** Reopens only the original launch material for its canonical custody owner. Never reads guest disk secrets. */
-  readonly parkingMaterial: (
-    target: BoatExecutionTarget,
-  ) => Effect.Effect<Redacted.Redacted<BoatLaunchMaterial>, Failure>;
   /**
    * Replays only the reserved exchange; a different target or boot refuses. Returns the binding
    * receipt: a digest of the public bind (identity, boot, operation), the same on every replay.
@@ -640,25 +621,8 @@ export interface BoatExecutionService {
   readonly hold: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
   /** Capture-only restart on the original boot, with the capture token Core kept for it. */
   readonly recover: (target: BoatExecutionTarget) => Effect.Effect<BoatRecoveryOutcome, Failure>;
-  /** Closes the held workspace for parking and returns the agent's receipt of it. */
-  readonly park: (
-    target: BoatExecutionTarget,
-    operationId: string,
-  ) => Effect.Effect<BoatParkingReceipt, Failure>;
   /** Fresh observation only: agent health, the tunnel's handshake and DNS, then daemon health. */
   readonly readiness: (target: BoatExecutionTarget) => Effect.Effect<BoatReadyReceipt, Failure>;
-}
-/**
- * The agent's park receipt, in the custody ledger's fields: the receipt file is the one artifact
- * the saved snapshot must carry, so both digests and both sizes are its own and it is one entry.
- */
-export interface BoatParkingReceipt {
-  readonly operationId: string;
-  readonly capsuleHash: string;
-  readonly archiveHash: string;
-  readonly contentBytes: number;
-  readonly storedBytes: number;
-  readonly entries: number;
 }
 /** A current observation, never durable authority to admit a later request. */
 export interface BoatReadyReceipt {
@@ -1359,49 +1323,7 @@ const make: Effect.Effect<
       ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
     };
   });
-  const park = Effect.fn("BoatExecution.park")(function* (
-    target: BoatExecutionTarget,
-    operationId: string,
-  ) {
-    const record = yield* loadTarget(target);
-    if (record.phase !== "held" || record.admission === null || record.isolation === undefined)
-      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    const request = yield* attempt("invalid-input", () => ({
-      format: "sealant-agent-park-v1" as const,
-      operationId: z.uuid().parse(operationId),
-    }));
-    const connection = yield* access(record);
-    const reply = yield* call(connection, "park", Redacted.make(JSON.stringify(request)));
-    if (reply.status === 409) return yield* Effect.fail(refusal("park", reply, ["parked"]));
-    const receipt = yield* attempt("invalid-reply", () => {
-      const parsed = boatAgentParkResponseSchema.parse(reply.body);
-      // The receipt is this operation's, in the agent's data directory (whatever the agent was
-      // given as its data directory: the path's directory is the agent's to name).
-      if (
-        !parsed.receipt.path.endsWith(`/park-${request.operationId}.json`) ||
-        parsed.receipt.bytes === 0
-      )
-        throw new Error();
-      return {
-        operationId: request.operationId,
-        capsuleHash: parsed.receipt.sha256,
-        archiveHash: parsed.receipt.sha256,
-        contentBytes: parsed.receipt.bytes,
-        storedBytes: parsed.receipt.bytes,
-        entries: 1,
-      };
-    });
-    yield* unchanged(record);
-    return receipt;
-  });
   return BoatExecution.of({
-    parkingMaterial: (target) =>
-      Effect.gen(function* () {
-        const record = yield* loadTarget(target);
-        if (record.admission?.sealedResumeEnvelope == null)
-          return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-        return yield* openMaterial(record, record.admission.sealedResumeEnvelope);
-      }),
     exchange,
     stage,
     recordIsolation,
@@ -1412,7 +1334,6 @@ const make: Effect.Effect<
     control,
     hold,
     recover,
-    park,
   });
 });
 /** Open assembly for worker infrastructure and faithful test transports. */

@@ -33,7 +33,6 @@ import {
   BOAT_AGENT_GATEWAY_ADDRESS,
   boatAgentBindRecordSchema,
   boatAgentLaunchRecordSchema,
-  boatAgentParkReceiptSchema,
 } from "./agent-contract.js";
 import type { BoatApi, BoatSandbox } from "./api.js";
 import { BoatSecret, boatSandboxIdSchema } from "./config.js";
@@ -53,7 +52,6 @@ const AGENT = path.join(PACKAGE_ROOT, "microvm-image/agent.mjs");
 const BIND_CLI = path.join(PACKAGE_ROOT, "microvm-image/boat-bind.mjs");
 const HOSTED_ORIGIN = "https://fixture-8080.on.boat.dev";
 const MANIFEST_DIGEST = createHash("sha256").update("boat image manifest").digest("hex");
-const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 
 // ---- The fake VM ---------------------------------------------------------------------------
 
@@ -730,38 +728,6 @@ describe("Core's Boat execution owner against the real guest agent", () => {
     await waitFor(() => exists(vm.socketPath));
     // Running again: a second recovery is an observation.
     expect(await execute(c.executor.recover(t))).toBe("running");
-  }, 30_000);
-
-  it("parks the held workspace once per operation, mapping the agent's receipt file into custody", async () => {
-    const { vm, t, c } = await launched();
-    await execute(c.executor.launch(t.runtimeInstanceId));
-    await waitFor(() => exists(vm.socketPath));
-    await execute(c.executor.hold(t));
-    const operationId = randomUUID();
-    const receipt = await execute(c.executor.park(t, operationId));
-    const file = path.join(vm.dataDir, `park-${operationId}.json`);
-    const bytes = await readFile(file);
-    expect(receipt).toEqual({
-      operationId,
-      capsuleHash: sha256(bytes),
-      archiveHash: sha256(bytes),
-      contentBytes: bytes.length,
-      storedBytes: bytes.length,
-      entries: 1,
-    });
-    expect(boatAgentParkReceiptSchema.parse(JSON.parse(bytes.toString("utf8")))).toMatchObject({
-      operation_id: operationId,
-      boot_id: t.bootId,
-      run_id: t.runId,
-      daemon: "stopped",
-      docker: "absent",
-    });
-    expect((await readFile(vm.syncLog, "utf8")).trim()).toBe("sync");
-    // The same park again is the same receipt; another operation, a launch or a recovery after
-    // the park are refused as `parked`.
-    expect(await execute(c.executor.park(t, operationId))).toEqual(receipt);
-    expect(await refusalReason(c.executor.park(t, randomUUID()))).toBe("parked");
-    expect(await refusalReason(c.executor.recover(t))).toBe("parked");
   }, 30_000);
 
   it("keeps the control relay's refusal typed until the daemon answers on its socket", async () => {

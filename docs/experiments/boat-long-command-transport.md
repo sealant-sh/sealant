@@ -140,4 +140,4 @@ A new Mend preview must bundle the changed Core worker. The transport layer alon
 migration. The stacked [failed-build recovery](boat-failed-build-recovery.md) layer adds a migration
 and restores ordinary acquisition for run 4's quarantined recipe without a manual DB reset. The real
 session proof still gates admission; a successful native build adds no claim for readiness, resource
-reach, stop/resume, or parking.
+reach or stop/resume.

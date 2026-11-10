@@ -579,12 +579,11 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 .from(boatObservations)
                 .where(eq(boatObservations.runtimeInstanceId, consumer.runtimeInstanceId));
               // Boat positively no longer has the VM: nothing of it can use the publication, and
-              // its slot was released after host cleanup. Parking custody keeps its own pin.
+              // its slot was released after host cleanup.
               const observedAbsent =
                 bound.success &&
                 observed?.presence === "absent" &&
                 observed.sandboxId === bound.data.sandboxId &&
-                capture?.custodyContract !== 3 &&
                 (tunnel === undefined ||
                   (reservation.success &&
                     reservation.data.released === true &&
@@ -595,7 +594,6 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 bound.data.removal !== undefined &&
                 bound.data.removal.kind !== "issued" &&
                 bound.data.removal.completed &&
-                capture?.custodyContract !== 3 &&
                 (bound.data.target === null
                   ? execution === undefined && tunnel === undefined
                   : aborted.success &&
@@ -608,7 +606,6 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                         tunnel.releasedAt !== null &&
                         isDeepStrictEqual(reservation.data.binding.target, bound.data.target))));
               // The immutable allocation remains as an audit record after canonical FINAL.
-              // Parking custody still needs its root publication for recovery.
               if (
                 !bound.success ||
                 (!deletedUnused &&
@@ -626,7 +623,6 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 (!deletedUnused &&
                   !observedAbsent &&
                   (capture?.deletionState !== "deleted" ||
-                    capture.custodyContract === 3 ||
                     !reservation.success ||
                     reservation.data.released !== true ||
                     tunnel?.releasedAt === null ||

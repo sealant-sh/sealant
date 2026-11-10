@@ -27,33 +27,6 @@
   },
   "overrides": [
     {
-      "files": ["**/*.ts"],
-      "excludeFiles": [
-        "packages/db/src/repositories/workspace-capture-drains.ts",
-        "packages/db/src/repositories/capture-preservation.ts",
-        "packages/db/src/schema/capture-preservation.ts",
-        "packages/db/src/testing/**",
-        "**/*.test.ts"
-      ],
-      "rules": {
-        "no-restricted-imports": [
-          "error",
-          {
-            "patterns": [
-              {
-                "group": [
-                  "**/capture-preservation",
-                  "**/capture-preservation.js",
-                  "**/capture-preservation.ts"
-                ],
-                "message": "Boat custody persistence belongs to the canonical capture drain owner."
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
       "files": ["apps/api/src/routes/**/*.ts", "packages/workspaces/src/worker/**/*.ts"],
       "excludeFiles": ["**/*.test.ts", "**/*.fixture.ts"],
       "rules": {
@@ -82,9 +55,6 @@
                   "**/images/boat/recipe*",
                   "**/images/boat/runtime-bundle*",
                   "**/repositories/native-publications*",
-                  "**/capture-preservation",
-                  "**/capture-preservation.js",
-                  "**/capture-preservation.ts",
                   "**/schema/native-publications*",
                   "@sealant/db/testing/*"
                 ],

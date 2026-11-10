@@ -8,8 +8,6 @@ import {
   BoatControlRequestRepo,
   boatControlRequestRepoLayer,
   SealantDB,
-  WorkspaceCaptureDrainRepo,
-  WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   type BoatControlRequest,
@@ -59,9 +57,7 @@ const current = (target: BoatExecutionTarget) =>
       instance?.adapter !== "boat" ||
       instance.status !== "ready" ||
       instance.stopReason !== null ||
-      ((yield* (yield* WorkspaceCaptureDrainRepo).getByRunId(target.runId))?.custodyContract !==
-        3 &&
-        instance.resourceId !== target.sandboxId) ||
+      instance.resourceId !== target.sandboxId ||
       !(yield* boatTargetIsCurrent(target))
     )
       return yield* Effect.fail(new BoatControlError());
@@ -82,30 +78,23 @@ type ControlDependencies =
   | BoatControlRequestRepo
   | CredentialCipher
   | BoatAllocationRepo
-  | WorkspaceCaptureDrainRepo
   | WorkspaceRuntimeInstanceRepo;
 const make: Effect.Effect<BoatInteractiveControl["Service"], never, ControlDependencies> =
   Effect.gen(function* () {
     const requests = yield* BoatControlRequestRepo;
     const cipher = yield* CredentialCipher;
     const allocations = yield* BoatAllocationRepo;
-    const roots = yield* WorkspaceCaptureDrainRepo;
     const instances = yield* WorkspaceRuntimeInstanceRepo;
     const checking = (target: BoatExecutionTarget) =>
       current(target).pipe(
         Effect.provideService(BoatAllocationRepo, allocations),
-        Effect.provideService(WorkspaceCaptureDrainRepo, roots),
         Effect.provideService(WorkspaceRuntimeInstanceRepo, instances),
       );
     return {
       connectMaterial: (runId: string, sandboxId: string) =>
         Effect.runPromise(
           Effect.gen(function* () {
-            const root = yield* roots.getByRunId(runId);
-            const target =
-              root?.custodyContract === 3
-                ? yield* (yield* roots.preservation).resolveExecution(runId)
-                : (yield* allocations.get(runId))?.target;
+            const target = (yield* allocations.get(runId))?.target;
             if (target == null || target.sandboxId !== sandboxId)
               return yield* Effect.fail(new BoatControlError());
             yield* checking(target);
@@ -153,7 +142,6 @@ export const boatInteractiveControlLayer: Layer.Layer<
     Layer.mergeAll(
       boatControlRequestRepoLayer,
       BoatAllocationRepoLive,
-      WorkspaceCaptureDrainRepoLive,
       WorkspaceRuntimeInstanceRepoLive,
     ),
   ),

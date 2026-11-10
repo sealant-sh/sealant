@@ -36,7 +36,6 @@ export {
   boatWorkerExecutionLayer,
   boatReadinessWorkerLayer,
   boatFinalCloseWorkerLayer,
-  boatParkingWorkerLayer,
 } from "./worker/boat-allocation.js";
 
 export {
@@ -78,14 +77,6 @@ export {
   boatObserverLayerNoDeps,
   type BoatPresence,
 } from "./runtime/boat/observation.js";
-
-export {
-  BoatParking,
-  BoatParkingProvider,
-  BoatParkingError,
-  boatParkingLayer,
-  boatParkingLayerNoDeps,
-} from "./runtime/boat/parking.js";
 
 export { loadBoatCredential } from "./runtime/boat/credential.js";
 export {

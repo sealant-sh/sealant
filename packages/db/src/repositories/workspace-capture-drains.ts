@@ -11,10 +11,6 @@ import {
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainState,
 } from "../schema.js";
-import {
-  makeCapturePreservationStore,
-  type CapturePreservationStore,
-} from "./capture-preservation.js";
 
 const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "claimLease",
@@ -101,8 +97,6 @@ export interface WorkspaceCaptureDrainSchedule {
 }
 
 export interface WorkspaceCaptureDrainRepoService {
-  /** Boat custody children share this root's transaction and writer contract. Owner-private. */
-  readonly preservation: Effect.Effect<CapturePreservationStore>;
   /**
    * Take (or renew) the run's drain lease for `owner`, for `leaseMs` of database time. Succeeds
    * when nobody holds it, the holder's lease expired (its worker died), or `owner` already holds
@@ -380,7 +374,6 @@ export interface WorkspaceCaptureDrainRepoService {
   readonly markRetained: (input: {
     readonly runId: string;
     readonly reason: string;
-    readonly policy?: unknown;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
    * Retained executors whose next recovery attempt is due and that nobody is recovering now (no
@@ -470,9 +463,11 @@ const deletionColumns = {
  * in a rolling deploy, carries the same marker and bypasses the guards it does not implement
  * (review 12 #3: the review 11 writer marked '1' and released an issued removal over a request of
  * unknown outcome). History: '1' review 10 (unsaved answers, issued removals, recovery claims);
- * '2' review 12 (per-request removal outcomes, review 11 #3); '3' Boat custody and retention.
+ * '2' review 12 (per-request removal outcomes, review 11 #3); '3' Boat custody and retention;
+ * '4' Boat custody removed (the ledger keeps contract 2's invariants and nothing else, and a '3'
+ * writer, which still believes in custody roots, is no longer trusted).
  */
-export const CAPTURE_LEDGER_CONTRACT = "3";
+export const CAPTURE_LEDGER_CONTRACT = "4";
 
 /**
  * Mark the transaction as a writer that keeps the ledger's invariants itself (review 10, decision
@@ -547,10 +542,8 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
   WorkspaceCaptureDrainRepo,
   Effect.gen(function* () {
     const db = yield* SealantDB;
-    const preservation = makeCapturePreservationStore(db, markCurrentWriter);
 
     return {
-      preservation: Effect.succeed(preservation),
       claimLease: (input) =>
         withRepoError(
           "claimLease",
@@ -1312,7 +1305,45 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           }),
         ),
 
-      markRetained: (input) => withRepoError("markRetained", preservation.markRetained(input)),
+      markRetained: (input) =>
+        withRepoError(
+          "markRetained",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* markCurrentWriter(tx);
+              const detail = `not saved · retained · ${input.reason}`;
+              const [row] = yield* tx
+                .insert(workspaceCaptureDrains)
+                .values({
+                  runId: input.runId,
+                  retainedAt: sql`now()`,
+                  retainedReason: input.reason,
+                  nextRecoveryAt: sql`now()`,
+                  state: "kept",
+                  detail,
+                  observedAt: sql`now()`,
+                })
+                .onConflictDoUpdate({
+                  target: workspaceCaptureDrains.runId,
+                  set: {
+                    // The first instant stands; recovery is due at once unless already scheduled.
+                    retainedAt: sql`coalesce(${workspaceCaptureDrains.retainedAt}, now())`,
+                    retainedReason: input.reason,
+                    nextRecoveryAt: sql`coalesce(${workspaceCaptureDrains.nextRecoveryAt}, now())`,
+                    state: "kept",
+                    detail,
+                    observedAt: sql`now()`,
+                  },
+                })
+                .returning({ runId: workspaceCaptureDrains.runId });
+              if (row === undefined) {
+                return yield* Effect.fail(
+                  new Error(`Recording the retention of run ${input.runId} wrote no row.`),
+                );
+              }
+            }),
+          ),
+        ),
 
       listRetainedDue: (input) =>
         withRepoError(
@@ -1327,7 +1358,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
             .where(
               and(
                 isNotNull(workspaceCaptureDrains.retainedAt),
-                isNull(workspaceCaptureDrains.custodyContract),
                 or(
                   isNull(workspaceCaptureDrains.nextRecoveryAt),
                   lte(workspaceCaptureDrains.nextRecoveryAt, sql`now()`),
@@ -1455,16 +1485,11 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .update(workspaceCaptureDrains)
                 .set({
                   nextRecoveryAt: sql`greatest(now(), ${workspaceCaptureDrains.recoveryLeaseUntil})`,
-                  nextPreservationActionAt: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 then now() else ${workspaceCaptureDrains.nextPreservationActionAt} end`,
-                  preservationDesired: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 and ${workspaceCaptureDrains.discardRequestedAt} is null then 'recover' else ${workspaceCaptureDrains.preservationDesired} end`,
-                  custodyRevision: sql`${workspaceCaptureDrains.custodyRevision} + case when ${workspaceCaptureDrains.custodyContract} = 3 then 1 else 0 end`,
                 })
                 .where(
                   and(
                     eq(workspaceCaptureDrains.runId, runId),
                     isNotNull(workspaceCaptureDrains.retainedAt),
-                    sql`(${workspaceCaptureDrains.custodyContract} is null or ${workspaceCaptureDrains.retainedReason} is not null)`,
-                    sql`not exists(select 1 from capture_preservation_evidence e where e.run_id = ${workspaceCaptureDrains.runId} and e.kind = 'lineage-discharged')`,
                   ),
                 )
                 .returning();
@@ -1491,9 +1516,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   set: {
                     discardRequestedAt: sql`coalesce(${workspaceCaptureDrains.discardRequestedAt}, now())`,
                     discardRequestedBy: sql`coalesce(${workspaceCaptureDrains.discardRequestedBy}, ${input.requestedBy})`,
-                    preservationDesired: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 then 'discard' else ${workspaceCaptureDrains.preservationDesired} end`,
-                    nextPreservationActionAt: sql`case when ${workspaceCaptureDrains.custodyContract} = 3 then now() else ${workspaceCaptureDrains.nextPreservationActionAt} end`,
-                    custodyRevision: sql`${workspaceCaptureDrains.custodyRevision} + case when ${workspaceCaptureDrains.custodyContract} = 3 then 1 else 0 end`,
                   },
                 })
                 .returning();

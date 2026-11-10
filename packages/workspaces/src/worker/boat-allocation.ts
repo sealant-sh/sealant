@@ -15,7 +15,6 @@ import {
   boatFinalCloseLayer,
 } from "../runtime/boat/final-close.js";
 import { boatObserverLayer } from "../runtime/boat/observation.js";
-import { BoatParking, BoatParkingProvider, boatParkingLayer } from "../runtime/boat/parking.js";
 import { BoatAllocationProvider } from "../runtime/boat/provider.js";
 import type { BoatTunnelCarrier } from "../runtime/boat/tunnel-carrier.js";
 import { SealantRuntime, SealantRuntimeControlLive } from "../sealantd/runtime.js";
@@ -61,25 +60,9 @@ export const boatReadinessWorkerLayer: Layer.Layer<
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatResourcesHost | BoatTunnelCarrier
 > = boatReadinessLayer.pipe(Layer.provide(Layer.merge(Resources, boatWorkerExecutionLayer)));
 
-/** Canonical stopped-run reconciliation, sharing the original sealed execution custody. */
+/** Canonical stopped-run reconciliation, sharing the original sealed execution. */
 export const boatFinalCloseWorkerLayer: Layer.Layer<
   BoatFinalClose,
   never,
   SealantDB | CredentialCipher | BoatAllocationProvider | BoatFinalCloseProvider | BoatResourcesHost
 > = boatFinalCloseLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
-
-/** Parking shares the exact exchange, resource and readiness owners used by ordinary held launch. */
-export const boatParkingWorkerLayer: Layer.Layer<
-  BoatParking,
-  never,
-  | SealantDB
-  | CredentialCipher
-  | BoatAllocationProvider
-  | BoatResourcesHost
-  | BoatParkingProvider
-  | BoatTunnelCarrier
-> = boatParkingLayer.pipe(
-  Layer.provide(
-    Layer.mergeAll(boatWorkerExecutionLayer, boatReadinessWorkerLayer, SealantRuntimeControlLive),
-  ),
-);

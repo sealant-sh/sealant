@@ -49,10 +49,8 @@ and answers `sealant-bootstrap-reply-v1` with the bearer under RSA-OAEP-SHA256. 
 again on the same boot re-encrypts the same bearer; another operation or key refuses
 (`bind-exchange-conflict`); a stale boot id refuses (`bind-stale-boot`); a new boot binds afresh for
 the identity the disk was first bound to, and a disk parked on its last boot once more as a new
-instance of the same deployment (the parking resume). The disk does not prevent a second resume: any
-VM created from the saved snapshot binds the same way. What prevents one is Core's custody: one
-resume intent per lineage, and the snapshot is retired once its child is current. A refusal is one
-reason code on stderr.
+instance of the same deployment. Core no longer parks a disk or restores one, so that last bind is
+unused. A refusal is one reason code on stderr.
 
 The agent arms itself lazily from the tmpfs bearer: it is the launch secret and the control token,
 so `GET /sealant/health` answers it (503, not booted) before any launch, and Core proves the bearer
@@ -112,13 +110,13 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   never a 401. `503 {reason: docker-stop-unverified}` when Docker could not be proved stopped, and
   `503 {reason: daemon-stop-unverified}` when a daemon scope could not be proved gone: nothing was
   started, and Core retries.
-- `POST /sealant/park`: `{format: sealant-agent-park-v1, operationId}`. Kills the daemon's namespace
-  (every `sealant-workspace-*` scope, each proved gone), stops Docker, `sync`, writes
+- `POST /sealant/park`: the agent still serves it; Core no longer calls it, and a later guest change
+  removes it. `{format: sealant-agent-park-v1, operationId}`. Kills the daemon's namespace (every
+  `sealant-workspace-*` scope, each proved gone), stops Docker, `sync`, writes
   `/var/lib/sealant/agent/park-<operationId>.json` (0600) and answers its path, SHA-256 and size.
   The same operation again is the same receipt; another operation, a launch or a recovery after a
   park is `409 {reason: parked}`. When the daemon or Docker could not be proved stopped the agent
-  writes no receipt and answers `503 {reason: daemon-stop-unverified | docker-stop-unverified}`;
-  Core maps it as retryable, never as closed, and the same park is retried.
+  writes no receipt and answers `503 {reason: daemon-stop-unverified | docker-stop-unverified}`.
 
 ## An agent restarted on the same boot
 
@@ -138,6 +136,6 @@ recover is `recover-state-unknown`. After a reboot the tmpfs is empty and nothin
 `src/runtime/boat/agent-boat.test.ts` runs the real agent and bind CLI on a fake VM against the
 contract. `src/runtime/boat/agent-transport.test.ts` runs Core's real execution owner and transport
 (`execution.ts`) against that same real agent: bind, health proof, network, launch and adoption of a
-lost reply, readiness, every recovery answer, park, and the control relay's typed refusal.
+lost reply, readiness, every recovery answer, and the control relay's typed refusal.
 `src/runtime/boat/execution.test.ts` pins how each agent status is classified. These are local
 proofs; they do not replace a live Boat session.

@@ -5,8 +5,6 @@ import type { CredentialCipher } from "@sealant/credentials";
 import {
   BoatAllocationRepo,
   BoatAllocationRepoLive,
-  WorkspaceCaptureDrainRepo,
-  WorkspaceCaptureDrainRepoLive,
   BoatExecutionRepo,
   BoatExecutionRepoLive,
   BoatTunnelRepo,
@@ -126,7 +124,6 @@ const make: Effect.Effect<
   BoatResources["Service"],
   never,
   | BoatAllocationRepo
-  | WorkspaceCaptureDrainRepo
   | BoatExecutionRepo
   | BoatTunnelRepo
   | ResourceInstanceRepo
@@ -143,13 +140,8 @@ const make: Effect.Effect<
   const guest = yield* BoatExecution;
   const host = yield* BoatResourcesHost;
   const carrier = yield* BoatTunnelCarrier;
-  const canonical = yield* WorkspaceCaptureDrainRepo;
-  const allocationRepo = yield* BoatAllocationRepo;
   const isCurrent = (target: BoatExecutionTarget) =>
-    boatTargetIsCurrent(target, true).pipe(
-      Effect.provideService(WorkspaceCaptureDrainRepo, canonical),
-      Effect.provideService(BoatAllocationRepo, allocationRepo),
-    );
+    boatTargetIsCurrent(target).pipe(Effect.provideService(BoatAllocationRepo, allocations));
   const current = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
       const execution = yield* executions.get(target.runtimeInstanceId);
@@ -299,14 +291,7 @@ const make: Effect.Effect<
           if (record?.target === null || record === undefined) return "pending" as const;
           // A live launch owns its guest and gateway until it finishes or its lease lapses.
           if (yield* allocations.launchInFlight(id)) return "pending" as const;
-          const root = yield* canonical.getByRunId(record.target.runId);
-          const preservation = yield* canonical.preservation;
-          const target =
-            root?.custodyContract === 3
-              ? yield* preservation.resolveExecution(record.target.runId)
-              : record.target;
-          if (target === undefined) return "held" as const;
-          yield* boundary(prepare(target));
+          yield* boundary(prepare(record.target));
           return "configured" as const;
         }).pipe(
           Effect.timeout(120_000),
@@ -342,13 +327,7 @@ const make: Effect.Effect<
         ...(after === undefined ? {} : { after }),
       });
       for (const id of ids) {
-        const root = yield* canonical.getByRunId(id);
-        const preservation = yield* canonical.preservation;
-        const allocation = yield* allocations.get(id);
-        const target =
-          root?.custodyContract === 3
-            ? yield* preservation.resolveExecution(id)
-            : (allocation?.target ?? undefined);
+        const target = (yield* allocations.get(id))?.target ?? undefined;
         if (target === undefined) continue;
         const reservation = yield* tunnels.get(target.runtimeInstanceId);
         if (
@@ -364,10 +343,7 @@ const make: Effect.Effect<
           !isDeepStrictEqual(execution.target, reservation.binding.target) ||
           execution.admission.epoch !== reservation.network.epoch ||
           execution.admission.operationId !== reservation.network.operationId ||
-          !(yield* boatTargetIsCurrent(target).pipe(
-            Effect.provideService(BoatAllocationRepo, allocations),
-            Effect.provideService(WorkspaceCaptureDrainRepo, canonical),
-          ))
+          !(yield* isCurrent(target))
         )
           continue;
         const link = yield* resources.linkOfRun(id);
@@ -388,7 +364,6 @@ export const boatResourcesLayerNoDeps: Layer.Layer<
   BoatResources,
   never,
   | BoatAllocationRepo
-  | WorkspaceCaptureDrainRepo
   | BoatExecutionRepo
   | BoatTunnelRepo
   | ResourceInstanceRepo
@@ -406,7 +381,6 @@ export const boatResourcesLayer: Layer.Layer<
   Layer.provide(
     Layer.mergeAll(
       BoatAllocationRepoLive,
-      WorkspaceCaptureDrainRepoLive,
       BoatExecutionRepoLive,
       boatTunnelRepoLayer,
       ResourceInstanceRepoLive,

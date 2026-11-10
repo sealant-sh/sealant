@@ -7,16 +7,12 @@ import { describe, expect, it } from "vitest";
 
 describe("parseWorkerEnv", () => {
   it.each([
-    { input: undefined, expected: true },
-    { input: "true", expected: true },
-    { input: "false", expected: false },
-  ])("preserves automatic parking $input through worker startup", ({ input, expected }) => {
-    const env = parseWorkerEnv({ SEALANT_BOAT_AUTOMATIC_PARKING: input });
-    expect(env.SEALANT_BOAT_AUTOMATIC_PARKING).toBe(expected);
-  });
-
-  it.each(["1", "0", "yes", "FALSE"])("refuses invalid automatic parking value %s", (value) => {
-    expect(() => parseWorkerEnv({ SEALANT_BOAT_AUTOMATIC_PARKING: value })).toThrow();
+    { SEALANT_BOAT_AUTOMATIC_PARKING: "false", SEALANT_BOAT_PARKING_DELAY_SECONDS: "3600" },
+    { SEALANT_BOAT_AUTOMATIC_PARKING: "yes", SEALANT_BOAT_PARKING_DELAY_SECONDS: "1" },
+  ])("starts with the retired Boat parking settings %o still set, and ignores them", (retired) => {
+    const env = parseWorkerEnv(retired);
+    expect(env).not.toHaveProperty("SEALANT_BOAT_AUTOMATIC_PARKING");
+    expect(env).not.toHaveProperty("SEALANT_BOAT_PARKING_DELAY_SECONDS");
   });
 
   it("requires the complete reconciliation contract without changing runtime selection", () => {

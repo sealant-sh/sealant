@@ -4,8 +4,8 @@ Boat remains off by default. `SEALANT_BOAT_ADMISSION_OWNER_IDS` accepts exact, c
 IDs. Only an authenticated service caller such as Mend can assert an admitted owner. This is an
 operator routing switch, not independent person authentication. Empty lists keep existing Docker
 routing. Explicit Docker choices stay Docker. The API and worker need the same allowlist. The worker
-refuses admission unless allocation, authenticated readiness, FINAL close, resource reconciliation
-and parking are actually assembled. Capture sources are supported; inline dotfiles archives are
+refuses admission unless allocation, authenticated readiness, FINAL close and resource
+reconciliation are actually assembled. Capture sources are supported; inline dotfiles archives are
 currently refused. Native image preflight can return unknown while construction still runs through
 the ordinary native publication owner.
 
@@ -18,12 +18,11 @@ Ordinary Stop uses canonical FINAL capture, positive provider deletion and gatew
 releasing the UDP slot and native publication consumer. Reconciliation finishes publication release
 if the worker crashes after recording the stopped runtime. Resume creates a fresh VM from the
 project publication and restores Mend's captured worktree. Mend's existing idle Stop uses this same
-path. It is not redirected to snapshot parking.
+path.
 
-Snapshot parking additionally keeps installed packages and disk state outside the captured worktree,
-including home files and caches and declared tmpfs capsule contents. It does not preserve running
-processes or RAM. The existing parking policy remains unchanged. A plain sync before parking's stop
-is hygiene, not a durability fix.
+Snapshot parking, which also kept installed packages and disk state outside the captured worktree,
+was cut. Installed packages, home files and caches outside the captured worktree do not survive a
+Stop.
 
 ## Worker configuration on VM 131
 
@@ -37,8 +36,8 @@ The operator supplies names and values privately:
 - Worker: `SEALANT_BOAT_API_KEY_FILE=/run/secrets/boat-api-key`, `SEALANT_BOAT_DEPLOYMENT_ID`,
   `SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_ENDPOINT`, `SEALANT_BOAT_GATEWAY_IMAGE`,
   `SEALANT_BOAT_BUILDER_OWNER`, `SEALANT_BOAT_STATE_DIRECTORY=/var/lib/sealant/boat`.
-- Keep the already reviewed parking settings at their intended values. Admission requires parking
-  services to be wired even when ordinary idle Stop is selected.
+- `SEALANT_BOAT_AUTOMATIC_PARKING` and `SEALANT_BOAT_PARKING_DELAY_SECONDS` are retired. The worker
+  ignores them, so they can be removed.
 - Mount the persistent native-build journal directory at `/var/lib/sealant/boat`. The builder owner
   UUID must survive worker restarts. Mount the secret directory read-only at `/run/secrets`, owned
   by root with mode 0700, containing the root-owned, regular, single-link 0400 key file. Symlink
