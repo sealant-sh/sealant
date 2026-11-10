@@ -314,14 +314,16 @@ export const dockerScenario = async (
     "container cannot reach private addresses",
     [
       "docker run --rm alpine sh -c '",
+      // The metadata address and the VM's own agent port. (Not the legacy UDP gateway endpoint:
+      // a carried VM is never told it, and to the VM it is just a public host.)
       "for target in 169.254.169.254:80 " +
-        `${vm.ip ?? "127.0.0.1"}:8080 ${stack.gatewayEndpoint}:22; do ` +
+        `${vm.ip ?? "127.0.0.1"}:8080; do ` +
         "host=${target%:*}; port=${target#*:}; " +
         'if nc -z -w 3 $host $port 2>/dev/null; then echo "$target reachable"; else echo "$target blocked"; fi; done\'',
     ].join(""),
   );
   expect(denied).not.toContain("reachable");
-  expect(denied.split("\n").filter((line) => line.endsWith("blocked"))).toHaveLength(3);
+  expect(denied.split("\n").filter((line) => line.endsWith("blocked"))).toHaveLength(2);
   await measure("after hello-world, build, compose and egress checks");
 
   // Limits: a two-stage Node build with `npm ci`, the heaviest ordinary thing a session does.
