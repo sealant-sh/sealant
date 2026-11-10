@@ -484,6 +484,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         receipt: "e".repeat(64),
         handshake: "unverified",
         admission: "held",
+        carrier: "udp",
       });
       expect(new Set(guest.networkBodies).size).toBe(1);
       expect(await execute(repo.get(target.runId))).toEqual(installed);
@@ -506,6 +507,57 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await expect(execute(executor.isolate(target, input))).rejects.toThrow("invalid-reply");
       expect(guest.starts).toBe(0);
       expect(JSON.stringify(installed)).not.toContain(Redacted.value(input.privateKey));
+    }));
+  it("carries the tunnel over the agent's WebSocket only when the agent says it can", () =>
+    test(async ({ executor, repo, target, guest }) => {
+      await execute(executor.exchange(target));
+      await execute(executor.stage(target.runId, material()));
+      const installed = await execute(repo.get(target.runId));
+      if (installed?.admission === null || installed === undefined) throw new Error("no admission");
+      const input = {
+        network: {
+          epoch: 1,
+          operationId: installed.admission.operationId,
+          endpoint: "10.0.0.41",
+          subnet: "10.98.0.32/27",
+        },
+        privateKey: Redacted.make(Buffer.alloc(32, 4).toString("base64")),
+        publicKey: Buffer.alloc(32, 5).toString("base64"),
+        gatewayKey: Buffer.alloc(32, 6).toString("base64"),
+        port: 40000,
+        carrier: "websocket" as const,
+      };
+      const bodies = () =>
+        guest.networkBodies.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+      // An older agent lists no carriers: it dials the gateway over UDP, as before.
+      expect((await execute(executor.isolate(target, input))).carrier).toBe("udp");
+      expect(bodies()[0]).toMatchObject({ endpoint: "10.0.0.41", port: 40000 });
+      expect(bodies()[0]).not.toHaveProperty("carrier");
+      // An agent that can carry it: no endpoint, no port, `carrier: websocket`.
+      const original = guest.request.bind(guest);
+      guest.request = async (...args) => {
+        const reply = await original(...args);
+        return args[2] === "network-status"
+          ? {
+              ...reply,
+              body: {
+                ...z.object({}).passthrough().parse(reply.body),
+                configured: false,
+                carriers: ["udp", "websocket"],
+              },
+            }
+          : reply;
+      };
+      expect((await execute(executor.isolate(target, input))).carrier).toBe("websocket");
+      const carried = bodies()[1];
+      expect(carried).toMatchObject({ carrier: "websocket", subnet: "10.98.0.32/27" });
+      expect(carried).not.toHaveProperty("endpoint");
+      expect(carried).not.toHaveProperty("port");
+      // Core's end connects to the agent's carrier route with the control token and hosted cookie.
+      const connection = Redacted.value(await execute(executor.tunnel(target)));
+      expect(connection.url).toMatch(/^wss:\/\/.+\/sealant\/tunnel$/);
+      expect(connection.headers["Authorization"]).toMatch(/^Bearer [a-f0-9]{64}$/);
+      expect(connection.headers["Cookie"]).toMatch(/^_port_auth=/);
     }));
   it("refuses another run claiming either the owned sandbox or disk before provider delivery", () =>
     test(async ({ executor, target, db, guest }) => {

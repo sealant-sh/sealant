@@ -77,13 +77,15 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   Core opens it through Boat's hosted HTTPS with the control token, the same way it reaches every
   other route, and relays it to the gateway on its own host. Neither the VM nor the gateway's host
   takes an inbound connection, as with a MicroVM. Each binary frame is one WireGuard datagram,
-  either way. In the VM, `sealant-wg`'s peer is a UDP relay on loopback, and WireGuard listens on a
-  port the agent picks. The relay takes datagrams from that port only and sends only to it, so
-  nothing else on the VM can stand in for WireGuard. One carrier at a time: a newer one replaces the
-  older, which is closed with 1012. The relay's and WireGuard's ports are kept on tmpfs, so an agent
-  restarted on the boot binds the relay where the peer points, or re-points the peer.
-  `GET /sealant/network` lists `carriers` (`udp`, `websocket`) before Core configures anything, and
-  says `carrier_attached` once configured to carry it.
+  either way, and a message a proxy split into fragments is put back together as one. In the VM,
+  `sealant-wg`'s peer is a UDP relay on loopback, and the relay learns the port WireGuard picked
+  itself once its interface is up (`wg show … listen-port`), so no port is handed over that could be
+  taken first. The relay takes datagrams from that port only and sends only to it, so nothing else
+  on the VM can stand in for WireGuard. One carrier at a time: a newer one replaces the older, which
+  is closed with 1012. The relay's and WireGuard's ports are kept on tmpfs, so an agent restarted on
+  the boot binds the relay where the peer points, or re-points the peer. `GET /sealant/network`
+  lists `carriers` (`udp`, `websocket`) before Core configures anything, and says `carrier_attached`
+  once configured to carry it.
 - `POST /sealant/network`: today's `sealant-guest-network-v1` body. The agent brings up `sealant-wg`
   in the VM's own namespace with the private key on `wg`'s stdin only, routes the subnet and the
   gateway, starts the VM's resolver (a DNS forwarder on `100.127.255.254:53` that asks the gateway

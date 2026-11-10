@@ -117,6 +117,11 @@ import {
 import { BoatObserver, boatObserverLayer, boatObserverLayerNoDeps } from "./observation.js";
 import { BoatAllocationProvider } from "./provider.js";
 import { RecordedBoat } from "./recorded-boat.fixture.js";
+import {
+  BoatTunnelCarrier,
+  boatTunnelCarrierAbsent,
+  type BoatTunnelCarrierInput,
+} from "./tunnel-carrier.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -256,7 +261,10 @@ const test = async (
     reopenResources: (
       endpoint?: string,
       gatewayHostId?: string,
+      relay?: string,
     ) => Effect.Effect<BoatResources["Service"], CredentialCipherError>;
+    /** What a relay-configured host asked its (recording) carrier to keep open. */
+    carried: BoatTunnelCarrierInput[];
     tunnels: BoatTunnelRepo["Service"];
     resources: ResourceInstanceRepo["Service"];
     gateway: GatewayFixture;
@@ -338,30 +346,48 @@ const test = async (
         );
         const gateway = new GatewayFixture();
         const gatewayHostId = randomUUID();
-        const hostLayer = (endpoint = "10.0.0.41", hostId: string = gatewayHostId) =>
-          Layer.succeed(BoatResourcesHost, {
-            deploymentId: "test",
-            gatewayHostId: hostId,
-            endpoint,
-            subnets: {
-              allocate: async () => {
-                await gateway.beforeSubnet();
-                if (gateway.subnetUnavailable) throw new Error("subnet allocator unavailable");
-                return "10.98.0.32/27";
+        // A UDP-only host has no relay and the absent carrier; a relay records what it carries.
+        const carried: BoatTunnelCarrierInput[] = [];
+        const recordingCarrier = Layer.succeed(
+          BoatTunnelCarrier,
+          BoatTunnelCarrier.of({
+            ensure: (carrierInput) => Effect.sync(() => void carried.push(carrierInput)),
+            release: () => Effect.void,
+            attached: () => Effect.succeed(false),
+          }),
+        );
+        const hostLayer = (
+          endpoint = "10.0.0.41",
+          hostId: string = gatewayHostId,
+          relay?: string,
+        ) =>
+          Layer.merge(
+            relay === undefined ? boatTunnelCarrierAbsent : recordingCarrier,
+            Layer.succeed(BoatResourcesHost, {
+              ...(relay === undefined ? {} : { relay: { host: relay } }),
+              deploymentId: "test",
+              gatewayHostId: hostId,
+              endpoint,
+              subnets: {
+                allocate: async () => {
+                  await gateway.beforeSubnet();
+                  if (gateway.subnetUnavailable) throw new Error("subnet allocator unavailable");
+                  return "10.98.0.32/27";
+                },
+                release: async () => {
+                  throw new Error("must retain subnet");
+                },
               },
-              release: async () => {
-                throw new Error("must retain subnet");
+              tunnel: {
+                ensure: (request) =>
+                  Effect.tryPromise({
+                    try: () => gateway.ensure(request),
+                    catch: () => new BoatTunnelError("gateway-unavailable"),
+                  }),
+                remove: () => gateway.remove(),
               },
-            },
-            tunnel: {
-              ensure: (request) =>
-                Effect.tryPromise({
-                  try: () => gateway.ensure(request),
-                  catch: () => new BoatTunnelError("gateway-unavailable"),
-                }),
-              remove: () => gateway.remove(),
-            },
-          });
+            }),
+          );
         const ResourceLayer = boatResourcesLayer.pipe(Layer.provide(Exchange));
         const ResourceRoot: Layer.Layer<
           BoatAllocation | BoatResources | BoatReadiness | BoatFinalClose,
@@ -394,9 +420,15 @@ const test = async (
         const resourceOwner = Context.get(context, BoatResources);
         const resources = Context.get(context, ResourceInstanceRepo);
         const scope = yield* Effect.scope;
-        const reopenResources = (endpoint = "10.0.0.41", hostId: string = gatewayHostId) =>
+        const reopenResources = (
+          endpoint = "10.0.0.41",
+          hostId: string = gatewayHostId,
+          relay?: string,
+        ) =>
           Layer.buildWithScope(
-            ResourceLayer.pipe(Layer.provide(Layer.merge(Infra, hostLayer(endpoint, hostId)))),
+            ResourceLayer.pipe(
+              Layer.provide(Layer.merge(Infra, hostLayer(endpoint, hostId, relay))),
+            ),
             scope,
           ).pipe(Effect.map((ctx) => Context.get(ctx, BoatResources)));
         yield* Effect.promise(() =>
@@ -485,6 +517,7 @@ const test = async (
                 return { owner: Context.get(built, BoatFinalClose), daemon };
               }),
             reopenResources,
+            carried,
             tunnels,
             resources,
             gateway,
@@ -1844,6 +1877,39 @@ describe.runIf(databaseUrl !== undefined)(
         const foreignHost = await execute(s.reopenResources("10.0.0.41", randomUUID()));
         await expect(execute(foreignHost.prepare(target))).rejects.toThrow("binding-conflict");
         expect(s.gateway.requests).toHaveLength(2);
+      }));
+    it("carries the tunnel when the host has a relay and the agent can: the carrier gets the gateway's port", () =>
+      test(async (s) => {
+        const target = await execute(s.allocations.prepare(s.input));
+        await execute(s.executor.stage(target.runId, Redacted.make(launchMaterial())));
+        const original = s.guest.request.bind(s.guest);
+        s.guest.request = async (...args) => {
+          const reply = await original(...args);
+          return args[2] === "network-status"
+            ? {
+                ...reply,
+                body: {
+                  ...z.object({}).passthrough().parse(reply.body),
+                  carriers: ["udp", "websocket"],
+                },
+              }
+            : reply;
+        };
+        const relayed = await execute(s.reopenResources("10.0.0.41", undefined, "127.0.0.1"));
+        const result = await execute(relayed.prepare(target));
+        expect(result.guest.carrier).toBe("websocket");
+        const body = JSON.parse(s.guest.networkBodies.at(-1) ?? "{}") as Record<string, unknown>;
+        expect(body).toMatchObject({ carrier: "websocket" });
+        expect(body).not.toHaveProperty("endpoint");
+        expect(s.carried).toHaveLength(1);
+        expect(s.carried[0]).toMatchObject({
+          runId: target.runId,
+          gateway: { host: "127.0.0.1", port: s.gateway.requests.at(-1)?.listenPort },
+        });
+        const connection = Redacted.value(
+          await execute(s.carried[0]?.connection ?? Effect.die("")),
+        );
+        expect(connection.url).toMatch(/\/sealant\/tunnel$/);
       }));
     const parkingSource = async (
       s: Parameters<Parameters<typeof test>[0]>[0],
