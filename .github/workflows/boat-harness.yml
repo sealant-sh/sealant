@@ -66,12 +66,44 @@ jobs:
       - name: Kernel WireGuard
         run: sudo modprobe wireguard && lsmod | grep -q '^wireguard'
 
+      # The twin base image needs Ubuntu's archive and snapshot service to build (the snapshot is the
+      # only source of the pinned systemd). Cached by the twin's own files, a job builds it only
+      # when they change, so an Ubuntu outage cannot turn every run red. At run time the stack reads
+      # a mirror when only the mirror answers (stack.ts).
+      - name: Restore the twin base image
+        id: twin-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/boat-twin-base.tar
+          key: boat-twin-${{ hashFiles('packages/workspaces/boat-harness/twin/**') }}
+
+      - name: Load the twin base image
+        if: steps.twin-cache.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/boat-twin-base.tar
+
       # A step timeout fails the step instead of cancelling the job, so the logs still upload.
       - name: Run the harness
         timeout-minutes: 85
         env:
           BOAT_HARNESS_VERBOSE: "1"
         run: pnpm boat:harness
+
+      - name: Export the twin base image
+        id: twin-export
+        if: always() && steps.twin-cache.outputs.cache-hit != 'true'
+        run: |
+          tags=$(docker image ls --filter reference='sealant-boat-harness-twin:*' --format '{{.Repository}}:{{.Tag}}' | grep -v -- '-mirror$' || true)
+          if [ -n "$tags" ]; then
+            docker save -o /tmp/boat-twin-base.tar $tags
+            echo "saved=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache the twin base image
+        if: always() && steps.twin-export.outputs.saved == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/boat-twin-base.tar
+          key: boat-twin-${{ hashFiles('packages/workspaces/boat-harness/twin/**') }}
 
       - name: Keep the harness logs
         if: always()

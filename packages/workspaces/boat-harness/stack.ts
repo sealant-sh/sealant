@@ -246,29 +246,95 @@ const freeSubnet = async (): Promise<string> => {
   throw new Error("no free 192.0.x.0/24 subnet for the twin network");
 };
 
-/** Builds an image once per content hash of its context and returns its tag, kept between runs. */
-const cachedImage = async (name: string, context: string, dockerfile?: string): Promise<string> => {
+/**
+ * Builds an image once per content hash of its context and returns its tag, kept between runs.
+ * Build arguments change only how an image is built (where it downloads from), never what it holds,
+ * so they are not part of the tag: a cached image is used whatever they are.
+ */
+const cachedImage = async (
+  name: string,
+  context: string,
+  options: { readonly dockerfile?: string; readonly args?: Readonly<Record<string, string>> } = {},
+): Promise<string> => {
   const digest = createHash("sha256");
   for (const file of (await readdir(context)).toSorted())
     digest.update(file).update(await readFile(join(context, file)));
+  const args = Object.entries(options.args ?? {});
   const tag = `${name}:${digest.digest("hex").slice(0, 16)}`;
   const id = await docker(["image", "inspect", "-f", "{{.Id}}", tag]);
   if (id.code === 0 && process.env.BOAT_HARNESS_REBUILD !== "1") return tag;
-  await dockerOk(
+  const built = await docker(
     [
       "build",
-      "-q",
+      "--progress=plain",
       // Not the run key: containers inherit image labels, and must not look like a run's.
       "--label",
       CACHE_LABEL,
       "-t",
       tag,
-      ...(dockerfile === undefined ? [] : ["-f", dockerfile]),
+      ...(options.dockerfile === undefined ? [] : ["-f", options.dockerfile]),
+      ...args.flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]),
       context,
     ],
     { timeoutMs: 20 * 60_000 },
   );
+  if (built.code !== 0) {
+    // apt's own lines say which host failed; the build's last lines only echo the Dockerfile.
+    const apt = `${built.stdout}\n${built.stderr}`
+      .split("\n")
+      .filter((line) => /\b(E:|W: Failed|Err:)/.test(line))
+      .slice(-12);
+    throw new Error(
+      `building ${tag} failed (${String(built.code)}${built.timedOut ? ", timed out" : ""}): ${apt.join(" | ") || built.stderr.slice(-1500)}`,
+    );
+  }
   return tag;
+};
+
+/**
+ * Where the twins read Ubuntu 24.04: the stock archive, else a full mirror of it, as
+ * `recipe.e2e.ts` does (#534). The native build runs apt in a twin, so an archive outage would
+ * otherwise fail every scenario and say nothing about Boat. Both unreachable fails the stack at once.
+ */
+const STOCK_ARCHIVE = "http://archive.ubuntu.com/ubuntu";
+const UBUNTU_ARCHIVES = [STOCK_ARCHIVE, "http://mirrors.edge.kernel.org/ubuntu"] as const;
+
+/**
+ * The twin image reading Ubuntu from `mirror` instead of the stock archive and security host: one
+ * layer over the cached twin that rewrites apt's sources, built without any download.
+ */
+const mirroredTwin = async (twin: string, mirror: string): Promise<string> => {
+  const tag = `${twin}-mirror`;
+  if ((await docker(["image", "inspect", "-f", "{{.Id}}", tag])).code === 0) return tag;
+  await dockerOk(["build", "-q", "--label", CACHE_LABEL, "-t", tag, "-"], {
+    input: [
+      `FROM ${twin}`,
+      `RUN sed -i -e "s|http://archive.ubuntu.com/ubuntu|${mirror}|g" -e "s|http://security.ubuntu.com/ubuntu|${mirror}|g" /etc/apt/sources.list.d/ubuntu.sources`,
+    ].join("\n"),
+    timeoutMs: 5 * 60_000,
+  });
+  return tag;
+};
+
+const reachableArchive = async (log: (line: string) => void): Promise<string> => {
+  const failures: string[] = [];
+  for (const url of UBUNTU_ARCHIVES) {
+    const answer = await fetch(`${url}/dists/noble/Release`, {
+      method: "HEAD",
+      signal: AbortSignal.timeout(20_000),
+    }).catch((error: unknown) => error);
+    if (answer instanceof Response && answer.ok) {
+      if (url !== STOCK_ARCHIVE)
+        log(`Ubuntu archive unreachable (${failures.join("; ")}); twins read ${url}`);
+      return url;
+    }
+    failures.push(
+      `${url}: ${answer instanceof Response ? `HTTP ${answer.status}` : String(answer)}`,
+    );
+  }
+  throw new Error(
+    `Ubuntu's archive and its mirror are both unreachable (${failures.join("; ")}): the native build cannot run, so no scenario could say anything about Boat`,
+  );
 };
 
 const makeTls = async (directory: string) => {
@@ -409,10 +475,21 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
   try {
     // Images: guest twin base and the real resource gateway.
     log("building guest twin and gateway images (cached by tag)");
-    const [twinImage, gatewayBase] = await Promise.all([
-      cachedImage("sealant-boat-harness-twin", join(here, "twin")),
+    // The local pin (`BOAT_HARNESS_UBUNTU_ARCHIVE_IP`) keeps the stock archive's name, so it needs
+    // no mirror.
+    const archive =
+      process.env.BOAT_HARNESS_UBUNTU_ARCHIVE_IP === undefined
+        ? await reachableArchive(log)
+        : STOCK_ARCHIVE;
+    const [twinBase, gatewayBase] = await Promise.all([
+      cachedImage("sealant-boat-harness-twin", join(here, "twin"), {
+        args: archive === STOCK_ARCHIVE ? {} : { UBUNTU_ARCHIVE: archive },
+      }),
       cachedImage("sealant-boat-harness-gateway", join(repo, "packages/workspaces/boat-tunnel")),
     ]);
+    // The base ends on the stock archive, as a Boat VM does; when only the mirror answers, the
+    // twins (and the native build in them) read the mirror instead.
+    const twinImage = archive === STOCK_ARCHIVE ? twinBase : await mirroredTwin(twinBase, archive);
     // Core wants the gateway by digest. Its containers get this run's label from `bin/docker`.
     const gatewayImage = (
       await dockerOk(["image", "inspect", "-f", "{{.Id}}", gatewayBase])
