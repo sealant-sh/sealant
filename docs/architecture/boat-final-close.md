@@ -76,6 +76,17 @@ the VM and can never be read as nothing to save. A malformed answer or lost tran
 too and is retried. Snapshot hydration and fresh-epoch recovery belong to the canonical parking
 owner.
 
+## A close that keeps the VM
+
+When FINAL drains but the daemon cannot confirm the work saved (`unconfirmed`, `stalled`, or
+`silent` while the VM runs, for example because Mend refuses the uploads), the close keeps the VM
+and records the retention on the run's capture root (`retained_at`, with why). That record is what
+enrolls the session for parking: the parking sweep takes over its lineage, and the session is parked
+only once `SEALANT_BOAT_PARKING_DELAY_SECONDS` have passed since the retention. From enrollment on,
+the lifecycle sweep leaves the run to parking. A FINAL whose queue is still moving, or one another
+close holds, records nothing; the close that owns the drain decides. The agent's refusals and a
+pending recovery boot keep the VM without recording a retention.
+
 ## Exact cleanup and retry
 
 Only canonical deletion authorization and issuance permit DELETE. A fresh provider observation must

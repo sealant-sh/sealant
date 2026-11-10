@@ -1829,6 +1829,8 @@ describe.runIf(databaseUrl !== undefined)("Boat canonical FINAL close", () => {
       await execute(Deferred.await(reached));
       try {
         expect(await execute(owner.close(target))).toBe("retained");
+        // The close in flight decides; the one it turned away keeps nothing on record.
+        expect((await execute(s.canonical.getByRunId(target.runId)))?.retainedAt).toBeNull();
       } finally {
         await execute(Deferred.succeed(open, undefined));
       }
@@ -2123,6 +2125,82 @@ describe.runIf(databaseUrl !== undefined)(
         ).toBe(target.sandboxId);
         expect(s.provider.creates).toHaveLength(2);
         await expect(execute(s.resourceOwner.prepare(target))).rejects.toThrow("held");
+      }));
+    /** A capture session whose Stop could not confirm its FINAL saved (Mend refused uploads). */
+    const keptByStop = async (s: Parameters<Parameters<typeof test>[0]>[0]) => {
+      s.provider.parking = true;
+      const target = await execute(s.allocations.prepare(s.input));
+      await execute(
+        s.readiness.launch(
+          target,
+          Redacted.make({
+            bootEnv: {
+              SEALANT_WORKSPACE_SOURCE: "capture",
+              SEALANT_CAPTURE_ENDPOINT: "https://capture.invalid/session",
+              SEALANT_CAPTURE_WORKTREE_ID: "wt_1",
+              SEALANT_CAPTURE_LAUNCH_ID: "parking-launch",
+            },
+            secretEnv: { SEALANT_CAPTURE_TOKEN: "local-proof-token" },
+            pins: { credentialVersions: [], dotfiles: [] },
+            docker: false,
+          }),
+        ),
+      );
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      const { owner } = await execute(
+        s.final([captureStatus({ complete: false, incompleteReason: "ship-failed" })]),
+      );
+      expect(await execute(owner.close(target))).toBe("retained");
+      const parking = await execute(
+        s.parking([
+          captureStatus({ complete: false, incompleteReason: "ship-failed", pending: 1 }),
+          captureStatus({ epoch: 2 }),
+        ]),
+      );
+      return { target, owner, parking, custody: await execute(s.canonical.preservation) };
+    };
+    it("records the retention of a Stop that kept the VM, so parking enrolls it, never before the parking delay (harness: park and resume)", () =>
+      test(async (s) => {
+        const { target, owner, parking, custody } = await keptByStop(s);
+        const root = await execute(s.canonical.getByRunId(target.runId));
+        expect(root?.retainedAt).toBeInstanceOf(Date);
+        expect(root?.retainedReason).toMatch(/^FINAL not saved · unconfirmed/);
+        expect(await execute(parking.reconcile())).toEqual([]);
+        const enrolled = await execute(custody.read(target.runId));
+        expect(enrolled).toMatchObject({ state: "retained", parkingDelaySeconds: 300 });
+        expect(Date.parse(enrolled?.retainedSince ?? "")).toBe(root?.retainedAt?.getTime());
+        expect(Date.parse(enrolled?.parkingEligibleAt ?? "")).toBe(
+          (root?.retainedAt?.getTime() ?? 0) + 300_000,
+        );
+        // Parking owns the lineage now: the lifecycle sweep no longer retries the close.
+        expect((await execute(owner.reconcile({ limit: 20 }))).entries).toContainEqual({
+          runId: target.runId,
+          outcome: "skipped",
+        });
+        // Due on the action clock, but the retention is younger than the delay: nothing is saved.
+        await execute(makeParkingActionDue(s.db, target.runId));
+        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("held");
+        expect(s.provider.saves).toBe(0);
+        expect(s.provider.deleteCalls).toBe(0);
+      }));
+    it("parks a session its Stop kept once the parking delay has passed (harness: park and resume)", () =>
+      test(async (s) => {
+        const { target, parking, custody } = await keptByStop(s);
+        // The Stop recorded the retention; here it is moved back past the delay.
+        expect((await execute(s.canonical.getByRunId(target.runId)))?.retainedAt).toBeInstanceOf(
+          Date,
+        );
+        await execute(backdateUnenrolledParkingRetention(s.db, target.runId));
+        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("pending");
+        await execute(makeParkingActionDue(s.db, target.runId));
+        expect((await execute(parking.reconcile()))[0]?.outcome).toBe("parked");
+        expect(s.provider.saves).toBe(1);
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await execute(custody.read(target.runId))).toMatchObject({
+          state: "parked",
+          snapshotOnly: true,
+        });
       }));
     it("parks the resumed child after its own idle delay and discharges every saved ancestor on discard", () =>
       test(async (s) => {

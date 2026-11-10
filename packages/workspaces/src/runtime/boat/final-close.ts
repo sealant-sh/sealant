@@ -337,7 +337,21 @@ const make: Effect.Effect<
         label: "Boat FINAL close",
         runtimeState: Effect.succeed("running"),
       }).pipe(Effect.provideService(SealantRuntime, runtime));
-      if (outcome.kind !== "drained") return "retained" as const;
+      if (outcome.kind !== "drained") {
+        // The work on the VM could not be confirmed saved, so the VM is kept: recorded, which is
+        // what enrolls it for parking (after the retained parking delay). A queue still moving or
+        // a drain another close holds keeps nothing yet; that close, or the next, decides.
+        if (
+          outcome.kind === "unconfirmed" ||
+          outcome.kind === "stalled" ||
+          outcome.kind === "silent"
+        )
+          yield* ledger.markRetained(
+            target.runId,
+            `FINAL not saved · ${outcome.kind}${outcome.detail === undefined ? "" : ` · ${outcome.detail}`}`,
+          );
+        return "retained" as const;
+      }
     }
     // Absence and a timeout are never completion. A previous unknown DELETE may be retried only
     // after a fresh positive observation of this exact owned sandbox and unchanged FINAL evidence.
