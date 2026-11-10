@@ -963,6 +963,30 @@ export interface CreateOptions {
   readonly services?: WorkspaceServicesOptions;
   /** The workspace's network (see `WorkspaceNetworkOptions`). */
   readonly network?: WorkspaceNetworkOptions;
+  /**
+   * `"none"`: your promise that this workspace will never be linked to project resources
+   * (`scope.workspaces.link()`), made at create and kept for the workspace's life, restarts
+   * included. Set it for a workspace whose worktree binds no resource. Omitted, the workspace may
+   * be linked, as before the option existed, on every runtime.
+   *
+   * What it changes depends on the runtime:
+   *
+   * - **Boat** builds a workspace's way to reach resources when it launches: a gateway on the
+   *   control plane's Docker host, a tunnel to it and a resolver in the VM. With `"none"` none of
+   *   that is built, the workspace is ready sooner, and a Boat deployment that has no resource
+   *   gateway at all can run it. Linking such a workspace later rejects with a `SealantApiError`
+   *   whose `code` is `ResourceWorkspaceWithoutResourcesError` and `reason` is
+   *   `workspace-without-resources`; nothing is linked and the running workspace is
+   *   unchanged. To give it resources, create the workspace again without the option and link that
+   *   one: it reaches them from its next start.
+   * - **Docker and Kubernetes** attach resources to a running workspace, so they do not enforce
+   *   the option: linking a workspace created with it works as it does without.
+   *
+   * A Boat deployment with no resource gateway refuses a Boat workspace created WITHOUT the
+   * option before it is built: `ready()` rejects with code `gateway-unavailable`. A control plane
+   * older than the option rejects the create (400): its spec is strict.
+   */
+  readonly resources?: "none";
   /** When true (default), resolve only once the workspace runtime is live. */
   readonly wait?: boolean;
   /**
@@ -1168,7 +1192,9 @@ export interface Workspace {
    * otherwise (with the control plane's reason; a runtime's `unsupported-runtime-requirement`
    * refusal is one). A per-person launch the worker refused for its owner map rejects with the
    * refusal's own code: `owner-map-unsupported` when the image cannot apply the owner map,
-   * `owner-map-unverified` when Core cannot tell whether it does.
+   * `owner-map-unverified` when Core cannot tell whether it does. A Boat workspace created without
+   * `resources: "none"` on a deployment that has no resource gateway rejects with
+   * `gateway-unavailable`: nothing was built and no VM was created.
    * When the handle came from `workspaces.create()` and `ready()` gives up on a bound, a stop is
    * requested before the error is thrown, so an abandoned launch does not keep running to its cap;
    * the error says whether the request was accepted (not that the workspace stopped). Options given

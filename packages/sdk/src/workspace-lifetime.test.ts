@@ -172,6 +172,12 @@ describe("workspace.ready() failure codes", () => {
       "The image's sealantd does not restore files per person.",
     ],
     ["owner-map-unverified", "owner-map-unverified", "Core could not read the image's probe."],
+    // A Boat deployment with no resource gateway refused a workspace that may be linked.
+    [
+      "gateway-unavailable",
+      "gateway-unavailable",
+      "This deployment has no resource gateway for Boat",
+    ],
     ["executor-launch-failed", "workspace_not_ready", "boom"],
   ])(
     "rejects a launch the control plane failed with %s as %s, with its reason",

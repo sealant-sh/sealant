@@ -99,6 +99,43 @@ describe("buildCreateWorkspaceRequest", () => {
     expect(build({ cloudMetadata: false }).runtime?.network).toBeUndefined();
   });
 
+  it('sends `resources: "none"` as the spec\'s `runtime.resources` only when asked', () => {
+    const build = (options: { resources?: "none"; network?: { cloudMetadata: true } } = {}) =>
+      buildCreateWorkspaceRequest(
+        { repository: "github.com/acme/billing-service", harness: opencode(), ...options },
+        config,
+      ).payload as unknown as { spec: { runtime?: Record<string, unknown> }; resources?: unknown };
+
+    const asked = build({ resources: "none" });
+    expect(asked.spec.runtime).toEqual({ resources: "none" });
+    // It lives in the stored spec, where a restart reads it again; never beside it.
+    expect(asked).not.toHaveProperty("resources");
+    // Absent by default: nothing is sent, and the workspace may be linked as before.
+    expect(build().spec.runtime).toBeUndefined();
+    expect(JSON.stringify(build())).not.toContain("resources");
+    // It shares the one `runtime` object with every other runtime-scoped option.
+    expect(build({ resources: "none", network: { cloudMetadata: true } }).spec.runtime).toEqual({
+      resources: "none",
+      network: { cloudMetadata: true },
+    });
+  });
+
+  it("refuses a `resources` value the control plane does not know, before sending anything", () => {
+    for (const resources of ["all", "", true, null]) {
+      expect(() =>
+        buildCreateWorkspaceRequest(
+          {
+            repository: "github.com/acme/billing-service",
+            harness: opencode(),
+            // @ts-expect-error: only "none" is a `resources` value.
+            resources,
+          },
+          config,
+        ),
+      ).toThrow(expect.objectContaining({ code: "invalid_create_options" }));
+    }
+  });
+
   it("passes through full git urls and honors an explicit ref", () => {
     const { payload } = buildCreateWorkspaceRequest(
       { repository: "https://gitlab.com/x/y.git", ref: "master", harness: opencode() },

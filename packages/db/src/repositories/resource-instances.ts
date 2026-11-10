@@ -13,6 +13,7 @@ import {
   type ResourceInstanceStopReason,
   type ResourceInstanceVolume,
 } from "@sealant/api-contracts";
+import { storedWorkspaceResources } from "@sealant/validators";
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { Cause, Context, Effect, Layer, Schema } from "effect";
 
@@ -22,6 +23,7 @@ import {
   resourceInstances,
   resourceNetworks,
   resourceWorkspaceLinks,
+  workspaceAttemptSnapshots,
   workspaceRunLinks,
   workspaceRuntimeInstances,
   workspaces,
@@ -126,6 +128,13 @@ export type ResourceWorkspaceLinkOutcome =
   /** The workspace is linked to another domain; nothing changed. */
   | { readonly kind: "other-domain"; readonly resourceDomainId: string }
   | { readonly kind: "no-such-workspace" }
+  /**
+   * The workspace was created never to be linked to resources (`runtime.resources: "none"` in its
+   * stored spec) and runs on Boat, where a run is given its resource gateway and tunnel at launch
+   * or never: nothing was written. A workspace recreated without the option can be linked, and
+   * reaches its resources from its next start.
+   */
+  | { readonly kind: "workspace-without-resources" }
   | { readonly kind: "domain-not-active"; readonly state: Exclude<ResourceDomainState, "active"> }
   | { readonly kind: "no-such-domain" };
 
@@ -652,11 +661,35 @@ export const ResourceInstanceRepoLive: Layer.Layer<ResourceInstanceRepo, never, 
                 .where(eq(resourceDomains.id, resourceDomainId));
               if (domain?.ownerKind !== "project") return { kind: "caller-only" } as const;
               const [workspace] = yield* db
-                .select({ id: workspaces.id })
+                .select({ id: workspaces.id, latestRunId: workspaces.latestRunId })
                 .from(workspaces)
                 .where(eq(workspaces.id, workspaceId))
                 .limit(1);
               if (workspace === undefined) return { kind: "no-such-workspace" } as const;
+              // Boat gives a run its resource gateway at launch or never, so a workspace created
+              // without resources cannot gain them while it lives. The runtimes that attach
+              // resources to a running executor (Docker, Kubernetes) do not enforce the option.
+              if (workspace.latestRunId !== null) {
+                const [launch] = yield* db
+                  .select({
+                    spec: workspaceAttemptSnapshots.blueprintPayload,
+                    adapter: workspaceRuntimeInstances.adapter,
+                  })
+                  .from(workspaceAttemptSnapshots)
+                  .leftJoin(
+                    workspaceRuntimeInstances,
+                    eq(workspaceRuntimeInstances.runId, workspaceAttemptSnapshots.runId),
+                  )
+                  .where(eq(workspaceAttemptSnapshots.runId, workspace.latestRunId))
+                  .limit(1);
+                const spec = storedWorkspaceResources(launch?.spec);
+                if (
+                  spec?.resources === "none" &&
+                  // Its executor's runtime once it has one; until then, the runtime it requires.
+                  (launch?.adapter ?? spec.family) === "boat"
+                )
+                  return { kind: "workspace-without-resources" } as const;
+              }
               const [row] = yield* db
                 .insert(resourceWorkspaceLinks)
                 .values({ workspaceId, resourceDomainId, worktreeKey, aliases })

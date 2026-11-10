@@ -485,6 +485,19 @@ export const workspaceLegacyEnvSchema = z
     }
   });
 
+/**
+ * `"none"`: the caller's statement, made at create and kept for the workspace's life (a restart
+ * reads the same spec), that this workspace will never be linked to project resources
+ * (`POST /v1/resource-domains/:id/links`). A runtime that needs standing infrastructure for a
+ * workspace to reach resources then builds none of it: on Boat the run gets no resource gateway,
+ * tunnel or in-VM resolver, and a later link of the workspace is refused
+ * (`ResourceWorkspaceWithoutResourcesError`). Docker and Kubernetes attach resources to a running
+ * workspace, so they do not enforce it: a later link works as it does without the option. Absent:
+ * the workspace may be linked, as before the option existed.
+ */
+export const workspaceResourcesSchema = z.literal("none");
+export type WorkspaceResources = z.infer<typeof workspaceResourcesSchema>;
+
 export const workspaceSpecRuntimeSchema = z
   .strictObject({
     env: workspaceLegacyEnvSchema,
@@ -499,6 +512,7 @@ export const workspaceSpecRuntimeSchema = z
     network: workspaceSpecNetworkSchema.prefault({}),
     envFrom: z.array(workspaceEnvFromSourceSchema).max(16).default([]),
     kubernetes: workspaceSpecKubernetesSchema,
+    resources: workspaceResourcesSchema.optional(),
   })
   .prefault({});
 
@@ -553,6 +567,38 @@ export const workspaceBlueprintSchema = z.strictObject({
 });
 
 export type WorkspaceBlueprint = z.infer<typeof workspaceBlueprintSchema>;
+
+const storedResourcesSchema = z.object({
+  runtime: z.object({ resources: workspaceResourcesSchema.optional() }).optional(),
+  target: z
+    .object({
+      runtime: z.object({ family: workspaceTargetRuntimeFamilySchema.optional() }).optional(),
+    })
+    .optional(),
+});
+
+/**
+ * What a stored spec says about linking its workspace to resources: the `runtime.resources` it was
+ * created with and the runtime family it requires (`auto` when it names none). Reads only those
+ * two fields, so a spec stored by an older control plane answers too; `undefined` when the stored
+ * value is not a spec at all.
+ */
+export const storedWorkspaceResources = (
+  spec: unknown,
+):
+  | {
+      readonly resources: WorkspaceResources | undefined;
+      readonly family: z.infer<typeof workspaceTargetRuntimeFamilySchema>;
+    }
+  | undefined => {
+  const parsed = storedResourcesSchema.safeParse(spec);
+  return parsed.success
+    ? {
+        resources: parsed.data.runtime?.resources,
+        family: parsed.data.target?.runtime?.family ?? "auto",
+      }
+    : undefined;
+};
 
 export const parseWorkspaceBlueprint = (input: unknown): WorkspaceBlueprint => {
   return workspaceBlueprintSchema.parse(input);

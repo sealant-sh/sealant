@@ -44,6 +44,22 @@ describe("toSealantError", () => {
     });
   });
 
+  it("types the refusal to link a workspace created without resources", () => {
+    const refused = toSealantError({
+      _tag: "ResourceWorkspaceWithoutResourcesError",
+      message: "This workspace was created without resources.",
+      code: "workspace-without-resources",
+      status: 409,
+    });
+    expect(refused).toBeInstanceOf(SealantApiError);
+    expect(refused).toMatchObject({
+      code: "ResourceWorkspaceWithoutResourcesError",
+      reason: "workspace-without-resources",
+      status: 409,
+      message: "This workspace was created without resources.",
+    });
+  });
+
   it("reads status from a nested HTTP response", () => {
     const mapped = toSealantError({
       _tag: "RequestError",

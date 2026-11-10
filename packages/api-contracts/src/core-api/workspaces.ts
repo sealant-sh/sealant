@@ -215,6 +215,29 @@ export const createWorkspaceCredentialsSchema = Schema.Struct({
 });
 export type CreateWorkspaceCredentials = typeof createWorkspaceCredentialsSchema.Type;
 
+/**
+ * `spec.runtime.resources` of a create: this workspace will never be linked to project resources
+ * (`PUT /v1/resource-domains/:id/workspace-links/:workspaceId`). Absent, a workspace may be linked,
+ * as before the option existed, on every runtime.
+ *
+ * What it buys is runtime-specific. On Boat a workspace's way to reach resources is built when it
+ * launches (a gateway on Core's Docker host, a tunnel and a resolver in the VM); with `"none"`
+ * none of it is built, the workspace is ready sooner, and a Boat deployment with no resource
+ * gateway can run it. A later link of such a workspace is refused there
+ * (`ResourceWorkspaceWithoutResourcesError`, 409). A Boat deployment with no resource gateway
+ * refuses a Boat workspace created without the option before it is built: the launch fails with
+ * `WORKSPACE_GATEWAY_UNAVAILABLE_CODE` as the workspace's `error.code`. Docker and Kubernetes
+ * attach resources to a running workspace, so they do not enforce the option: a later link works.
+ */
+export const WORKSPACE_RESOURCES_NONE = "none";
+
+/**
+ * `error.code` of a workspace whose launch a Boat deployment with no resource gateway refused: the
+ * workspace may be linked to resources (it was created without `runtime.resources: "none"`), and
+ * this deployment has nothing to reach them through. Nothing was built and no VM was created.
+ */
+export const WORKSPACE_GATEWAY_UNAVAILABLE_CODE = "gateway-unavailable";
+
 export const createWorkspaceRequestSchema = Schema.Struct({
   /** Existing resource domain for image reuse only. Omitted selects the authenticated owner. */
   imageScopeId: Schema.optional(NonEmptyString),
@@ -226,6 +249,12 @@ export const createWorkspaceRequestSchema = Schema.Struct({
   sourceSelection: Schema.optional(githubWorkspaceSourceSelectionSchema),
   dotfilesSelection: Schema.optional(githubWorkspaceSourceSelectionSchema),
   credentials: Schema.optional(createWorkspaceCredentialsSchema),
+  /**
+   * The workspace's spec (the blueprint in `@sealant/validators`), stored with the workspace and
+   * read again by every restart. `runtime.resources: "none"` in it is the caller's statement that
+   * this workspace will never be linked to project resources (see
+   * `WORKSPACE_RESOURCES_NONE`).
+   */
   spec: Schema.Unknown,
   // The transient secret channel: validated by `parseWorkspaceSecretEnv`, encrypted at rest on
   // the build job until launch, delivered to the workspace daemon as a boot file, and NEVER part

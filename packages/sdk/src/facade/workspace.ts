@@ -14,7 +14,7 @@ import type {
   WorkspaceCredentialHome as WireWorkspaceCredentialHome,
   WorkspaceDetails as WireWorkspaceDetails,
 } from "@sealant/api-contracts";
-import { sessionArgvIssue } from "@sealant/api-contracts";
+import { sessionArgvIssue, WORKSPACE_GATEWAY_UNAVAILABLE_CODE } from "@sealant/api-contracts";
 
 import { applyDotfiles } from "../effect/apply-dotfiles.js";
 import { execWorkspace } from "../effect/exec-workspace.js";
@@ -121,6 +121,9 @@ const readyFailureCode = (code: string | undefined): string => {
   if (code === "image-build-stalled") return "workspace_image_build_stalled";
   if (code === "image-build-timeout") return "workspace_image_build_timeout";
   if (code !== undefined && OWNER_MAP_REFUSAL_CODES.has(code)) return code;
+  // A Boat deployment with no resource gateway refused a workspace that may be linked to
+  // resources (created without `resources: "none"`).
+  if (code === WORKSPACE_GATEWAY_UNAVAILABLE_CODE) return code;
   return "workspace_not_ready";
 };
 

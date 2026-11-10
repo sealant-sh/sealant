@@ -208,6 +208,21 @@ describe("native recipe boundary", () => {
     expect(recipe.value.installScript).toContain("/opt/sealant/node --version");
     expect(recipe.value.installScript).not.toContain("python3 nodejs");
   });
+  it("builds one image for a workspace with resources and one created without them", async () => {
+    // `runtime.resources` is a launch-time fact: a session with no resources boots the same
+    // snapshot as one with, so it must never fork the recipe, its hash or its boot environment.
+    const base = spec();
+    const without = { ...base, runtime: { ...base.runtime, resources: "none" as const } };
+    const linkable = await createNativeRecipe(base, serializationBundleFixture);
+    const unlinked = await createNativeRecipe(without, serializationBundleFixture);
+    if (!linkable.ok) throw linkable.error;
+    if (!unlinked.ok) throw unlinked.error;
+    expect(unlinked.value.hash).toBe(linkable.value.hash);
+    expect(unlinked.value.installScript).toBe(linkable.value.installScript);
+    expect(unlinked.value.agentManifestDigest).toBe(linkable.value.agentManifestDigest);
+    expect(nativeWorkspaceInstallation(without)).toEqual(nativeWorkspaceInstallation(base));
+  });
+
   it("does not install dotfiles without a source when applyDotfiles is enabled", async () => {
     const base = spec();
     const disabled = { ...base, customization: { ...base.customization, applyDotfiles: false } };
