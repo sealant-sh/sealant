@@ -187,6 +187,43 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         guest: { service: "docker", reason: "policy-failed" },
       });
       expect(boatExecutionRetryable(failed)).toBe(false);
+      // The engine answered but could not run a container (VM 131 run 7): what it is made of and
+      // the run's error come with the diagnostic, redacted, so the failure says why.
+      guest.request = async (...args) =>
+        args[2] === "health"
+          ? {
+              status: 503,
+              body: {
+                version: 2,
+                booted: true,
+                controlSocket: true,
+                services: {
+                  docker: {
+                    status: "failed",
+                    reason: "container-probe-failed",
+                    code: null,
+                    signal: null,
+                    output:
+                      "containerd: /usr/local/bin/containerd containerd v2.1.4 on /run/sealant/docker-exec/containerd/containerd.sock\nsystem containerd socket: present\ncontainer probe: docker run failed:\nfailed to create TTRPC connection: unsupported protocol: Yunix",
+                  },
+                },
+              },
+            }
+          : original(...args);
+      const probe = await execute(Effect.flip(executor.readiness(target)));
+      expect(boatLaunchDiagnostic(probe, "readiness")).toMatchObject({
+        code: "guest-failed",
+        check: "docker",
+        guest: {
+          service: "docker",
+          reason: "container-probe-failed",
+          outputTail: expect.stringContaining("unsupported protocol: Yunix"),
+        },
+      });
+      expect(boatLaunchDiagnostic(probe, "readiness").guest?.outputTail).toContain(
+        "system containerd socket: present",
+      );
+      expect(boatExecutionRetryable(probe)).toBe(false);
     }));
   it("observes readiness from the agent's health, the tunnel's handshake and the daemon", () =>
     test(async (context) => {

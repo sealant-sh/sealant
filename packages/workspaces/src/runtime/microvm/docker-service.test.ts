@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -81,7 +81,28 @@ for arg; do
   sep=,
 done
 printf '%s' "[$line]" > "$FAKE_DOCKER_RECORD" || exit 1
+[ -n "$FAKE_DOCKER_LOG" ] && printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+# The real engine's failure on VM 131 run 7: the shim and containerd disagreed.
+if [ "$1 $2 $3" = "--host $2 run" ] && [ -n "$FAKE_DOCKER_RUN_FAIL" ]; then
+  echo "docker: Error response from daemon: failed to create task for container: failed to start shim: start failed: failed to create TTRPC connection: unsupported protocol: Yunix" >&2
+  exit 125
+fi
 exit 0
+`;
+
+// The engine's own containerd: answers --version, and once started makes the socket its config
+// names (as the real one listens), unless FAKE_CONTAINERD_DIE asks it to exit at once.
+const FAKE_CONTAINERD = `#!/bin/sh
+if [ "$1" = --version ]; then echo "containerd github.com/containerd/containerd/v2 v2.9.9-fake"; exit 0; fi
+printf '%s\\n' "$*" > "$FAKE_CONTAINERD_RECORD"
+[ -n "$FAKE_CONTAINERD_DIE" ] && exit 3
+address=$(sed -n 's/^ *address = "\\(.*\\)"$/\\1/p' "$2")
+: > "$address"
+trap 'exit 0' TERM
+while :; do sleep 1; done
+`;
+const FAKE_SHIM = `#!/bin/sh
+echo "containerd-shim-runc-v2: v2.9.9-fake"
 `;
 
 const SERVICE_RUNNER = `
@@ -111,7 +132,10 @@ service = createDockerService({
   ...JSON.parse(process.env.SERVICE_OPTIONS ?? "{}"),
   onReady: () => void finish("READY"),
   onStateChange: (health) => {
-    if (health.status === "failed") void finish("FAILED:" + health.reason);
+    if (health.status === "failed") {
+      console.log("HEALTH:" + JSON.stringify(health));
+      void finish("FAILED:" + health.reason);
+    }
   },
 });
 service.start();
@@ -176,6 +200,7 @@ const runService = async (
   extra: {
     readonly options?: Record<string, unknown>;
     readonly expectedModes?: Record<string, number>;
+    readonly env?: Record<string, string>;
   } = {},
 ): Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }> => {
   const child: ChildProcess = spawn(
@@ -192,6 +217,7 @@ const runService = async (
         FAKE_REQUIRED_DIRS: JSON.stringify(fixture.requiredDirectories),
         FAKE_DOCKERD_RECORD: fixture.dockerdRecord,
         FAKE_DOCKER_RECORD: fixture.dockerRecord,
+        ...extra.env,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -393,5 +419,138 @@ describe("DockerService runtime directories", () => {
     await expect(readFile(fixture.dockerdRecord, "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+    // The default engine's failed health is the four fields it always was: no `output`, which a
+    // Core from before the field refuses.
+    const health: unknown = JSON.parse(
+      result.stdout
+        .split("\n")
+        .find((line) => line.startsWith("HEALTH:"))
+        ?.slice(7) ?? "null",
+    );
+    expect(health).toEqual({
+      status: "failed",
+      reason: "directory-preparation-failed",
+      code: null,
+      signal: null,
+    });
+  });
+});
+
+/** The engine's own containerd socket, under the fixture's exec root. */
+const socket = (fixture: ServiceFixture) =>
+  path.join(fixture.paths.execRoot, "containerd", "containerd.sock");
+/** The failed health the service runner prints. */
+const healthOf = (stdout: string) =>
+  z.object({ status: z.literal("failed"), reason: z.string(), output: z.string() }).parse(
+    JSON.parse(
+      stdout
+        .split("\n")
+        .find((line) => line.startsWith("HEALTH:"))
+        ?.slice(7) ?? "{}",
+    ),
+  );
+
+describe("DockerService with the engine's own containerd and a container at readiness", () => {
+  const engine = async (fixture: ServiceFixture) => {
+    const bin = path.join(fixture.root, "bin");
+    const containerd = path.join(bin, "containerd");
+    const shim = path.join(bin, "containerd-shim-runc-v2");
+    const init = path.join(bin, "docker-init");
+    await Promise.all([
+      writeFile(containerd, FAKE_CONTAINERD),
+      writeFile(shim, FAKE_SHIM),
+      writeFile(init, "static docker-init stand-in"),
+    ]);
+    await Promise.all([chmod(containerd, 0o755), chmod(shim, 0o755)]);
+    return {
+      options: { containerdPath: containerd, shimPath: shim, containerProbeInitPath: init },
+      containerd,
+      env: {
+        FAKE_CONTAINERD_RECORD: path.join(fixture.root, "containerd.args"),
+        FAKE_DOCKER_LOG: path.join(fixture.root, "docker.log"),
+      },
+    };
+  };
+  it("starts its own containerd, points dockerd at it, and runs a container before it is ready", async () => {
+    const fixture = await createFixture();
+    const own = await engine(fixture);
+    const result = await runService(fixture, { options: own.options, env: own.env });
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout).toContain("READY:");
+    // dockerd never adopts a containerd it finds: it is told which one.
+    const record = dockerdRecordSchema.parse(
+      JSON.parse(await readFile(fixture.dockerdRecord, "utf8")),
+    );
+    expect(record.argv.slice(0, 2)).toEqual(["--containerd", socket(fixture)]);
+    const config = path.join(fixture.paths.execRoot, "containerd", "containerd.toml");
+    expect((await readFile(own.env.FAKE_CONTAINERD_RECORD, "utf8")).trim()).toBe(
+      `--config ${config}`,
+    );
+    const toml = await readFile(config, "utf8");
+    expect(toml).toContain(`address = ${JSON.stringify(socket(fixture))}`);
+    expect(toml).toContain('"io.containerd.grpc.v1.cri"');
+    expect((await stat(config)).mode & 0o777).toBe(0o600);
+    // Readiness ran a real container: an image of one static file, no network, never pulled.
+    const calls = (await readFile(own.env.FAKE_DOCKER_LOG, "utf8")).trim().split("\n");
+    const host = `--host unix://${fixture.paths.socket}`;
+    expect(calls).toContain(
+      `${host} import --change ENTRYPOINT ["/probe"] - sealant-engine-probe:1`,
+    );
+    expect(calls).toContain(
+      `${host} run --rm --network none --pull never --log-driver none sealant-engine-probe:1 --version`,
+    );
+    expect(calls.indexOf(`${host} info`)).toBeLessThan(calls.findIndex((c) => c.includes(" run ")));
+    // The probe's image does not stay in the workspace's Docker.
+    expect(calls).toContain(`${host} image rm sealant-engine-probe:1`);
+    expect(calls.findIndex((c) => c.includes(" image rm "))).toBeGreaterThan(
+      calls.findIndex((c) => c.includes(" run ")),
+    );
+  });
+
+  it("is not ready when the engine answers but cannot run a container, and says what it is made of", async () => {
+    const fixture = await createFixture();
+    const own = await engine(fixture);
+    const result = await runService(fixture, {
+      options: own.options,
+      env: { ...own.env, FAKE_DOCKER_RUN_FAIL: "1" },
+    });
+    expect(result.stdout).toContain("FAILED:container-probe-failed");
+    const health = healthOf(result.stdout);
+    expect(health.reason).toBe("container-probe-failed");
+    expect(health.output).toContain(
+      `containerd: ${own.containerd} containerd github.com/containerd/containerd/v2 v2.9.9-fake on ${socket(fixture)}`,
+    );
+    expect(health.output).toContain("shim: ");
+    expect(health.output).toContain("v2.9.9-fake");
+    expect(health.output).toMatch(/system containerd socket: (present|absent)/);
+    expect(health.output).toContain("unsupported protocol: Yunix");
+    // A probe that failed still takes its image with it.
+    const calls = (await readFile(own.env.FAKE_DOCKER_LOG, "utf8")).trim().split("\n");
+    expect(calls).toContain(
+      `--host unix://${fixture.paths.socket} image rm sealant-engine-probe:1`,
+    );
+  });
+
+  it("fails as containerd-failed, and never starts dockerd, when its containerd exits", async () => {
+    const fixture = await createFixture();
+    const own = await engine(fixture);
+    const result = await runService(fixture, {
+      options: own.options,
+      env: { ...own.env, FAKE_CONTAINERD_DIE: "1" },
+    });
+    expect(result.stdout).toContain("FAILED:containerd-failed");
+    await expect(readFile(fixture.dockerdRecord, "utf8")).rejects.toThrow();
+  });
+});
+
+describe("singleFileTar", () => {
+  it("writes a tar that tar itself lists as one executable file", async () => {
+    const { singleFileTar } = await import(DOCKER_SERVICE);
+    const root = await mkdtemp(path.join(tmpdir(), "single-file-tar-"));
+    fixtures.add(root);
+    const archive = path.join(root, "probe.tar");
+    await writeFile(archive, singleFileTar("probe", Buffer.from("#!/bin/sh\necho ok\n")));
+    const listed = execFileSync("tar", ["-tvf", archive], { encoding: "utf8" });
+    expect(listed).toMatch(/^-rwxr-xr-x .* 18 .* probe$/m);
   });
 });

@@ -141,6 +141,78 @@ export const sweepDockerCgroups = async (options) => {
   );
 };
 
+/** Where a system containerd listens: dockerd adopts it, unless it is told which one to use. */
+const SYSTEM_CONTAINERD_SOCKET = "/run/containerd/containerd.sock";
+/** The probe image the container check imports: one static file, no registry. */
+const PROBE_IMAGE = "sealant-engine-probe:1";
+const PROBE_TIMEOUT_MS = 60_000;
+const PROBE_IMAGE_REMOVAL_TIMEOUT_MS = 15_000;
+const ENGINE_OUTPUT_MAX_CHARS = 2_048;
+
+/** A tar header field: octal digits, NUL-terminated, to its width. */
+const octal = (value, length) => `${value.toString(8).padStart(length - 1, "0")}\0`;
+
+/** A POSIX tar holding one regular file, as `docker import` reads it: no tar binary needed. */
+export const singleFileTar = (name, content, mode = 0o755) => {
+  const header = Buffer.alloc(512, 0);
+  const field = (offset, length, value) => header.write(value, offset, length, "ascii");
+  field(0, 100, name);
+  field(100, 8, octal(mode, 8));
+  field(108, 8, octal(0, 8));
+  field(116, 8, octal(0, 8));
+  field(124, 12, octal(content.length, 12));
+  field(136, 12, octal(0, 12));
+  field(148, 8, "        ");
+  field(156, 1, "0");
+  field(257, 6, "ustar\0");
+  field(263, 2, "00");
+  let sum = 0;
+  for (const byte of header) sum += byte;
+  field(148, 8, `${sum.toString(8).padStart(6, "0")}\0 `);
+  const padding = Buffer.alloc((512 - (content.length % 512)) % 512, 0);
+  return Buffer.concat([header, content, padding, Buffer.alloc(1024, 0)]);
+};
+
+/** Run a program to completion, bounded: its exit code and the end of its output. Never throws. */
+const runBounded = async (command, args, { env, input, timeoutMs, onSpawn, role }) => {
+  let child;
+  try {
+    child = spawn(command, args, { detached: true, env, stdio: ["pipe", "pipe", "pipe"] });
+  } catch {
+    return { code: null, output: "" };
+  }
+  onSpawn?.(child, role);
+  let output = "";
+  const keep = (chunk) => {
+    output = (output + chunk.toString("utf8")).slice(-ENGINE_OUTPUT_MAX_CHARS);
+  };
+  child.stdout.on("data", keep);
+  child.stderr.on("data", keep);
+  child.stdin.on("error", () => {});
+  child.stdin.end(input);
+  const killTimer = setTimeout(() => stopGuestProcessGroup(child, "SIGKILL"), timeoutMs);
+  killTimer.unref();
+  try {
+    const [code] = await once(child, "close");
+    return { code, output };
+  } catch {
+    return { code: null, output };
+  } finally {
+    clearTimeout(killTimer);
+  }
+};
+
+/** The first line a binary prints for its version, or why it could not say. */
+const versionOf = async (binary, args, env) => {
+  const { code, output } = await runBounded(binary, args, { env, timeoutMs: 5_000 });
+  const line =
+    output
+      .split("\n")
+      .find((entry) => entry.trim() !== "")
+      ?.trim() ?? "";
+  return code === 0 && line !== "" ? line.slice(0, 200) : `unknown (exit ${String(code)})`;
+};
+
 const positiveInteger = (value, fallback) => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -405,7 +477,19 @@ export const createDockerService = (options) => {
       ? Number(options.containerStopSeconds)
       : null;
   const verifiesStop = cgroupParent !== null || engineCgroupPath !== null;
+  // Optional: the engine's own containerd. Unset, dockerd adopts a containerd already listening on
+  // /run/containerd (a base image's own), whose PATH may find this bundle's newer shim first: the
+  // two then disagree on the shim's bootstrap (VM 131 run 7, "unsupported protocol: Yunix").
+  const containerdPath = nonEmpty(options.containerdPath);
+  const shimPath = nonEmpty(options.shimPath);
+  const containerdDirectory = path.join(execRoot, "containerd");
+  const containerdSocket = path.join(containerdDirectory, "containerd.sock");
+  const containerdConfig = path.join(containerdDirectory, "containerd.toml");
+  // Optional: readiness runs a container (this static file as its only content) after `docker
+  // info`, so an engine that answers but cannot start a container is never reported ready.
+  const probeInitPath = nonEmpty(options.containerProbeInitPath);
   const dockerdArgs = [
+    ...(containerdPath === null ? [] : ["--containerd", containerdSocket]),
     "--host",
     dockerHost,
     "--data-root",
@@ -463,6 +547,11 @@ export const createDockerService = (options) => {
   }
 
   let health = { status: "starting" };
+  let containerd = null;
+  let containerdClosed = false;
+  // What the engine is made of, said with any failure: which containerd dockerd uses (its binary
+  // and socket), its version and the shim's, and whether a system containerd was there to adopt.
+  let engineSummary = null;
   let dockerd = null;
   let dockerdClosed = false;
   let timer = null;
@@ -487,18 +576,26 @@ export const createDockerService = (options) => {
     probes.clear();
   };
 
-  const fail = (reason, code = null, signal = null, stopDockerd = false) => {
+  const fail = (reason, code = null, signal = null, stopDockerd = false, detail = "") => {
     if (health.status === "failed" || stopping) return;
+    const output = [engineSummary, detail.trim()]
+      .filter((part) => typeof part === "string" && part !== "")
+      .join("\n")
+      .slice(-ENGINE_OUTPUT_MAX_CHARS);
     health = {
       status: "failed",
       reason,
       code,
       signal,
       ...(lastProbeFailure === null ? {} : { probe: lastProbeFailure }),
+      ...(output === "" ? {} : { output }),
     };
     clearProbeTimer();
     stopProbes();
-    if (stopDockerd) stopGuestProcessGroup(dockerd, "SIGTERM");
+    if (stopDockerd) {
+      stopGuestProcessGroup(dockerd, "SIGTERM");
+      stopGuestProcessGroup(containerd, "SIGTERM");
+    }
     options.onStateChange?.(health);
   };
 
@@ -604,6 +701,132 @@ export const createDockerService = (options) => {
     schedule(monitor);
   };
 
+  /** What the engine is made of, as one line per part, for a failure to carry. */
+  const describeEngine = async () => {
+    const systemSocket = existsSync(SYSTEM_CONTAINERD_SOCKET);
+    const lines = [
+      containerdPath === null
+        ? `containerd: dockerd's choice (${systemSocket ? `adopts the system one at ${SYSTEM_CONTAINERD_SOCKET}` : "its own, started by dockerd"})`
+        : `containerd: ${containerdPath} ${await versionOf(containerdPath, ["--version"], env)} on ${containerdSocket}`,
+      ...(shimPath === null ? [] : [`shim: ${shimPath} ${await versionOf(shimPath, ["-v"], env)}`]),
+      `system containerd socket: ${systemSocket ? "present" : "absent"}`,
+    ];
+    return lines.join("\n");
+  };
+
+  /**
+   * Readiness's real container: import an image of one static file (no registry, no network) and
+   * run it with no network. It is what `docker run` does end to end: containerd, the shim, runc.
+   */
+  const probeContainer = async () => {
+    let content;
+    try {
+      content = readFileSync(probeInitPath);
+    } catch {
+      return { ok: false, detail: `container probe: ${probeInitPath} is not readable` };
+    }
+    const spawnOptions = {
+      env,
+      timeoutMs: PROBE_TIMEOUT_MS,
+      onSpawn: options.onSpawn,
+      role: "docker-probe",
+    };
+    const imported = await runBounded(
+      dockerPath,
+      ["--host", dockerHost, "import", "--change", 'ENTRYPOINT ["/probe"]', "-", PROBE_IMAGE],
+      { ...spawnOptions, input: singleFileTar("probe", content) },
+    );
+    if (imported.code !== 0)
+      return { ok: false, detail: `container probe: docker import failed:\n${imported.output}` };
+    const ran = await runBounded(
+      dockerPath,
+      [
+        "--host",
+        dockerHost,
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--pull",
+        "never",
+        "--log-driver",
+        "none",
+        PROBE_IMAGE,
+        "--version",
+      ],
+      spawnOptions,
+    );
+    // The image was only ever the probe's. It leaves the workspace's `docker image ls` whatever the
+    // run said, so no start leaves one behind for the next import to orphan. Best effort: an image
+    // that stays is a line in a listing, not a reason to fail the engine.
+    await runBounded(dockerPath, ["--host", dockerHost, "image", "rm", PROBE_IMAGE], {
+      ...spawnOptions,
+      timeoutMs: PROBE_IMAGE_REMOVAL_TIMEOUT_MS,
+    });
+    if (ran.code !== 0)
+      return { ok: false, detail: `container probe: docker run failed:\n${ran.output}` };
+    return { ok: true, detail: "" };
+  };
+
+  /** Start the engine's own containerd, and resolve once its socket is there (or it failed). */
+  const startContainerd = async (deadline, stderrLog) => {
+    try {
+      mkdirSync(containerdDirectory, { recursive: true, mode: 0o700 });
+      writeFileSync(
+        containerdConfig,
+        [
+          "version = 2",
+          `root = ${JSON.stringify(path.join(dataRoot, "containerd", "daemon"))}`,
+          `state = ${JSON.stringify(path.join(containerdDirectory, "daemon"))}`,
+          // The engine needs no Kubernetes CRI, as dockerd's own containerd runs without it.
+          'disabled_plugins = ["io.containerd.grpc.v1.cri", "io.containerd.cri.v1.runtime", "io.containerd.cri.v1.images"]',
+          "[grpc]",
+          `  address = ${JSON.stringify(containerdSocket)}`,
+          "",
+        ].join("\n"),
+        { mode: 0o600 },
+      );
+    } catch {
+      return "directory-preparation-failed";
+    }
+    const containerdArgs = ["--config", containerdConfig];
+    const [command, args] =
+      engineCgroupPath === null
+        ? [containerdPath, containerdArgs]
+        : [
+            "/bin/sh",
+            [
+              "-c",
+              'echo $$ > "$0/cgroup.procs" && exec "$@"',
+              engineCgroupPath,
+              containerdPath,
+              ...containerdArgs,
+            ],
+          ];
+    containerd = spawn(command, args, { detached: true, env, stdio: ["ignore", "ignore", "pipe"] });
+    options.onSpawn?.(containerd, "containerd");
+    containerd.stderr?.on("data", (chunk) => stderrLog.write(chunk));
+    let exited = null;
+    containerd.once("error", () => {
+      exited ??= { code: null, signal: null };
+    });
+    containerd.once("exit", (code, signal) => {
+      exited ??= { code, signal };
+      if (!stopping && health.status !== "failed")
+        fail("containerd-failed", code, signal, true, "containerd exited");
+    });
+    containerd.once("close", () => {
+      containerdClosed = true;
+    });
+    while (!existsSync(containerdSocket)) {
+      if (exited !== null) return "containerd-failed";
+      if (stopping) return "stopping";
+      if (Date.now() >= deadline) return "readiness-timeout";
+      await new Promise((resolve) => setTimeout(resolve, 50).unref());
+    }
+    return "ready";
+  };
+
   const start = () => {
     if (started) return;
     started = true;
@@ -630,65 +853,95 @@ export const createDockerService = (options) => {
         return;
       }
     }
-    // With an engine cgroup, a shell joins it and then execs dockerd under the same pid, so dockerd
-    // is in it before it can start anything: no child escapes the cgroup by racing the move.
-    const [command, args] =
-      engineCgroupPath === null
-        ? [dockerdPath, dockerdArgs]
-        : [
-            "/bin/sh",
-            [
-              "-c",
-              'echo $$ > "$0/cgroup.procs" && exec "$@"',
-              engineCgroupPath,
-              dockerdPath,
-              ...dockerdArgs,
-            ],
-          ];
-    dockerd = spawn(command, args, {
-      detached: true,
-      env,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    // The agent records every process it starts (pid and start time): the processes the final
-    // sweep and a recovery may spare are exactly those, never ones that merely share a name.
-    options.onSpawn?.(dockerd, "dockerd");
-    dockerd.stderr?.on("data", (chunk) => {
-      stderrLog.write(chunk);
-      signatureTracker.observe(chunk);
-    });
-    dockerd.once("error", (error) => {
-      if (safeSpawnErrorCode(error) === "ENOENT") signatureTracker.markMissingBinary();
-      fail("spawn-failed");
-    });
-    dockerd.once("exit", (code, signal) => {
-      killDescendantsAfterLeaderExit(dockerd?.pid);
-      if (!stopping) fail("exited", code, signal);
-    });
-    dockerd.once("close", () => {
-      dockerdClosed = true;
-      stderrLog.close();
-    });
+    const launchDockerd = () => {
+      // With an engine cgroup, a shell joins it and then execs dockerd under the same pid, so dockerd
+      // is in it before it can start anything: no child escapes the cgroup by racing the move.
+      const [command, args] =
+        engineCgroupPath === null
+          ? [dockerdPath, dockerdArgs]
+          : [
+              "/bin/sh",
+              [
+                "-c",
+                'echo $$ > "$0/cgroup.procs" && exec "$@"',
+                engineCgroupPath,
+                dockerdPath,
+                ...dockerdArgs,
+              ],
+            ];
+      dockerd = spawn(command, args, {
+        detached: true,
+        env,
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      // The agent records every process it starts (pid and start time): the processes the final
+      // sweep and a recovery may spare are exactly those, never ones that merely share a name.
+      options.onSpawn?.(dockerd, "dockerd");
+      dockerd.stderr?.on("data", (chunk) => {
+        stderrLog.write(chunk);
+        signatureTracker.observe(chunk);
+      });
+      dockerd.once("error", (error) => {
+        if (safeSpawnErrorCode(error) === "ENOENT") signatureTracker.markMissingBinary();
+        fail("spawn-failed");
+      });
+      dockerd.once("exit", (code, signal) => {
+        killDescendantsAfterLeaderExit(dockerd?.pid);
+        if (!stopping) fail("exited", code, signal);
+      });
+      dockerd.once("close", () => {
+        dockerdClosed = true;
+        stderrLog.close();
+      });
 
-    const awaitReady = async () => {
-      if (stopping || health.status === "failed") return;
-      if (await probe()) {
+      const awaitReady = async () => {
         if (stopping || health.status === "failed") return;
-        health = { status: "ready", socket: socketPath };
-        consecutiveRuntimeProbeFailures = 0;
-        lastCountedRuntimeProbeFailureAt = 0;
-        options.onStateChange?.(health);
-        options.onReady();
-        if (!stopping) schedule(monitor);
-        return;
-      }
-      if (Date.now() >= deadline) {
-        fail("readiness-timeout", null, null, true);
-        return;
-      }
-      schedule(awaitReady);
+        if (await probe()) {
+          if (stopping || health.status === "failed") return;
+          if (probeInitPath !== null) {
+            const container = await probeContainer();
+            if (stopping || health.status === "failed") return;
+            if (!container.ok) {
+              fail("container-probe-failed", null, null, true, container.detail);
+              return;
+            }
+          }
+          health = { status: "ready", socket: socketPath };
+          consecutiveRuntimeProbeFailures = 0;
+          lastCountedRuntimeProbeFailureAt = 0;
+          options.onStateChange?.(health);
+          options.onReady();
+          if (!stopping) schedule(monitor);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          fail("readiness-timeout", null, null, true);
+          return;
+        }
+        schedule(awaitReady);
+      };
+      void awaitReady();
     };
-    void awaitReady();
+    // The default engine (Lambda's) starts and reports exactly as it did before these options
+    // existed. Only an engine the agent assembles from them is described, so only its failures
+    // carry `output`, which a Core older than the field refuses.
+    if (containerdPath === null && probeInitPath === null) {
+      launchDockerd();
+      return;
+    }
+    void (async () => {
+      engineSummary = await describeEngine();
+      if (stopping || health.status === "failed") return;
+      if (containerdPath !== null) {
+        const outcome = await startContainerd(deadline, stderrLog);
+        if (outcome === "stopping" || health.status === "failed") return;
+        if (outcome !== "ready") {
+          fail(outcome, containerd?.exitCode ?? null, containerd?.signalCode ?? null, true);
+          return;
+        }
+      }
+      launchDockerd();
+    })();
   };
 
   const verify = async () => {
@@ -765,7 +1018,7 @@ export const createDockerService = (options) => {
    */
   const sweepLeftovers = async () => {
     // Nothing was ever started: there is nothing of Docker to prove gone.
-    if (dockerd === null) return true;
+    if (dockerd === null && containerd === null) return true;
     // A containers' slice that was never resolved cannot be proved empty.
     if (cgroupParent !== null && cgroupPath === null) return false;
     return killCgroupsUntilEmpty(
@@ -804,6 +1057,18 @@ export const createDockerService = (options) => {
           killed,
         };
       }
+      // The engine's own containerd goes after dockerd, as dockerd stops its own.
+      if (containerd !== null && !containerdClosed) {
+        stopGuestProcessGroup(containerd, "SIGTERM");
+        const closed = await Promise.race([
+          once(containerd, "close").then(
+            () => true,
+            () => true,
+          ),
+          new Promise((resolve) => setTimeout(() => resolve(false), shutdownTimeoutMs).unref()),
+        ]);
+        if (!closed) stopGuestProcessGroup(containerd, "SIGKILL");
+      }
       // `verified`: nothing of Docker runs any more (only when the service can tell).
       return verifiesStop ? { ...result, verified: await sweepLeftovers() } : result;
     })();
@@ -818,12 +1083,15 @@ export const createDockerService = (options) => {
       signatures,
       identifiedSignature: Object.values(signatures).some(Boolean),
       facts: diagnosticFacts(),
+      engine: engineSummary,
     };
   };
 
   return {
     start,
     health: () => health,
+    /** Which containerd dockerd uses (binary, socket), its version and the shim's; null until known. */
+    engine: () => engineSummary,
     isReady: () => health.status === "ready",
     verify,
     stop,

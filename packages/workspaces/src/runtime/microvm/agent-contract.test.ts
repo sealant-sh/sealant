@@ -138,19 +138,25 @@ describe("MicroVM agent contract", () => {
     ).toMatchObject({
       services: { docker: { status: "failed", reason: "directory-preparation-failed" } },
     });
-    expect(() =>
-      agentHealthResponseSchema.parse({
-        ...base,
-        services: {
-          docker: {
-            status: "failed",
-            reason: "probe-failed",
-            code: null,
-            signal: null,
-            output: "raw daemon log",
-          },
+    // A failure may say what the engine is made of and the failing command's last output, bounded
+    // (Core redacts it before it enters a diagnostic); never an unbounded daemon log.
+    const failedWith = (output: string) => ({
+      ...base,
+      services: {
+        docker: {
+          status: "failed",
+          reason: "container-probe-failed",
+          code: null,
+          signal: null,
+          output,
         },
-      }),
-    ).toThrow();
+      },
+    });
+    expect(
+      agentHealthResponseSchema.parse(failedWith("containerd: /usr/local/bin/containerd v2")),
+    ).toMatchObject({
+      services: { docker: { reason: "container-probe-failed" } },
+    });
+    expect(() => agentHealthResponseSchema.parse(failedWith("x".repeat(4097)))).toThrow();
   });
 });
