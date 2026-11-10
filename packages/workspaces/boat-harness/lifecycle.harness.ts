@@ -16,6 +16,7 @@ import { DEFECTS } from "./defects.js";
 import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
 import { scenarios } from "./faults.js";
 import { runScenario, type Defect } from "./markers.js";
+import { parkAndResume } from "./parking-scenario.js";
 import {
   assertReleased,
   assertSettled,
@@ -224,4 +225,14 @@ describe("one fault per step", () => {
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
+});
+
+// Last: it restarts the worker with automatic parking on, and back off when it ends.
+describe("parking", () => {
+  scenario(
+    "park and resume keeps the workspace's Docker images",
+    DEFECTS.parking,
+    () => parkAndResume(stack, project, step),
+    60 * 60_000,
+  );
 });

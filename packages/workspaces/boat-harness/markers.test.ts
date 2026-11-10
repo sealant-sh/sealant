@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFECTS, PEER_PID, SLOW_CLOSE } from "./defects.js";
+import { DEFECTS, NEVER_PARKED, PEER_PID, SLOW_CLOSE } from "./defects.js";
 import { defectMatches, expectDefect, runScenario } from "./markers.js";
 
 /** The runtime view the harness prints, with a readiness launch error. */
@@ -59,6 +59,22 @@ describe("expected-failure markers", () => {
     expect(defectMatches(SLOW_CLOSE, terminalTimeout(runtime({ allocation: "bound" })))).toBe(
       false,
     );
+  });
+
+  it("let P1 excuse only the retention step, never a later parking or resume failure", () => {
+    expect(
+      defectMatches(
+        NEVER_PARKED,
+        "step retention: parking never starts: the Stop kept the session, but 90 s later ...",
+      ),
+    ).toBe(true);
+    expect(DEFECTS.parking).toBe(NEVER_PARKED);
+    for (const later of [
+      "step parked: timed out after 1200s waiting for the worker to park the session",
+      "step the image survived: expected 'sha256:a' to be 'sha256:b'",
+      "step Stop keeps the VM: timed out after 180s waiting for the Stop to keep the session",
+    ])
+      expect(defectMatches(NEVER_PARKED, later)).toBe(false);
   });
 
   it("fail a scenario that no longer fails, and keep a different failure's message", async () => {

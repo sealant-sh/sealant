@@ -48,8 +48,10 @@ that touch Boat code, nightly, and on demand (`.github/workflows/boat-harness.ym
 - Detached output keeps the last 8 MiB and reports `stdoutTruncated` / `stderrTruncated` past it.
 - `DELETE` needs `X-Ascii-Confirm-Delete` and answers 202 with an operation to poll.
 - Resume needs its body (`type`, `ttlSeconds`, `noEnv`).
-- Saved snapshots are `docker commit`. Names are at most 63 characters. A trial account can be set
-  to refuse them with 403 `trial_saved_snapshots_not_allowed`.
+- Saved snapshots are `docker commit` plus a copy of the VM's `/var/lib/sealant/docker` volume
+  (commit leaves volumes out; Boat saves the whole disk), and a VM created from one starts with a
+  copy of it. Names are at most 63 characters. A trial account can be set to refuse them with 403
+  `trial_saved_snapshots_not_allowed`.
 - `create from` a snapshot boots a new container, so a new boot ID. Before the VM reads `idle`, the
   fake applies Boat's clone rewrites (`boat-native-guest-startup.md`): it restores the provider's
   own systemd executable and rewrites `.bashrc` to different bytes of the same length (the sandbox
@@ -90,9 +92,10 @@ The networking follows what the guest enforces:
 blueprint driven as the owner's person through `exec(argv, { user })`; hello-world, a build, compose
 to `db` through the tunnel, the containers' egress policy, a two-stage `npm ci` build, the VM's and
 the session's cgroup peaks, and `boat-image/vm-probe.sh` in the twin; evidence in
-`BOAT_TWIN_PROOF_DIR` when set), then one fault per step. A scenario's own steps check that the
-runtime row carries the exact cause, and that Mend sees a terminal workspace (`stopped` or `failed`,
-never `retained`) within 60 s (`assertSettled`).
+`BOAT_TWIN_PROOF_DIR` when set), then one fault per step, then park and resume
+(`parking-scenario.ts`). A scenario's own steps check that the runtime row carries the exact cause,
+and that Mend sees a terminal workspace (`stopped` or `failed`, never `retained`) within 60 s
+(`assertSettled`).
 
 Then, after every scenario and whatever it did, each launch it made must be released
 (`assertReleased`): the workspace terminal, and the UDP slot, publication pin, VM and gateway gone.
@@ -105,6 +108,17 @@ F3 must happen at the `ready` step). It can also require guest or proxy evidence
 passes only while it fails exactly that way. Any other failure fails it, and so does passing, so the
 fix's pull request removes the marker. An `intermittent` marker (C1, a timing defect) passes either
 way but still fails on any other error.
+
+Park and resume runs last, with the worker restarted with `SEALANT_BOAT_AUTOMATIC_PARKING=true` and
+the shortest delay Core accepts (300 s), and restarted with its defaults when it ends. A Docker
+session builds an image as the owner's person and leaves an edit the capture channel refuses to
+take, so its Stop keeps the VM. The worker must then park it (the agent's park, a whole-VM saved
+snapshot, the VM deleted). The owner recovers it after the capture epoch advances, and on the child
+VM the image must have the same id and run, and the edit must be unchanged. A final Stop must retire
+the snapshot. On main it stops at P1: nothing records the retention that enrolls a Boat session for
+parking. `BOAT_HARNESS_SIMULATE_RETENTION=1` writes that one row so the later steps can be proved
+locally before the fix; CI never sets it. The capture channel's harness controls
+(`capture-server.ts`: refuse uploads, set the epoch) stand in for Mend's store and lease service.
 
 Core sometimes records only an error class (`readiness` / `Error`). A failure message therefore
 carries two pieces of evidence: the guest's journal lines that name a cause, and every non-200

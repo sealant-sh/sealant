@@ -49,6 +49,8 @@ export interface FakeSandbox {
   ip: string | undefined;
   deletion: FakeDeletion | undefined;
   removed: boolean;
+  /** The saved snapshot's copy of `/var/lib/sealant/docker` this VM starts from, if any. */
+  readonly dockerSeed: string | undefined;
 }
 
 export interface FakeDeletion {
@@ -63,6 +65,8 @@ export interface FakeSnapshot {
   readonly snapshotId: string;
   readonly createdAt: string;
   readonly image: string;
+  /** The volume holding the source's `/var/lib/sealant/docker`: Boat saves the whole disk. */
+  readonly dockerData: string;
   status: "saving" | "ready" | "failed";
 }
 
@@ -613,6 +617,7 @@ export class FakeBoat {
         if (method === "DELETE") {
           this.snapshots.delete(snapshot.name);
           await this.#docker(["image", "rm", "-f", snapshot.image]);
+          await this.#docker(["volume", "rm", "-f", snapshot.dockerData]);
           this.#record("snapshot-deleted", snapshot.sourceSandboxId, snapshot.name);
           return send(200, {
             ok: true,
@@ -655,11 +660,13 @@ export class FakeBoat {
 
   #create(body: z.infer<typeof createBody>, stuck: boolean): FakeSandbox {
     let image = this.options.baseImage;
+    let dockerSeed: string | undefined;
     if (body.from !== undefined) {
       const snapshot = this.snapshots.get(body.from);
       if (snapshot === undefined || snapshot.status !== "ready")
         throw new HttpError(404, "snapshot_not_found");
       image = snapshot.image;
+      dockerSeed = snapshot.dockerData;
     }
     const id = newSandboxId();
     const sandbox: FakeSandbox = {
@@ -678,6 +685,7 @@ export class FakeBoat {
       ip: undefined,
       deletion: undefined,
       removed: false,
+      dockerSeed,
     };
     this.sandboxes.set(id, sandbox);
     this.#record("create", id, body.from ?? "base");
@@ -705,6 +713,7 @@ export class FakeBoat {
       `${HARNESS_LABEL}=${this.options.runId}`,
       dockerData,
     ]);
+    if (sandbox.dockerSeed !== undefined) await this.#copyVolume(sandbox.dockerSeed, dockerData);
     await this.#dockerOk([
       "run",
       "-d",
@@ -836,6 +845,7 @@ export class FakeBoat {
       snapshotId: randomUUID(),
       createdAt: now(),
       image: `sealant-boat-twin-snapshot:${this.options.runId}-${body.name}`.slice(0, 128),
+      dockerData: `boat-harness-${this.options.runId}-snapshot-${body.name}-docker`,
       status: "saving",
     };
     this.snapshots.set(snapshot.name, snapshot);
@@ -856,11 +866,40 @@ export class FakeBoat {
           sandbox.container,
           snapshot.image,
         ]);
+        // `docker commit` leaves volumes out; the VM's disk includes its Docker data.
+        await this.#dockerOk([
+          "volume",
+          "create",
+          "--label",
+          `${HARNESS_LABEL}=${this.options.runId}`,
+          snapshot.dockerData,
+        ]);
+        await this.#copyVolume(`${sandbox.container}-docker`, snapshot.dockerData);
         snapshot.status = "ready";
         this.#record("snapshot-ready", sandbox.id, snapshot.name);
       })(),
     );
     return this.#snapshotView(snapshot);
+  }
+
+  /** Copies one volume's files into another, owners and modes kept, in a short-lived container. */
+  async #copyVolume(from: string, to: string) {
+    await this.#dockerOk([
+      "run",
+      "--rm",
+      "--label",
+      `${HARNESS_LABEL}=${this.options.runId}`,
+      "-v",
+      `${from}:/from:ro`,
+      "-v",
+      `${to}:/to`,
+      "--entrypoint",
+      "cp",
+      this.options.baseImage,
+      "-a",
+      "/from/.",
+      "/to/",
+    ]);
   }
 
   #snapshotFile(snapshotId: string, path: string, response: http.ServerResponse) {

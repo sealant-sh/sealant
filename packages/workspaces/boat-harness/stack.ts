@@ -46,8 +46,12 @@ export interface CaptureState {
   readonly endpoint: string;
   readonly head: { readonly n: number; readonly capture_id: string } | null;
   readonly planRequests: number;
+  readonly epoch: number;
   readonly objects: number;
   readonly errors: readonly string[];
+  readonly failUploads: boolean;
+  /** `upload.urls` / `capture.register` calls answered 503 while uploads fail. */
+  readonly refusedUploads: number;
 }
 
 export interface CaptureSession {
@@ -56,6 +60,10 @@ export interface CaptureSession {
   readonly worktreeId: string;
   /** The channel's view: its head moves when the daemon registers a capture (e.g. FINAL). */
   readonly state: () => Promise<CaptureState>;
+  /** While true, the daemon cannot ship: its work stays unsent, as when Mend cannot take it. */
+  readonly failUploads: (fail: boolean) => Promise<void>;
+  /** Advances the capture epoch, as Mend's lease service does before another executor resumes. */
+  readonly setEpoch: (epoch: number) => Promise<void>;
 }
 
 export interface ManagedProcess {
@@ -84,6 +92,8 @@ export interface HarnessStack {
   readonly api: ManagedProcess;
   /** Runs read-only SQL in Core's database and returns its rows as JSON values. */
   readonly query: (sql: string) => Promise<unknown[]>;
+  /** Runs one SQL statement that writes. Only for a scenario's documented, opt-in simulation. */
+  readonly write: (sql: string) => Promise<void>;
   /** SIGKILLs the worker: no finalizers run, as when a host dies. */
   readonly killWorker: () => Promise<void>;
   /** Core-labelled Docker objects (resources, gateways) created since the stack started. */
@@ -91,6 +101,8 @@ export interface HarnessStack {
   readonly ownedObjects: () => Promise<LabelledObjects>;
   /** Starts the worker, optionally with environment overrides (e.g. another gateway image). */
   readonly startWorker: (overrides?: Readonly<Record<string, string>>) => Promise<void>;
+  /** Stops the worker as a deploy would (SIGTERM), then starts it with these overrides. */
+  readonly restartWorker: (overrides?: Readonly<Record<string, string>>) => Promise<void>;
   /** The gateway image digest the worker was started with. */
   readonly gatewayImage: string;
   readonly stop: () => Promise<void>;
@@ -518,8 +530,11 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       endpoint: z.string(),
       head: z.object({ n: z.number(), capture_id: z.string() }).nullable(),
       planRequests: z.number(),
+      epoch: z.number(),
       objects: z.number(),
       errors: z.array(z.string()),
+      failUploads: z.boolean(),
+      refusedUploads: z.number(),
     });
     const openCapture = async (worktreeId: string): Promise<CaptureSession> => {
       const token = randomBytes(24).toString("hex");
@@ -554,7 +569,23 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
         async () => (await state()).endpoint,
         60_000,
       );
-      return { endpoint, token, worktreeId, state };
+      const control = async (path: string, body: unknown) => {
+        const response = await fetch(`http://${ip}:9000${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok)
+          throw new Error(`capture ${path}: ${response.status} ${await response.text()}`);
+      };
+      return {
+        endpoint,
+        token,
+        worktreeId,
+        state,
+        failUploads: (fail) => control("/harness/uploads", { fail }),
+        setEpoch: (epoch) => control("/harness/epoch", { epoch }),
+      };
     };
 
     // The production worker bundle with its packaged Boat assets beside it.
@@ -728,9 +759,21 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       worker,
       api,
       query,
+      write: async (sql) => {
+        await psql(sql);
+      },
       killWorker: () => stopProcess(worker, "SIGKILL"),
       ownedObjects: () => listLabelled(label),
       startWorker,
+      restartWorker: async (overrides = {}) => {
+        await stopProcess(worker, "SIGTERM");
+        await startWorker(overrides);
+        await waitFor(
+          "the worker to restart",
+          async () => (worker.child === undefined ? undefined : true),
+          30_000,
+        );
+      },
       gatewayImage,
       stop,
     };

@@ -56,6 +56,20 @@ export const SLOW_CLOSE: Defect = {
   intermittent: true,
 };
 
+/**
+ * Found by this harness on main 3a0d37ae: a Boat session whose Stop keeps the VM (its FINAL could
+ * not drain) is never parked. Enrollment needs `workspace_capture_drains.retained_at`, and nothing
+ * on the Boat path writes it: the stop's canonical close returns `retained` and the stop worker
+ * only reports `kept` (`process-workspace-stop.ts`); API stop retains only rows already enrolled,
+ * and `BoatParking.retain` runs only for enrolled roots. The session waits with its VM forever.
+ */
+export const NEVER_PARKED: Defect = {
+  id: "P1",
+  title: "a retained Boat session is never enrolled for parking (nothing records retention)",
+  failure: /^step retention: parking never starts: /,
+  owner: "thread C (lifecycle) or D (parking)",
+};
+
 /** Whichever of several defects a timing-dependent scenario reaches first. */
 export const firstOf = (...defects: readonly Defect[]): Defect => ({
   id: defects.map((defect) => defect.id).join(" or "),
@@ -73,6 +87,7 @@ export const firstOf = (...defects: readonly Defect[]): Defect => ({
  */
 export const DEFECTS = {
   happyPath: undefined,
+  parking: NEVER_PARKED,
   faults: {
     "bind slower than one sweep period": undefined,
     "create reply lost": undefined,
@@ -94,5 +109,6 @@ export const DEFECTS = {
   },
 } as const satisfies {
   readonly happyPath: Defect | undefined;
+  readonly parking: Defect | undefined;
   readonly faults: Readonly<Record<string, Defect | undefined>>;
 };
