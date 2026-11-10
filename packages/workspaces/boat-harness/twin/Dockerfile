@@ -12,7 +12,10 @@ ARG SYSTEMD_VERSION=255.4-1ubuntu8.16
 ARG UBUNTU_ARCHIVE=http://archive.ubuntu.com/ubuntu
 ENV container=docker
 # The snapshot archive is HTTPS-only, so trust roots come from the base archive first.
-RUN if [ "${UBUNTU_ARCHIVE}" != http://archive.ubuntu.com/ubuntu ]; then \
+# Ubuntu's services answer 503 now and then (snapshot.ubuntu.com did on 2026-11-10): apt retries
+# each fetch during the build, and the setting goes again before the image is done.
+RUN printf 'Acquire::Retries "6";\n' > /etc/apt/apt.conf.d/80-harness-build-retries \
+    && if [ "${UBUNTU_ARCHIVE}" != http://archive.ubuntu.com/ubuntu ]; then \
       sed -i -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_ARCHIVE}|g" \
              -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_ARCHIVE}|g" /etc/apt/sources.list.d/ubuntu.sources; \
     fi \
@@ -23,7 +26,7 @@ RUN if [ "${UBUNTU_ARCHIVE}" != http://archive.ubuntu.com/ubuntu ]; then \
        systemd=${SYSTEMD_VERSION} systemd-sysv=${SYSTEMD_VERSION} libsystemd0=${SYSTEMD_VERSION} \
        libsystemd-shared=${SYSTEMD_VERSION} libudev1=${SYSTEMD_VERSION} \
        dbus sudo python3 iproute2 ca-certificates curl kmod \
-    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/80-harness-build-retries \
     # A Boat VM uses the stock archive. The snapshot was only for the pinned systemd, and it is slow.
     && sed -i -e "s|^URIs: ${SNAPSHOT}$|URIs: http://archive.ubuntu.com/ubuntu/|" /etc/apt/sources.list.d/ubuntu.sources \
     && sed -i -e "0,/archive.ubuntu.com/! s|^URIs: http://archive.ubuntu.com/ubuntu/$|URIs: http://security.ubuntu.com/ubuntu/|" /etc/apt/sources.list.d/ubuntu.sources

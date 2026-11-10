@@ -271,10 +271,10 @@ const cachedImage = async (
   const tag = `${name}:${digest.digest("hex").slice(0, 16)}`;
   const id = await docker(["image", "inspect", "-f", "{{.Id}}", tag]);
   if (id.code === 0 && process.env.BOAT_HARNESS_REBUILD !== "1") return tag;
-  await dockerOk(
+  const built = await docker(
     [
       "build",
-      "-q",
+      "--progress=plain",
       // Not the run key: containers inherit image labels, and must not look like a run's.
       "--label",
       CACHE_LABEL,
@@ -286,6 +286,16 @@ const cachedImage = async (
     ],
     { timeoutMs: 20 * 60_000 },
   );
+  if (built.code !== 0) {
+    // apt's own lines say which host failed; the build's last lines only echo the Dockerfile.
+    const apt = `${built.stdout}\n${built.stderr}`
+      .split("\n")
+      .filter((line) => /\b(E:|W: Failed|Err:)/.test(line))
+      .slice(-12);
+    throw new Error(
+      `building ${tag} failed (${String(built.code)}${built.timedOut ? ", timed out" : ""}): ${apt.join(" | ") || built.stderr.slice(-1500)}`,
+    );
+  }
   return tag;
 };
 
