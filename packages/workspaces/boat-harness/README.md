@@ -142,8 +142,8 @@ gone, the reaper removes what the run left and releases the host lock:
 `pnpm --filter @sealant/workspaces exec tsx boat-harness/cleanup.ts` does the same by hand. It lists
 first, removes only with `--remove`, and never touches a live run. A run is live while its test
 process or any process started for it (worker, API, reaper) exists, including while it builds
-images. Leftover objects alone never keep a run live: when a process-tree kill takes the reaper
-with the test process, the next run takes the lock over and `cleanup.ts --remove` reaps it.
+images. Leftover objects alone never keep a run live: when a process-tree kill takes the reaper with
+the test process, the next run takes the lock over and `cleanup.ts --remove` reaps it.
 
 `markers.test.ts`, `reap.test.ts`, `fake-boat.test.ts` and `docker-wrapper.test.ts` cover the
 markers, the lock, the reaper, cleanup, the fake's API rules and the wrapper. They need no Docker
