@@ -19,7 +19,7 @@ import { expect } from "vitest";
 
 import { docker, dockerOk } from "./docker.js";
 import type { FakeSandbox } from "./fake-boat.js";
-import { PERSON, type Launch } from "./scenario.js";
+import { MEND_GID, PERSON, type Launch } from "./scenario.js";
 import type { HarnessStack } from "./stack.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -230,6 +230,19 @@ export const dockerScenario = async (
     await writeFile(join(evidenceDir(stack), "limits.json"), JSON.stringify(limits, null, 1));
   };
   await measure("ready");
+
+  // The person's passwd entry: made at prepare, as root, through the platform's exec (what Mend
+  // does; sealantd only maps ownership to it). Their primary group is `mend`; `docker` lets them
+  // reach the engine's socket, which the Boat image gives the docker group.
+  const prepared = await run_.workspace.exec([
+    "/bin/sh",
+    "-c",
+    `getent passwd ${String(PERSON.uid)} >/dev/null || useradd -u ${String(PERSON.uid)} -g ${String(MEND_GID)} -G docker -m -d ${PERSON.home} -s /bin/bash ${PERSON.id}; id ${PERSON.id}`,
+  ]);
+  await transcript.note(
+    `## prepare the person as root (exit ${String(prepared.exitCode)})\n${prepared.stdout}${prepared.stderr}`,
+  );
+  if (prepared.exitCode !== 0) throw new Error(`useradd failed: ${prepared.stderr.slice(-1000)}`);
 
   // Who we are, and what Docker we see.
   const identity = await asPerson(

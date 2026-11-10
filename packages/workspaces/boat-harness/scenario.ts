@@ -67,7 +67,7 @@ export const PERSON = {
   uid: 40001,
   home: "/home/harness-person",
 } as const;
-const MEND_GID = 40000;
+export const MEND_GID = 40000;
 
 export interface LaunchOptions {
   /** Resume an earlier session: the daemon restores its worktree's captures before anything runs. */
