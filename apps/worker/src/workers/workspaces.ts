@@ -48,7 +48,7 @@ import {
   boatFinalCloseWorkerLayer,
   boatReadinessWorkerLayer,
   boatResourcesLayer,
-  boatWorkerExecutionLayer,
+  boatSealedExecutionLayer,
   DockerBoatTunnel,
   boatAllocationWorkerLayer,
   DockerResourceRuntime,
@@ -416,7 +416,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         ),
       );
   const resourceReconciler = resourceAssembly?.reconciler;
-  // Admission is registered only beside the actual FINAL close owner.
+  // The Boat adapter is registered only beside the actual FINAL close owner.
   const boatAssembly = await (async () => {
     const provider = boatProviderFromEnv(env);
     if (provider === undefined) return undefined;
@@ -459,14 +459,16 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             : {}),
         }),
       });
-      const Resources = boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer));
+      const Resources = boatResourcesLayer.pipe(Layer.provide(boatSealedExecutionLayer));
       const Repos = Layer.mergeAll(
         BoatAllocationRepoLive,
         WorkspaceRuntimeInstanceRepoLive,
         WorkspaceCaptureDrainRepoLive,
       ).pipe(Layer.provide(Infra));
+      // Boat serves launches where its builder is configured, the way MicroVM does where its build
+      // role is: the worker's env schema then holds the rest of the Boat configuration complete.
       const bundle =
-        env.SEALANT_BOAT_ADMISSION_OWNER_IDS.length === 0 ? undefined : await loadPackagedRuntime();
+        env.SEALANT_BOAT_BUILDER_OWNER === undefined ? undefined : await loadPackagedRuntime();
       if (bundle !== undefined && !bundle.ok) throw bundle.error;
       const catalogRuntime =
         bundle === undefined
@@ -500,7 +502,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         Resources,
         boatReadinessWorkerLayer,
         boatFinalCloseWorkerLayer,
-        boatWorkerExecutionLayer,
+        boatSealedExecutionLayer,
         boatControlMaterialLayer,
       ).pipe(
         Layer.provideMerge(Repos),
@@ -517,14 +519,13 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         ),
       );
       const runtime = ManagedRuntime.make(WorkerLayer);
-      const admission =
+      const registration =
         catalogRuntime === undefined
           ? undefined
           : {
               kind: "boat-native" as const,
               adapter: new BoatRuntimeAdapter({
                 deploymentId: provider.deploymentId,
-                ownerIds: env.SEALANT_BOAT_ADMISSION_OWNER_IDS,
                 runtime,
               }),
               artifacts: await catalogRuntime.runPromise(BoatNativeCatalog),
@@ -535,7 +536,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach()));
       return {
         runtime,
-        admission,
+        registration,
         control,
         reconcileCatalog:
           catalogRuntime === undefined
@@ -566,7 +567,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     );
     return {
       runtime: ManagedRuntime.make(WorkerLayer),
-      admission: undefined,
+      registration: undefined,
       control: undefined,
       reconcileCatalog: undefined,
       disposeCatalog: undefined,
@@ -673,7 +674,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           imageBuilder: containerImageBuilder,
         }))),
     ...microvmRuntimes,
-    ...(boatAssembly?.admission === undefined ? [] : [boatAssembly.admission]),
+    ...(boatAssembly?.registration === undefined ? [] : [boatAssembly.registration]),
   ];
   const runtimeAdapters = runtimes.map((runtime) => runtime.adapter);
 
@@ -725,7 +726,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           db,
           runtimes,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
-          boatAdmissionOwnerIds: env.SEALANT_BOAT_ADMISSION_OWNER_IDS,
           gitHubSourceIntegration,
           registryClient,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
@@ -829,7 +829,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       // runtimes: a reaped job builds with the same builder a first delivery would.
       runtimes,
       defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
-      boatAdmissionOwnerIds: env.SEALANT_BOAT_ADMISSION_OWNER_IDS,
       gitHubSourceIntegration,
       registryClient,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
@@ -1215,7 +1214,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         );
         if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
       }
-      if (boatAssembly?.admission !== undefined) await boatAssembly.reconcileCatalog?.();
+      if (boatAssembly?.registration !== undefined) await boatAssembly.reconcileCatalog?.();
       const unresolved = report.entries.filter(
         (entry) => !["bound", "deleted"].includes(entry.outcome),
       );

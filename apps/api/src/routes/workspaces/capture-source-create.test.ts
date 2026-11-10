@@ -48,7 +48,7 @@ import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { BoatAdmissionOwners } from "../../services/boat-admission.js";
+import { BoatConfigured } from "../../services/boat-availability.js";
 import {
   PackageStandardizerService,
   WorkspaceBuildJobPublisherService,
@@ -1101,7 +1101,7 @@ const nativeRequirements = (family: string, extra: Record<string, unknown> = {})
   ...extra,
 });
 
-describe("createWorkspace image scope and Boat admission", () => {
+describe("createWorkspace image scope and Boat refusals", () => {
   const domainId = "rdm:00000000-0000-4000-8000-000000000001";
   for (const [name, spec, code] of [
     ["Arch", nativeRequirements("arch"), "runtime-os-unsupported"],
@@ -1124,21 +1124,22 @@ describe("createWorkspace image scope and Boat admission", () => {
       }),
       "runtime-requirement-unsupported",
     ],
-    // Docker is no refusal on Boat: the VM's image carries the engine. The capability gate below
-    // is what stops this unregistered deployment.
+    // Docker is no refusal on Boat: the VM's image carries the engine. What stops these is the
+    // deployment not configuring Boat, refused like any unregistered runtime.
     [
       "Docker",
       nativeRequirements("ubuntu", { tooling: { services: { docker: { enabled: true } } } }),
-      "boat-production-capability-unverified",
+      "unsupported-runtime",
     ],
-    ["Ubuntu registration", nativeRequirements("ubuntu"), "boat-production-capability-unverified"],
-    ["Nix registration", nativeRequirements("nix"), "boat-production-capability-unverified"],
+    ["Ubuntu registration", nativeRequirements("ubuntu"), "unsupported-runtime"],
+    ["Nix registration", nativeRequirements("nix"), "unsupported-runtime"],
   ] as const) {
     it(`refuses ${name} before reserving or creating anything`, async () => {
       const state: RecordingState = {};
       const result = await Effect.runPromise(
         Effect.result(createWorkspace({ payload: nativeCreateRequest(spec), headers: {} })).pipe(
           Effect.provide(makeRecordingLayer(state)),
+          Effect.provideService(BoatConfigured, false),
         ),
       );
       expect(Result.isFailure(result)).toBe(true);
@@ -1221,10 +1222,17 @@ describe("createWorkspace image scope and Boat admission", () => {
   });
 });
 
-describe("operator Boat owner routing", () => {
+describe("Boat runtime selection", () => {
+  const principals: readonly RequestPrincipal[] = [
+    { kind: "service" },
+    { kind: "bearer" },
+    { kind: "gateway" },
+    { kind: "open" },
+    { kind: "none" },
+  ];
   const create = (
     principal: RequestPrincipal,
-    owners: readonly string[],
+    boatConfigured: boolean,
     explicit?: "docker" | "boat",
   ) => {
     const state: RecordingState = {};
@@ -1250,39 +1258,48 @@ describe("operator Boat owner routing", () => {
         Effect.result,
         Effect.provide(makeRecordingLayer(state)),
         Effect.provideService(CurrentPrincipal, principal),
-        Effect.provideService(BoatAdmissionOwners, owners),
+        Effect.provideService(BoatConfigured, boatConfigured),
       ),
     ).then((result) => ({ state, result }));
   };
-  it("queues a native create only for the exact service-asserted owner", async () => {
-    const { state, result } = await create({ kind: "service" }, ["usr_capture"]);
-    expect(Result.isSuccess(result)).toBe(true);
-    expect(state.job).toMatchObject({ target: { runtime: { family: "boat", mode: "require" } } });
-    expect(state.imageScope).toEqual({ kind: "owner", ownerUserId: "usr_capture" });
-  });
-  it("keeps Docker for an empty list, another owner and every non-service principal", async () => {
-    const cases: readonly (readonly [RequestPrincipal, readonly string[]])[] = [
-      [{ kind: "service" }, []],
-      [{ kind: "service" }, ["usr_capture_other"]],
-      [{ kind: "none" }, ["usr_capture"]],
-      [{ kind: "open" }, ["usr_capture"]],
-      [{ kind: "bearer" }, ["usr_capture"]],
-      [{ kind: "gateway" }, ["usr_capture"]],
-    ];
-    for (const [principal, owners] of cases) {
-      const { state, result } = await create(principal, owners);
-      expect(Result.isSuccess(result)).toBe(true);
-      expect(state.job).not.toMatchObject({ target: { runtime: { family: "boat" } } });
+  it("queues Boat for every principal that may create workspaces where Boat is configured", async () => {
+    for (const principal of principals) {
+      const { state, result } = await create(principal, true, "boat");
+      expect(Result.isSuccess(result), principal.kind).toBe(true);
+      expect(state.job, principal.kind).toMatchObject({
+        target: { runtime: { family: "boat", mode: "require" } },
+      });
+      expect(state.imageScope, principal.kind).toEqual({
+        kind: "owner",
+        ownerUserId: "usr_capture",
+      });
     }
   });
-  it("preserves explicit Docker, and refuses explicit Boat without the admitted owner", async () => {
-    const docker = await create({ kind: "service" }, ["usr_capture"], "docker");
+  it("never reroutes auto to Boat, whoever owns the workspace, and keeps explicit Docker", async () => {
+    for (const principal of principals) {
+      const { state, result } = await create(principal, true);
+      expect(Result.isSuccess(result), principal.kind).toBe(true);
+      expect(state.job, principal.kind).not.toMatchObject({
+        target: { runtime: { family: "boat" } },
+      });
+    }
+    const docker = await create({ kind: "service" }, true, "docker");
     expect(Result.isSuccess(docker.result)).toBe(true);
     expect(docker.state.job).toMatchObject({ target: { runtime: { family: "docker" } } });
-    const denied = await create({ kind: "service" }, [], "boat");
-    expect(Result.isFailure(denied.result) && denied.result.failure).toMatchObject({
-      code: "boat-production-capability-unverified",
-    });
-    expect(denied.state.job).toBeUndefined();
+  });
+  it("refuses Boat where it is not configured as any unregistered runtime is refused", async () => {
+    for (const principal of principals) {
+      const denied = await create(principal, false, "boat");
+      expect(
+        Result.isFailure(denied.result) && denied.result.failure,
+        principal.kind,
+      ).toMatchObject({
+        _tag: "WorkspaceServiceUnavailableError",
+        code: "unsupported-runtime",
+        message: "No runtime adapter is registered for target.runtime.family 'boat'.",
+      });
+      expect(denied.state.job, principal.kind).toBeUndefined();
+      expect(denied.state.reservations?.size ?? 0, principal.kind).toBe(0);
+    }
   });
 });

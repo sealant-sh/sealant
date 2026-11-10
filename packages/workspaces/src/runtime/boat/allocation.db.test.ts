@@ -67,7 +67,7 @@ import { postgresSpec } from "../../resources/resource.fixture.js";
 import { adoptStrandedLaunchesEffect } from "../../worker/adopt-stranded-launches.js";
 import {
   boatAllocationWorkerLayer,
-  boatWorkerExecutionLayer,
+  boatSealedExecutionLayer,
   boatReadinessWorkerLayer,
   boatFinalCloseWorkerLayer,
 } from "../../worker/boat-allocation.js";
@@ -387,7 +387,7 @@ const test = async (
           boatReadinessWorkerLayer,
           boatFinalCloseWorkerLayer,
           boatAllocationWorkerLayer,
-          boatResourcesLayer.pipe(Layer.provide(boatWorkerExecutionLayer)),
+          boatResourcesLayer.pipe(Layer.provide(boatSealedExecutionLayer)),
         ).pipe(
           Layer.provide(
             Layer.mergeAll(
@@ -645,7 +645,6 @@ const adapterFixture = async (s: AllocationFixture) => {
   );
   const adapter = new BoatRuntimeAdapter({
     deploymentId: "test",
-    ownerIds: [input.principalId],
     runtime,
   });
   return { runtime, adapter, input, close };
@@ -1191,34 +1190,38 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         await f.runtime.dispose();
       }
     }));
-  it("launches through the durable owners with complete boot facts, then FINAL closes and releases its slot", () =>
+  it("launches for any principal through the durable owners with complete boot facts, then FINAL closes and releases its slot", () =>
     test(async (s) => {
       const f = await adapterFixture(s);
       const hooks: string[] = [];
       try {
-        const result = await f.adapter.launch(f.input, {
-          onStarted: async (identity) => {
-            hooks.push("started");
-            expect(s.guest.starts).toBe(0);
-            await execute(
-              s.runtimes.upsertRuntimeInstance({
-                runId: f.input.runId,
-                ...identity,
-                status: "running",
-              }),
-            );
+        // No owner list: whoever may create workspaces is launched on the deployment's Boat account.
+        const result = await f.adapter.launch(
+          { ...f.input, principalId: "usr_any_creator" },
+          {
+            onStarted: async (identity) => {
+              hooks.push("started");
+              expect(s.guest.starts).toBe(0);
+              await execute(
+                s.runtimes.upsertRuntimeInstance({
+                  runId: f.input.runId,
+                  ...identity,
+                  status: "running",
+                }),
+              );
+            },
+            onReady: async (identity) => {
+              hooks.push("ready");
+              await execute(
+                s.runtimes.upsertRuntimeInstance({
+                  runId: f.input.runId,
+                  ...identity,
+                  status: "ready",
+                }),
+              );
+            },
           },
-          onReady: async (identity) => {
-            hooks.push("ready");
-            await execute(
-              s.runtimes.upsertRuntimeInstance({
-                runId: f.input.runId,
-                ...identity,
-                status: "ready",
-              }),
-            );
-          },
-        });
+        );
         expect(result).toMatchObject({
           adapter: "boat",
           resourceId: "bx_23456789",
@@ -1249,13 +1252,12 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         await f.runtime.dispose();
       }
     }));
-  it("refuses a different owner before allocation and leaves unknown boot outcomes in exact custody", () =>
+  it("refuses a launch without its pins before allocation and leaves unknown boot outcomes in exact custody", () =>
     test(async (s) => {
       const f = await adapterFixture(s);
       try {
-        await expect(
-          f.adapter.launch({ ...f.input, principalId: "not-allowlisted" }),
-        ).rejects.toThrow("admission-refused");
+        const { admissionPins: _pins, ...unpinned } = f.input;
+        await expect(f.adapter.launch(unpinned)).rejects.toThrow("admission-refused");
         expect(s.provider.creates).toHaveLength(0);
         s.guest.fail = true;
         await expect(f.adapter.launch(f.input)).rejects.toBeInstanceOf(LaunchRetainedError);

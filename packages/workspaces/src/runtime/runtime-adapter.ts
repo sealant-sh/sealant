@@ -505,6 +505,15 @@ export interface RuntimeAdapterParkResult {
   readonly stopped: readonly string[];
 }
 
+/**
+ * What a request that requires a runtime family this deployment did not configure is answered with,
+ * by the worker's selection and by the API where it knows first.
+ */
+export const unregisteredRuntimeRefusal = (family: RuntimeAdapterId) => ({
+  code: "unsupported-runtime" as const,
+  message: `No runtime adapter is registered for target.runtime.family '${family}'.`,
+});
+
 const createSelectionError = (code: string, message: string): Error & { code: string } => {
   const error = new Error(message) as Error & { code: string };
   error.code = code;
@@ -581,10 +590,8 @@ export const selectRuntimeAdapter = <A extends RuntimeAdapterLifecycle>(
   }
 
   if (requestedRuntime !== "auto" && mode === "require") {
-    throw createSelectionError(
-      "unsupported-runtime",
-      `No runtime adapter is registered for target.runtime.family '${requestedRuntime}'.`,
-    );
+    const refusal = unregisteredRuntimeRefusal(requestedRuntime);
+    throw createSelectionError(refusal.code, refusal.message);
   }
 
   throw createSelectionError(

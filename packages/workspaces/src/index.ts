@@ -33,7 +33,7 @@ export * from "./worker/reconcile-native-publications.js";
 
 export {
   boatAllocationWorkerLayer,
-  boatWorkerExecutionLayer,
+  boatSealedExecutionLayer,
   boatReadinessWorkerLayer,
   boatFinalCloseWorkerLayer,
 } from "./worker/boat-allocation.js";

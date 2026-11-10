@@ -1,9 +1,9 @@
 import type { WorkspaceBlueprint } from "./workspace-blueprint.js";
 
-/** Boat is a valid request family; this stage does not register its production adapter. */
+/** The Boat runtime family, served where the deployment configures Boat. */
 export const BOAT_RUNTIME_ID = "boat";
 
-/** Shared preflight result for create and the future native adapter. */
+/** Shared preflight result for create and the Boat adapter. */
 export type BoatSupport =
   | { readonly supported: true }
   | {

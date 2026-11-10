@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { boatAdmissionEnvSchema, parseWorkerEnv, appEnvSchema } from "@sealant/validators/env";
+import { parseWorkerEnv, parseAppEnv } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
 
 describe("parseWorkerEnv", () => {
@@ -14,6 +14,17 @@ describe("parseWorkerEnv", () => {
     expect(env).not.toHaveProperty("SEALANT_BOAT_AUTOMATIC_PARKING");
     expect(env).not.toHaveProperty("SEALANT_BOAT_PARKING_DELAY_SECONDS");
   });
+
+  it.each(["usr_proof", "usr_proof,usr_second", "*", "usr_ proof,"])(
+    "starts with the retired Boat owner list %s still set, and ignores it",
+    (owners) => {
+      for (const env of [
+        parseWorkerEnv({ SEALANT_BOAT_ADMISSION_OWNER_IDS: owners }),
+        parseAppEnv({ SEALANT_BOAT_ADMISSION_OWNER_IDS: owners }),
+      ])
+        expect(env).not.toHaveProperty("SEALANT_BOAT_ADMISSION_OWNER_IDS");
+    },
+  );
 
   it("requires the complete reconciliation contract without changing runtime selection", () => {
     expect(parseWorkerEnv({}).SEALANT_BOAT_API_KEY).toBeUndefined();
@@ -81,7 +92,7 @@ describe("parseWorkerEnv", () => {
     for (const key of Object.keys(base)) {
       expect(() =>
         parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
-      ).toThrow("Boat requires its key");
+      ).toThrow(/Boat requires its key \(SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE\)/);
     }
     expect(() => parseWorkerEnv({ ...base, SEALANT_BOAT_API_KEY_FILE: "relative" })).toThrow();
     expect(
@@ -93,10 +104,8 @@ describe("parseWorkerEnv", () => {
       }).DEFAULT_RUNTIME_ADAPTER,
     ).toBe("docker");
   });
-  it("keeps admission off by default and preserves exact asserted owners through both parses", () => {
-    expect(parseWorkerEnv({}).SEALANT_BOAT_ADMISSION_OWNER_IDS).toEqual([]);
+  it("serves Boat workspaces where the builder is configured, and then needs the complete Boat configuration", () => {
     const base = {
-      SEALANT_BOAT_ADMISSION_OWNER_IDS: "usr_proof,usr_second",
       SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
       SEALANT_BOAT_DEPLOYMENT_ID: "proof",
       SEALANT_BOAT_GATEWAY_HOST_ID: "11111111-2222-4333-8444-555555555555",
@@ -106,36 +115,22 @@ describe("parseWorkerEnv", () => {
       SEALANT_BOAT_STATE_DIRECTORY: "/var/lib/sealant/boat",
       SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
     };
-    expect(parseWorkerEnv(base).SEALANT_BOAT_ADMISSION_OWNER_IDS).toEqual([
-      "usr_proof",
-      "usr_second",
-    ]);
-    // Admission with every tunnel carried: no public endpoint.
+    expect(parseWorkerEnv(base).SEALANT_BOAT_BUILDER_OWNER).toBe(base.SEALANT_BOAT_BUILDER_OWNER);
+    // Every tunnel carried: no public endpoint.
     const { SEALANT_BOAT_GATEWAY_ENDPOINT: _publicEndpoint, ...carried } = base;
     expect(
       parseWorkerEnv({ ...carried, SEALANT_BOAT_GATEWAY_RELAY_HOST: "127.0.0.1" })
-        .SEALANT_BOAT_ADMISSION_OWNER_IDS,
-    ).toEqual(["usr_proof", "usr_second"]);
-    const parsed = boatAdmissionEnvSchema.parse(base);
-    expect(boatAdmissionEnvSchema.parse(parsed)).toEqual(parsed);
-    for (const key of Object.keys(base).filter(
-      (name) => name !== "SEALANT_BOAT_ADMISSION_OWNER_IDS",
-    ))
-      expect(() =>
-        parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
-      ).toThrow();
-    for (const value of [
-      "usr_proof,usr_proof",
-      "*",
-      "usr_proof,",
-      "usr_ proof",
-      "usr_proof\nother",
-    ])
+        .SEALANT_BOAT_STATE_DIRECTORY,
+    ).toBe(base.SEALANT_BOAT_STATE_DIRECTORY);
+    for (const key of Object.keys(base))
       expect(
-        boatAdmissionEnvSchema.safeParse({ SEALANT_BOAT_ADMISSION_OWNER_IDS: value }).success,
-      ).toBe(false);
-    expect(appEnvSchema.safeParse({ SEALANT_BOAT_ADMISSION_OWNER_IDS: "usr_proof" }).success).toBe(
-      false,
+        () =>
+          parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
+        key,
+      ).toThrow();
+    // Boat still runs beside the Docker resource host.
+    expect(() => parseWorkerEnv({ ...base, DOCKER_RUNTIME_ENABLED: "false" })).toThrow(
+      "Docker resource host",
     );
   });
 

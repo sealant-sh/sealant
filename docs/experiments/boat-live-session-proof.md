@@ -1,13 +1,15 @@
 # Ordinary Boat sessions and the preview proof
 
-Boat remains off by default. `SEALANT_BOAT_ADMISSION_OWNER_IDS` accepts exact, comma-separated owner
-IDs. Only an authenticated service caller such as Mend can assert an admitted owner. This is an
-operator routing switch, not independent person authentication. Empty lists keep existing Docker
-routing. Explicit Docker choices stay Docker. The API and worker need the same allowlist. The worker
-refuses admission unless allocation, authenticated readiness, FINAL close and resource
-reconciliation are actually assembled. Capture sources are supported; inline dotfiles archives are
-currently refused. Native image preflight can return unknown while construction still runs through
-the ordinary native publication owner.
+Boat is off by default and registered like MicroVM: a deployment that configures it serves it. Boat
+runs in the deployment owner's own Boat account, as MicroVM runs in their own AWS account, so there
+is no per-owner list: whoever may create workspaces on the deployment can launch Boat VMs on that
+account. A request reaches Boat only by naming `target.runtime.family: "boat"` (Mend names it on
+every Boat request); `auto` follows the deployment default. The worker registers the Boat adapter
+only where its builder is configured, and then requires allocation, authenticated readiness, FINAL
+close and resource reconciliation to be assembled. A deployment without Boat answers a Boat request
+with `unsupported-runtime`, as for any runtime it did not configure. Capture sources are supported;
+inline dotfiles archives are currently refused. Native image preflight can return unknown while
+construction still runs through the ordinary native publication owner.
 
 The ordinary adapter stages the real launch material and credential revision pins, waits for
 authenticated readiness, and opens interactive control directly. The API holds the deployment's Boat
@@ -33,12 +35,16 @@ built from #471 remains suitable; this layer does not change `boat-tunnel`.
 
 The operator supplies names and values privately:
 
-- Both API and worker: `SEALANT_BOAT_ADMISSION_OWNER_IDS`, `SEALANT_CREDENTIALS_KEY`,
+- Both API and worker: `SEALANT_CREDENTIALS_KEY`,
   `SEALANT_BOAT_API_KEY_FILE=/run/secrets/boat-api-key` (or `SEALANT_BOAT_API_KEY`) and
-  `SEALANT_BOAT_DEPLOYMENT_ID`. The API refuses to start with admission on and no Boat key.
+  `SEALANT_BOAT_DEPLOYMENT_ID`. Given the deployment id, the API refuses to start without the Boat
+  key and names the settings; given neither, it refuses Boat requests at create.
 - Worker: `SEALANT_BOAT_GATEWAY_HOST_ID`, `SEALANT_BOAT_GATEWAY_ENDPOINT`,
   `SEALANT_BOAT_GATEWAY_IMAGE`, `SEALANT_BOAT_BUILDER_OWNER`,
-  `SEALANT_BOAT_STATE_DIRECTORY=/var/lib/sealant/boat`.
+  `SEALANT_BOAT_STATE_DIRECTORY=/var/lib/sealant/boat`. The builder settings are what register the
+  Boat adapter; with either one set, the worker refuses to start without the rest.
+- `SEALANT_BOAT_ADMISSION_OWNER_IDS` is retired. The API and the worker ignore it, so it can be
+  removed.
 - `SEALANT_BOAT_AUTOMATIC_PARKING` and `SEALANT_BOAT_PARKING_DELAY_SECONDS` are retired. The worker
   ignores them, so they can be removed.
 - Mount the persistent native-build journal directory at `/var/lib/sealant/boat`. The builder owner
