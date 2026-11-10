@@ -10,7 +10,14 @@ import { startWorkspaceWorker } from "./workspaces.js";
 // attribution via execution ids.
 export const startWorkers = async (env: WorkerEnv) => {
   const workspaceWorker = await startWorkspaceWorker(env);
-  const telemetryWorker = await startTelemetryWorker(env);
+  // Boat runs are reached through the workspace worker's Boat control (hosted HTTPS, fresh
+  // authority per connection); the recorder must use it too, or a Boat session never records.
+  const telemetryWorker = await startTelemetryWorker(
+    env,
+    workspaceWorker.boatConnectMaterial === undefined
+      ? {}
+      : { boatConnectMaterial: workspaceWorker.boatConnectMaterial },
+  );
 
   return {
     stop: async () => {
