@@ -19,28 +19,45 @@ from a host-network container, which is what a `docker run --network host` reach
 ```sh
 sudo bash vm-probe.sh
 sudo bash vm-probe.sh --host-network-container ubuntu:24.04   # needs Docker on the VM
+bash vm-probe.sh --isolation-only                             # isolation alone, any user
 ```
 
 ## Read it
 
 Each check prints one line: `PASS|FAIL|SKIP <section> <check> <detail>`. `INFO` lines are facts, not
-checks. Each pass ends with a `SUMMARY` line. The VM's summary is the last line:
+checks. The last line is the verdict, and it also counts the host-network container's checks when
+that pass runs:
 
 ```
-SUMMARY kernel pass=17 fail=0 skip=0 isolation pass=9 fail=0
+SUMMARY kernel pass=17 fail=0 skip=0 isolation pass=9 fail=0 skip=0 result=PASS
 ```
+
+`result` is `FAIL` when any check failed, and `INCOMPLETE` when none failed but an isolation check
+couldn't be made. It is `PASS` only when every check ran and passed.
+
+- An isolation `PASS` means the connection was refused or got no answer in time, and each port's
+  outcome is printed (`22:closed 80:filtered`). A probe that couldn't run is a `FAIL` with its
+  reason, never a pass.
+- A missing discovery tool (`ip`, `wg`) makes the checks that need it `SKIP` with that reason, so
+  the verdict reads `INCOMPLETE`. `timeout` and `bash` are required: without them, every isolation
+  check is a `FAIL`.
+- A WireGuard peer's routed prefix is sampled by hosts inside it: the /32 itself, both addresses of
+  a /31, otherwise the first two. A prefix broader than /8, or an IPv6 one, is a `SKIP` that names
+  it as not covered.
 
 - A kernel `FAIL` means Docker won't work on this VM. The exit status is 1.
 - An isolation `FAIL` means the provider lets a root guest reach that address. That's a fact for the
   decision on in-guest egress rules, not an error, and it leaves the exit status at 0.
-- `SKIP` means a tool is missing (for example `nft` when `iptables` is used), not a kernel gap.
+- A kernel `SKIP` means a tool is missing (for example `nft` when `iptables` is used), not a kernel
+  gap.
 
 ## Known readings
 
 - **overlayfs fails inside a container** whose root is itself overlay. The local harness twin gives
   Docker's data root a volume for this reason. A VM's disk passes.
-- **`own-public-address` answers** when the address is a NAT shared with something listening, as on
-  a lab host. On a Boat VM, it shows whether the VM's own public address loops back to it.
+- **`own-public-address`** is an `INFO` line, not a check, because a NAT shared with something
+  listening answers for it, as on a lab host. On a Boat VM, it shows whether the VM's own public
+  address loops back to it.
 - **`modprobe br_netfilter` fails without `/lib/modules`.** That happens in a container that shares
   its host's kernel. The `br-netfilter` line then reports whether the host already has the module
   loaded.
