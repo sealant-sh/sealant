@@ -91,6 +91,7 @@ export const DEFECTS = {
     "worker killed after bind": undefined,
     "Stop after the launch": firstOf(PEER_PID, STUCK_DRAINS),
     "deletion stuck in processing": undefined,
+    "snapshot save fails": undefined,
   },
 } as const satisfies {
   readonly happyPath: Defect | undefined;

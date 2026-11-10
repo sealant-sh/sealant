@@ -154,7 +154,8 @@ const scenario = (
 const fault = (
   key: keyof typeof DEFECTS.faults,
   body: (s: HarnessStack, p: Project) => Promise<void>,
-) => scenario(key, DEFECTS.faults[key], () => body(stack, project));
+  timeoutMs?: number,
+) => scenario(key, DEFECTS.faults[key], () => body(stack, project), timeoutMs);
 
 describe("Boat session lifecycle", () => {
   // The first launch also builds and publishes the native snapshot.
@@ -179,4 +180,6 @@ describe("one fault per step", () => {
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
+  // Last: it builds a second environment, which takes a full native build.
+  fault("snapshot save fails", scenarios.snapshotSaveFails, 30 * 60_000);
 });

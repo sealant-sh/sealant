@@ -351,6 +351,32 @@ export const scenarios = {
   },
 
   /**
+   * The native build's snapshot save fails (Boat reports the saved snapshot `failed`). The launch
+   * that needed it fails with that cause, and nothing it reserved stays held: in particular its
+   * publication consumer pin is released (it stayed `pending` on main df649211).
+   */
+  async snapshotSaveFails(stack: HarnessStack, project: Project) {
+    let failed = 0;
+    await withFaults(
+      stack,
+      {
+        snapshot: () => {
+          failed += 1;
+          return "failed";
+        },
+      },
+      async () => {
+        // `jq` makes a different environment from the published one, so this launch builds.
+        const run = await launch(stack, project, { packages: ["jq"] });
+        const outcome = await awaitOutcome(stack, run, 20 * 60_000);
+        expect(outcome.status).not.toBe("ready");
+        expect(failed).toBeGreaterThanOrEqual(1);
+        await assertSettled(stack, run, outcome.at, { cause: /snapshot|publication|mechanism/i });
+      },
+    );
+  },
+
+  /**
    * Boat's deletion stays `processing`. The launch fails at permit, after its UDP slot and
    * publication pin are held. While Boat says `processing` the VM is not gone, so Core must keep
    * both; once the deletion completes it must release them.

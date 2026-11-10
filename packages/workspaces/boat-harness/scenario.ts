@@ -61,6 +61,8 @@ export interface Launch {
 export interface LaunchOptions {
   /** Resume an earlier session: the daemon restores its worktree's captures before anything runs. */
   readonly resume?: CaptureSession;
+  /** Extra catalog packages: a different environment, so the launch needs its own native build. */
+  readonly packages?: readonly string[];
 }
 
 /** Creates a capture-sourced Boat workspace and links it to the project, as a Mend session does. */
@@ -76,6 +78,7 @@ export const launch = async (
     runtime: "boat",
     os: "ubuntu",
     harness: codex(),
+    ...(options.packages === undefined ? {} : { packages: options.packages }),
     name: `harness-${stack.runId}-${randomBytes(3).toString("hex")}`,
     wait: false,
     source: {
