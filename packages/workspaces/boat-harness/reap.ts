@@ -54,7 +54,11 @@ export const realHost: HostDeps = {
 export interface LockState {
   readonly holder: string;
   readonly pid: number | undefined;
-  /** The holder's process or its run network still exists: the run is live, or tearing down. */
+  /**
+   * The holder's test process, or any process carrying the run (worker, API, reaper), still
+   * exists: the run is live, or its reaper is tearing it down. Leftover objects alone never keep
+   * a run live; a run whose processes are all gone is dead, and its lock and objects are reaped.
+   */
   readonly alive: boolean;
 }
 
@@ -70,17 +74,17 @@ export const lockState = async (deps: HostDeps = realHost): Promise<LockState | 
   if (held.code !== 0) return undefined;
   const [holder = "", pidText = ""] = held.stdout.trim().split(" ");
   const pid = /^\d+$/.test(pidText) ? Number(pidText) : undefined;
-  const processAlive = pid !== undefined && (await deps.processAlive(pid));
-  const networkAlive =
-    (await deps.docker(["network", "inspect", `boat-harness-${holder}`])).code === 0;
-  return { holder, pid, alive: processAlive || networkAlive };
+  const alive =
+    (pid !== undefined && (await deps.processAlive(pid))) ||
+    (/^[a-f0-9]{8}$/.test(holder) && (await deps.runProcesses(holder)).length > 0);
+  return { holder, pid, alive };
 };
 
 /**
  * One harness run per Docker host: Core's worker reconciles resource networks and gateways
  * host-wide, so two stacks on one host disturb each other. The lock is a named container that is
- * never started; creating it is atomic. It is taken over only when its holder's process and run
- * network are both gone. Waits up to two hours.
+ * never started; creating it is atomic. It is taken over only when every process of its holder's
+ * run is gone. Waits up to two hours.
  */
 export const acquireHostLock = async (
   runId: string,
@@ -195,7 +199,7 @@ export interface CleanupPlan {
   readonly staleLock: string | undefined;
 }
 
-/** What `cleanup.ts` may remove. A run is live while its lock holder's process or network exists. */
+/** What `cleanup.ts` may remove. A run is live while its lock holder or any of its processes exists. */
 export const cleanupPlan = async (deps: HostDeps = realHost): Promise<CleanupPlan> => {
   const runs = await listRuns(deps);
   const lock = await lockState(deps);

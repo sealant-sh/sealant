@@ -345,6 +345,8 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     ["--import", "tsx", join(here, "reaper.ts"), runId, String(process.pid)],
     {
       cwd: join(repo, "packages/workspaces"),
+      // Carrying the run keeps the lock live while the reaper works, and lets a later run find it.
+      env: { ...process.env, [RUN_ENV]: runId },
       detached: true,
       stdio: ["ignore", reaperLog.fd, reaperLog.fd],
     },
