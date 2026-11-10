@@ -121,13 +121,22 @@ const sampleGuest = async (vm: FakeSandbox, cgroup: string): Promise<CgroupSampl
 export const sampleLimits = async (vm: FakeSandbox, label: string) => {
   const id = (await dockerOk(["inspect", "-f", "{{.Id}}", vm.container])).trim();
   const twin = `/sys/fs/cgroup/system.slice/docker-${id}.scope`;
+  // A slice nests by its name; the agent resolves it from systemd and so does this.
+  const unitCgroup = async (unit: string) => {
+    const shown = await docker(
+      ["exec", vm.container, "systemctl", "show", "--property", "ControlGroup", "--value", unit],
+      { timeoutMs: 10_000 },
+    );
+    const control = shown.stdout.trim();
+    return control.startsWith("/") ? join("/sys/fs/cgroup", control) : `/sys/fs/cgroup/${unit}`;
+  };
   return {
     label,
     at: new Date().toISOString(),
     twin: await sampleHost(twin),
-    session: await sampleGuest(vm, "/sys/fs/cgroup/system.slice/sealant-agent.service"),
+    session: await sampleGuest(vm, await unitCgroup("sealant-agent.service")),
     dockerEngine: await sampleGuest(vm, "/sys/fs/cgroup/sealant-docker-engine"),
-    dockerContainers: await sampleGuest(vm, "/sys/fs/cgroup/sealant-docker.slice"),
+    dockerContainers: await sampleGuest(vm, await unitCgroup("sealant-docker.slice")),
   };
 };
 
