@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
+  chownSync,
   closeSync,
   existsSync,
   chmodSync,
@@ -175,6 +176,50 @@ const ensurePrivateDirectory = (target) => {
   chmodSync(target, 0o700);
 };
 
+/**
+ * The socket's directory when dockerd is told a `--group`: root-owned, the group's, 0750, so the
+ * group's members reach the socket (dockerd makes the socket itself 0660 root:group).
+ */
+const ensureGroupDirectory = (target, gid) => {
+  mkdirSync(target, { recursive: true, mode: 0o750 });
+  if (!lstatSync(target).isDirectory()) throw new Error("Docker runtime path is not a directory");
+  chownSync(target, -1, gid);
+  chmodSync(target, 0o750);
+};
+
+/**
+ * The numeric id of a group, from `/etc/group` (then `getent group`, for a group another name
+ * service holds); a numeric name is that id. `null` when nothing names it.
+ */
+const resolveGroupId = (group) => {
+  if (/^\d+$/.test(group)) return Number(group);
+  const entry = (line) => {
+    const fields = line.split(":");
+    return fields[0] === group && /^\d+$/.test(fields[2] ?? "") ? Number(fields[2]) : null;
+  };
+  try {
+    for (const line of readFileSync("/etc/group", "utf8").split("\n")) {
+      const gid = entry(line);
+      if (gid !== null) return gid;
+    }
+  } catch {
+    // No /etc/group to read: getent is the next source.
+  }
+  try {
+    const output = execFileSync("getent", ["group", group], {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    }).toString("utf8");
+    for (const line of output.split("\n")) {
+      const gid = entry(line);
+      if (gid !== null) return gid;
+    }
+  } catch {
+    // Unknown group.
+  }
+  return null;
+};
+
 const createSignatureTracker = (socketPath) => {
   const signatures = {
     cgroupReadonly: false,
@@ -230,6 +275,14 @@ export const createDockerService = (options) => {
   const dataRoot = options.dataRoot ?? DOCKER_DATA_ROOT;
   const execRoot = options.execRoot ?? DOCKER_EXEC_ROOT;
   const pidFile = options.pidFile ?? DOCKER_PID_FILE;
+  // Optional networking and socket-sharing arguments; unset, dockerd gets exactly the arguments
+  // it always had.
+  const bridgeIp =
+    typeof options.bridgeIp === "string" && options.bridgeIp !== "" ? options.bridgeIp : null;
+  const addressPools = Array.isArray(options.addressPools)
+    ? options.addressPools.filter((pool) => typeof pool === "string" && pool !== "")
+    : [];
+  const group = typeof options.group === "string" && options.group !== "" ? options.group : null;
   const dockerdArgs = [
     "--host",
     dockerHost,
@@ -239,9 +292,21 @@ export const createDockerService = (options) => {
     execRoot,
     "--pidfile",
     pidFile,
+    ...(bridgeIp === null ? [] : ["--bip", bridgeIp]),
+    ...addressPools.flatMap((pool) => ["--default-address-pool", pool]),
+    ...(group === null ? [] : ["--group", group]),
   ];
   const probeArgs = ["--host", dockerHost, "info"];
-  const runtimeDirectories = [path.dirname(socketPath), dataRoot, execRoot, path.dirname(pidFile)];
+  const socketDirectory = path.dirname(socketPath);
+  const runtimeDirectories = [socketDirectory, dataRoot, execRoot, path.dirname(pidFile)];
+  const prepareDirectories = () => {
+    const gid = group === null ? null : resolveGroupId(group);
+    if (group !== null && gid === null) throw new Error("Docker socket group is unknown");
+    for (const directory of new Set(runtimeDirectories)) {
+      if (gid !== null && directory === socketDirectory) ensureGroupDirectory(directory, gid);
+      else ensurePrivateDirectory(directory);
+    }
+  };
   const readinessTimeoutMs = positiveInteger(options.readinessTimeoutMs, 30_000);
   const probeIntervalMs = positiveInteger(options.probeIntervalMs, 1_000);
   const probeTimeoutMs = positiveInteger(options.probeTimeoutMs, 5_000);
@@ -414,7 +479,7 @@ export const createDockerService = (options) => {
     if (started) return;
     started = true;
     try {
-      for (const directory of new Set(runtimeDirectories)) ensurePrivateDirectory(directory);
+      prepareDirectories();
     } catch {
       fail("directory-preparation-failed");
       return;

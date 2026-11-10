@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
-# Install the pinned ARM64 Docker engine and CLI plugins into the Docker-capable image.
-# The engine archive is Docker's static glibc-independent bundle. The plugins are static Go
-# binaries from their upstream release pages, so none of these files depend on Alpine/musl.
+# Install the pinned Docker engine and CLI plugins into the Docker-capable image, for the
+# architecture the builder runs on (aarch64 for the Lambda MicroVM image, x86_64 for the Boat
+# image). The engine archive is Docker's static glibc-independent bundle. The plugins are static
+# Go binaries from their upstream release pages, so none of these files depend on Alpine/musl.
 set -euo pipefail
 
 DOCKER_VERSION="29.8.1"
-DOCKER_SHA256="667395fbffab52901b80181dfbb39ea76da2fbd7642c4fbddd24e42146b07b48"
 BUILDX_VERSION="0.37.1"
-BUILDX_SHA256="e5cc9fe3bbff5cbc91230981f7860e06076110730a2db997082652199042a1f2"
 COMPOSE_VERSION="5.5.1"
-COMPOSE_SHA256="732e3a84c1a0f67256ce80bc2598a24546b10ca05f9faa97efceb1171ece2ef7"
 
-[[ "$(uname -m)" == "aarch64" ]] || {
-  printf 'Docker payload installation requires an aarch64 builder\n' >&2
-  exit 1
-}
+case "$(uname -m)" in
+  aarch64)
+    DOCKER_ARCH="aarch64"
+    DOCKER_SHA256="667395fbffab52901b80181dfbb39ea76da2fbd7642c4fbddd24e42146b07b48"
+    BUILDX_ARCH="arm64"
+    BUILDX_SHA256="e5cc9fe3bbff5cbc91230981f7860e06076110730a2db997082652199042a1f2"
+    COMPOSE_ARCH="aarch64"
+    COMPOSE_SHA256="732e3a84c1a0f67256ce80bc2598a24546b10ca05f9faa97efceb1171ece2ef7"
+    ;;
+  x86_64)
+    DOCKER_ARCH="x86_64"
+    DOCKER_SHA256="d8db66739d2e28d4933786d73e918d9be643a67fbd835db1bf740d650a259e70"
+    BUILDX_ARCH="amd64"
+    BUILDX_SHA256="9447199cdb435f25880548343c128a4b6650e8891ee598905d8d29d39a8e359b"
+    COMPOSE_ARCH="x86_64"
+    COMPOSE_SHA256="db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576"
+    ;;
+  *)
+    printf 'Docker payload installation requires an aarch64 or x86_64 builder, not %s\n' "$(uname -m)" >&2
+    exit 1
+    ;;
+esac
 
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d -t sealant-docker.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
 fetch() {
@@ -28,7 +44,7 @@ fetch() {
 
 ENGINE_ARCHIVE="$WORK/docker.tgz"
 fetch \
-  "https://download.docker.com/linux/static/stable/aarch64/docker-${DOCKER_VERSION}.tgz" \
+  "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz" \
   "$ENGINE_ARCHIVE" \
   "$DOCKER_SHA256"
 tar -xzf "$ENGINE_ARCHIVE" -C "$WORK"
@@ -43,11 +59,11 @@ done
 PLUGIN_DIR="/usr/local/lib/docker/cli-plugins"
 install -d -m 0755 "$PLUGIN_DIR"
 fetch \
-  "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-arm64" \
+  "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${BUILDX_ARCH}" \
   "$WORK/docker-buildx" \
   "$BUILDX_SHA256"
 fetch \
-  "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-aarch64" \
+  "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-${COMPOSE_ARCH}" \
   "$WORK/docker-compose" \
   "$COMPOSE_SHA256"
 install -m 0755 "$WORK/docker-buildx" "$PLUGIN_DIR/docker-buildx"

@@ -15,12 +15,15 @@ const FAKE_DOCKERD = `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
 const required = JSON.parse(process.env.FAKE_REQUIRED_DIRS);
+// Every directory is private (0700) unless the test expects another mode for it (a group-shared
+// socket directory).
+const expectedModes = JSON.parse(process.env.FAKE_EXPECTED_MODES ?? "{}");
 const directories = Object.fromEntries(required.map((entry) => {
   try {
     const value = fs.statSync(entry);
-    return [entry, { directory: value.isDirectory(), mode: value.mode & 0o777 }];
+    return [entry, { directory: value.isDirectory(), mode: value.mode & 0o777, gid: value.gid }];
   } catch {
-    return [entry, { directory: false, mode: null }];
+    return [entry, { directory: false, mode: null, gid: null }];
   }
 }));
 // Published whole, by rename: the fake docker answers once the record exists, so an existing
@@ -28,7 +31,7 @@ const directories = Object.fromEntries(required.map((entry) => {
 const record = process.env.FAKE_DOCKERD_RECORD;
 fs.writeFileSync(\`\${record}.\${process.pid}.tmp\`, JSON.stringify({ argv: process.argv.slice(2), directories }));
 fs.renameSync(\`\${record}.\${process.pid}.tmp\`, record);
-if (Object.values(directories).some((entry) => !entry.directory || entry.mode !== 0o700)) {
+if (Object.entries(directories).some(([entry, value]) => !value.directory || value.mode !== (expectedModes[entry] ?? 0o700))) {
   process.stderr.write("can't create unix socket: no such file or directory");
   process.exit(17);
 }
@@ -105,6 +108,7 @@ service = createDockerService({
   probeTimeoutMs: 100,
   shutdownTimeoutMs: 100,
   logPath: paths.log,
+  ...JSON.parse(process.env.SERVICE_OPTIONS ?? "{}"),
   onReady: () => void finish("READY"),
   onStateChange: (health) => {
     if (health.status === "failed") void finish("FAILED:" + health.reason);
@@ -169,6 +173,10 @@ const createFixture = async (): Promise<ServiceFixture> => {
 
 const runService = async (
   fixture: ServiceFixture,
+  extra: {
+    readonly options?: Record<string, unknown>;
+    readonly expectedModes?: Record<string, number>;
+  } = {},
 ): Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }> => {
   const child: ChildProcess = spawn(
     process.execPath,
@@ -177,6 +185,8 @@ const runService = async (
       env: {
         ...process.env,
         SERVICE_PATHS: JSON.stringify(fixture.paths),
+        SERVICE_OPTIONS: JSON.stringify(extra.options ?? {}),
+        FAKE_EXPECTED_MODES: JSON.stringify(extra.expectedModes ?? {}),
         FAKE_DOCKERD: fixture.dockerd,
         FAKE_DOCKER: fixture.docker,
         FAKE_REQUIRED_DIRS: JSON.stringify(fixture.requiredDirectories),
@@ -209,8 +219,117 @@ const dockerdRecordSchema = z.strictObject({
   argv: z.array(z.string()),
   directories: z.record(
     z.string(),
-    z.strictObject({ directory: z.boolean(), mode: z.number().int().nullable() }),
+    z.strictObject({
+      directory: z.boolean(),
+      mode: z.number().int().nullable(),
+      gid: z.number().int().nullable(),
+    }),
   ),
+});
+
+/** The name of the group this test process runs as, from /etc/group, when it has one. */
+const currentGroupName = async (): Promise<string | null> => {
+  const gid = process.getgid?.();
+  if (gid === undefined) return null;
+  const groups = await readFile("/etc/group", "utf8").catch(() => "");
+  for (const line of groups.split("\n")) {
+    const fields = line.split(":");
+    if (fields.length >= 3 && Number(fields[2]) === gid && fields[0] !== undefined) {
+      return fields[0];
+    }
+  }
+  return null;
+};
+
+describe("DockerService networking and socket group options", () => {
+  it("passes the bridge address, address pools and group through to dockerd", async () => {
+    const fixture = await createFixture();
+    const gid = process.getgid?.() ?? 0;
+    const socketDirectory = path.dirname(fixture.paths.socket);
+    const result = await runService(fixture, {
+      options: {
+        bridgeIp: "198.18.0.1/16",
+        addressPools: ["base=198.18.0.0/15,size=24", "base=198.19.0.0/16,size=24"],
+        group: String(gid),
+      },
+      expectedModes: { [socketDirectory]: 0o750 },
+    });
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout).toContain("READY:");
+    const record = dockerdRecordSchema.parse(
+      JSON.parse(await readFile(fixture.dockerdRecord, "utf8")),
+    );
+    expect(record.argv).toEqual([
+      "--host",
+      `unix://${fixture.paths.socket}`,
+      "--data-root",
+      fixture.paths.dataRoot,
+      "--exec-root",
+      fixture.paths.execRoot,
+      "--pidfile",
+      fixture.paths.pidFile,
+      "--bip",
+      "198.18.0.1/16",
+      "--default-address-pool",
+      "base=198.18.0.0/15,size=24",
+      "--default-address-pool",
+      "base=198.19.0.0/16,size=24",
+      "--group",
+      String(gid),
+    ]);
+    // The socket's directory opens to the group; every other runtime directory stays private.
+    expect(record.directories[socketDirectory]).toEqual({ directory: true, mode: 0o750, gid });
+    for (const directory of fixture.requiredDirectories.filter((d) => d !== socketDirectory)) {
+      expect(record.directories[directory]).toMatchObject({ directory: true, mode: 0o700 });
+    }
+  });
+
+  it("resolves a group by name and keeps today's exact arguments when no option is set", async () => {
+    const name = await currentGroupName();
+    if (name !== null) {
+      const fixture = await createFixture();
+      const socketDirectory = path.dirname(fixture.paths.socket);
+      const result = await runService(fixture, {
+        options: { group: name },
+        expectedModes: { [socketDirectory]: 0o750 },
+      });
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      const record = dockerdRecordSchema.parse(
+        JSON.parse(await readFile(fixture.dockerdRecord, "utf8")),
+      );
+      expect(record.argv.slice(-2)).toEqual(["--group", name]);
+      expect(record.directories[socketDirectory]).toMatchObject({
+        mode: 0o750,
+        gid: process.getgid?.() ?? 0,
+      });
+    }
+    const plain = await createFixture();
+    const result = await runService(plain, { options: { addressPools: [] } });
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const record = dockerdRecordSchema.parse(
+      JSON.parse(await readFile(plain.dockerdRecord, "utf8")),
+    );
+    expect(record.argv).toEqual([
+      "--host",
+      `unix://${plain.paths.socket}`,
+      "--data-root",
+      plain.paths.dataRoot,
+      "--exec-root",
+      plain.paths.execRoot,
+      "--pidfile",
+      plain.paths.pidFile,
+    ]);
+  });
+
+  it("fails directory preparation when the group cannot be resolved", async () => {
+    const fixture = await createFixture();
+    const result = await runService(fixture, { options: { group: "no-such-group-sealant" } });
+    expect(result).toMatchObject({ code: 1, stderr: "" });
+    expect(result.stdout).toContain("FAILED:directory-preparation-failed");
+    await expect(readFile(fixture.dockerdRecord, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });
 
 describe("DockerService runtime directories", () => {
@@ -238,7 +357,11 @@ describe("DockerService runtime directories", () => {
       fixture.paths.pidFile,
     ]);
     expect(Object.values(record.directories)).toEqual(
-      fixture.requiredDirectories.map(() => ({ directory: true, mode: 0o700 })),
+      fixture.requiredDirectories.map(() => ({
+        directory: true,
+        mode: 0o700,
+        gid: process.getgid?.() ?? 0,
+      })),
     );
     expect(
       z.array(z.string()).parse(JSON.parse(await readFile(fixture.dockerRecord, "utf8"))),
