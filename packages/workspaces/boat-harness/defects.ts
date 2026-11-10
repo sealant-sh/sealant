@@ -9,6 +9,9 @@
  * - S1 for launches that fail after allocation: #491.
  * - R1, the 30 s sweep winning a launch's exchange: #503.
  * - S3, a launch whose worker died: #494.
+ * - S4, a lost create reply losing the launch: #508.
+ * - C1, a failed launch's close waiting on the 30 s sweep: #508.
+ * - S1 for launches that fail while Boat is `cloning`: #508.
  */
 import type { Defect } from "./markers.js";
 
@@ -31,33 +34,6 @@ export const PEER_PID: Defect = {
 const PEER_PID_AT_READY: Defect = {
   ...PEER_PID,
   failure: /^step ready: launch ended \w+ with [^\n]*\\"step\\":\\"readiness\\"/,
-};
-
-/**
- * Lifecycle S1, the part #491 left: a launch that fails while Boat still reports `cloning`
- * (`observe-sandbox` / `allocation-pending`) is deleted correctly, but its public status stays
- * `retained`.
- */
-export const DELETED_VM_KEPT: Defect = {
-  id: "S1",
-  title: "a launch failed in `cloning` is deleted but still reads retained",
-  // Mend still reads retained although Core removed the runtime and deleted the VM.
-  failure:
-    /^timed out after \d+s waiting for Mend to see a terminal workspace[^\n]*; public status retained; runtime [^\n]*"removed":true[^\n]*"allocation":"deleted"/,
-  owner: "thread C (lifecycle)",
-};
-
-/**
- * Lifecycle S4: create is persisted `issued` before send, and a lost reply fails the launch at
- * once instead of adopting the VM through discovery. The sweep later finds and deletes that VM,
- * so nothing leaks; the launch itself is lost.
- */
-export const ISSUED_ALLOCATION: Defect = {
-  id: "S4",
-  title: "a lost create reply loses the launch (no leak)",
-  // The launch ends at `create` with the allocation still `issued`.
-  failure: /^launch ended \w+ with [^\n]*\\"step\\":\\"create\\"[^\n]*"allocation":"issued"/,
-  owner: "thread C (lifecycle)",
 };
 
 /** Lifecycle S2: established FINAL closes resources but never ends capture retention. */
@@ -99,22 +75,22 @@ export const DEFECTS = {
   happyPath: PEER_PID_AT_READY,
   faults: {
     "bind slower than one sweep period": PEER_PID,
-    "create reply lost": ISSUED_ALLOCATION,
-    "provisioning never finishes": firstOf(DELETED_VM_KEPT, SLOW_CLOSE),
-    "bind exits 1": SLOW_CLOSE,
-    "bind times out": SLOW_CLOSE,
-    "bind start reply lost": SLOW_CLOSE,
-    "receiver socket absent behind a live relay": SLOW_CLOSE,
-    "receiver answers 400 on permit": SLOW_CLOSE,
-    "receiver answers 409 on permit": SLOW_CLOSE,
-    "receiver answers 503 on permit": SLOW_CLOSE,
+    "create reply lost": undefined,
+    "provisioning never finishes": undefined,
+    "bind exits 1": undefined,
+    "bind times out": undefined,
+    "bind start reply lost": undefined,
+    "receiver socket absent behind a live relay": undefined,
+    "receiver answers 400 on permit": undefined,
+    "receiver answers 409 on permit": undefined,
+    "receiver answers 503 on permit": undefined,
     "gateway dnsmasq starts 8 s late": PEER_PID,
-    "gateway crashes before the guest joins": SLOW_CLOSE,
-    "UDP to the gateway blocked": SLOW_CLOSE,
+    "gateway crashes before the guest joins": undefined,
+    "UDP to the gateway blocked": undefined,
     "db stopped by a person": PEER_PID,
     "worker killed after bind": undefined,
     "Stop after the launch": firstOf(PEER_PID, STUCK_DRAINS),
-    "deletion stuck in processing": SLOW_CLOSE,
+    "deletion stuck in processing": undefined,
   },
 } as const satisfies {
   readonly happyPath: Defect | undefined;
