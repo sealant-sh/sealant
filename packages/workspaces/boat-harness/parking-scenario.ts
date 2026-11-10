@@ -179,8 +179,11 @@ export const parkAndResume = async (stack: HarnessStack, project: Project, step:
       const row = await custody(stack, run);
       if (row?.retained_at !== null && row?.retained_at !== undefined) return;
       if (process.env.BOAT_HARNESS_SIMULATE_RETENTION === "1") {
+        // Only what Core's own `backdateUnenrolledParkingRetention` writes (without its backdating,
+        // so the real delay runs). Scheduling a legacy recovery as well would hand the session to
+        // the old recovery sweep, whose lease keeps parking from enrolling it.
         await stack.write(
-          `update workspace_capture_drains set retained_at = now(), retained_reason = 'boat-harness: simulated retention (P1)', next_recovery_at = now() where run_id = '${sqlText(run.runId)}' and retained_at is null and custody_contract is null`,
+          `update workspace_capture_drains set retained_at = now(), retained_reason = 'boat-harness: simulated retention (P1)' where run_id = '${sqlText(run.runId)}' and retained_at is null and custody_contract is null`,
         );
         await transcript.note("retention simulated (BOAT_HARNESS_SIMULATE_RETENTION=1, defect P1)");
         return;
