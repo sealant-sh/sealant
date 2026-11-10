@@ -642,7 +642,6 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       TMPDIR: processTmp,
       DATABASE_URL: databaseUrl,
       SEALANT_CREDENTIALS_KEY: credentialsKey,
-      SEALANT_BOAT_ADMISSION_OWNER_IDS: ownerId,
       // Both the worker and the API hold the Boat key and deployment (the API needs them once it
       // talks to Boat itself, #563; on main it ignores them).
       SEALANT_BOAT_API_KEY: credential,
