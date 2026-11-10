@@ -102,7 +102,6 @@ export const DEFECTS = {
     "worker killed after bind": undefined,
     "Stop after the launch": undefined,
     "deletion stuck in processing": undefined,
-    "legacy UDP tunnel": undefined,
   },
 } as const satisfies {
   readonly happyPath: Defect | undefined;

@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFECTS } from "./defects.js";
 import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
 import { scenarios } from "./faults.js";
+import { legacyUdpTunnel } from "./legacy-udp-scenario.js";
 import { runScenario, type Defect } from "./markers.js";
 import { parkAndResume } from "./parking-scenario.js";
 import {
@@ -235,10 +236,15 @@ describe("one fault per step", () => {
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
-  // Restarts the worker in the legacy UDP mode, and back to the default when it ends.
-  fault("legacy UDP tunnel", scenarios.legacyUdpTunnel);
 });
 
+// Isolated: deleted with the tunnel's UDP endpoint mode. Restarts the worker in that mode, and
+// back to the default (carried) when it ends.
+describe("legacy UDP tunnel", () => {
+  scenario("legacy UDP tunnel", undefined, () => legacyUdpTunnel(stack, project));
+});
+
+// Isolated: deleted with snapshot parking.
 // Last: it restarts the worker with automatic parking on, and back off when it ends.
 describe("parking", () => {
   scenario(
