@@ -1546,20 +1546,23 @@ const parseFrames = (buffer) => {
 };
 
 const handleControlUpgrade = (req, socket, head) => {
-  const refuse = (status, text) => {
-    socket.write(
+  // A refusal is ended, not destroyed, after its write: destroy() would drop a response the
+  // kernel has not taken yet, and the client would read a reset instead of the reason.
+  const answer = (response) => {
+    socket.end(response);
+    setTimeout(() => socket.destroy(), 1_000).unref();
+  };
+  const refuse = (status, text) =>
+    answer(
       `HTTP/1.1 ${status} ${text}\r\nconnection: close\r\ncontent-type: text/plain\r\ncontent-length: ${Buffer.byteLength(text)}\r\n\r\n${text}`,
     );
-    socket.destroy();
-  };
   // Control is not reachable yet (no daemon, no socket, Docker not ready, or the socket refused
   // the connection): a 503 whose body names the reason, before any 101 is sent.
   const unavailable = () => {
     const body = JSON.stringify({ error: "control-unavailable" });
-    socket.write(
+    answer(
       `HTTP/1.1 503 Service Unavailable\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
     );
-    socket.destroy();
   };
   arm();
   if (!bearerMatches(req.headers.authorization, state.controlToken)) {
