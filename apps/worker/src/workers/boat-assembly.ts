@@ -152,6 +152,7 @@ export const assembleBoat = async (input: {
       registration: undefined,
       control: undefined,
       reach: undefined,
+      reopenCarriers: undefined,
       reconcileCatalog: undefined,
       disposeCatalog: undefined,
       reconcileResources: undefined,
@@ -239,6 +240,17 @@ export const assembleBoat = async (input: {
       gateway === undefined
         ? undefined
         : () => runtime.runPromise(Effect.flatMap(BoatResources, (resources) => resources.reach())),
+    /**
+     * At worker start, the carriers of the live runs with a tunnel through this worker's gateway:
+     * a restart dropped every one. None to reopen without a gateway.
+     */
+    reopenCarriers:
+      gateway === undefined
+        ? undefined
+        : () =>
+            runtime.runPromise(
+              Effect.flatMap(BoatResources, (resources) => resources.reopenCarriers()),
+            ),
     reconcileCatalog:
       catalogRuntime === undefined
         ? undefined

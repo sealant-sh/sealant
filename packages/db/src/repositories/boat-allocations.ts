@@ -15,6 +15,7 @@ import { SealantDB } from "../client.js";
 import { boatAllocations } from "../schema/boat-allocations.js";
 import { boatExecutions } from "../schema/boat-executions.js";
 import { boatObservations } from "../schema/boat-observations.js";
+import { boatTunnels } from "../schema/boat-tunnels.js";
 import { nativePublications, nativePublicationConsumers } from "../schema/native-publications.js";
 import { workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
 
@@ -56,6 +57,18 @@ export interface BoatAllocationRepoService {
   readonly launchInFlight: (id: string) => Effect.Effect<boolean, BoatAllocationStoreError>;
   readonly list: (input: {
     readonly deploymentId: string;
+    readonly limit: number;
+    readonly after?: string;
+  }) => Effect.Effect<readonly string[], BoatAllocationStoreError>;
+  /**
+   * The live allocations of a deployment that hold a tunnel on one gateway host: bound, not
+   * launched without resources, their run active, their tunnel reservation there unreleased. Ended
+   * runs are never read, so a page costs the same however many runs the deployment has had. Same
+   * order and cursor as `list`.
+   */
+  readonly listTunnelled: (input: {
+    readonly deploymentId: string;
+    readonly gatewayHostId: string;
     readonly limit: number;
     readonly after?: string;
   }) => Effect.Effect<readonly string[], BoatAllocationStoreError>;
@@ -384,6 +397,45 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
         .limit(input.limit);
       return rows.map((row) => row.id);
     });
+    const listTunnelled = Effect.fn("BoatAllocationRepo.listTunnelled")(function* (
+      input: Parameters<BoatAllocationRepoService["listTunnelled"]>[0],
+    ) {
+      if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)
+        return yield* Effect.fail(new BoatAllocationStoreError("invalid-record"));
+      const rows = yield* db
+        .select({ id: boatAllocations.runtimeInstanceId })
+        .from(boatAllocations)
+        .innerJoin(
+          boatTunnels,
+          eq(boatTunnels.runtimeInstanceId, boatAllocations.runtimeInstanceId),
+        )
+        .innerJoin(
+          workspaceRuntimeInstances,
+          eq(
+            workspaceRuntimeInstances.runId,
+            sql`${boatAllocations.record}->'input'->'consumer'->>'runId'`,
+          ),
+        )
+        .where(
+          and(
+            eq(boatAllocations.deploymentId, input.deploymentId),
+            sql`${boatAllocations.record}->>'phase' = 'bound'`,
+            sql`(${boatAllocations.record}->'input'->>'resources') is distinct from 'none'`,
+            eq(boatTunnels.gatewayHostId, input.gatewayHostId),
+            isNull(boatTunnels.releasedAt),
+            // The same active run `isActive` reads.
+            eq(workspaceRuntimeInstances.adapter, "boat"),
+            inArray(workspaceRuntimeInstances.status, ["pending", "running", "ready"]),
+            isNull(workspaceRuntimeInstances.stopReason),
+            input.after === undefined
+              ? undefined
+              : gt(boatAllocations.runtimeInstanceId, input.after),
+          ),
+        )
+        .orderBy(asc(boatAllocations.runtimeInstanceId))
+        .limit(input.limit);
+      return rows.map((row) => row.id);
+    });
     const reservedAt = (id: string) =>
       db
         .select({ createdAt: boatAllocations.createdAt })
@@ -398,6 +450,7 @@ const make: Effect.Effect<BoatAllocationRepo["Service"], never, SealantDB> = Eff
       reserve: (record) => boundary(reserve(record)),
       advance: (before, next) => boundary(advance(before, next)),
       list: (input) => boundary(list(input)),
+      listTunnelled: (input) => boundary(listTunnelled(input)),
     });
   },
 );
