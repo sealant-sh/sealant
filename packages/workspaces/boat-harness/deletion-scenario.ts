@@ -33,10 +33,24 @@ const ready = async (stack: HarnessStack, run: Launch) => {
   return outcome.view.sandbox;
 };
 
-/** The removal Core recorded on the run's allocation, if any. */
+/**
+ * The removal Core recorded on the run's row, if any: `issued` (the first DELETE is claimed),
+ * `operation` (Boat's deletion operation, with whether it completed), `absent` (Boat's 404 was
+ * committed before its operation read complete) or `never-created`.
+ */
 const recordedRemoval = async (stack: HarnessStack, runId: string) => {
   const [row] = await stack.query(
-    `select record->'removal'->>'kind' as kind, record->'removal'->>'id' as id, record->'removal'->>'completed' as completed from boat_allocations where runtime_instance_id = '${sqlText(runId)}'`,
+    `select kind,
+            case when kind = 'operation' then deletion_operation_id end as id,
+            case when kind = 'operation' then (deletion_completed_at is not null)::text
+                 when kind in ('absent', 'never-created') then 'true' end as completed
+       from (select b.*,
+                    case when b.absent_basis = 'never-created' then 'never-created'
+                         when b.deletion_completed_at is not null then 'operation'
+                         when b.absent_at is not null then 'absent'
+                         when b.deletion_operation_id is not null then 'operation'
+                         when b.deletion_claimed_at is not null then 'issued' end as kind
+               from boat_runs b where b.run_id = '${sqlText(runId)}') r`,
   );
   return z
     .object({

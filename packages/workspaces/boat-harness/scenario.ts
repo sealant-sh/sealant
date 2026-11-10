@@ -163,6 +163,30 @@ export type RuntimeView = z.infer<typeof runtimeSchema>;
 
 export const sqlText = (value: string) => value.replaceAll("'", "''");
 
+/**
+ * How far a run's VM is, read from its `boat_runs` row `b`, in the words these scenarios assert:
+ * `deleted` once Boat's own answer that it holds no VM is committed, `deleting` while the first
+ * DELETE is claimed or Boat's deletion operation is on record, then held, reserved, issued,
+ * allocated and bound. The same reading as `boatRunVmPhase`.
+ */
+const VM_PHASE = `case
+    when b.run_id is null then null
+    when b.absent_at is not null then 'deleted'
+    when b.deletion_claimed_at is not null or b.deletion_operation_id is not null then 'deleting'
+    when b.held_reason is not null then 'held'
+    when b.sandbox_id is null then case when b.create_issued_at is null then 'reserved' else 'issued' end
+    when b.target is null then 'allocated'
+    else 'bound' end`;
+/** How far the run's launch is, from the same row: the same reading as `boatRunLaunchPhase`. */
+const LAUNCH_PHASE = `case
+    when b.run_id is null or (b.exchange_id is null and b.fenced_at is null) then null
+    when b.fenced_at is not null then case when b.launch_issued_at is not null then 'held' else 'aborted' end
+    when b.launch_accepted_at is not null then 'running'
+    when b.launch_issued_at is not null then 'issued'
+    when b.admission_operation_id is not null then 'installed'
+    when b.sealed_control is not null then 'control'
+    else 'exchange' end`;
+
 export const runtimeView = async (
   stack: Pick<HarnessStack, "query">,
   runId: string,
@@ -171,15 +195,14 @@ export const runtimeView = async (
   const [row] = await stack.query(`
     select r.status, r.error_code, left(r.error_message, 2000) as error, r.stop_reason,
            r.removed_at is not null as removed,
-           a.record->>'phase' as allocation, a.sandbox_id as sandbox,
-           e.record->>'phase' as execution,
+           ${VM_PHASE} as allocation, b.sandbox_id as sandbox,
+           ${LAUNCH_PHASE} as execution,
            t.released_at is not null as tunnel_released, t.runtime_instance_id is not null as has_tunnel,
            c.state as pin,
            d.state as drain, d.retained_at is not null as retained
       from (select '${id}'::text as run_id) k
       left join workspace_runtime_instances r on r.run_id = k.run_id
-      left join boat_allocations a on a.runtime_instance_id = k.run_id
-      left join boat_executions e on e.runtime_instance_id = k.run_id
+      left join boat_runs b on b.run_id = k.run_id
       left join boat_tunnels t on t.runtime_instance_id = k.run_id
       left join native_publication_consumers c on c.run_id = k.run_id
       left join workspace_capture_drains d on d.run_id = k.run_id`);
@@ -508,7 +531,7 @@ export const gatewayName = async (
   runId: string,
 ): Promise<string | undefined> => {
   const [row] = await stack.query(
-    `select record->'target' as target from boat_allocations where runtime_instance_id = '${sqlText(runId)}'`,
+    `select target from boat_runs where run_id = '${sqlText(runId)}'`,
   );
   const target = boatExecutionTargetSchema.safeParse(
     z.object({ target: z.unknown() }).safeParse(row).data?.target,

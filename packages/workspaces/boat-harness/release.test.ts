@@ -40,7 +40,7 @@ const world = (input: {
     query: async (sql: string) => {
       if (sql.includes("headN"))
         return [{ complete: "true", head_n: 3, last_status_at: new Date(1990).toISOString() }];
-      if (sql.includes("from boat_allocations where")) return [];
+      if (sql.includes("from boat_runs where")) return [];
       const pin = input.pinUntilDiscard === true && !discarded ? "pending" : "released";
       return [row({ pin, ...input.row })];
     },
