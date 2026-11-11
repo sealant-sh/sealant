@@ -83,8 +83,11 @@ import {
   targetDerivationOptionsFromEnv,
   watchRuntimeExits,
   UnsupportedImagePlatformError,
+  type BoatSharedStop,
   type CaptureDrainSettings,
   type RegistryClient,
+  type RuntimeAdapterId,
+  type RuntimeAdapterLifecycle,
 } from "@sealant/workspaces";
 import { Effect, Layer } from "effect";
 
@@ -116,6 +119,11 @@ const MAX_OVERLAPPING_RECOVERY_SWEEPS = 4;
 // A lifecycle stop waits this long on a capture queue, inside the queue's 15-minute active
 // window; a drain that needs longer is finished by the reaper (the stop intent is durable).
 const LIFECYCLE_STOP_DRAIN_BUDGET_MS = 10 * 60 * 1000;
+/**
+ * How long a stop of a retained launch, or one Boat's convergence sweep asks for, waits on one
+ * executor's capture queue (the expiry reaper's own budget per executor).
+ */
+const RETAINED_LAUNCH_DRAIN_BUDGET_MS = 60_000;
 
 const createDatabaseFromEnv = async (env: WorkerEnv): Promise<DB> => {
   return createSealantDB(env.DATABASE_URL);
@@ -417,7 +425,11 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     ...baseTargetOptions,
     ...(boatAssembly?.control === undefined
       ? {}
-      : { boatConnectMaterial: boatDrainConnectMaterial(boatAssembly.control) }),
+      : {
+          boatConnectMaterial: boatDrainConnectMaterial(boatAssembly.control),
+          // A launch that failed before its control URL was recorded left a VM to drain too.
+          boatEndpointOptional: true,
+        }),
   };
   const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
     ? []
@@ -513,7 +525,15 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     ...microvmRuntimes,
     ...(boatAssembly?.registration === undefined ? [] : [boatAssembly.registration]),
   ];
-  const runtimeAdapters = runtimes.map((runtime) => runtime.adapter);
+  // Every runtime's adapter, for the paths that stop, inspect and recover executors. A worker
+  // that holds Boat's resource gateway and does not launch Boat workspaces still ends them: only
+  // it can release their tunnels.
+  const runtimeAdapters: readonly RuntimeAdapterLifecycle[] = [
+    ...runtimes.map((runtime) => runtime.adapter),
+    ...(boatAssembly?.registration === undefined && boatAssembly?.lifecycle !== undefined
+      ? [boatAssembly.lifecycle]
+      : []),
+  ];
 
   // Drain before stop (no loss of work product): one durable ledger (`workspace_capture_drains`)
   // shared by every path that can tear a capture-sourced runtime down (lifecycle stop, reapers,
@@ -545,6 +565,36 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     (runId) => requestRecoverySweep?.(runId),
   );
 
+  // A Boat launch that failed after its VM was created is stopped at once, by the same stop the
+  // retained-launch sweep would make on its next tick: a paid VM does not wait a minute for a
+  // decision that needs none, and a launch whose daemon never ran reads terminal within seconds.
+  // Every other runtime keeps the sweep's tick.
+  const stopRetainedLaunch = (runId: string, adapter: RuntimeAdapterId): void => {
+    if (adapter !== "boat") {
+      return;
+    }
+    processWorkspaceStop({
+      runId,
+      stopReason: "failed",
+      db,
+      runtimeAdapters,
+      ...(credentialCipher === undefined ? {} : { credentialCipher }),
+      targetOptions: drainTargetOptions,
+      ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+      captureDrain: {
+        ledger: captureDrainLedger,
+        settings: captureDrainSettings,
+        budgetMs: RETAINED_LAUNCH_DRAIN_BUDGET_MS,
+        label: "retained launch",
+      },
+    }).catch((error: unknown) => {
+      console.error("Stopping a retained Boat launch failed; the retained-launch sweep retries", {
+        error,
+        runId,
+      });
+    });
+  };
+
   // Every consumer below: resolving completes the delivery, throwing dead-letters it (no retries).
   // Failures are recorded on the domain rows by the handlers themselves; the rethrow only keeps the
   // failed delivery visible in the queue's DLQ.
@@ -567,6 +617,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           registryClient,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+          onLaunchRetained: stopRetainedLaunch,
         });
       } catch (error) {
         console.error("Workspace build job failed", {
@@ -670,6 +721,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       registryClient,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
       ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+      onLaunchRetained: stopRetainedLaunch,
     }).catch((error: unknown) => {
       console.error("Workspace build job reaper tick failed", { error });
     });
@@ -1016,8 +1068,26 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // Live runs have a cursor of their own, so a link is applied within ceil(live runs / page)
   // ticks however many ended allocations the cursor above still has to page through.
   let boatLiveResourceCursor: string | undefined;
-  let boatCloseCursor: string | undefined;
+  let boatConvergenceCursor: string | undefined;
   let boatSweepRunning = false;
+  // The nudge: Boat's convergence sweep calls the shared stop for a Boat run that is stopping or
+  // failed, as the expiry reaper calls it for every runtime. The stop decides; the sweep only asks.
+  const stopBoatRun: BoatSharedStop = ({ runId, stopReason }) =>
+    processWorkspaceStop({
+      runId,
+      stopReason,
+      db,
+      runtimeAdapters,
+      ...(credentialCipher === undefined ? {} : { credentialCipher }),
+      targetOptions: drainTargetOptions,
+      ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+      captureDrain: {
+        ledger: captureDrainLedger,
+        settings: captureDrainSettings,
+        budgetMs: RETAINED_LAUNCH_DRAIN_BUDGET_MS,
+        label: "Boat convergence",
+      },
+    });
   const runBoatSweep = async () => {
     if (boatRuntime === undefined || boatSweepRunning) return;
     boatSweepRunning = true;
@@ -1032,16 +1102,19 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }),
       );
       boatCursor = report.next;
-      if (boatAssembly?.reconcileCloses !== undefined) {
-        const closed = await boatAssembly.reconcileCloses({
+      if (boatAssembly?.reconcileConvergence !== undefined) {
+        const converged = await boatAssembly.reconcileConvergence({
           limit: 20,
-          ...(boatCloseCursor === undefined ? {} : { after: boatCloseCursor }),
+          ...(boatConvergenceCursor === undefined ? {} : { after: boatConvergenceCursor }),
+          stop: stopBoatRun,
         });
-        boatCloseCursor = closed.next;
-        const held = closed.entries.filter(
-          (entry) => !["closed", "skipped"].includes(entry.outcome),
+        boatConvergenceCursor = converged.next;
+        // A stop still draining or busy is at work, and a kept VM is reported by the sweep itself,
+        // once an hour: only what nothing is settling is listed every tick.
+        const held = converged.entries.filter((entry) =>
+          ["held", "discharging", "unavailable"].includes(entry.outcome),
         );
-        if (held.length > 0) console.warn("Boat close obligations remain", { entries: held });
+        if (held.length > 0) console.warn("Boat stop obligations remain", { entries: held });
       }
       if (boatAssembly?.reconcileResources !== undefined) {
         const resources = await boatAssembly.reconcileResources({

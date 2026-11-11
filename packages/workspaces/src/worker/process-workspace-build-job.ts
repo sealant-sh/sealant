@@ -176,6 +176,15 @@ export interface ProcessWorkspaceBuildJobOptions {
    * Default `DEFAULT_IMAGE_BUILD_MAX_MS` (45 minutes).
    */
   readonly imageBuildMaxMs?: number;
+  /**
+   * Told when a launch failed after its executor started and the executor was kept (the run is
+   * recorded `failed` with `LAUNCH_RETAINED_ERROR_CODE`), with the runtime that holds it. The
+   * retained-launch sweep drains and stops such an executor on its next tick; a worker that
+   * should not wait for the tick starts that same stop from here. Called once the record is
+   * written, never awaited: what it starts is its own, and its failure is not the launch's.
+   * Absent: the sweep's next tick, as always.
+   */
+  readonly onLaunchRetained?: (runId: string, adapter: RuntimeAdapterId) => void;
 }
 
 /** How often a build in progress records what it is doing, when the worker names nothing else. */
@@ -795,6 +804,15 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       yield* attempts
         .markAttemptFailed({ id: runId })
         .pipe(swallowingFailure("mark-attempt-failed update"));
+      // The executor was kept and its record written: whoever stops retained launches is told.
+      const retained =
+        error.cause instanceof LaunchRetainedError ? error.cause.identity : undefined;
+      const onLaunchRetained = options.onLaunchRetained;
+      if (written === "written" && retained !== undefined && onLaunchRetained !== undefined) {
+        yield* Effect.sync(() => onLaunchRetained(runId, retained.adapter)).pipe(
+          swallowingFailure("retained-launch notification"),
+        );
+      }
     });
 
   const markSucceeded = (fields: {

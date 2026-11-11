@@ -17,7 +17,7 @@ import {
 import { Effect, Layer, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import { removalRefused, type RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import { removalPending, removalRefused, type RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntime } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import {
@@ -212,52 +212,6 @@ const makeHarness = (input: {
 };
 
 describe("processWorkspaceStopEffect", () => {
-  it.each(["closed", "retained", "pending"] as const)(
-    "leaves %s canonical capture closure to its runtime owner",
-    async (outcome) => {
-      const harness = makeHarness({
-        workspace: workspaceRow(),
-        instance: runtimeInstance({ adapter: "boat", sourceKind: "capture" }),
-        captureSourced: true,
-      });
-      const calls: string[] = [];
-      const adapter: RuntimeAdapter = {
-        id: "boat",
-        supports: () => ({ supported: true }),
-        launch: async () => {
-          throw new Error("unused");
-        },
-        stop: async () => {
-          throw new Error("generic stop must not own Boat deletion");
-        },
-        closeCapture: async (input, runId) => {
-          expect(harness.markStopRequested).toHaveBeenCalledWith({
-            runId: "run_old",
-            stopReason: "user",
-          });
-          expect(input.resourceId).toBe("container-1");
-          calls.push(runId);
-          return outcome;
-        },
-      };
-      const result = await Effect.runPromise(
-        processWorkspaceStopEffect({
-          workspaceId: "ws_1",
-          runId: "run_old",
-          stopReason: "user",
-          runtimeAdapters: [adapter],
-        }).pipe(Effect.provide(harness.layer)),
-      );
-      expect(calls).toEqual(["run_old"]);
-      expect(result).toBe(
-        outcome === "closed" ? "stopped" : outcome === "retained" ? "kept" : "draining",
-      );
-      expect(harness.markStopped).not.toHaveBeenCalled();
-      expect(harness.markRemoved).not.toHaveBeenCalled();
-      expect(harness.setWorkspaceStatus).toHaveBeenCalledTimes(outcome === "closed" ? 1 : 0);
-    },
-  );
-
   it("removes the container, marks the instance stopped, and settles the CURRENT runtime's workspace", async () => {
     const harness = makeHarness({
       // A git-sourced run: no captures, so a plain stop removes it.
@@ -1847,4 +1801,269 @@ describe("processWorkspaceStopEffect · an issued removal with no recorded outco
     expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleted");
     expect(ledger.store.rows.get("run_old")?.entry.last?.headN).toBe(7);
   });
+});
+
+// What a runtime declares to the shared stop (`RuntimeAdapter.stopRequestBeforeDrain`,
+// `reportsMissingAsLost`, and a removal it marks `removalPending`). Boat alone declares them;
+// each case is run for a runtime that declares it and for one that does not, whose stop is
+// exactly what it was.
+/** A runtime that keeps no remains (one `stop` call), with whatever it declares. */
+const adapterOf = (
+  declared: Pick<RuntimeAdapter, "stopRequestBeforeDrain" | "reportsMissingAsLost">,
+  stop: RuntimeAdapter["stop"],
+  inspect: NonNullable<RuntimeAdapter["inspect"]>,
+): RuntimeAdapter => ({
+  // Addressed like a Docker executor (the fake daemon answers it), stopped in one call.
+  id: "docker",
+  supports: () => ({ supported: true }),
+  launch: async () => {
+    throw new Error("not used in stop tests");
+  },
+  stop,
+  inspect,
+  ...declared,
+});
+const stoppedInOneCall = async () => ({
+  adapter: "docker" as const,
+  resourceId: "container-1",
+  outcome: "stopped" as const,
+});
+
+describe("processWorkspaceStopEffect · what a runtime declares to the shared stop", () => {
+  const settings: CaptureDrainSettings = {
+    pollIntervalMs: 1,
+    stallWindowMs: 30,
+    unreachableWindowMs: 30,
+    requestTimeoutMs: 1_000,
+  };
+  const stopOf = (
+    harness: Harness,
+    adapter: RuntimeAdapter,
+    ledger: CaptureDrainLedger,
+    logger?: Logger.Logger<unknown, void>,
+  ) =>
+    Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [adapter],
+        captureDrain: { ledger, settings, budgetMs: 1_000, label: "declarations" },
+      }).pipe(
+        Effect.provide(harness.layer),
+        logger === undefined ? (effect) => effect : Effect.provide(Logger.layer([logger])),
+      ),
+    );
+
+  it.each([
+    [
+      "before anything is asked of the executor, for a runtime that declares it",
+      { stopRequestBeforeDrain: true },
+      ["stop-requested", "inspect", "adapter-stop"],
+    ],
+    [
+      "at the removal, as always, for one that does not",
+      {},
+      ["inspect", "stop-requested", "adapter-stop"],
+    ],
+  ] as const)("records the stop request %s", async (_name, declared, expected) => {
+    const order: string[] = [];
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon([savedStatus()]).layer,
+    });
+    harness.markStopRequested.mockImplementation(() =>
+      Effect.sync(() => {
+        // Recorded once more at the removal (idempotent in the repository): the first is the one.
+        if (!order.includes("stop-requested")) order.push("stop-requested");
+      }),
+    );
+    const adapter = adapterOf(
+      declared,
+      async () => {
+        order.push("adapter-stop");
+        return stoppedInOneCall();
+      },
+      async () => {
+        order.push("inspect");
+        return { state: "running" };
+      },
+    );
+    expect(await stopOf(harness, adapter, inMemoryCaptureDrainLedger())).toBe("stopped");
+    expect(order).toEqual(expected);
+    expect(harness.markStopRequested).toHaveBeenCalledWith({
+      runId: "run_old",
+      stopReason: "user",
+    });
+  });
+
+  it("keeps the stop request it recorded before the drain when the drain keeps the executor", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      // Empty and never confirmed complete: kept.
+      daemon: fakeCaptureDaemon([captureStatus({ pending: 0 })]).layer,
+    });
+    const stop = vi.fn<RuntimeAdapter["stop"]>(stoppedInOneCall);
+    const adapter = adapterOf({ stopRequestBeforeDrain: true }, stop, async () => ({
+      state: "running",
+    }));
+    expect(await stopOf(harness, adapter, inMemoryCaptureDrainLedger())).toBe("kept");
+    expect(harness.markStopRequested).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(harness.markStopped).not.toHaveBeenCalled();
+  });
+
+  it("answers draining, with no error and nothing recorded stopped, when the runtime accepted the removal and has not finished it, and the next call finishes it without another drain", async () => {
+    const daemon = fakeCaptureDaemon([savedStatus({ headN: 7 })]);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: daemon.layer,
+    });
+    let clock = 1_000_000;
+    const ledger = inMemoryCaptureDrainLedger({ now: () => clock });
+    const stop = vi
+      .fn<RuntimeAdapter["stop"]>()
+      .mockImplementationOnce(async () => {
+        throw removalPending(new Error("the provider is still deleting it"));
+      })
+      .mockImplementation(stoppedInOneCall);
+    const adapter = adapterOf({}, stop, async () => ({ state: "running" }));
+    const levels: string[] = [];
+    const recorder = Logger.make(({ logLevel }) => {
+      levels.push(logLevel);
+    });
+
+    expect(await stopOf(harness, adapter, ledger, recorder)).toBe("draining");
+    expect(levels).not.toContain("Error");
+    expect(harness.markStopped).not.toHaveBeenCalled();
+    expect(harness.markRemoved).not.toHaveBeenCalled();
+    expect(harness.setWorkspaceStatus).not.toHaveBeenCalled();
+    // The removal stays issued and exclusionary, its hold ended: exactly as an unknown outcome.
+    const pending = ledger.store.rows.get("run_old");
+    expect(pending?.deletion?.state).toBe("deleting-issued");
+    expect(pending?.deletion?.expiresAtMs).toBeLessThanOrEqual(clock);
+    expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeUndefined();
+    expect(await Effect.runPromise(ledger.admitRecovery("run_old", NO_CLAIM))).toBe("deleting");
+    expect(pending?.observation).toMatchObject({ state: "stop-failed" });
+    expect(pending?.observation?.detail).toContain("accepted the removal and has not finished it");
+
+    // The next sweep: the runtime still has it, the evidence stands, the removal is issued again.
+    clock += 30_000;
+    const asked = daemon.calls.length;
+    expect(await stopOf(harness, adapter, ledger)).toBe("stopped");
+    expect(daemon.calls).toHaveLength(asked);
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(harness.markStopped).toHaveBeenCalledTimes(1);
+    expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleted");
+    expect(ledger.store.rows.get("run_old")?.observation?.state).toBe("stopped");
+  });
+
+  it("still fails a stop whose removal ended with an outcome nobody knows, and logs it", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon([savedStatus()]).layer,
+    });
+    const ledger = inMemoryCaptureDrainLedger();
+    const levels: string[] = [];
+    const recorder = Logger.make(({ logLevel }) => {
+      levels.push(logLevel);
+    });
+    const adapter = adapterOf(
+      {},
+      async (): Promise<never> => {
+        throw new Error("socket hang up");
+      },
+      async () => ({ state: "running" }),
+    );
+    await expect(stopOf(harness, adapter, ledger, recorder)).rejects.toThrow("socket hang up");
+    expect(levels).toContain("Error");
+    expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleting-issued");
+    expect(ledger.store.rows.get("run_old")?.observation?.state).toBe("stop-failed");
+  });
+
+  it("leaves an owner's discard standing, unrecorded as done, while the runtime has not finished the removal", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+    });
+    const ledger = inMemoryCaptureDrainLedger();
+    const row = ledger.store.rows;
+    await Effect.runPromise(
+      ledger
+        .claim("run_old")
+        .pipe(
+          Effect.flatMap((claim) =>
+            claim === undefined ? Effect.void : ledger.release("run_old", claim.token),
+          ),
+        ),
+    );
+    const seeded = row.get("run_old");
+    if (seeded === undefined) throw new Error("missing drain row");
+    seeded.entry = { ...seeded.entry, discardRequested: { atMs: 1, by: "user_1" } };
+    const stop = vi
+      .fn<RuntimeAdapter["stop"]>()
+      .mockImplementationOnce(async () => {
+        throw removalPending(new Error("the provider is still deleting it"));
+      })
+      .mockImplementation(stoppedInOneCall);
+    const adapter = adapterOf({}, stop, async () => ({ state: "running" }));
+    expect(await stopOf(harness, adapter, ledger)).toBe("draining");
+    expect(row.get("run_old")?.observation?.state).not.toBe("discarded");
+    expect(harness.markStopped).not.toHaveBeenCalled();
+    expect(await stopOf(harness, adapter, ledger)).toBe("stopped");
+    expect(row.get("run_old")?.observation?.state).toBe("discarded");
+  });
+
+  it.each([
+    ["lost, for a runtime that declares it", { reportsMissingAsLost: true }, "gone"],
+    ["stopped, as always, for one that does not", {}, "stopped"],
+  ] as const)(
+    "reports an executor the runtime no longer has, with nothing on record that its work was saved, as %s",
+    async (_name, declared, state) => {
+      const harness = makeHarness({
+        workspace: workspaceRow(),
+        instance: runtimeInstance({ sourceKind: "capture" }),
+        daemon: fakeCaptureDaemon(["unreachable"]).layer,
+      });
+      const ledger = inMemoryCaptureDrainLedger();
+      const stop = vi.fn<RuntimeAdapter["stop"]>(stoppedInOneCall);
+      const adapter = adapterOf(declared, stop, async () => ({ state: "missing" }));
+      expect(await stopOf(harness, adapter, ledger)).toBe("stopped");
+      // The runtime is still asked: it only cleans up what the executor held.
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(harness.markStopped).toHaveBeenCalledTimes(1);
+      const observation = ledger.store.rows.get("run_old")?.observation;
+      expect(observation?.state).toBe(state);
+      expect(observation?.detail).toContain(
+        state === "gone"
+          ? "nothing on record says its work was saved"
+          : "nothing of the executor was left",
+      );
+    },
+  );
+
+  it.each([
+    ["a runtime that declares it", { reportsMissingAsLost: true }],
+    ["one that does not", {}],
+  ] as const)(
+    "reports an executor the runtime no longer has as stopped when its final flush was observed complete, for %s",
+    async (_name, declared) => {
+      const harness = makeHarness({
+        workspace: workspaceRow(),
+        instance: runtimeInstance({ sourceKind: "capture" }),
+        daemon: fakeCaptureDaemon(["unreachable"]).layer,
+      });
+      const ledger = inMemoryCaptureDrainLedger();
+      await Effect.runPromise(ledger.recordStatus("run_old", savedStatus({ headN: 7 }), 1));
+      const adapter = adapterOf(declared, stoppedInOneCall, async () => ({ state: "missing" }));
+      expect(await stopOf(harness, adapter, ledger)).toBe("stopped");
+      const observation = ledger.store.rows.get("run_old")?.observation;
+      expect(observation?.state).toBe("stopped");
+      expect(observation?.detail).toContain("its daemon reported the final flush complete");
+    },
+  );
 });

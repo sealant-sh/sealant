@@ -23,6 +23,10 @@ const cipher: CredentialCipherService = {
 const unused = async (): Promise<never> => {
   throw new Error("the Boat builder is not used by this test");
 };
+/** The shared stop Boat's sweep nudges: with no Boat run on record it is never called. */
+const neverStops = async (): Promise<never> => {
+  throw new Error("no Boat run exists to stop");
+};
 const snapshotBuilder = async (): Promise<BoatNativeCatalogOptions["builder"]> => ({
   plan: unused,
   build: unused,
@@ -135,8 +139,12 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
     ).toThrow(expect.objectContaining({ code: "gateway-unavailable" }));
     // No gateway means no resource reach to account for, and its sweeps run with nothing to do.
     expect(boat.reach).toBeUndefined();
-    expect(await boat.reconcileCloses?.({ limit: 20 })).toEqual({ entries: [] });
+    expect(await boat.reconcileConvergence?.({ limit: 20, stop: neverStops })).toEqual({
+      entries: [],
+    });
     expect(await boat.reconcileResources?.({ limit: 20 })).toEqual({ entries: [] });
+    // The shared stop, exit and recovery paths hold the one adapter the launches use.
+    expect(boat.lifecycle).toBe(registration.adapter);
     // A tick with its page of live runs, and a link job, find nothing to configure here.
     expect(await boat.reconcileResources?.({ limit: 20, live: { limit: 20 } })).toEqual({
       entries: [],
@@ -190,12 +198,24 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
 
   it("launches nothing without the builder: allocations alone, or its gateway's sweeps", async () => {
     const keyOnly = await assemble(provider, undefined);
-    expect(keyOnly).toMatchObject({ registration: undefined, control: undefined });
-    expect(keyOnly?.reconcileCloses).toBeUndefined();
+    expect(keyOnly).toMatchObject({
+      registration: undefined,
+      control: undefined,
+      lifecycle: undefined,
+    });
+    expect(keyOnly?.reconcileConvergence).toBeUndefined();
     // No resource owner here: this worker takes no link jobs.
     expect(keyOnly?.applyLink).toBeUndefined();
     const sweeps = await assemble({ ...provider, ...gateway }, dockerHost);
     expect(sweeps?.registration).toBeUndefined();
-    expect(await sweeps?.reconcileCloses?.({ limit: 20 })).toEqual({ entries: [] });
+    expect(await sweeps?.reconcileConvergence?.({ limit: 20, stop: neverStops })).toEqual({
+      entries: [],
+    });
+    // It launches nothing and still ends Boat sessions: only it can release their tunnels, so
+    // the shared stop, exit and recovery paths are given its adapter.
+    expect(sweeps?.lifecycle?.id).toBe("boat");
+    expect(sweeps?.lifecycle?.supports({ blueprint: boatWorkspace() })).toEqual({
+      supported: true,
+    });
   });
 });

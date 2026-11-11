@@ -50,6 +50,8 @@ export interface CaptureState {
   readonly errors: readonly string[];
   /** Every answered `capture.register`, in order (see capture-server.ts). */
   readonly registers: readonly CaptureRegister[];
+  /** When each `capture.register` refused by `registerFault` was answered. */
+  readonly refused: readonly number[];
 }
 
 export interface CaptureRegister {
@@ -78,6 +80,14 @@ export interface CaptureSession {
   readonly worktreeId: string;
   /** The channel's view: its head moves when the daemon registers a capture (e.g. FINAL). */
   readonly state: () => Promise<CaptureState>;
+  /**
+   * Every later `capture.register` is held `delayMs` before it is forwarded, or refused with the
+   * channel's 409 `byte-quota` (`refuse`); `{}` clears it.
+   */
+  readonly registerFault: (fault: {
+    readonly delayMs?: number;
+    readonly refuse?: boolean;
+  }) => Promise<void>;
 }
 
 export interface ManagedProcess {
@@ -640,6 +650,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
           sealRecorded: z.boolean(),
         }),
       ),
+      refused: z.array(z.number()),
     });
     const openCapture = async (worktreeId: string): Promise<CaptureSession> => {
       const token = randomBytes(24).toString("hex");
@@ -674,7 +685,17 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
         async () => (await state()).endpoint,
         60_000,
       );
-      return { endpoint, token, worktreeId, state };
+      const registerFault = async (fault: {
+        readonly delayMs?: number;
+        readonly refuse?: boolean;
+      }) => {
+        const answer = await fetch(`http://${ip}:9000/harness/register-fault`, {
+          method: "POST",
+          body: JSON.stringify(fault),
+        });
+        if (answer.status !== 204) throw new Error(`register fault refused: ${answer.status}`);
+      };
+      return { endpoint, token, worktreeId, state, registerFault };
     };
 
     // The production worker bundle with its packaged Boat assets beside it.

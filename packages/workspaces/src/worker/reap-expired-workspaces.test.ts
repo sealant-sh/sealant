@@ -18,7 +18,7 @@ import {
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import { removalPending, type RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { inMemoryCaptureDrainLedger } from "./capture-drain.js";
 import { reapExpiredWorkspacesEffect } from "./reap-expired-workspaces.js";
@@ -129,5 +129,78 @@ describe("reapExpiredWorkspaces · retained launches", () => {
     const result = await sweep(fakeCaptureDaemon([captureStatus({ pending: 0 })]));
     expect(result.stop).not.toHaveBeenCalled();
     expect(result.markStopped).not.toHaveBeenCalled();
+  });
+});
+
+// The reaper is sequential and serves every runtime: a removal its runtime accepted and has not
+// finished (a Boat deletion stuck in `processing`) must neither fail the sweep nor keep the
+// executors after it waiting.
+describe("reapExpiredWorkspaces · a removal the runtime has not finished", () => {
+  it("defers that executor without an error and goes on to the next one in the same tick", async () => {
+    const rows = [
+      { ...retainedRow, runId: "run_stuck", resourceId: "container-stuck" },
+      { ...retainedRow, runId: "run_next", resourceId: "container-next" },
+    ];
+    const markStopped = vi.fn((input: { runId: string; stopReason: string }) =>
+      Effect.succeed({ ...retainedRow, status: "stopped" as const, runId: input.runId }),
+    );
+    const stop = vi.fn<RuntimeAdapter["stop"]>(async (input) => {
+      if (input.resourceId === "container-stuck")
+        throw removalPending(new Error("the provider is still deleting it"));
+      return { adapter: "docker", resourceId: input.resourceId, outcome: "stopped" };
+    });
+    const adapter: RuntimeAdapter = {
+      id: "docker",
+      supports: () => ({ supported: true }),
+      launch: async () => {
+        throw new Error("unused");
+      },
+      stop,
+      inspect: async () => ({ state: "running" }),
+    };
+    const ledger = inMemoryCaptureDrainLedger();
+    const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        listRunningInstances: () => Effect.succeed([]),
+        listRetainedLaunches: () => Effect.succeed(rows),
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(rows.find((row) => row.runId === runId)),
+        markStopped,
+        markRemoved: () => Effect.void,
+        markStopRequested: () => Effect.void,
+      } as unknown as WorkspaceRuntimeInstanceRepoService),
+      Layer.succeed(WorkspaceRepo, {
+        setWorkspaceStatus: () => Effect.succeed(null),
+      } as unknown as WorkspaceRepoService),
+      Layer.succeed(WorkspaceAttemptRepo, {
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceAttemptRepoService),
+      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+      fakeCaptureDaemon([savedStatus()]).layer,
+    );
+    const reaped = await Effect.runPromise(
+      reapExpiredWorkspacesEffect({
+        runtimeAdapters: [adapter],
+        captureDrain: {
+          ledger,
+          settings: {
+            pollIntervalMs: 1,
+            stallWindowMs: 30,
+            unreachableWindowMs: 30,
+            requestTimeoutMs: 1_000,
+          },
+        },
+      }).pipe(Effect.provide(layer)),
+    );
+    // Both were worked on: one deferred, one stopped.
+    expect(reaped).toBe(2);
+    expect(stop.mock.calls.map(([input]) => input.resourceId)).toEqual([
+      "container-stuck",
+      "container-next",
+    ]);
+    expect(markStopped.mock.calls.map(([input]) => input.runId)).toEqual(["run_next"]);
+    expect(ledger.store.rows.get("run_stuck")?.deletion?.state).toBe("deleting-issued");
+    expect(ledger.store.rows.get("run_stuck")?.observation?.state).toBe("stop-failed");
+    expect(ledger.store.rows.get("run_next")?.observation?.state).toBe("stopped");
   });
 });

@@ -1721,6 +1721,117 @@ describe("processWorkspaceBuildJobEffect", () => {
     );
 
     it.effect(
+      "tells whoever stops retained launches once the executor is kept and its record written, and only then",
+      () => {
+        const jobs = captureJob("job_told");
+        const attempts = workspaceAttemptRepoStub();
+        const order: string[] = [];
+        const runtimeInstances = {
+          ...workspaceRuntimeInstanceRepoStub(),
+          upsertRuntimeInstance: vi.fn((input: { readonly status: string }) =>
+            Effect.sync(() => {
+              order.push(`row:${input.status}`);
+              return {};
+            }),
+          ),
+        };
+        attempts.markAttemptFailed.mockImplementation(() =>
+          Effect.sync(() => {
+            order.push("attempt:failed");
+            return null;
+          }),
+        );
+        const onLaunchRetained = vi.fn((runId: string, adapter: string) => {
+          order.push(`told:${runId}:${adapter}`);
+        });
+        const runtimeAdapter = createRuntimeAdapterStub("docker", {
+          launch: vi.fn(async (_input, hooks) => {
+            await hooks?.onStarted?.(identity);
+            throw new LaunchRetainedError(identity, new Error("readiness timed out"));
+          }),
+        });
+
+        return Effect.gen(function* () {
+          const error = yield* processWorkspaceBuildJobEffect(
+            baseOptions({
+              jobId: "job_told",
+              credentialCipher: fakeCredentialCipher,
+              runtimeAdapters: [runtimeAdapter],
+              compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+              onLaunchRetained,
+            }),
+          ).pipe(Effect.flip);
+
+          expect(error.errorCode).toBe(LAUNCH_RETAINED_ERROR_CODE);
+          expect(onLaunchRetained).toHaveBeenCalledTimes(1);
+          expect(onLaunchRetained).toHaveBeenCalledWith("run_job_told", "docker");
+          // After the failed row and the attempt: what it starts finds the launch recorded.
+          expect(order.slice(-3)).toEqual([
+            "row:failed",
+            "attempt:failed",
+            "told:run_job_told:docker",
+          ]);
+        }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+      },
+    );
+
+    it.effect("tells nobody of a launch that failed with no executor to keep", () => {
+      const jobs = captureJob("job_nothing_kept");
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const onLaunchRetained = vi.fn();
+      const runtimeAdapter = createRuntimeAdapterStub("docker", {
+        launch: vi.fn(async () => {
+          throw new Error("the runtime refused to create the executor");
+        }),
+      });
+
+      return Effect.gen(function* () {
+        const error = yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_nothing_kept",
+            credentialCipher: fakeCredentialCipher,
+            runtimeAdapters: [runtimeAdapter],
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+            onLaunchRetained,
+          }),
+        ).pipe(Effect.flip);
+
+        expect(error.errorCode).not.toBe(LAUNCH_RETAINED_ERROR_CODE);
+        expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_job_nothing_kept" });
+        expect(onLaunchRetained).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+    });
+
+    it.effect("keeps the launch's own failure when the one it tells throws", () => {
+      const jobs = captureJob("job_told_throws");
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const runtimeAdapter = createRuntimeAdapterStub("docker", {
+        launch: vi.fn(async () => {
+          throw new LaunchRetainedError(identity, new Error("credential file write failed"));
+        }),
+      });
+
+      return Effect.gen(function* () {
+        const error = yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_told_throws",
+            credentialCipher: fakeCredentialCipher,
+            runtimeAdapters: [runtimeAdapter],
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+            onLaunchRetained: () => {
+              throw new Error("the stop could not be started");
+            },
+          }),
+        ).pipe(Effect.flip);
+
+        expect(error.errorCode).toBe(LAUNCH_RETAINED_ERROR_CODE);
+        expect(error.message).toContain("credential file write failed");
+      }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+    });
+
+    it.effect(
       "records a launched capture executor retained when its ready row cannot be written",
       () => {
         const jobs = captureJob("job_unrecorded");
@@ -3142,6 +3253,7 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
       renewLaunchLease: vi.fn(() => Effect.succeed(false)),
     };
     const removed: string[] = [];
+    const onLaunchRetained = vi.fn();
     const exit = await Effect.runPromise(
       processWorkspaceBuildJobEffect(
         baseOptions({
@@ -3150,6 +3262,7 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
           runtimeAdapters: [neverReady(new Date(Date.now() + 3_600_000).toISOString())],
           compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
           launchLeaseMs: 1_000,
+          onLaunchRetained,
           launchMaterialStager: {
             stage: async () => ({}),
             removeSecretEnv: async () => {
@@ -3169,6 +3282,8 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
     expect(failed.every((input) => typeof input["fenceLaunchOwner"] === "string")).toBe(true);
     expect(attempts.markAttemptFailed).not.toHaveBeenCalled();
     expect(removed).toEqual([]);
+    // The launch is its adopter's: nobody is told to stop it from here.
+    expect(onLaunchRetained).not.toHaveBeenCalled();
   }, 15_000);
 });
 

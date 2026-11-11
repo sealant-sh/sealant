@@ -9,7 +9,7 @@
 import { Effect, Exit, Fiber, Layer, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import { removalRefused } from "../runtime/runtime-adapter.js";
+import { removalPending, removalRefused } from "../runtime/runtime-adapter.js";
 import {
   SealantRuntime,
   type CaptureFlushReport,
@@ -19,10 +19,15 @@ import {
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { captureStatusFromStored } from "./capture-drain-ledger.js";
 import {
+  EMPTY_CAPTURE_DRAIN_ENTRY,
   InMemoryCaptureDrainStore,
   attestedCompleteFor,
   authorizedDeletion,
   blueprintSourceKind,
+  describeDeletionBasis,
+  removalObservation,
+  terminalCaptureState,
+  type CaptureDrainEntry,
   ledgerObservationRecorder,
   probeCaptureDaemon,
   captureProgressed,
@@ -1365,6 +1370,69 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
     expect(await run(ledger.openObservation("run_issued", 1_000))).toBeDefined();
   });
 
+  // A removal the provider accepted and has not finished (Boat: its deletion operation still
+  // reads `processing`) is kept exactly as an unknown outcome is, and is no failure to report.
+  it.each([
+    ["an outcome nobody knows", () => new Error("socket closed after the request was sent"), true],
+    [
+      "a removal the runtime accepted and has not finished",
+      () => removalPending(new Error("the provider is still deleting it")),
+      false,
+    ],
+  ] as const)(
+    "keeps a removal issued, its hold ended, after %s, and logs an error only for the first",
+    async (_name, failure, logsError) => {
+      let clock = 0;
+      const ledger = inMemoryCaptureDrainLedger({ now: () => clock });
+      await run(ledger.recordStatus("run_kept", savedStatus({ headN: 7 }), clock));
+      const authorized = await run(
+        ledger.authorizeDeletion("run_kept", await versionOf(ledger, "run_kept")),
+      );
+      if (authorized.kind !== "authorized") {
+        throw new Error(authorized.kind);
+      }
+      const levels: string[] = [];
+      const exit = await Effect.runPromise(
+        removeUnderDeletion({
+          ledger,
+          runId: "run_kept",
+          ticket: authorized.ticket,
+          remove: Effect.tryPromise({
+            try: async () => {
+              throw failure();
+            },
+            catch: (error) => error,
+          }),
+        }).pipe(
+          Effect.exit,
+          Effect.provide(
+            Logger.layer([
+              Logger.make(({ logLevel }) => {
+                levels.push(logLevel);
+              }),
+            ]),
+          ),
+        ),
+      );
+      // The call's failure still reaches its caller, which decides what it means.
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(levels.includes("Error")).toBe(logsError);
+      const row = ledger.store.rows.get("run_kept");
+      expect(row?.deletion?.state).toBe("deleting-issued");
+      // Its hold ended with the call: settled from the runtime at once, not 120 s later.
+      expect(row?.deletion?.expiresAtMs).toBeLessThanOrEqual(clock);
+      expect(await run(ledger.admitRecovery("run_kept", NO_CLAIM))).toBe("deleting");
+      expect(await run(ledger.openObservation("run_kept", 1_000))).toBeUndefined();
+      clock += 1;
+      // The runtime still has it and the evidence stands: issued again, under a new ticket.
+      const again = await run(
+        authorizedDeletion({ ledger, runId: "run_kept", runtime: "running", decide: keepRunning }),
+      );
+      expect(again.decision).toEqual({ delete: true, basis: "issued-before" });
+      expect(again.ticket).toBeDefined();
+    },
+  );
+
   // Review 9 #5: a runtime call that failed after the provider may have accepted it (a lost
   // reply) is not a refusal: the provider may still act on it.
   it("keeps a removal issued when its runtime call fails with an outcome nobody knows (review 9 #5)", async () => {
@@ -1659,5 +1727,70 @@ describe("an observation cut off at the deadline (e2e 8 F9)", () => {
     await Effect.runPromise(Fiber.interrupt(fiber));
     expect(fencesOf(ledger)).toBe(0);
     expect((await drain(fakeCaptureDaemon([savedStatus()]), ledger)).kind).toBe("drained");
+  });
+});
+
+const readable = (entry: Partial<CaptureDrainEntry>) =>
+  ({ readable: true, entry: { ...EMPTY_CAPTURE_DRAIN_ENTRY, ...entry } }) as const;
+
+describe("what a removal records of an executor's work", () => {
+  const executor = { runId: "run_1", resourceId: "bx_23456789", reference: null };
+  const saved = readable({ last: savedStatus() });
+  const unsaved = readable({ last: captureStatus({ pending: 2 }) });
+  const discarded = readable({ discardRequested: { atMs: 1, by: "user_1" } });
+
+  it("reads the terminal state from the evidence: discarded, saved, or lost", () => {
+    const evidence = (record: Parameters<typeof recordedDeletionEvidence>[0]) =>
+      terminalCaptureState(recordedDeletionEvidence(record, executor));
+    expect(evidence(saved)).toBe("stopped");
+    expect(evidence(unsaved)).toBe("gone");
+    expect(evidence(readable({}))).toBe("gone");
+    expect(evidence(discarded)).toBe("discarded");
+    // An unreadable record says nothing was saved.
+    expect(evidence({ readable: false })).toBe("gone");
+    // A saved answer with an unsaved one no later answer covers is not saved.
+    expect(
+      evidence(readable({ last: savedStatus(), unsaved: [captureStatus({ pending: 1 })] })),
+    ).toBe("gone");
+  });
+
+  it.each([undefined, false] as const)(
+    "records `stopped` for every basis and every record on a runtime that does not report a missing executor as lost (%s)",
+    (reportsMissingAsLost) => {
+      for (const basis of ["missing", "observed-complete", "discarded", "nothing-to-save"] as const)
+        for (const record of [saved, unsaved, discarded, { readable: false } as const])
+          expect(
+            removalObservation({
+              basis,
+              reportsMissingAsLost,
+              record,
+              executor,
+              removed: "the runtime was removed",
+            }),
+          ).toEqual({
+            state: "stopped",
+            detail: `the runtime was removed: ${describeDeletionBasis(basis)}`,
+          });
+    },
+  );
+
+  it("records a missing executor from the evidence on a runtime that reports it as lost, and every other basis as `stopped`", () => {
+    const observe = (
+      basis: Parameters<typeof removalObservation>[0]["basis"],
+      record: Parameters<typeof removalObservation>[0]["record"],
+    ) =>
+      removalObservation({
+        basis,
+        reportsMissingAsLost: true,
+        record,
+        executor,
+        removed: "the runtime was removed",
+      }).state;
+    expect(observe("missing", unsaved)).toBe("gone");
+    expect(observe("missing", { readable: false })).toBe("gone");
+    expect(observe("missing", saved)).toBe("stopped");
+    expect(observe("missing", discarded)).toBe("discarded");
+    for (const basis of ["observed-complete", "attested-complete", "nothing-to-save"] as const)
+      expect(observe(basis, unsaved)).toBe("stopped");
   });
 });

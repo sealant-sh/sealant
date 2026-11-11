@@ -72,7 +72,7 @@ import {
   type ExecutorRuntimeState,
   type ObservedCapture,
 } from "../runtime/executor-preservation.js";
-import { isRemovalRefusal } from "../runtime/runtime-adapter.js";
+import { isRemovalPending, isRemovalRefusal } from "../runtime/runtime-adapter.js";
 import {
   SealantControlError,
   SealantRuntime,
@@ -1250,6 +1250,65 @@ export const recordedDeletionEvidence = (
   };
 };
 
+/**
+ * What became of an executor's work once the runtime positively no longer has it, from the
+ * evidence on record (the same evidence that authorizes removing one), never from the drain's
+ * display state, which an earlier saved FINAL leaves behind after newer unsaved answers.
+ * `stopped`: a complete FINAL Core observed, or a covering attestation of a sealed FINAL, with no
+ * unsaved answer after it. `discarded`: its owner discarded the unsaved work. `gone`: anything
+ * else, reported as lost. All three end the retention.
+ */
+export const terminalCaptureState = (
+  evidence: Pick<
+    ReturnType<typeof recordedDeletionEvidence>,
+    "observedComplete" | "attestedComplete" | "discarded"
+  >,
+): "stopped" | "discarded" | "gone" =>
+  evidence.discarded
+    ? "discarded"
+    : evidence.observedComplete || evidence.attestedComplete
+      ? "stopped"
+      : "gone";
+
+/**
+ * What a stop records on the drain once the runtime removed the executor (or found nothing of it
+ * left) on `basis`. Every runtime records `stopped`, with why it could go. A runtime that
+ * `reportsMissingAsLost` records an executor it no longer had (`missing`) from the evidence as it
+ * stands (`terminalCaptureState`): `gone` unless something on record says the work was saved.
+ */
+export const removalObservation = (input: {
+  readonly basis: ExecutorDeletionBasis;
+  readonly reportsMissingAsLost: boolean | undefined;
+  readonly record: CaptureDrainRead;
+  readonly executor: ExecutorIdentity;
+  /** How the removal reads when it is reported `stopped` ("the runtime was removed"). */
+  readonly removed: string;
+}): CaptureDrainObservation => {
+  const stopped: CaptureDrainObservation = {
+    state: "stopped",
+    detail: `${input.removed}: ${describeDeletionBasis(input.basis)}`,
+  };
+  if (input.basis !== "missing" || input.reportsMissingAsLost !== true) {
+    return stopped;
+  }
+  const state = terminalCaptureState(recordedDeletionEvidence(input.record, input.executor));
+  switch (state) {
+    case "stopped":
+      return stopped;
+    case "discarded":
+      return {
+        state,
+        detail: "the runtime no longer has the executor; its owner discarded the unsaved captures",
+      };
+    case "gone":
+      return {
+        state,
+        detail:
+          "the runtime no longer has the executor, and nothing on record says its work was saved",
+      };
+  }
+};
+
 /** Whether a deletion basis rests on recorded evidence a newer observation could revoke. */
 const basisRestsOnEvidence = (basis: ExecutorDeletionBasis): boolean =>
   basis === "observed-complete" || basis === "attested-complete" || basis === "issued-before";
@@ -1551,7 +1610,8 @@ export const removeUnderDeletion = <A, E, R>(input: {
  * request's outcome is still unknown, when it stays issued and is settled from the runtime. Anything else — a transport error after the request may have gone out, a timeout,
  * an interruption, a defect — is an outcome nobody knows: the provider may still act on it, so
  * the removal stays issued and exclusionary (no observation, no recovery) and is settled from what
- * the runtime says of the executor.
+ * the runtime says of the executor. A removal the runtime accepted and has not finished
+ * (`isRemovalPending`) is kept the same way, without the error: it is not a failure.
  */
 const removalFailed = <E>(
   ledger: CaptureDrainLedger,
@@ -1562,6 +1622,12 @@ const removalFailed = <E>(
   const error = Cause.findErrorOption(cause);
   if (Option.isSome(error) && isRemovalRefusal(error.value)) {
     return ledger.releaseDeletion(runId, ticket);
+  }
+  if (Option.isSome(error) && isRemovalPending(error.value)) {
+    // The runtime accepted the removal and has not finished it (`removalPending`): nothing failed
+    // and nothing is unknown, so nothing is logged as an error. It stays issued and exclusionary,
+    // its hold ended, and is settled from what the runtime says of the executor, as below.
+    return ledger.lapseIssuedDeletion(runId, ticket);
   }
   return Effect.logError(
     `Capture drain · run ${runId}: the runtime call removing its executor failed with an outcome nobody knows (the request may have reached the runtime); the removal stays issued, nothing is observed or recovered, and it is settled from what the runtime says of the executor.`,
@@ -1642,8 +1708,6 @@ export const describeDeletionBasis = (basis: ExecutorDeletionBasis): string => {
       return "the owner discarded its unsaved captures";
     case "nothing-to-save":
       return "its recovery boot found nothing to save: it never materialized a capture, so no user code ran on it";
-    case "never-launched":
-      return "its agent recorded no launch on this boot: the daemon never started there, so no user code ran on it";
     case "issued-before":
       return "its removal was issued earlier on evidence that still stands, and the runtime still had it";
   }

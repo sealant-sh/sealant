@@ -21,7 +21,9 @@ import type { CredentialCipherService } from "@sealant/credentials";
  *     A MicroVM whose daemon ended while the VM runs on (sealantd exited 75) keeps its disk until
  *     the platform's cap: its agent starts sealantd again in recovery mode on that disk, handed
  *     the kept capture token with the request, and it is drained the same way — the deadline
- *     sweep makes that recovery due before the cap.
+ *     sweep makes that recovery due before the cap. A Boat VM is recovered the same way, by its
+ *     agent, for as long as Boat has it; one whose launch never started a daemon answers
+ *     `nothing-to-save` without a recovery boot.
  *     While it waits, an ended executor has nothing running beside it: its runtime stops what it
  *     no longer needs (`RuntimeAdapter.parkRetained`; Docker: its dockerd sidecar), never its
  *     disk.
@@ -71,7 +73,7 @@ import {
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
 import {
-  closesItsOwnExecutors,
+  isRemovalPending,
   type RuntimeAdapterLifecycle,
   type RuntimeAdapterRecoverResult,
 } from "../runtime/runtime-adapter.js";
@@ -358,18 +360,6 @@ const recoverOne = (
       );
       return yield* retry(`no runtime adapter is registered for '${instance.adapter}'`);
     }
-    // OWN-CLOSE GUARD (Boat; `closesItsOwnExecutors`, removed with `closeCapture`): its retained
-    // executor is recovered, drained and removed by the runtime's own close owner, under its own
-    // hold of the capture ledger. Nothing is inspected, authorized, started or removed from here:
-    // the retention stays on record and the attempt is counted, as it always was for a runtime
-    // this sweep cannot recover.
-    if (closesItsOwnExecutors(adapter)) {
-      const detail = `left to the ${adapter.id} runtime's own close, which recovers the executor on its own disk and removes it only once its final flush is confirmed`;
-      yield* (row.recoveryAttempts === 0 ? Effect.logInfo : Effect.logDebug)(
-        `${prefix}: retained · ${detail}.`,
-      );
-      return yield* retry(detail);
-    }
     const executor = { runId, resourceId, reference };
     const stopReason = instance.stopReason ?? "failed";
 
@@ -389,7 +379,20 @@ const recoverOne = (
             bounds.removeMs,
             "the runtime's removal of the executor",
           ),
-        });
+        }).pipe(
+          // The runtime accepted the removal and has not finished it (`removalPending`): nothing
+          // failed. Nothing is recorded removed, and the next attempt asks the runtime again.
+          Effect.catchIf(isRemovalPending, () => Effect.succeed("pending" as const)),
+        );
+        if (removal === "pending") {
+          yield* Effect.logInfo(
+            `${prefix}: the ${adapter.id} runtime accepted the removal of the retained executor and has not finished it; asked again soon.`,
+          );
+          return yield* retry(
+            "the runtime accepted the removal of the executor and has not finished it",
+            backoff.baseMs,
+          );
+        }
         if (!removal.removed) {
           return yield* retry(
             "its removal was voided by newer evidence before it was made",
@@ -513,7 +516,10 @@ const recoverOne = (
     // a token nothing is started — a boot without it would exit, not save.
     const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
     const restarts = state === "exited" && runtimeRestartsRetainedExecutors(adapter.id);
-    if (restarts && instance.daemonRecoveryBoot !== true) {
+    // A runtime that answers for an executor nothing was ever started on is asked whatever the
+    // daemon's build and whether or not a token was kept: it refuses a restart itself.
+    const asksAnyway = adapter.recoverAnswersUnstarted === true;
+    if (restarts && !asksAnyway && instance.daemonRecoveryBoot !== true) {
       // A daemon without sealantd's recovery boot ignores the request for it and runs its
       // ORDINARY boot: it restores the store's head over the staging and edits this disk holds,
       // and runs the lifecycle steps and the harness again. Unknown is treated the same (fail
@@ -539,7 +545,10 @@ const recoverOne = (
         options.credentialCipher,
       );
       const restage = handsTokenOver ? undefined : stager.restageSecretEnv;
-      if (token === undefined || (!handsTokenOver && restage === undefined)) {
+      if (
+        (token === undefined && !asksAnyway) ||
+        (token !== undefined && !handsTokenOver && restage === undefined)
+      ) {
         const why =
           token === undefined
             ? row.captureTokenSealed === null || row.captureTokenSealed === undefined
@@ -553,7 +562,8 @@ const recoverOne = (
         );
         return yield* retry(`not recoverable · no capture token · ${why}`);
       }
-      recoverySecretEnv = { [CAPTURE_TOKEN_SECRET_ENV_NAME]: token };
+      recoverySecretEnv =
+        token === undefined ? undefined : { [CAPTURE_TOKEN_SECRET_ENV_NAME]: token };
     }
     const restage = stager.restageSecretEnv;
     if (restarts && !handsTokenOver && recoverySecretEnv !== undefined && restage !== undefined) {
@@ -593,6 +603,7 @@ const recoverOne = (
                 ...(handsTokenOver && recoverySecretEnv !== undefined
                   ? { runId, secretEnv: recoverySecretEnv }
                   : {}),
+                ...(asksAnyway ? { daemonRecoveryBoot: instance.daemonRecoveryBoot } : {}),
               }),
             bounds.recoverMs,
             "the runtime's restart of the executor",

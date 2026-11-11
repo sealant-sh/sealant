@@ -557,15 +557,15 @@ export class BoatGuestTransportService extends Context.Service<
 export type BoatLaunchMaterial = z.infer<typeof envelopeSchema>;
 
 /**
- * What the agent said of a held workspace's capture when asked to recover it. `nothing-to-save`
- * carries the agent's basis: `no-launch` (this boot was bound and never launched: nothing ran) or
- * `daemon` (the recovery boot found no materialized capture, sealantd exit 76), with the daemon's
- * own line when it gave one.
+ * What the agent said of a held workspace's capture when asked to recover it. `running`: its
+ * daemon is up. `restarted`: the agent started sealantd again in recovery mode on the VM's disk.
+ * `nothing-to-save` carries the agent's basis: `no-launch` (this boot was bound and never
+ * launched: nothing ran) or `daemon` (the recovery boot found no materialized capture, sealantd
+ * exit 76), with the daemon's own line when it gave one.
  */
 export type BoatRecoveryOutcome =
   | "running"
-  | "pending"
-  | "held"
+  | "restarted"
   | {
       readonly outcome: "nothing-to-save";
       readonly basis: "no-launch" | "daemon";
@@ -633,8 +633,15 @@ export interface BoatExecutionService {
   ) => Effect.Effect<Redacted.Redacted<SealantTarget>, Failure>;
   /** Irreversibly prevents new worker starts, issued or running, without disturbing FINAL's daemon. */
   readonly hold: (target: BoatExecutionTarget) => Effect.Effect<void, Failure>;
-  /** Capture-only restart on the original boot, with the capture token Core kept for it. */
-  readonly recover: (target: BoatExecutionTarget) => Effect.Effect<BoatRecoveryOutcome, Failure>;
+  /**
+   * Capture-only restart on the original boot of a held launch, handed the recovery boot's secret
+   * env (the capture token the executor was launched with, as the recovery sweep unsealed it).
+   * The agent's typed refusals (`BOAT_AGENT_RECOVER_REFUSALS`) fail as `agent-refused`.
+   */
+  readonly recover: (
+    target: BoatExecutionTarget,
+    secretEnv: Redacted.Redacted<Readonly<Record<string, string>>>,
+  ) => Effect.Effect<BoatRecoveryOutcome, Failure>;
   /**
    * Fresh observation only: agent health, the tunnel's handshake and DNS, then daemon health. A
    * run without resources has no tunnel to observe: agent health, then daemon health.
@@ -1310,15 +1317,15 @@ const make: Effect.Effect<
       admission: { ...record.admission, sealedEnvelope: null },
     });
   });
-  const recover = Effect.fn("BoatExecution.recover")(function* (target: BoatExecutionTarget) {
+  const recover = Effect.fn("BoatExecution.recover")(function* (
+    target: BoatExecutionTarget,
+    secretEnv: Redacted.Redacted<Readonly<Record<string, string>>>,
+  ) {
     const record = yield* loadTarget(target);
     if (record.phase !== "held" || record.admission === null || record.isolation === undefined)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    // The capture token travels with the recovery: without the resume envelope (erased once Boat
-    // reported the VM absent) there is nothing a recovery boot could ship with.
-    if (record.admission.sealedResumeEnvelope === undefined) return "held" as const;
-    const material = yield* openMaterial(record, record.admission.sealedResumeEnvelope);
-    const token = Redacted.value(material).secretEnv["SEALANT_CAPTURE_TOKEN"];
+    // The capture token travels with the recovery: a recovery boot without it could ship nothing.
+    const token = Redacted.value(secretEnv)["SEALANT_CAPTURE_TOKEN"];
     if (token === undefined || token.length === 0)
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
     const connection = yield* access(record);
@@ -1329,6 +1336,7 @@ const make: Effect.Effect<
         JSON.stringify({
           version: AGENT_RECOVER_CONTRACT_VERSION,
           runId: target.runId,
+          // The agent takes exactly the capture token, whatever else the sweep handed over.
           secretEnvJson: JSON.stringify({ SEALANT_CAPTURE_TOKEN: token }),
         }),
       ),
@@ -1340,7 +1348,7 @@ const make: Effect.Effect<
     );
     yield* unchanged(record);
     if (outcome.outcome === "running") return "running" as const;
-    if (outcome.outcome === "restarted") return "pending" as const;
+    if (outcome.outcome === "restarted") return "restarted" as const;
     return {
       outcome: "nothing-to-save" as const,
       basis: outcome.basis,

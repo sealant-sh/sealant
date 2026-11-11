@@ -28,6 +28,8 @@ import {
 import { boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
+/** What the recovery sweep hands a recovery: the capture token the launch carried. */
+const recoveryEnv = Redacted.make({ SEALANT_CAPTURE_TOKEN: "capture-version-one" });
 const material = (version = "version-one"): Redacted.Redacted<BoatLaunchMaterial> =>
   Redacted.make({
     bootEnv: { SEALANT_WORKSPACE_SOURCE: "capture", TOKEN_VERSION: version },
@@ -367,18 +369,22 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
     test(async (context) => {
       const { executor, repo, target, guest, db } = context;
       await execute(executor.exchange(target));
-      await expect(execute(executor.recover(target))).rejects.toThrow("invocation-held");
+      await expect(execute(executor.recover(target, recoveryEnv))).rejects.toThrow(
+        "invocation-held",
+      );
       await execute(executor.stage(target.runId, material()));
       await execute(executor.recordIsolation(target, receipts));
       await execute(executor.launch(target.runId));
-      await expect(execute(executor.recover(target))).rejects.toThrow("invocation-held");
+      await expect(execute(executor.recover(target, recoveryEnv))).rejects.toThrow(
+        "invocation-held",
+      );
       await execute(executor.hold(target));
       const held = await execute(repo.get(target.runId));
-      expect(await execute(executor.recover(target))).toBe("running");
+      expect(await execute(executor.recover(target, recoveryEnv))).toBe("running");
       guest.recovery = "restarted";
-      expect(await execute(executor.recover(target))).toBe("pending");
+      expect(await execute(executor.recover(target, recoveryEnv))).toBe("restarted");
       guest.recovery = "nothing-to-save";
-      expect(await execute(executor.recover(target))).toEqual({
+      expect(await execute(executor.recover(target, recoveryEnv))).toEqual({
         outcome: "nothing-to-save",
         basis: "daemon",
         detail: "sealant boot: nothing to save: never materialized (/workspace/repo)",
@@ -389,24 +395,31 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         "recover-state-unknown",
       ] as const) {
         guest.recovery = reason;
-        expect(await refusalReason(executor.recover(target))).toBe(reason);
+        expect(await refusalReason(executor.recover(target, recoveryEnv))).toBe(reason);
       }
       guest.recovery = "running";
       guest.malformedRecovery = true;
-      await expect(execute(executor.recover(target))).rejects.toThrow("invalid-reply");
+      await expect(execute(executor.recover(target, recoveryEnv))).rejects.toThrow("invalid-reply");
       guest.malformedRecovery = false;
-      await expect(execute(executor.recover({ ...target, bootId: randomUUID() }))).rejects.toThrow(
-        "target-mismatch",
-      );
+      await expect(
+        execute(executor.recover({ ...target, bootId: randomUUID() }, recoveryEnv)),
+      ).rejects.toThrow("target-mismatch");
       expect(await execute(repo.get(target.runId))).toEqual(held);
       // A held execution is fenced: the launch is never pushed again.
       await expect(execute(executor.launch(target.runId))).rejects.toThrow("invocation-held");
       expect(guest.starts).toBe(1);
-      // The resume envelope erased (Boat reported the VM absent): nothing to recover with.
+      // The capture token is the caller's to hand over: without it nothing is asked of the agent.
+      const asked = guest.actions.length;
+      await expect(execute(executor.recover(target, Redacted.make({})))).rejects.toThrow(
+        "invalid-input",
+      );
+      expect(guest.actions).toHaveLength(asked);
+      // It no longer comes from the sealed resume envelope: one erased (Boat reported the VM
+      // absent) changes nothing, and what the caller hands over is what the agent is sent.
       if (held?.admission == null) throw new Error("held admission");
       const { sealedResumeEnvelope: _erased, ...admission } = held.admission;
       await execute(corruptBoatExecution(db, target.runId, { ...held, admission }));
-      expect(await execute(executor.recover(target))).toBe("held");
+      expect(await execute(executor.recover(target, recoveryEnv))).toBe("running");
     }));
   it("delivers the same authenticated network intent after reply loss and refuses stale epochs, boots and replies", () =>
     test(async ({ executor, repo, target, guest }) => {

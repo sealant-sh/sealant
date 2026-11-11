@@ -11,50 +11,25 @@ import {
   boatTunnelRepoLayer,
   NativePublicationRepo,
   NativePublicationRepoLive,
-  SealantDB,
-  WorkspaceCaptureDrainRepo,
-  WorkspaceCaptureDrainRepoLive,
+  type SealantDB,
 } from "@sealant/db";
 import type { BoatAllocationRecord } from "@sealant/validators";
 import { Cause, Context, Effect, Exit, Layer, Option } from "effect";
 
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
-import { databaseCaptureDrainLedger } from "../../worker/capture-drain-ledger.js";
-import { recordedDeletionEvidence } from "../../worker/capture-drain.js";
-
-/**
- * What became of a VM's work once Boat positively no longer has it, from the canonical evidence
- * (the same evidence that authorizes removing a VM), never from the drain's display state, which an
- * earlier saved FINAL leaves behind after newer unsaved answers. `stopped`: a complete FINAL Core
- * observed, or a covering attestation of a sealed FINAL, with no unsaved answer after it.
- * `discarded`: its owner discarded the unsaved work. `gone`: anything else, reported as lost. All
- * three end the retention.
- */
-export const terminalCaptureState = (
-  evidence: ReturnType<typeof recordedDeletionEvidence>,
-): "stopped" | "discarded" | "gone" =>
-  evidence.discarded
-    ? "discarded"
-    : evidence.observedComplete || evidence.attestedComplete
-      ? "stopped"
-      : "gone";
-
-const TERMINAL_DETAIL = {
-  stopped: "Boat removed the VM after its final capture was saved.",
-  discarded: "Boat removed the VM; its owner discarded the unsaved captures.",
-  gone: "Boat no longer has the VM; its work was not confirmed saved.",
-} as const;
 
 /** One obligation that could not be discharged on this pass; the next pass retries it alone. */
 export interface BoatDischargeBlocker {
-  readonly obligation: "runtime" | "capture" | "allocation" | "tunnel" | "publication" | "secrets";
+  readonly obligation: "allocation" | "tunnel" | "publication" | "secrets";
   readonly reason: "held" | "unavailable";
 }
 
 /**
- * Discharges every obligation of a VM Boat positively no longer has. Each obligation is idempotent
- * and retried on its own: a host that cannot remove the gateway does not keep the public status,
- * the capture outcome or the allocation from settling.
+ * Discharges what a VM Boat positively no longer has still holds, and what only Boat's own records
+ * hold: the allocation, the resume secrets, the gateway and its tunnel slot, the publication pin.
+ * Each obligation is idempotent and retried on its own: a host that cannot remove the gateway does
+ * not keep the allocation from settling. The run's runtime row and its capture record are not
+ * among them: the shared stop and exit paths write both, for every runtime.
  */
 export class BoatDischarge extends Context.Service<
   BoatDischarge,
@@ -75,19 +50,12 @@ export class BoatDischarge extends Context.Service<
 >()("@sealant/workspaces/boat/BoatDischarge") {}
 
 const make = Effect.gen(function* () {
-  const db = yield* SealantDB;
   const observations = yield* BoatObservationRepo;
   const allocations = yield* BoatAllocationRepo;
   const tunnels = yield* BoatTunnelRepo;
   const executions = yield* BoatExecutionRepo;
-  const canonical = yield* WorkspaceCaptureDrainRepo;
   const catalog = yield* NativePublicationRepo;
   const host = yield* BoatResourcesHost;
-  const ledger = databaseCaptureDrainLedger({
-    db,
-    owner: `boat-discharge-${randomUUID()}`,
-    leaseMs: 180_000,
-  });
   const discharge = Effect.fn("BoatDischarge.discharge")(function* (
     allocation: BoatAllocationRecord,
   ) {
@@ -96,7 +64,6 @@ const make = Effect.gen(function* () {
     const observed = yield* observations.get(id).pipe(Effect.orElseSucceed(() => undefined));
     if (observed?.presence !== "absent" || observed.sandboxId !== allocation.sandboxId)
       return { kind: "not-absent" } as const;
-    const root = yield* canonical.getByRunId(runId).pipe(Effect.orElseSucceed(() => undefined));
     const blockers: BoatDischargeBlocker[] = [];
     const settle = <A, E>(
       obligation: BoatDischargeBlocker["obligation"],
@@ -122,35 +89,6 @@ const make = Effect.gen(function* () {
           return false;
         }),
       );
-    // Public status first: the runtime row reads what Boat said, whatever else is still pending.
-    const runtimeSettled = yield* settle(
-      "runtime",
-      observations.recordAbsent({
-        runtimeInstanceId: id,
-        runId,
-        deploymentId: observed.deploymentId,
-        sandboxId: observed.sandboxId,
-        basis: observed.basis === "read" ? "not-found" : observed.basis,
-      }),
-    );
-    yield* settle(
-      "capture",
-      Effect.gen(function* () {
-        // A removal issued earlier whose reply was lost: absence is its outcome.
-        if (root?.deletionState === "deleting-issued" || root?.deletionState === "deleting")
-          yield* ledger.reconcileIssuedDeletion(runId, "gone", undefined);
-        const state = terminalCaptureState(
-          recordedDeletionEvidence(yield* ledger.read(runId), {
-            runId,
-            resourceId: allocation.sandboxId,
-            reference: null,
-          }),
-        );
-        if (root?.state === state && root.retainedAt === null && root.captureTokenSealed === null)
-          return;
-        yield* canonical.recordObservation({ runId, state, detail: TERMINAL_DETAIL[state] });
-      }),
-    );
     yield* settle(
       "allocation",
       Effect.gen(function* () {
@@ -172,14 +110,20 @@ const make = Effect.gen(function* () {
           phase: "deleted",
           reason: null,
           conflictingSandboxes: [],
-          // A removal this allocation recorded as Boat's own completed deletion operation (the
-          // close of a run without resources keeps it here) stays as its receipt.
+          // A removal this allocation recorded as Boat's own completed deletion operation stays
+          // as its receipt.
           removal:
             current.removal?.kind === "operation" && current.removal.completed
               ? current.removal
               : { kind: "absent", targetId: current.sandboxId, completed: true },
         });
-      }),
+      }).pipe(
+        // A discharge can meet another writer of the same allocation: a second discharge of the
+        // same absence (the removal's own and the sweep's), or the removal recording Boat's
+        // operation. The write that loses is decided again on what is stored now, which is
+        // deleted already or one write from it.
+        Effect.retry({ times: 2 }),
+      ),
     );
     yield* settle("secrets", executions.forgetResume(id));
     const tunnelSettled = yield* settle(
@@ -201,7 +145,8 @@ const make = Effect.gen(function* () {
       }),
       (error) => error === "foreign-host",
     );
-    if (runtimeSettled && tunnelSettled)
+    // The pin goes last, and only once the gateway is gone and its slot released.
+    if (tunnelSettled)
       yield* settle(
         "publication",
         catalog.release(allocation.input.consumer, allocation.input.publication.publicationId),
@@ -236,12 +181,10 @@ const make = Effect.gen(function* () {
 export const boatDischargeLayerNoDeps: Layer.Layer<
   BoatDischarge,
   never,
-  | SealantDB
   | BoatObservationRepo
   | BoatAllocationRepo
   | BoatTunnelRepo
   | BoatExecutionRepo
-  | WorkspaceCaptureDrainRepo
   | NativePublicationRepo
   | BoatResourcesHost
 > = Layer.effect(BoatDischarge, make);
@@ -254,7 +197,6 @@ export const boatDischargeLayer: Layer.Layer<BoatDischarge, never, SealantDB | B
         BoatAllocationRepoLive,
         boatTunnelRepoLayer,
         BoatExecutionRepoLive,
-        WorkspaceCaptureDrainRepoLive,
         NativePublicationRepoLive,
       ),
     ),

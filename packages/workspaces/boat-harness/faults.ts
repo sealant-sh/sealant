@@ -405,8 +405,8 @@ export const scenarios = {
   },
 
   /**
-   * Mend stops a session whose launch Core kept (`retained`) or that became ready. FINAL close
-   * must reach the guest (recover through the relay), save, delete the VM and end the drain.
+   * Mend stops a session that became ready. The shared stop must drain FINAL over the daemon's
+   * control channel, save, delete the VM and end the drain.
    */
   async stopAfterLaunch(stack: HarnessStack, project: Project) {
     await readyThenStop(stack, project);

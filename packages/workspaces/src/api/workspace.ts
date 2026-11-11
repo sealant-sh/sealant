@@ -68,6 +68,8 @@ export const executorIsRetained = (input: {
   readonly runtimeInstance?: WorkspaceRuntimeInstance | undefined;
   /** The run's `workspace_capture_drains.retained_at`. */
   readonly retainedAt?: Date | null | undefined;
+  /** The run's `workspace_capture_drains.state`: what its last stop observed. */
+  readonly captureDrainState?: string | null | undefined;
 }): boolean => {
   const instance = input.runtimeInstance;
   if (instance === undefined || instance.resourceId === null) {
@@ -76,7 +78,39 @@ export const executorIsRetained = (input: {
   if (input.retainedAt !== null && input.retainedAt !== undefined) {
     return true;
   }
-  return instance.status === "failed" && instance.errorCode === LAUNCH_RETAINED_ERROR_CODE;
+  if (instance.status === "failed" && instance.errorCode === LAUNCH_RETAINED_ERROR_CODE) {
+    return true;
+  }
+  return stopIsHeld({ runtimeInstance: instance, captureDrainState: input.captureDrainState });
+};
+
+/**
+ * Whether a stop of the run was requested and its executor is still there, kept by the control
+ * plane: its last stop ended without removing it (`kept`: its FINAL flush is not confirmed
+ * complete, so it is kept until that is, or its owner discards it) or with its removal not
+ * finished (`stop-failed`: its work is saved, and the runtime has not finished removing it, or
+ * refused to). Reported as `retained`: such a workspace is not live (nothing new is admitted to
+ * it) and not stopped (its executor exists, and is paid for). `captureDrain` says which, and
+ * since when it was last observed.
+ *
+ * A stop that is still draining never reads this way: its record says `draining`, then `saved`,
+ * then `stopped`, and neither `kept` nor `stop-failed` in between.
+ *
+ * For Boat only. Every other runtime reads a stop-requested executor as it always has (its own
+ * status until it ends, `retained` once its retention is recorded).
+ */
+export const stopIsHeld = (input: {
+  readonly runtimeInstance?: WorkspaceRuntimeInstance | undefined;
+  readonly captureDrainState?: string | null | undefined;
+}): boolean => {
+  const instance = input.runtimeInstance;
+  return (
+    instance?.adapter === "boat" &&
+    instance.resourceId !== null &&
+    instance.stopReason !== null &&
+    instance.status !== "stopped" &&
+    (input.captureDrainState === "kept" || input.captureDrainState === "stop-failed")
+  );
 };
 
 export const resolveWorkspaceStatus = (input: {
