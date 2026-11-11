@@ -9,22 +9,19 @@ import {
 import { isDeepStrictEqual } from "node:util";
 
 import { CredentialCipher, type CredentialCipherError } from "@sealant/credentials";
-import {
-  BoatExecutionRepo,
-  BoatExecutionRepoLive,
-  type BoatExecutionStoreError,
-  type SealantDB,
-} from "@sealant/db";
+import { BoatRunRepo, BoatRunRepoLive, type BoatRunStoreError, type SealantDB } from "@sealant/db";
 import { RuntimeState } from "@sealant/runtime-protocol";
 import {
   boatAdmissionPinsSchema,
   boatNetworkIntentSchema,
   boatWireGuardKeySchema,
   boatExecutionTargetSchema,
+  boatRunLaunchPhase,
   type BoatAdmissionPins,
-  type BoatExecutionRecord,
   type BoatExecutionTarget,
   type BoatNetworkIntent,
+  type BoatRun,
+  type BoatRunIsolation,
 } from "@sealant/validators";
 import { Cause, Context, Effect, Layer, Redacted, Schedule } from "effect";
 import { z } from "zod";
@@ -224,7 +221,7 @@ export class BoatExecutionError extends Error {
     this.diagnostic = safe;
   }
 }
-type Failure = BoatExecutionError | BoatExecutionStoreError | CredentialCipherError;
+type Failure = BoatExecutionError | BoatRunStoreError | CredentialCipherError;
 const attempt = <A>(code: BoatExecutionError["code"], run: () => A) =>
   Effect.try({ try: run, catch: () => new BoatExecutionError(code) });
 const io = <A>(
@@ -576,7 +573,7 @@ export type BoatRecoveryOutcome =
  * What a run's records and its agent say of the daemon on its VM, in one read. `up`: the agent
  * reports the launch it accepted on this boot, and names no exit. `exited`: the agent's health
  * names the daemon's exit. `not-booted`: the agent reports no launch on this boot. `never-launched`:
- * the execution was aborted, which only a launch never pushed to the agent can be, so nothing ran.
+ * the run was fenced before any launch push, so nothing ran.
  * `unasked`: the launch has not been accepted yet (or never bound a bearer), so the agent's
  * `booted: false` would describe a launch still in flight; it is not asked.
  */
@@ -606,11 +603,11 @@ export interface BoatExecutionService {
   /**
    * Freezes what a launch was isolated under: the receipts its network was prepared under, or the
    * fact that it has no resource network (`{ resources: "none" }`), after which `isolate` and
-   * `tunnel` refuse the run for good. The record is the only reader.
+   * `tunnel` refuse the run for good. The run's row is the only reader.
    */
   readonly recordIsolation: (
     target: BoatExecutionTarget,
-    receipts: NonNullable<BoatExecutionRecord["isolation"]>,
+    receipts: BoatRunIsolation,
   ) => Effect.Effect<void, Failure>;
   /** Pushes the sealed launch to the agent once. A lost reply adopts the agent's durable launch record. */
   readonly launch: (id: string) => Effect.Effect<"running", Failure>;
@@ -653,6 +650,12 @@ export interface BoatExecutionService {
    * daemon probe. A failed read fails; it is never an exit.
    */
   readonly daemon: (target: BoatExecutionTarget) => Effect.Effect<BoatDaemonObservation, Failure>;
+  /**
+   * Opens the run's sealed bearer under the context it was sealed in, and nothing else: no Boat
+   * request, no agent request. Fails if it does not open. A running session whose bearer no longer
+   * opens cannot be drained, so the worker checks every one at start and says so.
+   */
+  readonly verifyBearer: (runId: string) => Effect.Effect<void, Failure>;
 }
 /** A current observation, never durable authority to admit a later request. */
 export interface BoatReadyReceipt {
@@ -707,25 +710,24 @@ export const boatLaunchRequest = (
     : { version: AGENT_CONTRACT_VERSION, ...common };
 };
 
-const bindingOf = (record: BoatExecutionRecord) => ({
-  identity: identity(record.target),
-  boot_id: record.target.bootId,
-  epoch: record.admission?.epoch,
-  operation_id: record.admission?.operationId,
+const bindingOf = (run: BoatRun, target: BoatExecutionTarget) => ({
+  identity: identity(target),
+  boot_id: target.bootId,
+  epoch: run.admissionEpoch ?? undefined,
+  operation_id: run.admissionOperationId ?? undefined,
 });
 /** A launch frozen with no resource network: its workspace was created without resources. */
-const withoutResources = (record: BoatExecutionRecord) =>
-  record.isolation !== undefined && "resources" in record.isolation;
+const withoutResources = (run: BoatRun) => run.isolation !== null && "resources" in run.isolation;
 /** What the readiness receipt digests: the binding and the frozen isolation receipts. */
-const isolationReceiptOf = (record: BoatExecutionRecord) =>
+const isolationReceiptOf = (run: BoatRun, target: BoatExecutionTarget) =>
   sha256(
     canonical(
-      record.isolation !== undefined && "resources" in record.isolation
-        ? { binding: bindingOf(record), resources: record.isolation.resources }
+      run.isolation !== null && "resources" in run.isolation
+        ? { binding: bindingOf(run, target), resources: run.isolation.resources }
         : {
-            binding: bindingOf(record),
-            resource_receipt: record.isolation?.resourceReceipt,
-            tunnel_receipt: record.isolation?.tunnelReceipt,
+            binding: bindingOf(run, target),
+            resource_receipt: run.isolation?.resourceReceipt,
+            tunnel_receipt: run.isolation?.tunnelReceipt,
           },
     ),
   );
@@ -733,20 +735,33 @@ const bindingReceiptOf = (target: BoatExecutionTarget, exchangeId: string) =>
   sha256(
     canonical({ identity: identity(target), boot_id: target.bootId, operation_id: exchangeId }),
   );
+/** What every secret of a run is sealed under: its bound target and its exchange. */
+interface SealContext {
+  readonly target: BoatExecutionTarget;
+  readonly exchangeId: string;
+}
+/** A run whose bind exchange is reserved: the launch owner acts on nothing less. */
+type BoundRun = BoatRun & SealContext;
+/** What an external call must find unmoved when it returns: the launch, not the VM's observation. */
+const launchState = (run: BoatRun) => ({
+  phase: boatRunLaunchPhase(run),
+  target: run.target,
+  exchangeId: run.exchangeId,
+  sealedControl: run.sealedControl,
+  admissionOperationId: run.admissionOperationId,
+  admissionEpoch: run.admissionEpoch,
+  isolation: run.isolation,
+});
 
 const make: Effect.Effect<
   BoatExecution["Service"],
   never,
-  BoatExecutionRepo | CredentialCipher | BoatGuestTransportService
+  BoatRunRepo | CredentialCipher | BoatGuestTransportService
 > = Effect.gen(function* () {
-  const repo = yield* BoatExecutionRepo;
+  const runs = yield* BoatRunRepo;
   const cipher = yield* CredentialCipher;
   const transport = yield* BoatGuestTransportService;
-  const seal = (
-    record: Pick<BoatExecutionRecord, "target" | "exchangeId">,
-    purpose: string,
-    value: Redacted.Redacted<unknown>,
-  ) =>
+  const seal = (record: SealContext, purpose: string, value: Redacted.Redacted<unknown>) =>
     cipher
       .encrypt(
         JSON.stringify({
@@ -755,12 +770,7 @@ const make: Effect.Effect<
         }),
       )
       .pipe(Effect.map((sealed) => sealed.sealed));
-  const open = <T>(
-    record: BoatExecutionRecord,
-    purpose: string,
-    sealed: string,
-    schema: z.ZodType<T>,
-  ) =>
+  const open = <T>(record: SealContext, purpose: string, sealed: string, schema: z.ZodType<T>) =>
     cipher.decrypt(sealed).pipe(
       Effect.flatMap((raw) =>
         attempt("seal-context-mismatch", () => {
@@ -779,55 +789,68 @@ const make: Effect.Effect<
         }),
       ),
     );
-  const load = (id: string) =>
-    repo
-      .get(id)
+  /** The run with its bind exchange reserved, or fenced before one: what the launch owner owns. */
+  const bound = (run: BoatRun | undefined): Effect.Effect<BoundRun, BoatExecutionError> => {
+    if (run === undefined || run.target === null)
+      return Effect.fail(new BoatExecutionError("invalid-input"));
+    const { target, exchangeId } = run;
+    if (exchangeId === null)
+      return run.fencedAt === null
+        ? Effect.fail(new BoatExecutionError("invalid-input"))
+        : Effect.fail(new BoatExecutionError("invocation-held"));
+    return Effect.succeed({ ...run, target, exchangeId });
+  };
+  const load = (id: string) => runs.get(id).pipe(Effect.flatMap(bound));
+  const loadTarget = (target: BoatExecutionTarget) =>
+    runs
+      .get(target.runId)
       .pipe(
-        Effect.flatMap((record) =>
-          record === undefined
+        Effect.flatMap((run) =>
+          run === undefined
             ? Effect.fail(new BoatExecutionError("invalid-input"))
-            : Effect.succeed(record),
+            : isDeepStrictEqual(run.target, target)
+              ? bound(run)
+              : Effect.fail(new BoatExecutionError("target-mismatch")),
         ),
       );
-  const loadTarget = (target: BoatExecutionTarget) =>
-    load(target.runtimeInstanceId).pipe(
-      Effect.flatMap((record) =>
-        isDeepStrictEqual(record.target, target)
-          ? Effect.succeed(record)
-          : Effect.fail(new BoatExecutionError("target-mismatch")),
-      ),
-    );
-  /** The record must not have moved under an external call that read it. */
-  const unchanged = (record: BoatExecutionRecord) =>
-    load(record.target.runtimeInstanceId).pipe(
-      Effect.flatMap((now) =>
-        isDeepStrictEqual(now, record)
-          ? Effect.void
-          : Effect.fail(new BoatExecutionError("target-mismatch")),
-      ),
-    );
-  /** The sealed admission envelope: the launch material, checked against the frozen digest. */
-  const openMaterial = (record: BoatExecutionRecord, sealed: string) =>
-    open(record, "admission", sealed, envelopeSchema).pipe(
+  /** The launch must not have moved under an external call that read it. */
+  const unchanged = (run: BoatRun) =>
+    runs
+      .get(run.runId)
+      .pipe(
+        Effect.flatMap((now) =>
+          now !== undefined && isDeepStrictEqual(launchState(now), launchState(run))
+            ? Effect.void
+            : Effect.fail(new BoatExecutionError("target-mismatch")),
+        ),
+      );
+  /** The sealed launch material, checked against the frozen digest. */
+  const openMaterial = (run: BoundRun, sealed: string) =>
+    open(run, "admission", sealed, envelopeSchema).pipe(
       Effect.flatMap((envelope) =>
-        sha256(canonical(Redacted.value(envelope))) === record.admission?.digest
+        sha256(canonical(Redacted.value(envelope))) === run.admissionDigest
           ? Effect.succeed(envelope)
           : Effect.fail(new BoatExecutionError("seal-context-mismatch")),
       ),
     );
-  const access = (record: BoatExecutionRecord) =>
+  /** The run's bearer, opened under the context it was sealed in. Asks nothing of Boat. */
+  const bearerOf = (run: BoundRun) =>
     Effect.gen(function* () {
-      if (record.sealedControl === null)
+      if (run.sealedControl === null)
         return yield* Effect.fail(new BoatExecutionError("invalid-input"));
-      const opened = yield* open(record, "control", record.sealedControl, controlSchema);
+      const opened = yield* open(run, "control", run.sealedControl, controlSchema);
       const stored = Redacted.value(opened);
-      // Hosted cookies may expire; each request refreshes access without repeating bootstrap.
-      const hosted = yield* io(() => transport.host(record.target), "host-agent");
-      const bearer = yield* attempt("seal-context-mismatch", () => {
+      return yield* attempt("seal-context-mismatch", () => {
         const parsed = BoatSecret.parse(stored.bearer);
         if (!parsed.ok) throw new Error();
         return parsed.value;
       });
+    });
+  const access = (run: BoundRun) =>
+    Effect.gen(function* () {
+      const bearer = yield* bearerOf(run);
+      // Hosted cookies may expire; each request refreshes access without repeating bootstrap.
+      const hosted = yield* io(() => transport.host(run.target), "host-agent");
       return { hosted, bearer };
     });
   /**
@@ -835,12 +858,12 @@ const make: Effect.Effect<
    * secret environment. A material that no longer opens leaves the first two.
    */
   const launchSecrets = (
-    record: BoatExecutionRecord,
+    run: BoundRun,
     connection: { hosted: BoatHostedControl; bearer: BoatSecret },
   ) =>
-    (record.admission?.sealedResumeEnvelope == null
+    (run.sealedLaunch === null
       ? Effect.succeed([])
-      : openMaterial(record, record.admission.sealedResumeEnvelope).pipe(
+      : openMaterial(run, run.sealedLaunch).pipe(
           Effect.map((material) => Object.values(Redacted.value(material).secretEnv)),
           Effect.orElseSucceed(() => []),
         )
@@ -903,10 +926,11 @@ const make: Effect.Effect<
 
   const exchange = Effect.fn("BoatExecution.exchange")(function* (input: BoatExecutionTarget) {
     const target = yield* attempt("invalid-input", () => boatExecutionTargetSchema.parse(input));
-    let record = yield* repo.get(target.runtimeInstanceId);
-    if (record !== undefined && !isDeepStrictEqual(record.target, target))
+    let stored = yield* runs.get(target.runId);
+    if (stored === undefined) return yield* Effect.fail(new BoatExecutionError("invalid-input"));
+    if (!isDeepStrictEqual(stored.target, target))
       return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
-    if (record === undefined) {
+    if (boatRunLaunchPhase(stored) === "none") {
       const key = yield* attempt("invalid-input", () =>
         generateKeyPairSync("rsa", {
           modulusLength: 3072,
@@ -920,27 +944,26 @@ const make: Effect.Effect<
         "exchange",
         Redacted.make({ privateKey: key.privateKey }),
       );
-      record = yield* repo.reserve({
-        ...reserved,
+      // Another reservation that won is returned in its place: one exchange per run.
+      stored = yield* runs.beginExchange(target, {
+        exchangeId: reserved.exchangeId,
         publicKey: key.publicKey,
         sealedExchange,
-        sealedControl: null,
-        admission: null,
-        phase: "exchange",
       });
     }
-    if (record.phase === "aborted")
-      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    if (record.phase !== "exchange") return bindingReceiptOf(target, record.exchangeId);
-    if (record.sealedExchange === null)
+    const run = yield* bound(stored);
+    const phase = boatRunLaunchPhase(run);
+    if (phase === "aborted") return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    if (phase !== "exchange") return bindingReceiptOf(target, run.exchangeId);
+    if (run.sealedExchange === null || run.exchangePublicKey === null)
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
     const request: BoatAgentBindRequest = {
       format: "sealant-bootstrap-v1",
       identity: identity(target),
       boot_id: target.bootId,
       manifest_digest: target.manifestDigest,
-      operation_id: record.exchangeId,
-      public_key: record.publicKey,
+      operation_id: run.exchangeId,
+      public_key: run.exchangePublicKey,
     };
     const raw = yield* io(() => transport.bind(target, request), "bind-exchange");
     const reply = yield* attempt("invalid-reply", () => {
@@ -948,12 +971,12 @@ const make: Effect.Effect<
       if (
         !isDeepStrictEqual(parsed.identity, request.identity) ||
         parsed.boot_id !== target.bootId ||
-        parsed.operation_id !== record.exchangeId
+        parsed.operation_id !== run.exchangeId
       )
         throw new Error();
       return parsed;
     });
-    const key = yield* open(record, "exchange", record.sealedExchange, exchangeSchema);
+    const key = yield* open(run, "exchange", run.sealedExchange, exchangeSchema);
     const bearer = yield* attempt("invalid-reply", () => {
       const label = JSON.stringify([
         request.format,
@@ -961,7 +984,7 @@ const make: Effect.Effect<
         target.sandboxId,
         target.diskLineage,
         target.bootId,
-        record.exchangeId,
+        run.exchangeId,
         target.manifestDigest,
       ]);
       const plaintext = privateDecrypt(
@@ -990,7 +1013,7 @@ const make: Effect.Effect<
       if (health.booted) throw new Error();
     });
     const sealedControl = yield* seal(
-      record,
+      run,
       "control",
       Redacted.make({
         origin: hosted.origin,
@@ -998,22 +1021,18 @@ const make: Effect.Effect<
         bearer: bearer.reveal(),
       }),
     );
-    yield* repo.advance(record, {
-      ...record,
-      phase: "control",
-      sealedExchange: null,
-      sealedControl,
-    });
-    return bindingReceiptOf(target, record.exchangeId);
+    yield* runs.sealControl(run.runId, run.exchangeId, sealedControl);
+    return bindingReceiptOf(target, run.exchangeId);
   });
   const stage = Effect.fn("BoatExecution.stage")(function* (
     id: string,
     payload: Redacted.Redacted<BoatLaunchMaterial>,
   ) {
-    const record = yield* load(id);
-    if (record.phase === "exchange" || record.phase === "aborted")
+    const run = yield* load(id);
+    const phase = boatRunLaunchPhase(run);
+    if (phase === "exchange" || phase === "aborted")
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
-    if (record.phase !== "control") return;
+    if (phase !== "control") return;
     const material = yield* attempt("invalid-input", () => {
       const value = envelopeSchema.parse(Redacted.value(payload));
       if (
@@ -1024,42 +1043,34 @@ const make: Effect.Effect<
         throw new Error();
       return value;
     });
-    const sealedEnvelope = yield* seal(record, "admission", Redacted.make(material));
-    yield* repo.advance(record, {
-      ...record,
-      phase: "installed",
-      admission: {
-        epoch: 1,
-        operationId:
-          record.target.runtimeInstanceId === record.target.runId
-            ? randomUUID()
-            : record.target.launchAttemptId,
-        digest: sha256(canonical(material)),
-        docker: material.docker,
-        sealedEnvelope,
-        sealedResumeEnvelope: sealedEnvelope,
-      },
+    const sealedLaunch = yield* seal(run, "admission", Redacted.make(material));
+    yield* runs.stage(id, {
+      epoch: 1,
+      operationId: randomUUID(),
+      digest: sha256(canonical(material)),
+      docker: material.docker,
+      sealedLaunch,
     });
   });
   const launch = Effect.fn("BoatExecution.launch")(function* (id: string) {
-    let record = yield* load(id);
-    if (record.phase === "held")
-      return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    if (record.phase !== "installed" && record.phase !== "issued" && record.phase !== "running")
+    let run = yield* load(id);
+    const phase = boatRunLaunchPhase(run);
+    if (phase === "held") return yield* Effect.fail(new BoatExecutionError("invocation-held"));
+    if (phase !== "installed" && phase !== "issued" && phase !== "running")
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
-    if (record.isolation === undefined)
+    if (run.isolation === null)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    // The agent's launch record is durable per boot: a running execution is the launch it adopted.
-    if (record.phase === "running") return "running" as const;
-    if (record.phase === "installed")
-      record = yield* repo.advance(record, { ...record, phase: "issued" });
-    if (record.admission?.sealedEnvelope == null)
+    // The agent's launch record is durable per boot: an acknowledged launch is the one it adopted.
+    if (phase === "running") return "running" as const;
+    // Issuing and fencing compete on the row: once fenced, no push is ever issued.
+    if (phase === "installed") run = yield* bound(yield* runs.issueLaunch(id));
+    if (run.sealedLaunch === null)
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
-    const material = yield* openMaterial(record, record.admission.sealedEnvelope);
-    const connection = yield* access(record);
+    const material = yield* openMaterial(run, run.sealedLaunch);
+    const connection = yield* access(run);
     const body = boatLaunchRequest(
       Redacted.value(material),
-      record.target.runId,
+      run.target.runId,
       connection.bearer.reveal(),
     );
     const reply = yield* call(connection, "launch", Redacted.make(JSON.stringify(body)));
@@ -1072,35 +1083,28 @@ const make: Effect.Effect<
     } else {
       yield* attempt("invalid-reply", () => agentLaunchResponseSchema.parse(reply.body));
     }
-    yield* repo.advance(record, {
-      ...record,
-      phase: "running",
-      admission: { ...record.admission, sealedEnvelope: null },
-    });
+    yield* runs.acceptLaunch(id);
     return "running" as const;
   });
   const isolate = Effect.fn("BoatExecution.isolate")(function* (
     target: BoatExecutionTarget,
     input: BoatGuestNetworkInput,
   ) {
-    const record = yield* loadTarget(target);
+    const run = yield* loadTarget(target);
     if (
-      !["installed", "issued", "running"].includes(record.phase) ||
-      record.admission === null ||
+      !["installed", "issued", "running"].includes(boatRunLaunchPhase(run)) ||
+      run.admissionOperationId === null ||
       // Frozen without a resource network: this guest is never given one.
-      withoutResources(record)
+      withoutResources(run)
     )
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     const network = yield* attempt("invalid-input", () =>
       boatNetworkIntentSchema.parse(input.network),
     );
-    if (
-      network.epoch !== record.admission.epoch ||
-      network.operationId !== record.admission.operationId
-    )
+    if (network.epoch !== run.admissionEpoch || network.operationId !== run.admissionOperationId)
       return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
-    const binding = bindingOf(record);
-    const connection = yield* access(record);
+    const binding = bindingOf(run, target);
+    const connection = yield* access(run);
     // The tunnel is carried over the agent's `/sealant/tunnel`, the only way it is: the VM dials
     // nothing. An agent that does not say it can carry it (an image older than the carrier) cannot
     // be given a tunnel, and says so by name instead of failing at the handshake.
@@ -1142,22 +1146,22 @@ const make: Effect.Effect<
       if (!isDeepStrictEqual(parsed.binding, binding)) throw new Error();
       return { receipt: parsed.receipt, handshake: parsed.handshake, admission: "held" as const };
     });
-    yield* unchanged(record);
+    yield* unchanged(run);
     return receipt;
   });
   const recordIsolation = Effect.fn("BoatExecution.recordIsolation")(function* (
     target: BoatExecutionTarget,
-    receipts: NonNullable<BoatExecutionRecord["isolation"]>,
+    receipts: BoatRunIsolation,
   ) {
-    const record = yield* loadTarget(target);
-    yield* repo.isolate(record, receipts);
+    const run = yield* loadTarget(target);
+    yield* runs.isolate(run.runId, receipts);
   });
   const readiness = Effect.fn("BoatExecution.readiness")(function* (target: BoatExecutionTarget) {
-    const record = yield* loadTarget(target);
-    if (record.phase !== "running" || record.isolation === undefined || record.admission === null)
+    const run = yield* loadTarget(target);
+    if (boatRunLaunchPhase(run) !== "running" || run.isolation === null || run.docker === null)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    const docker = record.admission.docker;
-    const connection = yield* access(record);
+    const docker = run.docker;
+    const connection = yield* access(run);
     // Every failure names the check that did not pass (`check`): what is retried until the VM is
     // ready (`agent-not-ready`) and what is lost for good (`guest-failed`) read the same way.
     type Check = NonNullable<BoatLaunchDiagnostic["check"]>;
@@ -1193,7 +1197,7 @@ const make: Effect.Effect<
           exitCode: observed.daemonExit.code,
           ...(output === undefined
             ? {}
-            : { outputTail: boatGuestOutput(output, yield* launchSecrets(record, connection)) }),
+            : { outputTail: boatGuestOutput(output, yield* launchSecrets(run, connection)) }),
         }),
       );
     }
@@ -1211,7 +1215,7 @@ const make: Effect.Effect<
               : {
                   outputTail: boatGuestOutput(
                     observed.services.docker.output,
-                    yield* launchSecrets(record, connection),
+                    yield* launchSecrets(run, connection),
                   ),
                 }),
           },
@@ -1231,15 +1235,15 @@ const make: Effect.Effect<
       );
       if (!daemon.healthy || !/^rt_[a-zA-Z0-9_-]+$/.test(daemon.runtimeId))
         return yield* Effect.fail(new BoatExecutionError("invalid-reply"));
-      yield* unchanged(record);
+      yield* unchanged(run);
       return daemon.runtimeId;
     });
     // A run without resources has no tunnel: nothing to shake hands with and no resolver of ours.
-    if (withoutResources(record))
+    if (withoutResources(run))
       return {
         runtimeId: yield* probeDaemon,
         bootId: target.bootId,
-        isolationReceipt: isolationReceiptOf(record),
+        isolationReceipt: isolationReceiptOf(run, target),
         handshake: "none" as const,
         dns: "none" as const,
         admission: "held" as const,
@@ -1273,7 +1277,7 @@ const make: Effect.Effect<
     return {
       runtimeId: yield* probeDaemon,
       bootId: target.bootId,
-      isolationReceipt: isolationReceiptOf(record),
+      isolationReceipt: isolationReceiptOf(run, target),
       handshake: "verified" as const,
       dns: "udp-and-tcp" as const,
       admission: "held" as const,
@@ -1281,23 +1285,24 @@ const make: Effect.Effect<
   });
 
   const tunnel = Effect.fn("BoatExecution.tunnel")(function* (target: BoatExecutionTarget) {
-    const record = yield* loadTarget(target);
+    const run = yield* loadTarget(target);
     if (
-      !["installed", "issued", "running"].includes(record.phase) ||
-      record.admission === null ||
-      withoutResources(record)
+      !["installed", "issued", "running"].includes(boatRunLaunchPhase(run)) ||
+      run.admissionOperationId === null ||
+      withoutResources(run)
     )
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    const connection = yield* access(record);
+    const connection = yield* access(run);
     return Redacted.make<BoatTunnelConnection>(
       boatTunnelConnection(connection.hosted, connection.bearer),
     );
   });
   const control = Effect.fn("BoatExecution.control")(function* (target: BoatExecutionTarget) {
-    const record = yield* loadTarget(target);
-    if (record.phase !== "running" && record.phase !== "held")
+    const run = yield* loadTarget(target);
+    const phase = boatRunLaunchPhase(run);
+    if (phase !== "running" && phase !== "held")
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    const connection = yield* access(record);
+    const connection = yield* access(run);
     return Redacted.make<SealantTarget>({
       kind: "websocket",
       ...boatControlConnection(connection.hosted, connection.bearer),
@@ -1305,30 +1310,27 @@ const make: Effect.Effect<
     });
   });
   const hold = Effect.fn("BoatExecution.hold")(function* (target: BoatExecutionTarget) {
-    const record = yield* loadTarget(target);
-    if (record.phase === "held") return;
+    const run = yield* loadTarget(target);
+    const phase = boatRunLaunchPhase(run);
+    if (phase === "held") return;
     // An issued launch whose reply never came is fenced too: Core never pushes it again, and the
     // agent only ever adopts a launch it already recorded (audit S5).
-    if ((record.phase !== "running" && record.phase !== "issued") || record.admission === null)
+    if (phase !== "running" && phase !== "issued")
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    yield* repo.advance(record, {
-      ...record,
-      phase: "held",
-      admission: { ...record.admission, sealedEnvelope: null },
-    });
+    yield* runs.fence(run.runId);
   });
   const recover = Effect.fn("BoatExecution.recover")(function* (
     target: BoatExecutionTarget,
     secretEnv: Redacted.Redacted<Readonly<Record<string, string>>>,
   ) {
-    const record = yield* loadTarget(target);
-    if (record.phase !== "held" || record.admission === null || record.isolation === undefined)
+    const run = yield* loadTarget(target);
+    if (boatRunLaunchPhase(run) !== "held" || run.isolation === null)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     // The capture token travels with the recovery: a recovery boot without it could ship nothing.
     const token = Redacted.value(secretEnv)["SEALANT_CAPTURE_TOKEN"];
     if (token === undefined || token.length === 0)
       return yield* Effect.fail(new BoatExecutionError("invalid-input"));
-    const connection = yield* access(record);
+    const connection = yield* access(run);
     const reply = yield* call(
       connection,
       "recover",
@@ -1346,7 +1348,7 @@ const make: Effect.Effect<
     const outcome = yield* attempt("invalid-reply", () =>
       boatAgentRecoverResponseSchema.parse(reply.body),
     );
-    yield* unchanged(record);
+    yield* unchanged(run);
     if (outcome.outcome === "running") return "running" as const;
     if (outcome.outcome === "restarted") return "restarted" as const;
     return {
@@ -1356,11 +1358,16 @@ const make: Effect.Effect<
     };
   });
   const daemon = Effect.fn("BoatExecution.daemon")(function* (target: BoatExecutionTarget) {
-    const record = yield* loadTarget(target);
-    // Aborted is reached only from before the launch push: nothing was ever started on the VM.
-    if (record.phase === "aborted") return { kind: "never-launched" } as const;
-    if (record.phase !== "running" && record.phase !== "held") return { kind: "unasked" } as const;
-    const connection = yield* access(record);
+    const stored = yield* runs.get(target.runId);
+    if (stored === undefined) return yield* Effect.fail(new BoatExecutionError("invalid-input"));
+    if (!isDeepStrictEqual(stored.target, target))
+      return yield* Effect.fail(new BoatExecutionError("target-mismatch"));
+    const phase = boatRunLaunchPhase(stored);
+    // Fenced before any launch push: nothing was ever started on the VM.
+    if (phase === "aborted") return { kind: "never-launched" } as const;
+    if (phase !== "running" && phase !== "held") return { kind: "unasked" } as const;
+    const run = yield* bound(stored);
+    const connection = yield* access(run);
     const observed = yield* call(connection, "health").pipe(Effect.flatMap(healthReply));
     if (observed.daemonExit !== undefined) {
       const output = observed.daemonExit.output;
@@ -1381,6 +1388,9 @@ const make: Effect.Effect<
     }
     return { kind: observed.booted ? "up" : "not-booted" } as const;
   });
+  const verifyBearer = Effect.fn("BoatExecution.verifyBearer")(function* (runId: string) {
+    yield* bearerOf(yield* load(runId));
+  });
   return BoatExecution.of({
     exchange,
     stage,
@@ -1393,19 +1403,20 @@ const make: Effect.Effect<
     hold,
     recover,
     daemon,
+    verifyBearer,
   });
 });
 /** Open assembly for worker infrastructure and faithful test transports. */
 export const boatExecutionLayerNoDeps: Layer.Layer<
   BoatExecution,
   never,
-  BoatExecutionRepo | CredentialCipher | BoatGuestTransportService
+  BoatRunRepo | CredentialCipher | BoatGuestTransportService
 > = Layer.effect(BoatExecution, make);
 /** Owns its PostgreSQL repository; the worker supplies cipher and authenticated guest transport. */
 export const boatExecutionLayer: Layer.Layer<
   BoatExecution,
   never,
   SealantDB | CredentialCipher | BoatGuestTransportService
-> = boatExecutionLayerNoDeps.pipe(Layer.provide(BoatExecutionRepoLive));
+> = boatExecutionLayerNoDeps.pipe(Layer.provide(BoatRunRepoLive));
 
 export type { BoatAdmissionPins };

@@ -2,8 +2,7 @@ import { join } from "node:path";
 
 import { CredentialCipher, type CredentialCipherService } from "@sealant/credentials";
 import {
-  BoatAllocationRepoLive,
-  BoatExecutionRepoLive,
+  BoatRunRepoLive,
   SealantDB,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
@@ -21,23 +20,23 @@ import {
   BoatRuntimeAdapter,
   BoatSnapshotBuilder,
   DockerBoatTunnel,
-  boatAllocationWorkerLayer,
   boatControlMaterialLayer,
   boatConvergenceWorkerLayer,
   boatNativeCatalogLayer,
-  boatObserverLayer,
   boatProviderFromEnv,
   boatReadinessWorkerLayer,
   boatRemovalWorkerLayer,
   boatResourcesLayer,
   boatSealedExecutionLayer,
+  boatVmWorkerLayer,
   loadPackagedRuntime,
   makeBoatTunnelCarrierLayer,
+  verifyBoatBearers,
   type BoatAdapterServices,
-  type BoatAllocation,
   type BoatGatewayHost,
   type BoatNativeCatalogOptions,
   type BoatSharedStop,
+  type BoatVm,
   type HttpBoatApi,
   type ResourceRuntime,
   type ResourceSubnets,
@@ -117,7 +116,7 @@ const packagedSnapshotBuilder = async (options: {
  *   (`runtime.resources: "none"`) and refuses any other Boat workspace before its build
  *   (`gateway-unavailable`).
  * - With the gateway and no builder it launches nothing and owns Boat's sweeps for its gateway.
- * - With the Boat key alone it reconciles allocations and nothing else.
+ * - With the Boat key alone it resolves its runs' creates (the VM sweep) and nothing else.
  */
 export const assembleBoat = async (input: {
   readonly env: BoatWorkerEnv;
@@ -147,9 +146,7 @@ export const assembleBoat = async (input: {
   );
   const gateway = boatGatewayHost(env, input.docker);
   if (gateway === undefined && env.SEALANT_BOAT_BUILDER_OWNER === undefined) {
-    const WorkerLayer: Layer.Layer<BoatAllocation> = boatAllocationWorkerLayer.pipe(
-      Layer.provide(Infra),
-    );
+    const WorkerLayer: Layer.Layer<BoatVm> = boatVmWorkerLayer.pipe(Layer.provide(Infra));
     return {
       runtime: ManagedRuntime.make(WorkerLayer),
       registration: undefined,
@@ -162,6 +159,7 @@ export const assembleBoat = async (input: {
       reconcileResources: undefined,
       applyLink: undefined,
       reconcileConvergence: undefined,
+      verifyBearers: undefined,
     };
   }
   const Host = Layer.succeed(BoatResourcesHost, {
@@ -170,8 +168,7 @@ export const assembleBoat = async (input: {
   });
   const Resources = boatResourcesLayer.pipe(Layer.provide(boatSealedExecutionLayer));
   const Repos = Layer.mergeAll(
-    BoatAllocationRepoLive,
-    BoatExecutionRepoLive,
+    BoatRunRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
     WorkspaceCaptureDrainRepoLive,
   ).pipe(Layer.provide(Infra));
@@ -198,14 +195,13 @@ export const assembleBoat = async (input: {
   const WorkerLayer: Layer.Layer<
     BoatAdapterServices | BoatResources | BoatControlMaterial | BoatConvergence | CredentialCipher
   > = Layer.mergeAll(
-    boatAllocationWorkerLayer,
+    boatVmWorkerLayer,
     Resources,
     boatReadinessWorkerLayer,
     // What stays Boat's own: the no-VM cases, the cleanup after absence, the nudge.
     boatConvergenceWorkerLayer,
-    // The adapter's `stop` and `inspect`: the one deletion, and the one source of presence.
+    // The adapter's `stop`: the one deletion. Presence is read by the VM owner above.
     boatRemovalWorkerLayer,
-    boatObserverLayer,
     boatSealedExecutionLayer,
     boatControlMaterialLayer,
   ).pipe(
@@ -278,6 +274,11 @@ export const assembleBoat = async (input: {
             return report;
           },
     disposeCatalog: () => catalogRuntime?.dispose(),
+    /**
+     * At worker start: opens every live run's sealed bearer once and says, per run, which do not
+     * open. A session whose bearer does not open cannot be drained. It never fails.
+     */
+    verifyBearers: () => runtime.runPromise(verifyBoatBearers(provider.deploymentId)),
     /**
      * One page of Boat's own convergence: the no-VM cases, the cleanup of what a VM Boat no
      * longer has still holds, and the nudge. `stop` is the worker's shared stop, which decides.

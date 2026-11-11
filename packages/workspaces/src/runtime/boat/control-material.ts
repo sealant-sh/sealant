@@ -1,7 +1,7 @@
 import type { CredentialCipher } from "@sealant/credentials";
 import {
-  BoatAllocationRepo,
-  BoatAllocationRepoLive,
+  BoatRunRepo,
+  BoatRunRepoLive,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   type SealantDB,
@@ -65,17 +65,17 @@ const executionFailure = (error: unknown) =>
     : unavailable();
 
 type Dependencies =
-  | BoatAllocationRepo
+  | BoatRunRepo
   | WorkspaceRuntimeInstanceRepo
   | BoatExecution
   | BoatAllocationProvider;
 const make: Effect.Effect<BoatControlMaterial["Service"], never, Dependencies> = Effect.gen(
   function* () {
-    const allocations = yield* BoatAllocationRepo;
+    const runs = yield* BoatRunRepo;
     const instances = yield* WorkspaceRuntimeInstanceRepo;
     const execution = yield* BoatExecution;
     const { deploymentId } = yield* BoatAllocationProvider;
-    /** The run is ready, not being stopped, on this sandbox, and its allocation is bound to it. */
+    /** The run is ready, not being stopped, on this sandbox, and its row is bound to it. */
     const current = (target: BoatExecutionTarget) =>
       Effect.gen(function* () {
         const instance = yield* instances.getRuntimeInstanceByRunId(target.runId);
@@ -84,20 +84,18 @@ const make: Effect.Effect<BoatControlMaterial["Service"], never, Dependencies> =
           instance.status === "ready" &&
           instance.stopReason === null &&
           instance.resourceId === target.sandboxId &&
-          (yield* boatTargetIsCurrent(target).pipe(
-            Effect.provideService(BoatAllocationRepo, allocations),
-          ));
+          (yield* boatTargetIsCurrent(target).pipe(Effect.provideService(BoatRunRepo, runs)));
         if (!ready) return yield* Effect.fail(refused());
       }).pipe(
         Effect.catch((error) =>
           Effect.fail(error instanceof BoatControlError ? error : unavailable()),
         ),
       );
-    /** This deployment's run on this sandbox, as its allocation bound it. */
+    /** This deployment's run on this sandbox, as its row bound it. */
     const owned = (runId: string, sandboxId: string) =>
       Effect.gen(function* () {
-        const allocation = yield* allocations.get(runId).pipe(Effect.mapError(() => unavailable()));
-        const target = allocation?.target;
+        const run = yield* runs.get(runId).pipe(Effect.mapError(() => unavailable()));
+        const target = run?.target;
         if (
           target == null ||
           target.runId !== runId ||
@@ -157,11 +155,7 @@ export const boatControlMaterialLayer: Layer.Layer<
   SealantDB | CredentialCipher | BoatAllocationProvider
 > = boatControlMaterialLayerNoDeps.pipe(
   Layer.provide(
-    Layer.mergeAll(
-      boatSealedExecutionLayer,
-      BoatAllocationRepoLive,
-      WorkspaceRuntimeInstanceRepoLive,
-    ),
+    Layer.mergeAll(boatSealedExecutionLayer, BoatRunRepoLive, WorkspaceRuntimeInstanceRepoLive),
   ),
 );
 

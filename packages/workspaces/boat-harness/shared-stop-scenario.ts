@@ -60,9 +60,17 @@ const deletesOf = (stack: HarnessStack, sandbox: string) =>
 const vmLive = (stack: HarnessStack, sandbox: string) =>
   stack.boat.liveSandboxes().some((vm) => vm.id === sandbox);
 
-/** Core has discharged the run: Boat's VM is gone by its word and the runtime row is stopped. */
+/**
+ * Core has discharged the run: Boat's VM is gone by its word, what it held is released, and the
+ * runtime row is no longer live. (`allocation` "deleted" alone is only the committed absence since
+ * #607, which comes before the tunnel slot and publication pin are released.)
+ */
 const discharged = (view: RuntimeView) =>
-  view.allocation === "deleted" && view.status !== null && view.status !== "ready";
+  view.allocation === "deleted" &&
+  (view.has_tunnel !== true || view.tunnel_released === true) &&
+  view.pin === "released" &&
+  view.status !== null &&
+  view.status !== "ready";
 
 // ---- A run's timeline ---------------------------------------------------------------------------
 
@@ -333,6 +341,10 @@ export const finalUnconfirmedThenDiscard = async (stack: HarnessStack, project: 
   await assertReleased(stack, run, { discard: false });
   const drain = await run.workspace.captureDrain();
   expect(drain?.state, JSON.stringify(drain)).toBe("discarded");
+  // And it stays the owner's discard: no later pass records it otherwise.
+  await sleep(30_000);
+  const after = await runtimeView(stack, run.runId);
+  expect(after.drain, `after one more sweep: ${JSON.stringify(after)}`).toBe("discarded");
   expect(deletesOf(stack, sandbox)).toHaveLength(1);
   // No FINAL was saved: the channel refused every register from the first Stop on.
   expect((await run.capture.state()).registers.filter((r) => r.at >= kept.stoppedAt)).toEqual([]);

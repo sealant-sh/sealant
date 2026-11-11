@@ -2,16 +2,20 @@ import { randomUUID } from "node:crypto";
 
 import { CredentialCipher, credentialCipherLayer } from "@sealant/credentials";
 import {
-  BoatExecutionRepo,
-  BoatExecutionRepoLive,
+  BoatRunRepo,
+  BoatRunRepoLive,
   makeSealantDBLayer,
   SealantDB,
   user,
   workspaceAttempts,
 } from "@sealant/db";
-import { corruptBoatExecution } from "@sealant/db/testing/boat-executions";
+import { corruptBoatRun, seedBoatRun } from "@sealant/db/testing/boat-runs";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
-import { boatExecutionTargetSchema, type BoatExecutionTarget } from "@sealant/validators";
+import {
+  boatExecutionTargetSchema,
+  boatRunLaunchPhase,
+  type BoatExecutionTarget,
+} from "@sealant/validators";
 import { Effect, Layer, Redacted } from "effect";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -41,7 +45,7 @@ const receipts = { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64
 const test = async (
   run: (context: {
     executor: BoatExecution["Service"];
-    repo: BoatExecutionRepo["Service"];
+    repo: BoatRunRepo["Service"];
     cipher: CredentialCipher["Service"];
     db: SealantDB["Service"];
     target: BoatExecutionTarget;
@@ -57,13 +61,13 @@ const test = async (
       Layer.succeed(BoatGuestTransportService, guest),
     );
     const Test = boatExecutionLayer.pipe(
-      Layer.provideMerge(BoatExecutionRepoLive),
+      Layer.provideMerge(BoatRunRepoLive),
       Layer.provideMerge(Infra),
     );
     await Effect.runPromise(
       Effect.gen(function* () {
         const executor = yield* BoatExecution;
-        const repo = yield* BoatExecutionRepo;
+        const repo = yield* BoatRunRepo;
         const cipher = yield* CredentialCipher;
         const db = yield* SealantDB;
         const runId = randomUUID();
@@ -72,24 +76,19 @@ const test = async (
           .insert(user)
           .values({ id: owner, name: "boat test", email: `${owner}@example.invalid` });
         yield* db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner });
-        const target = boatExecutionTargetSchema.parse({
-          deploymentId: "test",
-          workspaceId: "workspace",
-          runId,
-          runtimeInstanceId: runId,
-          launchAttemptId: "attempt",
-          sourceId: "publication",
-          sandboxId: "bx_23456789",
-          diskLineage: "disk",
-          bootId: randomUUID(),
-          manifestDigest: "b".repeat(64),
-        });
+        // The run's row with its VM bound, as the VM owner leaves it for the launch owner.
+        const target = yield* seedBoatRun(db, { runId });
         yield* Effect.promise(() => run({ executor, repo, cipher, db, target, guest }));
       }).pipe(Effect.provide(Test)),
     );
   });
 };
 const execute = Effect.runPromise;
+/** How far the run's launch is, as its row says. */
+const launchPhase = async (repo: BoatRunRepo["Service"], runId: string) => {
+  const run = await execute(repo.get(runId));
+  return run === undefined ? undefined : boatRunLaunchPhase(run);
+};
 /** The agent's health, or the tunnel's status, as a readiness observation answers it. */
 const health = (body: unknown) => (route: string) =>
   route === "health" ? { status: 503, body } : undefined;
@@ -111,11 +110,11 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await execute(executor.stage(target.runId, material()));
       // No isolation receipts yet: nothing is pushed.
       await expect(execute(executor.launch(target.runId))).rejects.toThrow("invocation-held");
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("installed");
+      expect(await launchPhase(repo, target.runId)).toBe("installed");
       await execute(executor.recordIsolation(target, receipts));
       guest.lostLaunchReply = true;
       await expect(execute(executor.launch(target.runId))).rejects.toThrow("transport-unavailable");
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("issued");
+      expect(await launchPhase(repo, target.runId)).toBe("issued");
       // The agent accepted the first push (its launch record is durable): the retry adopts it.
       expect(await execute(executor.launch(target.runId))).toBe("running");
       expect(guest.starts).toBe(1);
@@ -128,9 +127,12 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         secretEnvJson: JSON.stringify({ SEALANT_CAPTURE_TOKEN: "capture-version-one" }),
       });
       const settled = await execute(repo.get(target.runId));
-      expect(settled?.phase).toBe("running");
-      expect(settled?.admission?.sealedEnvelope).toBeNull();
-      expect(settled?.admission?.sealedResumeEnvelope).not.toBeUndefined();
+      expect(await launchPhase(repo, target.runId)).toBe("running");
+      // Acknowledged: the push is never issued again. The sealed launch stays, for redaction,
+      // until Boat no longer has the VM.
+      expect(settled?.launchIssuedAt).toBeInstanceOf(Date);
+      expect(settled?.launchAcceptedAt).toBeInstanceOf(Date);
+      expect(settled?.sealedLaunch).not.toBeNull();
       // Running: nothing is pushed again.
       expect(await execute(executor.launch(target.runId))).toBe("running");
       expect(guest.actions.filter((action) => action === "launch")).toHaveLength(2);
@@ -414,11 +416,10 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         "invalid-input",
       );
       expect(guest.actions).toHaveLength(asked);
-      // It no longer comes from the sealed resume envelope: one erased (Boat reported the VM
-      // absent) changes nothing, and what the caller hands over is what the agent is sent.
-      if (held?.admission == null) throw new Error("held admission");
-      const { sealedResumeEnvelope: _erased, ...admission } = held.admission;
-      await execute(corruptBoatExecution(db, target.runId, { ...held, admission }));
+      // It does not come from the sealed launch: one erased (Boat reported the VM absent)
+      // changes nothing, and what the caller hands over is what the agent is sent.
+      if (held?.sealedLaunch == null) throw new Error("held launch");
+      await execute(corruptBoatRun(db, target.runId, { sealedLaunch: null }));
       expect(await execute(executor.recover(target, recoveryEnv))).toBe("running");
     }));
   it("delivers the same authenticated network intent after reply loss and refuses stale epochs, boots and replies", () =>
@@ -433,8 +434,8 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await expect(execute(executor.isolate(target, input))).rejects.toThrow("invocation-held");
       await execute(executor.stage(target.runId, material()));
       const installed = await execute(repo.get(target.runId));
-      if (installed?.admission === null || installed === undefined) throw new Error("no admission");
-      input.network.operationId = installed.admission.operationId;
+      if (installed?.admissionOperationId == null) throw new Error("no admission");
+      input.network.operationId = installed.admissionOperationId;
       guest.lostIsolation = true;
       await expect(execute(executor.isolate(target, input))).rejects.toThrow(
         "transport-unavailable",
@@ -471,11 +472,11 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await execute(executor.exchange(target));
       await execute(executor.stage(target.runId, material()));
       const installed = await execute(repo.get(target.runId));
-      if (installed?.admission === null || installed === undefined) throw new Error("no admission");
+      if (installed?.admissionOperationId == null) throw new Error("no admission");
       const input = {
         network: {
           epoch: 1,
-          operationId: installed.admission.operationId,
+          operationId: installed.admissionOperationId,
           subnet: "10.98.0.32/27",
         },
         privateKey: Redacted.make(Buffer.alloc(32, 4).toString("base64")),
@@ -528,7 +529,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await execute(executor.exchange(target));
       for (const changed of [
         { sandboxId: "bx_3456789a", diskLineage: target.diskLineage },
-        { sandboxId: target.sandboxId, diskLineage: "another-disk" },
+        { sandboxId: target.sandboxId, diskLineage: randomUUID() },
       ]) {
         const runId = randomUUID();
         const owner = `usr_${randomUUID()}`;
@@ -538,13 +539,16 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
             .values({ id: owner, name: "collision", email: `${owner}@example.invalid` }),
         );
         await execute(db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner }));
+        // The table gives a deployment one run per VM and a disk lineage one run: the second
+        // run gets no row, so nothing can be exchanged for it.
+        await expect(execute(seedBoatRun(db, { runId, ...changed }))).rejects.toThrow();
         const next = boatExecutionTargetSchema.parse({
           ...target,
           ...changed,
           runId,
           runtimeInstanceId: runId,
         });
-        await expect(execute(executor.exchange(next))).rejects.toThrow("target-conflict");
+        await expect(execute(executor.exchange(next))).rejects.toThrow("invalid-input");
       }
       expect(guest.targets).toHaveLength(1);
     }));
@@ -570,7 +574,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         ),
       ).rejects.toThrow("invalid-input");
       expect(guest.actions).toEqual(["health"]);
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("control");
+      expect(await launchPhase(repo, target.runId)).toBe("control");
     }));
   it("seals before delivery, replays the same public exchange after reply loss, then erases its key", () =>
     test(async ({ executor, repo, target, guest, cipher }) => {
@@ -595,7 +599,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       // The exchange is proven with the bearer before it is sealed: health answered it.
       expect(guest.actions).toEqual(["health"]);
       const record = await execute(repo.get(target.runId));
-      expect(record?.phase).toBe("control");
+      expect(await launchPhase(repo, target.runId)).toBe("control");
       expect(record?.sealedExchange).toBeNull();
       expect(requests).toHaveLength(2);
       expect(requests[0]).toBe(requests[1]);
@@ -625,7 +629,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       const receipt = await execute(executor.exchange(target));
       expect(receipt).toMatch(/^[a-f0-9]{64}$/);
       expect(guest.actions).toEqual(["health", "health", "health"]);
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("control");
+      expect(await launchPhase(repo, target.runId)).toBe("control");
     }));
   it("refuses a mismatched bind reply, and a bind refusal is typed, before committing control", () =>
     test(async ({ executor, repo, target, guest }) => {
@@ -641,7 +645,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         };
       };
       await expect(execute(executor.exchange(target))).rejects.toThrow("invalid-reply");
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("exchange");
+      expect(await launchPhase(repo, target.runId)).toBe("exchange");
       guest.bind = async () => {
         throw new BoatExecutionError("agent-refused", {
           step: "bind-exchange",
@@ -651,7 +655,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         });
       };
       await expect(execute(executor.exchange(target))).rejects.toThrow("agent-refused");
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("exchange");
+      expect(await launchPhase(repo, target.runId)).toBe("exchange");
     }));
   it("freezes the first sealed material; later callers with newer material change nothing", () =>
     test(async ({ executor, repo, target, guest }) => {
@@ -665,7 +669,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         if (result.status === "rejected")
           expect(String(result.reason)).toContain("stale-transition");
       const installed = await execute(repo.get(target.runId));
-      expect(installed?.phase).toBe("installed");
+      expect(await launchPhase(repo, target.runId)).toBe("installed");
       expect(JSON.stringify(installed)).not.toContain("version-");
       await execute(executor.stage(target.runId, material("three")));
       expect(await execute(repo.get(target.runId))).toEqual(installed);
@@ -695,11 +699,11 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       // an agent from before the park route was removed could answer, is no acceptance.
       guest.request = async () => ({ status: 409, body: { reason: "parked" } });
       await expect(execute(executor.launch(target.runId))).rejects.toThrow("invalid-reply");
-      expect((await execute(repo.get(target.runId)))?.phase).toBe("issued");
+      expect(await launchPhase(repo, target.runId)).toBe("issued");
       expect(guest.starts).toBe(0);
       for (const changed of [
         { bootId: randomUUID() },
-        { diskLineage: "another" },
+        { diskLineage: randomUUID() },
         { launchAttemptId: "fresh" },
       ])
         await expect(execute(executor.exchange({ ...target, ...changed }))).rejects.toThrow(
@@ -713,16 +717,14 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       await execute(executor.exchange(target));
       await execute(executor.stage(target.runId, material()));
       const record = await execute(repo.get(target.runId));
-      if (record?.admission === null || record === undefined) throw new Error("no admission");
-      await execute(
-        corruptBoatExecution(db, target.runId, {
-          ...record,
-          admission: { ...record.admission, sealedEnvelope: record.sealedControl },
-        }),
-      );
+      if (record?.sealedControl == null || record.target === null) throw new Error("no bearer");
+      // The bearer's ciphertext where the launch's is read: sealed for another purpose.
+      await execute(corruptBoatRun(db, target.runId, { sealedLaunch: record.sealedControl }));
       await execute(executor.recordIsolation(target, receipts));
       await expect(execute(executor.launch(target.runId))).rejects.toThrow("seal-context-mismatch");
-      await execute(corruptBoatExecution(db, target.runId, { ...record, phase: "nonsense" }));
+      await execute(
+        corruptBoatRun(db, target.runId, { target: { ...record.target, bootId: "nonsense" } }),
+      );
       await expect(execute(repo.get(target.runId))).rejects.toThrow("invalid-record");
     }));
 });

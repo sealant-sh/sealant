@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { boatExecutionTargetSchema } from "./boat-execution.js";
+import { boatExecutionTargetSchema } from "./boat-run.js";
 
 /** Canonical nonzero 32-byte WireGuard key. The last base64 character has two zero padding bits. */
 export const boatWireGuardKeySchema = z

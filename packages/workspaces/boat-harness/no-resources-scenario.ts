@@ -55,12 +55,10 @@ const assertNoGateway = async (stack: HarnessStack, run: Launch) => {
   expect(z.object({ tunnels: z.number() }).parse(row).tunnels).toBe(0);
 };
 
-/** The run's allocation and execution records carry the option, frozen at launch. */
+/** The run's row carries the option and what the launch was isolated under, frozen at launch. */
 const assertRecordsNone = async (stack: HarnessStack, run: Launch) => {
   const [row] = await stack.query(
-    `select a.record->'input'->>'resources' as allocation, e.record->'isolation' as isolation
-       from boat_allocations a join boat_executions e on e.runtime_instance_id = a.runtime_instance_id
-      where a.runtime_instance_id = '${sqlText(run.runId)}'`,
+    `select resources as allocation, isolation from boat_runs where run_id = '${sqlText(run.runId)}'`,
   );
   expect(row).toEqual({ allocation: "none", isolation: { resources: "none" } });
 };

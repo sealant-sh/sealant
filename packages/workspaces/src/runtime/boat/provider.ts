@@ -1,4 +1,4 @@
-import type { BoatAllocationRecord } from "@sealant/validators";
+import type { BoatRun } from "@sealant/validators";
 import { Context } from "effect";
 
 import type { BoatApi, BoatSandbox } from "./api.js";
@@ -16,16 +16,14 @@ export class BoatAllocationProvider extends Context.Service<
 >()("@sealant/workspaces/boat/BoatAllocationProvider") {}
 
 /** The exact labels create stamps on a launch's VM; discovery and every read require all of them. */
-export const boatAllocationLabels = (record: BoatAllocationRecord) => ({
+export const boatRunLabels = (run: BoatRun) => ({
   "sealant-runtime": "boat",
-  "sealant-deployment": record.input.deploymentId,
-  "sealant-workspace": record.input.workspaceId,
-  "sealant-run": record.input.consumer.runId,
-  "sealant-instance": record.input.consumer.runtimeInstanceId,
-  "sealant-attempt": record.input.launchAttemptId,
-  "sealant-source": record.input.publication.publicationId,
+  "sealant-deployment": run.deploymentId,
+  "sealant-workspace": run.workspaceId,
+  "sealant-run": run.runId,
+  "sealant-instance": run.runId,
+  "sealant-attempt": run.launchAttemptId,
+  "sealant-source": run.publicationId,
 });
-export const boatAllocationMatches = (record: BoatAllocationRecord, sandbox: BoatSandbox) =>
-  Object.entries(boatAllocationLabels(record)).every(
-    ([key, value]) => sandbox.labels?.[key] === value,
-  );
+export const boatRunMatches = (run: BoatRun, sandbox: BoatSandbox) =>
+  Object.entries(boatRunLabels(run)).every(([key, value]) => sandbox.labels?.[key] === value);

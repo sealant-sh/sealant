@@ -818,8 +818,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       const rows: Record<string, unknown> = {};
       for (const table of [
         "workspace_runtime_instances",
-        "boat_allocations",
-        "boat_executions",
+        "boat_runs",
         "boat_tunnels",
         "native_publication_consumers",
         "workspace_capture_drains",
