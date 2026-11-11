@@ -260,6 +260,11 @@ export class FakeBoat {
   readonly deletions = new Map<string, FakeDeletion>();
   readonly events: FakeBoatEvent[] = [];
   faults: FakeBoatFaults = {};
+  /**
+   * How long an accepted deletion stays `processing` after the VM is withdrawn (from
+   * `deletionWithdrawnMs`); a scenario may change it for the deletions it starts.
+   */
+  deletionWithdrawnMs = 8000;
   readonly #idempotency = new Map<
     string,
     { readonly body: string; readonly id: string; readonly acceptedAt: number }
@@ -282,6 +287,7 @@ export class FakeBoat {
   readonly #background = new Set<Promise<unknown>>();
 
   constructor(readonly options: FakeBoatOptions) {
+    this.deletionWithdrawnMs = options.deletionWithdrawnMs ?? 8000;
     this.#docker = options.docker ?? docker;
     this.#dockerOk = okWith(this.#docker);
     this.#clock = options.clock ?? Date.now;
@@ -851,13 +857,12 @@ export class FakeBoat {
         // Withdrawn from the API at once; the operation completes only after the interval.
         sandbox.withdrawn = true;
         const withdrawnAt = Date.now();
+        const gapMs = this.deletionWithdrawnMs;
         this.#record("withdrawn", sandbox.id, deletion.id);
         for (const process of this.#processes.values())
           if (process.sandboxId === sandbox.id && process.running) process.child.kill("SIGKILL");
         await this.#docker(["rm", "-f", "-v", sandbox.container]);
-        await delay(
-          Math.max(100, withdrawnAt + (this.options.deletionWithdrawnMs ?? 8000) - Date.now()),
-        );
+        await delay(Math.max(100, withdrawnAt + gapMs - Date.now()));
         sandbox.removed = true;
         sandbox.ip = undefined;
         deletion.status = "completed";
