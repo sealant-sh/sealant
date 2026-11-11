@@ -619,11 +619,11 @@ export class FakeBoat {
         // A stuck deletion armed to complete on its next poll completes inside this one: the
         // poller is the first to hear `completed`.
         const armed = this.#completeOnPoll.get(deletion.targetId);
-        if (armed !== undefined) {
+        if (armed !== undefined && armed.accept()) {
           this.#completeOnPoll.delete(deletion.targetId);
           await this.completeDeletion(deletion.targetId);
           this.#record("harness:completed-in-poll", deletion.targetId, deletion.id);
-          armed();
+          armed.done();
         }
         return send(200, {
           ok: true,
@@ -895,17 +895,25 @@ export class FakeBoat {
   }
 
   /** Stuck deletions that complete inside the next poll of their operation, by VM. */
-  readonly #completeOnPoll = new Map<string, () => void>();
+  readonly #completeOnPoll = new Map<
+    string,
+    { readonly accept: () => boolean; readonly done: () => void }
+  >();
 
   /**
    * Lets a stuck deletion finish inside the next `GET /deletion-operations/<id>` of it, so the
-   * caller polling it is the first to hear `completed`. Resolves once it has; after `timeoutMs`
-   * with no poll it completes it outside one and resolves `false`.
+   * caller polling it is the first to hear `completed`; `accept` picks the poll (default: any).
+   * Resolves once it has; after `timeoutMs` with no such poll it completes it outside one and
+   * resolves `false`.
    */
-  async completeOnNextPoll(id: string, timeoutMs: number): Promise<boolean> {
+  async completeOnNextPoll(
+    id: string,
+    timeoutMs: number,
+    accept: () => boolean = () => true,
+  ): Promise<boolean> {
     let timer: NodeJS.Timeout | undefined;
     const polled = new Promise<boolean>((resolve) => {
-      this.#completeOnPoll.set(id, () => resolve(true));
+      this.#completeOnPoll.set(id, { accept, done: () => resolve(true) });
     });
     const late = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => resolve(false), timeoutMs);

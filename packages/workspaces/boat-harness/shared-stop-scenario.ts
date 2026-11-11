@@ -488,3 +488,81 @@ export const operationOutlastsTheWait = async (stack: HarnessStack, project: Pro
     stack.boat.deletionWithdrawnMs = 8000;
   }
 };
+
+// ---- The owner's discard lands while a saved run's VM is being deleted ------------------------------
+
+/**
+ * A clean Stop whose FINAL completes, and whose VM's deletion Boat holds `processing`; the owner's
+ * discard is sent while it is. The work was saved, so the drain must end `stopped` (its detail
+ * saying the final flush completed), not `discarded`; one DELETE; FINAL before it; and the edit
+ * comes back on a fresh VM. A discard the API refuses for a run that is not kept is reported and the
+ * rest still checked.
+ */
+export const discardWhileDeleting = async (stack: HarnessStack, project: Project) => {
+  const marker = `boat-harness ${randomBytes(16).toString("hex")}\n`;
+  let stuck: string | undefined;
+  const run = await withFaults(
+    stack,
+    {
+      deletion: (sandbox) => {
+        if (!isSession(sandbox)) return undefined;
+        stuck = sandbox.id;
+        return "stuck";
+      },
+    },
+    async () => {
+      const first = await launch(stack, project);
+      const sandbox = await ready(stack, first);
+      await sh(
+        first,
+        `printf '%s' '${marker.trimEnd()}' > boat-harness-discard-proof.txt && echo >> boat-harness-discard-proof.txt`,
+      );
+      await cleanStop(first);
+      await until("Boat to hold the VM's deletion", async () => stuck, 3 * 60_000, 500);
+      expect(stuck).toBe(sandbox);
+      // The deletion is in flight: Boat says `processing`, Core has not seen the VM gone.
+      await sleep(5000);
+      const before = await runtimeView(stack, first.runId);
+      expect(before.allocation, JSON.stringify(before)).not.toBe("deleted");
+      const discard = await first.workspace
+        .stop({ discardUnsaved: true })
+        .then(() => "accepted")
+        .catch(
+          (error: unknown) => `refused: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      await sleep(5000);
+      await stack.boat.completeDeletion(sandbox);
+      await until(
+        "the run to be discharged",
+        async () => (discharged(await runtimeView(stack, first.runId)) ? true : undefined),
+        5 * 60_000,
+        1000,
+      );
+      await assertReleased(stack, first, { discard: false });
+      // A sweep later, so a writer that comes after the stop has had its turn.
+      await sleep(30_000);
+      const drain = await first.workspace.captureDrain();
+      const view = await runtimeView(stack, first.runId);
+      process.stderr.write(
+        `[boat-harness] discard while deleting: discard ${discard}; drain ${drain?.state} (${drain?.detail ?? ""}); row ${view.drain}\n`,
+      );
+      expect(drain?.state, JSON.stringify(drain)).toBe("stopped");
+      expect(view.drain, JSON.stringify(view)).toBe("stopped");
+      expect(deletesOf(stack, sandbox)).toHaveLength(1);
+      expect(
+        await assertFinalBeforeDelete(stack, first, "was saved, then discarded while deleting"),
+      ).toBe("checked");
+      return first;
+    },
+  );
+  const resumed = await launch(stack, project, { resume: run.capture });
+  await ready(stack, resumed);
+  expect(await sh(resumed, "cat boat-harness-discard-proof.txt")).toBe(marker);
+  await cleanStop(resumed);
+  await until(
+    "the resumed session to be discharged",
+    async () => (discharged(await runtimeView(stack, resumed.runId)) ? true : undefined),
+    3 * 60_000,
+    1000,
+  );
+};

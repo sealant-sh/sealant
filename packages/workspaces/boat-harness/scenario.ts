@@ -469,9 +469,16 @@ export const assertInvariants = async (
     );
   const view = await runtimeView(stack, run.runId);
   if (options.discarded) return { final: "skipped", reason: "released by the owner's discard" };
-  // The scenario itself gave the owner's discard: the run ended without a FINAL, by request.
-  if (view.discard_requested === true || view.drain === "discarded")
-    return { final: "skipped", reason: "the owner discarded its unsaved work" };
+  // The owner asked to discard the run's unsaved work: it need not have a FINAL. One it has, captured
+  // before the delete (the discard came after a complete FINAL), is still checked.
+  if (view.discard_requested === true || view.drain === "discarded") {
+    const final = await assertFinalBeforeDelete(stack, run, "was discarded").catch(
+      () => "no-final",
+    );
+    return final === "checked"
+      ? { final: "checked" }
+      : { final: "skipped", reason: "the owner discarded its unsaved work" };
+  }
   if (view.stop_reason !== "user")
     return { final: "skipped", reason: `stop_reason ${JSON.stringify(view.stop_reason)}` };
   if (view.error_code !== null)
