@@ -91,6 +91,11 @@ export const nativePublicationConsumers = snakeCase.table(
   (table) => [
     primaryKey({ columns: [table.runId, table.runtimeInstanceId] }),
     index("native_publication_consumers_pin").on(table.publicationId, table.state),
+    // The pins still held, by run: what Boat's convergence sweep reads to find a run whose pin is
+    // not released, whatever the number of released ones.
+    index("native_publication_consumers_held")
+      .on(table.runId)
+      .where(sql`${table.state} <> 'released'`),
     check(
       "native_publication_consumers_state",
       sql`${table.state} in ('pending','live','retained','unknown','released')`,

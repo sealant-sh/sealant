@@ -131,7 +131,12 @@ export interface WorkspaceCaptureDrainRepoService {
   ) => Effect.Effect<ReadonlyMap<string, WorkspaceCaptureDrain>, WorkspaceCaptureDrainRepoError>;
   /**
    * Record an observation outside a drain (the stop that followed it failed or finished, or a
-   * discard ended the runtime); the lease is untouched.
+   * discard ended the runtime); the lease is untouched. The state is the writer's: a removal made
+   * on the owner's discard is written `discarded` by whoever made it, and one made because the
+   * work was saved is written `stopped` even when a discard was requested meanwhile. One thing is
+   * kept here: a row that already reads `discarded` is not relabelled by a later `stopped` or
+   * `gone` (a pass that finds the runtime gone after the discard's removal); its state and detail
+   * stay as the discard left them.
    */
   readonly recordObservation: (input: {
     readonly runId: string;
@@ -274,8 +279,9 @@ export interface WorkspaceCaptureDrainRepoService {
    * the evidence version bumped) and decided again on what is current. No `fenceMs`: the runtime
    * gives no such bound, and it stays `outstanding` until the runtime no longer has the executor
    * or the evidence stands again. `held`: its issuer holds it again (or someone took it over);
-   * `none`: nothing issued is left to settle; `deleted` also when it was recorded removed
-   * meanwhile.
+   * `none`: nothing issued is left to settle. `already-deleted`: it was recorded removed before
+   * this call, by its issuer or an earlier settlement: this call settled nothing, and a caller
+   * that read it as issued a moment ago has only met its ordinary completion.
    */
   readonly reconcileIssuedDeletion: (input: {
     readonly runId: string;
@@ -290,7 +296,7 @@ export interface WorkspaceCaptureDrainRepoService {
      */
     readonly reauthorizedVersion?: number | undefined;
   }) => Effect.Effect<
-    "deleted" | "reissue" | "released" | "outstanding" | "held" | "none",
+    "deleted" | "already-deleted" | "reissue" | "released" | "outstanding" | "held" | "none",
     WorkspaceCaptureDrainRepoError
   >;
   /**
@@ -654,7 +660,21 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
             yield* db
               .insert(workspaceCaptureDrains)
               .values({ runId: input.runId, ...set } satisfies NewWorkspaceCaptureDrain)
-              .onConflictDoUpdate({ target: workspaceCaptureDrains.runId, set });
+              .onConflictDoUpdate({
+                target: workspaceCaptureDrains.runId,
+                set:
+                  input.state === "stopped" || input.state === "gone"
+                    ? {
+                        ...set,
+                        // A run that ended on its owner's discard keeps reading so: a later pass
+                        // that finds the runtime gone does not relabel it.
+                        state: sql<WorkspaceCaptureDrainState>`case when ${workspaceCaptureDrains.state} = 'discarded' then 'discarded' else ${input.state} end`,
+                        detail: sql<
+                          string | null
+                        >`case when ${workspaceCaptureDrains.state} = 'discarded' then ${workspaceCaptureDrains.detail} else ${input.detail} end`,
+                      }
+                    : set,
+              });
           }),
         ),
 
@@ -1024,7 +1044,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
                 .for("update");
               if (current?.deletionState === "deleted") {
-                return "deleted" as const;
+                return "already-deleted" as const;
               }
               if (current === undefined || current.deletionState !== "deleting-issued") {
                 return "none" as const;

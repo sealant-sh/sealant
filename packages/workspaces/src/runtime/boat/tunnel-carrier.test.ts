@@ -12,9 +12,9 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) await cleanup();
 });
 
-const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
+const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000) => {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() > deadline) throw new Error("condition not met in time");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -98,9 +98,11 @@ describe("Boat tunnel carrier", () => {
     );
     await waitFor(() => agent.sockets.length === 1);
     expect(agent.headers[0]?.cookie).toBe("_port_auth=c");
-    expect(
-      await runtime.runPromise(Effect.flatMap(BoatTunnelCarrier, (c) => c.attached("run-1"))),
-    ).toBe(true);
+    // The agent accepts the connection before the carrier's own `open` has run: attached is
+    // waited for, not read straight after the accept.
+    await waitFor(() =>
+      runtime.runPromise(Effect.flatMap(BoatTunnelCarrier, (c) => c.attached("run-1"))),
+    );
     // The VM's handshake initiation, as the agent frames it: one datagram at the gateway.
     agent.sockets[0]?.send(Buffer.from("initiation"), { binary: true });
     await waitFor(() => gateway.received.length === 1);

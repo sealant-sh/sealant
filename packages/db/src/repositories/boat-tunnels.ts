@@ -80,6 +80,8 @@ export interface BoatTunnelRepoService {
    * After host cleanup, releases the slot of a guest Boat positively no longer has (its run's row
    * is absent). Absence alone discharges it: no FINAL, deletion ledger or launch state is
    * required, because nothing can reach a VM that does not exist. The only release there is.
+   * Two callers may release the same slot at once: what is stored decides, and the one that finds
+   * it released, before its write or at it, succeeds as the one that released it does.
    */
   readonly releaseAbsent: (
     previous: BoatTunnelReservation,
@@ -335,8 +337,11 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
                   ),
                 )
                 .returning();
-              if (rows.length === 0)
-                return yield* Effect.fail(new BoatTunnelStoreError("stale-transition"));
+              if (rows.length !== 0) return;
+              // The record changed between this call's read and its write. Another caller's
+              // release is this call's own outcome; anything else is not.
+              if (isDeepStrictEqual(yield* get(target.runtimeInstanceId, tx), next)) return;
+              return yield* Effect.fail(new BoatTunnelStoreError("stale-transition"));
             }),
           ),
         ),

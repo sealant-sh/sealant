@@ -43,7 +43,11 @@ import {
   seedBoatRun,
   strandBoatLaunch,
 } from "@sealant/db/testing/boat-runs";
-import { corruptBoatTunnel } from "@sealant/db/testing/boat-tunnels";
+import {
+  boatTunnelLockWaiters,
+  corruptBoatTunnel,
+  releaseBoatTunnelHolding,
+} from "@sealant/db/testing/boat-tunnels";
 import { nativeConsumerRows } from "@sealant/db/testing/native-publications";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import { closeJobQueueSingleton, getJobQueueSingleton } from "@sealant/jobs";
@@ -323,8 +327,31 @@ const sharedPaths = (input: {
 }) =>
   Effect.gen(function* () {
     const { db, adapter, clock, daemon, canonical, runtimes } = input;
-    /** Runs when the adapter's `stop` has returned and the shared path has recorded nothing yet. */
-    const hooks = { afterAdapterStop: async (): Promise<void> => {} };
+    const hooks = {
+      /** Runs when the adapter's `stop` has returned and the shared path has recorded nothing yet. */
+      afterAdapterStop: async (): Promise<void> => {},
+      /**
+       * Runs when a shared path has recorded the run stopped: the stop's removal is still
+       * recorded as issued, and its capture record does not say `stopped` yet.
+       */
+      afterStopRecorded: async (): Promise<void> => {},
+      /**
+       * Runs when a pass has read a removal as issued and is about to settle it from what the
+       * runtime says: between its read of the record and its write.
+       */
+      beforeSettleIssued: async (): Promise<void> => {},
+      /**
+       * Runs when a stop has read the run's record and is about to take its drain claim: between
+       * what it read and everything it does under the claim.
+       */
+      beforeClaim: async (): Promise<void> => {},
+      /**
+       * How far the adapter's clock moves before each shared path call: a whole `inspect` period,
+       * so each pass reads Boat as a later tick would. `0`: the pass follows the last read of the
+       * VM at once, inside its pacing window.
+       */
+      elapseMs: BOAT_INSPECT_READ_MS,
+    };
     // The adapter as the shared paths hold it: every method the Boat adapter's own.
     const lifecycle: RuntimeAdapterLifecycle = {
       id: adapter.id,
@@ -365,10 +392,19 @@ const sharedPaths = (input: {
         }),
     });
     const retained: string[] = [];
-    const ledger = notifyingRetention(
+    const recorded = notifyingRetention(
       databaseCaptureDrainLedger({ db, owner: `paths-${randomUUID()}`, leaseMs: 60_000 }),
       (runId) => retained.push(runId),
     );
+    const ledger: typeof recorded = {
+      ...recorded,
+      claim: (...claimed) =>
+        Effect.promise(() => hooks.beforeClaim()).pipe(Effect.andThen(recorded.claim(...claimed))),
+      reconcileIssuedDeletion: (...settlement) =>
+        Effect.promise(() => hooks.beforeSettleIssued()).pipe(
+          Effect.andThen(recorded.reconcileIssuedDeletion(...settlement)),
+        ),
+    };
     const cipher = Context.get(yield* Layer.build(cipherLayer), CredentialCipher);
     const settings = { ...DEFAULT_CAPTURE_DRAIN_SETTINGS, pollIntervalMs: 5 };
     const options = {
@@ -382,9 +418,15 @@ const sharedPaths = (input: {
       },
     };
     const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        ...runtimes,
+        markStopped: (stopped) =>
+          runtimes
+            .markStopped(stopped)
+            .pipe(Effect.tap(() => Effect.promise(() => hooks.afterStopRecorded()))),
+      }),
       Layer.mergeAll(
         WorkspaceRepoLive,
-        WorkspaceRuntimeInstanceRepoLive,
         WorkspaceAttemptRepoLive,
         WorkspaceCaptureDrainRepoLive,
         ConnectedAccountRepoLive,
@@ -394,7 +436,7 @@ const sharedPaths = (input: {
       recorder,
     );
     const tick = Effect.sync(() => {
-      clock.now += BOAT_INSPECT_READ_MS;
+      clock.now += hooks.elapseMs;
     });
     /** The shared stop alone, as one lifecycle message or one reaper tick runs it. */
     const stopOnly = (
@@ -531,6 +573,8 @@ const test = async (
     tunnels: BoatTunnelRepo["Service"];
     resources: ResourceInstanceRepo["Service"];
     gateway: GatewayFixture;
+    /** Runs when a release of what an absent VM held is about to release its publication pin. */
+    pin: { beforeRelease: () => Promise<void> };
     repo: BoatRunRepo["Service"];
     catalog: NativePublicationRepo["Service"];
     runtimes: WorkspaceRuntimeInstanceRepo["Service"];
@@ -616,6 +660,7 @@ const test = async (
           Layer.provide(Layer.succeed(BoatGuestTransportService, guest)),
         );
         const gateway = new GatewayFixture();
+        const pin = { beforeRelease: async (): Promise<void> => {} };
         const gatewayHostId = randomUUID();
         // Every tunnel is carried: the carrier records what the host asked it to keep open.
         const carried: BoatTunnelCarrierInput[] = [];
@@ -728,7 +773,13 @@ const test = async (
                 const daemon = fakeCaptureDaemon(script);
                 const pathsHost = hostLayer(gatewayHostId, "127.0.0.1", resourceGateway);
                 const stores = Layer.mergeAll(
-                  Layer.succeed(NativePublicationRepo, catalog),
+                  Layer.succeed(NativePublicationRepo, {
+                    ...catalog,
+                    release: (consumer, publicationId) =>
+                      Effect.promise(() => pin.beforeRelease()).pipe(
+                        Effect.andThen(catalog.release(consumer, publicationId)),
+                      ),
+                  }),
                   Layer.succeed(BoatRunRepo, repo),
                   Layer.succeed(BoatTunnelRepo, tunnels),
                   Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
@@ -793,6 +844,7 @@ const test = async (
             tunnels,
             resources,
             gateway,
+            pin,
             repo,
             catalog,
             runtimes,
@@ -1294,9 +1346,8 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         // Reconstruct the old worker's terminal allocation with its untouched pre-launch drain:
         // the exit reconciler's sweep of ended executors nothing settled reports it gone.
         await execute(restoreUnprogressedCaptureDrain(s.db, f.input.runId, token.sealed));
-        expect(await execute(f.close.sweep({ limit: 10 }))).toMatchObject({
-          entries: [{ runId: f.input.runId, outcome: "cleaned" }],
-        });
+        // Boat's own sweep has nothing left of the run: it is settled, and not in its page.
+        expect(await execute(f.close.sweep({ limit: 10 }))).toEqual({ entries: [] });
         await execute(f.close.reconcileExits());
         expect(await execute(s.canonical.getByRunId(f.input.runId))).toMatchObject({
           state: "gone",
@@ -1339,9 +1390,8 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         expect(s.provider.deleteCalls).toBe(0);
         expect(await execute(f.close.stop({ runId: f.input.runId }))).toBe("stopped");
         expect((await execute(nativeConsumerRows(s.db, f.input.runId)))[0]?.state).toBe("released");
-        expect(await execute(s.allocations.reconcile({ limit: 10 }))).toMatchObject({
-          entries: [{ outcome: "deleted" }],
-        });
+        // A run Boat no longer has a VM for is not in the VM sweep's page.
+        expect(await execute(s.allocations.reconcile({ limit: 10 }))).toEqual({ entries: [] });
         expect(await execute(s.resourceOwner.reconcile({ limit: 10 }))).toMatchObject({
           entries: [{ outcome: "closed" }],
         });
@@ -1559,9 +1609,10 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         };
         const first = execute(f.close.stop({ runId: f.input.runId }));
         await entered.promise;
-        // The sweep's nudge finds the removal under way and leaves the run to it.
+        // The sweep finds the stop's DELETE out, its claim live and no operation on record yet,
+        // and leaves the run to it: the shared stop is not asked a second time.
         expect(await execute(f.close.sweep({ limit: 10 }))).toMatchObject({
-          entries: [{ outcome: "kept" }],
+          entries: [{ outcome: "draining" }],
         });
         release.resolve();
         expect(await first).toBe("stopped");
@@ -1875,10 +1926,8 @@ describe.runIf(databaseUrl !== undefined)(
         expect(await execute(paths.sweep({ limit: 1, after: target.runId }))).toEqual({
           entries: [],
         });
-        // Ended and released: a later pass finds nothing left to do, and asks Boat nothing.
-        expect((await execute(paths.sweep({ limit: 1 }))).entries).toEqual([
-          { runId: target.runId, outcome: "cleaned" },
-        ]);
+        // Ended and released: the run is settled, so a later pass does not read it at all.
+        expect(await execute(paths.sweep({ limit: 1 }))).toEqual({ entries: [] });
         expect(s.provider.deleteCalls).toBe(1);
         for (const limit of [0, -1, 21, 1.5])
           await expect(execute(paths.sweep({ limit }))).rejects.toThrow("invalid-page");
@@ -2440,9 +2489,8 @@ describe.runIf(databaseUrl !== undefined)(
         const { paths, daemon } = await execute(s.final([]));
         expect(await execute(paths.stop(target))).toBe("stopped");
         expect(await execute(paths.stop(target))).toBe("stopped");
-        expect(await execute(paths.sweep({ limit: 20 }))).toMatchObject({
-          entries: [{ runId: target.runId, outcome: "cleaned" }],
-        });
+        // Settled by the stop: nothing is left for Boat's own sweep.
+        expect(await execute(paths.sweep({ limit: 20 }))).toEqual({ entries: [] });
         expect(await execute(s.resourceOwner.reconcile({ limit: 20 }))).toMatchObject({
           entries: [{ runId: target.runId, outcome: "closed" }],
         });
@@ -3116,9 +3164,8 @@ describe.runIf(databaseUrl !== undefined)(
         expect(await launchPhase(s, s.input.consumer.runId)).toBe("exchange");
         s.guest.fail = false;
         const exchanges = s.guest.targets.length;
-        expect((await execute(s.allocations.reconcile({ limit: 20 }))).entries[0]?.outcome).toBe(
-          "bound",
-        );
+        // A run with a VM on record is not in the sweep's page: only a launch binds or exchanges.
+        expect(await execute(s.allocations.reconcile({ limit: 20 }))).toEqual({ entries: [] });
         expect(await execute(s.repo.get(s.input.consumer.runId))).toEqual(before);
         // The launch read the boot once; the sweep asked the VM nothing.
         expect(s.provider.commands).toEqual(["/usr/bin/cat /proc/sys/kernel/random/boot_id"]);
@@ -3534,10 +3581,8 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       const ended = await runOf(s, target.runId);
       expect(ended.admissionOperationId).not.toBeNull();
       expect(ended.sealedLaunch).toBeNull();
-      // The deleted VM is no longer driven as if it were current.
-      expect(await execute(s.allocations.reconcile({ limit: 10 }))).toMatchObject({
-        entries: [{ runId: target.runId, outcome: "deleted" }],
-      });
+      // The deleted VM is no longer driven as if it were current: the sweep does not read it.
+      expect(await execute(s.allocations.reconcile({ limit: 10 }))).toEqual({ entries: [] });
     }));
 
   it("ends a ready VM's execution when Boat no longer has it, reporting its work lost (audit S6)", () =>
@@ -3598,9 +3643,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       expect(s.provider.deleteCalls).toBe(0);
       // Nothing is left for a later pass of either sweep.
       expect(await execute(paths.reconcileExits())).toBe(0);
-      expect(await execute(paths.sweep({ limit: 10 }))).toMatchObject({
-        entries: [{ runId: target.runId, outcome: "cleaned" }],
-      });
+      expect(await execute(paths.sweep({ limit: 10 }))).toEqual({ entries: [] });
     }));
 
   it("adopts a launch whose worker died as failed and closes it (audit S3)", () =>
@@ -4164,12 +4207,10 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       const target = await launch;
       expect(target.runId).toBe(s.input.consumer.runId);
       expect(await launchPhase(s, target.runId)).toBe("control");
-      // Once the launch's ownership lapses, the sweep owns the allocation again.
+      // Its create is resolved and its VM bound: nothing is left for the VM sweep, even once the
+      // launch's ownership lapses.
       await execute(strandBoatLaunch(s.db, { runId: target.runId, sandboxId: target.sandboxId }));
-      expect((await execute(s.allocations.reconcile({ limit: 20 }))).entries).toContainEqual({
-        runId: target.runId,
-        outcome: "bound",
-      });
+      expect(await execute(s.allocations.reconcile({ limit: 20 }))).toEqual({ entries: [] });
     }));
 
   it("continues a launch through a lost create reply by finding the VM Boat accepted (harness: create reply lost)", () =>
@@ -6900,6 +6941,29 @@ describe.runIf(databaseUrl !== undefined)("Boat adapter inspect", () => {
       }
     }));
 
+  it("answers missing for an absence another writer committed, inside the pacing window and without asking Boat or the agent", () =>
+    test(async (s) => {
+      const f = await inspectFixture(s);
+      try {
+        expect(await f.inspect()).toEqual({ state: "running", platformState: "running" });
+        const read = f.reads();
+        // The same instant: paced, `running` from the read a moment ago.
+        expect(await f.inspect()).toEqual({ state: "running" });
+        // Another observer commits Boat's 404 for the VM (a removal polling its deletion, the
+        // exit reconciler): from then on the run's row says Boat no longer has it.
+        await execute(s.repo.recordNotFound(f.target.runId, f.target.sandboxId));
+        expect(await f.observed()).toEqual(["absent"]);
+        // Still the same instant, well inside the period: the row is read, not the memory.
+        expect(await f.inspect()).toEqual({ state: "missing" });
+        f.clock.now += BOAT_INSPECT_READ_MS - 1;
+        expect(await f.inspect()).toEqual({ state: "missing" });
+        // Nothing was asked of Boat or the agent for it.
+        expect(f.reads()).toEqual(read);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }));
+
   it("paces a failed read like any other, as running", () =>
     test(async (s) => {
       const f = await inspectFixture(s);
@@ -7256,6 +7320,93 @@ describe.runIf(databaseUrl !== undefined)(
         expect(await released(s, f.runId)).toMatchObject(REMOVED);
       }));
 
+    it("polls a deletion Boat accepted and holds at processing, never drains the run meanwhile, and records it stopped in the visit that finds the deletion complete (harness: deletion stuck in processing)", () =>
+      test(async (s) => {
+        // A removal waits a second and a half for Boat's operation, so two callers poll it at once.
+        const paths = await execute(s.final(["unreachable"], undefined, 1_500));
+        const target = await readyRun(s);
+        const runId = target.runId;
+        s.gateway.allowRemoval = true;
+        // The run failed with its VM kept: retained, and its recovery finds nothing to save.
+        s.guest.health = () => daemonExited;
+        expect(await execute(paths.reconcileExits())).toBe(1);
+        // The exit reconciler probed the dead daemon once. From here on, what a drain would
+        // leave: a connection to the daemon, a call to it, a line that it did not answer.
+        const probed = paths.connects.length;
+        const drained = () => ({
+          connects: paths.connects.slice(probed),
+          calls: paths.daemon.calls,
+          unanswered: paths.logged.filter((line) => line.includes("did not answer")),
+        });
+        const NOT_DRAINED = { connects: [], calls: [], unanswered: [] };
+        s.guest.recovery = "nothing-to-save";
+        // Boat accepts the DELETE and holds its operation at `processing`; the VM stays readable.
+        s.provider.deletionCompleted = false;
+        // Recovery removes the VM and waits on the operation. While it is polling, Boat's sweep
+        // visits the run.
+        let meeting: Promise<BoatConvergenceSweep> | undefined;
+        s.provider.beforeDeletionRead = async () => {
+          meeting ??= execute(paths.sweep({ limit: 20 }));
+        };
+        expect(await execute(paths.recover(runId))).toBe("retained");
+        // The sweep polled the same operation, sent nothing and started no drain.
+        expect((await meeting)?.entries).toEqual([{ runId, outcome: "draining" }]);
+        s.provider.beforeDeletionRead = async () => {};
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(drained()).toEqual(NOT_DRAINED);
+        expect(await released(s, runId)).toMatchObject({ pin: false, absent: false });
+        // A later tick while it is still stuck: polled again, nothing else.
+        expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
+          { runId, outcome: "draining" },
+        ]);
+        expect(drained()).toEqual(NOT_DRAINED);
+
+        // The next tick's poll is the one Boat answers `completed`. A moment before it, another
+        // path inspected the VM and its agent did not answer (the VM is being deleted): `running`,
+        // which paces the next reads. The sweep's visit follows that read at once.
+        s.guest.health = () => {
+          throw new Error("connection reset");
+        };
+        paths.hooks.elapseMs = 0;
+        let completed = false;
+        s.provider.beforeDeletionRead = async () => {
+          if (completed) return;
+          completed = true;
+          expect(await paths.adapter.inspect({ resourceId: target.sandboxId })).toEqual({
+            state: "running",
+          });
+          s.provider.deletionCompleted = true;
+          s.provider.sandboxMissing = true;
+        };
+        // The visit that finds the deletion complete releases what the VM held and nudges the
+        // shared stop, which reads Boat's absence from the run's row and records the run stopped:
+        // no drain of a VM that is gone.
+        expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
+          { runId, outcome: "stopped" },
+        ]);
+        expect(completed).toBe(true);
+        expect(drained()).toEqual(NOT_DRAINED);
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await released(s, runId)).toMatchObject({
+          runtime: { status: "stopped", removed: true },
+          pin: true,
+          absent: true,
+        });
+        expect((await tunnelRecord(s, target)).released).toBe(true);
+        expect(s.gateway.removeCalls).toBe(1);
+        expect(await vmOf(s, runId)).toMatchObject({
+          removal: { kind: "operation", completed: true },
+        });
+        expect((await execute(s.canonical.getByRunId(runId)))?.retainedAt ?? null).toBeNull();
+        // Nothing is left for a later tick of either sweep or of the exit reconciler.
+        paths.hooks.elapseMs = BOAT_INSPECT_READ_MS;
+        expect(await execute(paths.sweep({ limit: 20 }))).toEqual({ entries: [] });
+        expect(await execute(s.allocations.reconcile({ limit: 20 }))).toEqual({ entries: [] });
+        expect(await execute(paths.reconcileExits())).toBe(0);
+        expect(drained()).toEqual(NOT_DRAINED);
+        expect(s.provider.deleteCalls).toBe(1);
+      }));
+
     it("keeps the VM of a dead daemon whose recovery the agent refuses: recorded failed and retained, never deleted, until its owner discards it", () =>
       test(async (s) => {
         const f = await readyPaths(s, ["unreachable"]);
@@ -7420,6 +7571,41 @@ describe.runIf(databaseUrl !== undefined)(
           state: "stopped",
           retainedAt: null,
         });
+      }));
+  },
+);
+
+describe.runIf(databaseUrl !== undefined)(
+  "Boat tunnel slot released by two callers at once",
+  () => {
+    it("is released once: the caller whose write finds it released by the other succeeds as the other does", () =>
+      test(async (s) => {
+        const target = await stopLaunched(s);
+        const frozen = await execute(s.tunnels.freeze(await tunnelRecord(s, target), randomUUID()));
+        await execute(s.repo.recordNotFound(target.runId, target.sandboxId));
+        expect(await vmPhase(s, target.runId)).toBe("deleted");
+        // One caller's release holds the slot's row from its read to its write.
+        const held = Promise.withResolvers<void>();
+        const write = Promise.withResolvers<void>();
+        const first = execute(
+          releaseBoatTunnelHolding(s.db, target.runId, {
+            held: () => held.resolve(),
+            write: write.promise,
+          }),
+        );
+        await held.promise;
+        // The other reads the slot unreleased, and its write waits on the first one's.
+        const second = execute(s.tunnels.releaseAbsent(frozen));
+        await vi.waitFor(async () => expect(await execute(boatTunnelLockWaiters(s.db))).toBe(1), {
+          timeout: 10_000,
+        });
+        write.resolve();
+        await first;
+        await second;
+        expect((await tunnelRecord(s, target)).released).toBe(true);
+        // Released for good: a third release changes nothing.
+        await execute(s.tunnels.releaseAbsent(frozen));
+        expect((await tunnelRecord(s, target)).released).toBe(true);
       }));
   },
 );
@@ -7699,6 +7885,156 @@ describe.runIf(databaseUrl !== undefined).each([
         }
       }, options),
     20_000,
+  );
+
+  // The meetings the test above leaves to scheduling, each one forced: one caller is held between
+  // its read and its write while the other completes.
+
+  it("the exit reconciler reading the stop's removal as issued, and settling it once the stop has recorded it complete, settles nothing and says nothing", () =>
+    test(async (s) => {
+      const f = await stopping(s);
+      const reading = Promise.withResolvers<void>();
+      const completed = Promise.withResolvers<void>();
+      try {
+        let reconciler: Promise<unknown> | undefined;
+        s.provider.beforeDeletion = async () => {
+          f.noteDelete();
+          s.provider.sandboxMissing = true;
+        };
+        // The stop has recorded the run stopped and has not recorded its removal complete: the
+        // run is an ended executor nothing settled, and the exit reconciler looks at it.
+        f.close.hooks.afterStopRecorded = async () => {
+          f.close.hooks.afterStopRecorded = async () => {};
+          reconciler = execute(f.close.reconcileExits()).then((exits) => f.reconciled.push(exits));
+          await reading.promise;
+        };
+        // The reconciler has read the removal as issued, and is about to settle it from Boat's
+        // 404: held there until the stop has recorded the removal complete.
+        f.close.hooks.beforeSettleIssued = async () => {
+          f.close.hooks.beforeSettleIssued = async () => {};
+          expect(await execute(s.canonical.getByRunId(f.target.runId))).toMatchObject({
+            deletionState: "deleting-issued",
+          });
+          reading.resolve();
+          await completed.promise;
+        };
+        expect(await f.stopRun()).toBe("stopped");
+        expect(await execute(s.canonical.getByRunId(f.target.runId))).toMatchObject({
+          deletionState: "deleted",
+        });
+        completed.resolve();
+        await reconciler;
+        expect(f.reconciled).toEqual([0]);
+        await stoppedCleanly(s, f);
+      } finally {
+        // A failed expectation above must not leave either caller held.
+        reading.resolve();
+        completed.resolve();
+        await f.runtime.dispose();
+      }
+    }, options));
+
+  it("the sweep's cleanup releasing the pin while the stop's removal is about to release it: released once, and neither says anything", () =>
+    test(async (s) => {
+      const f = await stopping(s);
+      try {
+        s.provider.beforeDeletion = async () => {
+          f.noteDelete();
+          s.provider.sandboxMissing = true;
+        };
+        // The stop's removal has released the tunnel slot, if the run had one, and is about to
+        // release the pin: the sweep's cleanup of the same run runs to its end first.
+        s.pin.beforeRelease = async () => {
+          s.pin.beforeRelease = async () => {};
+          expect((await execute(nativeConsumerRows(s.db, f.target.runId)))[0]?.state).not.toBe(
+            "released",
+          );
+          await f.sweep();
+          expect((await execute(nativeConsumerRows(s.db, f.target.runId)))[0]?.state).toBe(
+            "released",
+          );
+        };
+        expect(await f.stopRun()).toBe("stopped");
+        // The sweep cleaned up, and its nudge found the stop under way and left the run to it.
+        expect(f.swept).toEqual([[{ runId: f.target.runId, outcome: "busy" }]]);
+        await stoppedCleanly(s, f);
+      } finally {
+        await f.runtime.dispose();
+      }
+    }, options));
+
+  it.runIf(tunnelled)(
+    "the sweep's cleanup arriving while the stop's removal is at the gateway leaves the release to it: one gateway removal, and neither says anything",
+    () =>
+      test(async (s) => {
+        const f = await stopping(s);
+        try {
+          s.provider.beforeDeletion = async () => {
+            f.noteDelete();
+            s.provider.sandboxMissing = true;
+          };
+          // The stop's removal is removing the gateway, the slot not released yet: the sweep's
+          // cleanup of the same run arrives, and runs to its end.
+          s.gateway.beforeRemove = async () => {
+            s.gateway.beforeRemove = async () => {};
+            expect((await tunnelRecord(s, f.target)).released).not.toBe(true);
+            await f.sweep();
+            expect(s.gateway.removeCalls).toBe(1);
+            expect((await tunnelRecord(s, f.target)).released).not.toBe(true);
+          };
+          expect(await f.stopRun()).toBe("stopped");
+          // The cleanup found the stop's removal at the gateway, and its nudge found the stop
+          // under way: both left the run to it.
+          expect(f.swept).toEqual([[{ runId: f.target.runId, outcome: "busy" }]]);
+          await stoppedCleanly(s, f);
+        } finally {
+          await f.runtime.dispose();
+        }
+      }, options),
+  );
+
+  it.runIf(tunnelled)(
+    "the stop's removal arriving while the sweep's cleanup is at the gateway leaves the release to the sweep: the stop ends at once, one gateway removal, and neither says anything",
+    () =>
+      test(async (s) => {
+        const f = await stopping(s);
+        const removing = Promise.withResolvers<void>();
+        const stopped = Promise.withResolvers<void>();
+        try {
+          let sweeping: Promise<void> | undefined;
+          // The sweep's cleanup is removing the gateway on Boat's committed 404, held there
+          // until the stop has ended.
+          s.gateway.beforeRemove = async () => {
+            s.gateway.beforeRemove = async () => {};
+            removing.resolve();
+            await stopped.promise;
+          };
+          s.provider.beforeDeletion = async () => {
+            f.noteDelete();
+            await f.reconcilerSeesItGone();
+            sweeping = f.sweep();
+            await removing.promise;
+          };
+          // The stop does not wait for the sweep: Boat no longer has the VM, and what it held is
+          // being released.
+          expect(await f.stopRun()).toBe("stopped");
+          expect((await tunnelRecord(s, f.target)).released).not.toBe(true);
+          expect(await released(s, f.target.runId)).toMatchObject({
+            runtime: { status: "stopped" },
+            pin: false,
+            absent: true,
+          });
+          stopped.resolve();
+          await sweeping;
+          // The sweep released everything, and its nudge found the run stopped.
+          expect(f.swept).toEqual([[{ runId: f.target.runId, outcome: "stopped" }]]);
+          await stoppedCleanly(s, f);
+        } finally {
+          // A failed expectation above must not leave the sweep held at the gateway.
+          stopped.resolve();
+          await f.runtime.dispose();
+        }
+      }, options),
   );
 
   it("the adapter's stop resolves in the same call when Boat's 404 is committed while its operation still reads processing", () =>
@@ -8140,10 +8476,9 @@ describe.runIf(databaseUrl !== undefined)("Boat convergence: what stays Boat's o
         captureTokenSealed: null,
       });
       expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
-      // Idempotent.
-      expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
-        { runId, outcome: "cleaned" },
-      ]);
+      // Settled: its row, its pin, its stop and its capture record are all ended, so a later pass
+      // does not read it.
+      expect(await execute(paths.sweep({ limit: 20 }))).toEqual({ entries: [] });
     }));
 
   it("removes a VM adopted by its labels after its run was already recorded stopped: never bound, so nothing ran on it", () =>
@@ -8169,6 +8504,169 @@ describe.runIf(databaseUrl !== undefined)("Boat convergence: what stays Boat's o
         expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
       } finally {
         await f.runtime.dispose();
+      }
+    }));
+
+  it("does not nudge a run while another caller's first DELETE is out: no drain is started, and the nudge resumes once that claim has lapsed", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const runId = target.runId;
+      const paths = await execute(s.final([savedStatus()]));
+      // A caller fenced the run and claimed the DELETE. Boat has not answered it: no operation is
+      // on record, and nobody but that caller knows whether it was sent.
+      await execute(s.executor.hold(target));
+      await execute(s.tunnels.freeze(await tunnelRecord(s, target), randomUUID()));
+      await execute(claimBoatDeletionAgo(s.db, runId, 0));
+      for (const pass of [1, 2])
+        expect((await execute(paths.sweep({ limit: 20 }))).entries, `pass ${String(pass)}`).toEqual(
+          [{ runId, outcome: "draining" }],
+        );
+      // The shared stop was not asked: no FINAL to a VM that is being deleted, and no DELETE.
+      expect(paths.daemon.calls).toEqual([]);
+      expect(paths.connects).toEqual([]);
+      expect(s.provider.deleteCalls).toBe(0);
+      expect(await released(s, runId)).toMatchObject(NOTHING_RELEASED);
+      // The claim's caller vanished and its claim lapsed: the nudge asks the shared stop again,
+      // which drains FINAL and deletes the VM.
+      await execute(claimBoatDeletionAgo(s.db, runId, BOAT_REMOVAL_CLAIM_MS + 1));
+      expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
+        { runId, outcome: "stopped" },
+      ]);
+      expect(paths.daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await released(s, runId)).toMatchObject(REMOVED);
+    }));
+
+  it("an owner's discard recorded while another stop is between its read of the record and its claim ends the run discarded: that stop starts no drain, and no later writer relabels it stopped (#613)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const runId = target.runId;
+      // A FINAL that never completes: the run is kept.
+      const paths = await execute(s.final([captureStatus({ complete: false })]));
+      expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
+        { runId, outcome: "kept" },
+      ]);
+      const asked = paths.daemon.calls.length;
+      const drain = () => execute(s.canonical.getByRunId(runId));
+      const read = Promise.withResolvers<void>();
+      const discarded = Promise.withResolvers<void>();
+      try {
+        // The next nudge's stop has read the record, with no discard on it, and is about to
+        // take the run's claim.
+        paths.hooks.beforeClaim = async () => {
+          paths.hooks.beforeClaim = async () => {};
+          read.resolve();
+          await discarded.promise;
+        };
+        const nudged = execute(paths.sweep({ limit: 20 }));
+        await read.promise;
+        // The owner discards the kept run: the API records it, and the lifecycle stop terminates
+        // the VM without a drain.
+        await discardedBy(s, runId);
+        expect(await execute(paths.stop({ runId }))).toBe("stopped");
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await drain()).toMatchObject({
+          state: "discarded",
+          discardRequestedAt: expect.any(Date),
+        });
+        // The held stop goes on under its claim. It finds the discard on the record and honours
+        // it: the daemon is asked nothing, and the run still reads discarded.
+        discarded.resolve();
+        expect((await nudged).entries).toEqual([{ runId, outcome: "stopped" }]);
+        expect(paths.daemon.calls).toHaveLength(asked);
+        expect(await drain()).toMatchObject({ state: "discarded" });
+        // A sweep later, the exit reconciler and another stop: nothing relabels it.
+        expect(await execute(paths.reconcileExits())).toBe(0);
+        await execute(paths.sweep({ limit: 20 }));
+        expect(await execute(paths.stop({ runId }))).toBe("stopped");
+        expect(await drain()).toMatchObject({
+          state: "discarded",
+          detail: expect.stringContaining("discarded at the owner's request"),
+        });
+        // Nor does a writer that removed the ended runtime's remains on the discard, as the exit
+        // reconciler records it.
+        await execute(
+          paths.ledger.observe(runId, {
+            state: "stopped",
+            detail: "the ended runtime was removed: the owner discarded its unsaved captures",
+          }),
+        );
+        expect(await drain()).toMatchObject({ state: "discarded" });
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await released(s, runId)).toMatchObject(REMOVED);
+      } finally {
+        // A failed expectation above must not leave the nudge's stop held.
+        discarded.resolve();
+      }
+    }));
+
+  it("a discard recorded while a removal authorized on a complete FINAL is deleting the VM does not relabel it: the run ends stopped, its work saved", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const runId = target.runId;
+      const paths = await execute(s.final([savedStatus()]));
+      // FINAL is saved and the removal authorized on it; Boat has the DELETE when the owner's
+      // discard is recorded.
+      let requested = false;
+      s.provider.beforeDeletion = async () => {
+        expect(paths.daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+        await discardedBy(s, runId);
+        requested = true;
+      };
+      expect(await execute(paths.stop({ runId }))).toBe("stopped");
+      expect(requested).toBe(true);
+      // The removal was made because the work was saved, not on the discard: a normal stop.
+      const ended = {
+        state: "stopped",
+        detail: expect.stringContaining("final flush complete"),
+        discardRequestedAt: expect.any(Date),
+        deletionState: "deleted",
+      };
+      expect(await execute(s.canonical.getByRunId(runId))).toMatchObject(ended);
+      // And it stays so for every later pass, though the discard is on the record.
+      expect(await execute(paths.reconcileExits())).toBe(0);
+      await execute(paths.sweep({ limit: 20 }));
+      expect(await execute(paths.stop({ runId }))).toBe("stopped");
+      expect(await execute(s.canonical.getByRunId(runId))).toMatchObject(ended);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await released(s, runId)).toMatchObject(REMOVED);
+    }));
+
+  it("a stop already past its first read of the record honours a discard recorded before it takes the claim: the VM is terminated without a drain (#613)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const runId = target.runId;
+      const paths = await execute(s.final([captureStatus({ complete: false })]));
+      expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
+        { runId, outcome: "kept" },
+      ]);
+      const asked = paths.daemon.calls.length;
+      const read = Promise.withResolvers<void>();
+      const discarded = Promise.withResolvers<void>();
+      try {
+        paths.hooks.beforeClaim = async () => {
+          paths.hooks.beforeClaim = async () => {};
+          read.resolve();
+          await discarded.promise;
+        };
+        const nudged = execute(paths.sweep({ limit: 20 }));
+        await read.promise;
+        // The owner's discard is recorded, and no other stop has acted on it yet: the VM is
+        // still there and its daemon still answers.
+        await discardedBy(s, runId);
+        discarded.resolve();
+        // The held stop reads the record again under its claim and honours the discard: it does
+        // not drain the daemon first and keep the run again.
+        expect((await nudged).entries).toEqual([{ runId, outcome: "stopped" }]);
+        expect(paths.daemon.calls).toHaveLength(asked);
+        expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+          state: "discarded",
+          detail: expect.stringContaining("discarded at the owner's request"),
+        });
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await released(s, runId)).toMatchObject(REMOVED);
+      } finally {
+        discarded.resolve();
       }
     }));
 

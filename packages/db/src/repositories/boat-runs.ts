@@ -14,14 +14,18 @@ import {
   type BoatRunInput,
   type BoatRunIsolation,
 } from "@sealant/validators";
-import { and, asc, eq, exists, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, exists, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
 import { boatRuns, type BoatRunRow } from "../schema/boat-runs.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 import { nativePublications, nativePublicationConsumers } from "../schema/native-publications.js";
-import { workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
+import {
+  workspaceCaptureDrains,
+  workspaceRuntimeInstances,
+  workspaceRuntimeInstanceStatusValues,
+} from "../schema/workspace-build-jobs.js";
 
 /** Safe failure codes: no ciphertext, provider body or launch material. */
 export class BoatRunStoreError extends Error {
@@ -84,6 +88,35 @@ export interface BoatRunRepoService {
    * and cursor as `list`.
    */
   readonly listBearing: (input: {
+    readonly deploymentId: string;
+    readonly limit: number;
+    readonly after?: string;
+  }) => Failing<readonly string[]>;
+  /**
+   * The runs whose create is not resolved: no VM on record and no absence committed (reserved,
+   * issued, or held without a VM). Everything the VM sweep can change is one of them; a run with a
+   * VM, and one Boat no longer has, is never read. Same order and cursor as `list`.
+   */
+  readonly listUnresolved: (input: {
+    readonly deploymentId: string;
+    readonly limit: number;
+    readonly after?: string;
+  }) => Failing<readonly string[]>;
+  /**
+   * The runs with something left to settle, which is everything the convergence sweep can change.
+   * A run is one of them while any of these holds, each read from the column its own writer sets:
+   *
+   *  - Boat's absence of its VM is not committed (`absent_at` is null): it may hold a VM.
+   *  - Its tunnel slot is not released (`boat_tunnels.released_at` is null).
+   *  - Its publication pin is not released (`native_publication_consumers.state`).
+   *  - Its stop is not recorded: its runtime row is stopping or failed, and not `stopped`.
+   *  - It never had a VM and its capture record is not ended.
+   *
+   * A run with none of them is settled. An ended run that had a VM is never read again, however
+   * many the deployment has had; of the ones that never had a VM, the capture record is read by
+   * its key. Same order and cursor as `list`.
+   */
+  readonly listUnsettled: (input: {
     readonly deploymentId: string;
     readonly limit: number;
     readonly after?: string;
@@ -338,6 +371,82 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
         ),
       )
       .orderBy(asc(boatRuns.runId))
+      .limit(input.limit);
+    return rows.map((row) => row.id);
+  });
+  const listUnsettled = Effect.fn("BoatRunRepo.listUnsettled")(function* (
+    input: Parameters<BoatRunRepoService["listUnsettled"]>[0],
+  ) {
+    yield* page(input);
+    // Five sets, each read through an index of its own and cut to a page before they are merged:
+    // the page of their union is within the union of their pages. The first four read no settled
+    // run; the last reads the runs that never had a VM.
+    const paged = and(
+      eq(boatRuns.deploymentId, input.deploymentId),
+      input.after === undefined ? undefined : gt(boatRuns.runId, input.after),
+    );
+    const present = db
+      .select({ id: boatRuns.runId })
+      .from(boatRuns)
+      .where(and(paged, isNull(boatRuns.absentAt)))
+      .orderBy(asc(boatRuns.runId))
+      .limit(input.limit);
+    const tunnelled = db
+      .select({ id: boatRuns.runId })
+      .from(boatTunnels)
+      .innerJoin(boatRuns, eq(boatRuns.runId, boatTunnels.runtimeInstanceId))
+      .where(and(paged, isNull(boatTunnels.releasedAt)))
+      .orderBy(asc(boatRuns.runId))
+      .limit(input.limit);
+    const pinned = db
+      .select({ id: boatRuns.runId })
+      .from(nativePublicationConsumers)
+      .innerJoin(boatRuns, eq(boatRuns.runId, nativePublicationConsumers.runId))
+      .where(and(paged, ne(nativePublicationConsumers.state, "released")))
+      .orderBy(asc(boatRuns.runId))
+      .limit(input.limit);
+    const unstopped = db
+      .select({ id: boatRuns.runId })
+      .from(workspaceRuntimeInstances)
+      .innerJoin(boatRuns, eq(boatRuns.runId, workspaceRuntimeInstances.runId))
+      .where(
+        and(
+          paged,
+          eq(workspaceRuntimeInstances.adapter, "boat"),
+          // Every status but `stopped`, named so the (adapter, status) index reads them.
+          inArray(
+            workspaceRuntimeInstances.status,
+            workspaceRuntimeInstanceStatusValues.filter((status) => status !== "stopped"),
+          ),
+          or(
+            isNotNull(workspaceRuntimeInstances.stopReason),
+            eq(workspaceRuntimeInstances.status, "failed"),
+          ),
+        ),
+      )
+      .orderBy(asc(boatRuns.runId))
+      .limit(input.limit);
+    const unended = db
+      .select({ id: boatRuns.runId })
+      .from(boatRuns)
+      .where(
+        and(
+          paged,
+          isNull(boatRuns.sandboxId),
+          // Not what the sweep leaves a launch with no VM as: gone (discarded, if its owner
+          // asked), not retained, its capture token cleared. Read as a value per run, by the
+          // record's key: a join here is planned as a scan of every capture record there is.
+          sql`(select ${workspaceCaptureDrains.retainedAt} is not null or ${workspaceCaptureDrains.captureTokenSealed} is not null or ${workspaceCaptureDrains.state} is distinct from (case when ${workspaceCaptureDrains.discardRequestedAt} is null then 'gone' else 'discarded' end) from ${workspaceCaptureDrains} where ${workspaceCaptureDrains.runId} = ${boatRuns.runId})`,
+        ),
+      )
+      .orderBy(asc(boatRuns.runId))
+      .limit(input.limit);
+    const rows = yield* present
+      .union(tunnelled)
+      .union(pinned)
+      .union(unstopped)
+      .union(unended)
+      .orderBy((fields) => asc(fields.id))
       .limit(input.limit);
     return rows.map((row) => row.id);
   });
@@ -985,6 +1094,9 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     listTunnelled: (input) => boundary(listTunnelled(input)),
     listBearing: (input) =>
       boundary(list(input, isNotNull(boatRuns.sealedControl), isNull(boatRuns.absentAt))),
+    listUnresolved: (input) =>
+      boundary(list(input, isNull(boatRuns.sandboxId), isNull(boatRuns.absentAt))),
+    listUnsettled: (input) => boundary(listUnsettled(input)),
     isActive: (runId) => boundary(isActive(runId)),
     launchInFlight: (runId) => boundary(launchInFlight(runId)),
     createAgeMs: (runId) => boundary(createAgeMs(runId)),

@@ -82,6 +82,16 @@ export const boatRuns = snakeCase.table(
   (table) => [
     uniqueIndex("boat_runs_sandbox").on(table.deploymentId, table.sandboxId),
     index("boat_runs_deployment").on(table.deploymentId, table.runId),
+    // The runs Boat may still hold a VM for, which is what the sweeps page through: an ended run
+    // leaves this index when its absence is committed.
+    index("boat_runs_present")
+      .on(table.deploymentId, table.runId)
+      .where(sql`${table.absentAt} is null`),
+    // The runs that never had a VM: the convergence sweep reads their capture records, and an
+    // ended run that had one is never in this index.
+    index("boat_runs_no_vm")
+      .on(table.deploymentId, table.runId)
+      .where(sql`${table.sandboxId} is null`),
     check("boat_runs_resources", sql`${table.resources} is null or ${table.resources} = 'none'`),
     // The bound target names this row's run, VM, disk and source, and nothing else.
     check(

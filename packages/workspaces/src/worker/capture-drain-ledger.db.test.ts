@@ -223,6 +223,72 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(read.readable && read.entry?.discardRequested?.by).toBe("user_owner");
   });
 
+  it("writes the state its writer gives, discard requested or not, and never relabels a record that already reads discarded as stopped or gone (#613)", async () => {
+    const saved = await newRun();
+    const discarded = await newRun();
+    const plain = await newRun();
+    const layer = WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
+    const row = (runId: string) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const stored = yield* (yield* WorkspaceCaptureDrainRepo).getByRunId(runId);
+          return { state: stored?.state, detail: stored?.detail };
+        }).pipe(Effect.provide(layer)),
+      );
+    const requestDiscard = (runId: string) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* WorkspaceCaptureDrainRepo).requestDiscard({
+            runId,
+            requestedBy: "user_owner",
+          });
+        }).pipe(Effect.provide(layer)),
+      );
+    const observe = (
+      runId: string,
+      state: "stopped" | "gone" | "discarded" | "kept",
+      detail: string,
+    ) => Effect.runPromise(worker(dbB, "worker-b").observe(runId, { state, detail }));
+
+    // A discard requested while a removal authorized on a saved FINAL is under way: the removal
+    // was not made on the discard, and its writer's `stopped` stands.
+    await observe(saved, "kept", "draining");
+    await requestDiscard(saved);
+    await observe(saved, "stopped", "the runtime was removed: the final flush was complete");
+    expect(await row(saved)).toEqual({
+      state: "stopped",
+      detail: "the runtime was removed: the final flush was complete",
+    });
+    // So does `gone`, written by a pass that found nothing of it left.
+    await observe(saved, "gone", "nothing of it is left");
+    expect((await row(saved)).state).toBe("gone");
+
+    // A run removed on its owner's discard reads discarded, and a later pass that finds the
+    // runtime gone, or removes its remains, does not relabel it: state and detail both stay.
+    await observe(discarded, "kept", "kept");
+    await requestDiscard(discarded);
+    await observe(discarded, "discarded", "discarded at the owner's request");
+    for (const later of ["stopped", "gone"] as const) {
+      await observe(discarded, later, `a later pass wrote ${later}`);
+      expect(await row(discarded), later).toEqual({
+        state: "discarded",
+        detail: "discarded at the owner's request",
+      });
+    }
+    // Another writer of `discarded` is taken as written.
+    await observe(discarded, "discarded", "the ended runtime was removed: the owner discarded it");
+    expect(await row(discarded)).toEqual({
+      state: "discarded",
+      detail: "the ended runtime was removed: the owner discarded it",
+    });
+
+    // No discard requested: every state is recorded exactly as written, first write and later.
+    for (const written of ["stopped", "kept", "gone", "stopped"] as const) {
+      await observe(plain, written, written);
+      expect(await row(plain), written).toEqual({ state: written, detail: written });
+    }
+  });
+
   it("lets one of two simultaneous claims of one worker process through, and neither releases the other", async () => {
     // Review 2 RISK: every stop path of a worker shares its lease owner, and the claim admitted a
     // live lease of the same owner, so two drains of one run in one process both ran.
@@ -401,7 +467,8 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       expect(requested?.retainedAt).toEqual(first.retainedAt);
       expect(requested?.nextRecoveryAt?.getTime()).toBeLessThan(scheduled.getTime());
       expect(await dueNow()).toEqual([runId]);
-      // The retention ends with the executor; nothing is left to recover, or to ask for.
+      // The retention ends with the executor; nothing is left to recover, or to ask for. Its
+      // writer says `stopped`, and a discard that is merely on the record does not change that.
       await repo((drains) =>
         drains.recordObservation({ runId, state: "stopped", detail: "removed" }),
       );
@@ -815,6 +882,11 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     ).toBe("unresolved");
     // The runtime no longer has it: deleted.
     expect(await reconcile(gone.runId, "gone")).toBe("deleted");
+    expect(await state(gone.runId)).toBe("deleted");
+    // Settled once: a pass that read it as issued before that, and settles it now, is told it was
+    // recorded removed already, whatever the runtime says. Nothing is settled a second time.
+    expect(await reconcile(gone.runId, "gone")).toBe("already-deleted");
+    expect(await reconcile(gone.runId, "present")).toBe("already-deleted");
     expect(await state(gone.runId)).toBe("deleted");
 
     // Still there, evidence unchanged: taken over, still issued, the old issuer's hold gone.

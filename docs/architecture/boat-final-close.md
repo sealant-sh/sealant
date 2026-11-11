@@ -157,11 +157,19 @@ that absence. Four callers can overlap one stop:
 
 - **The exit reconciler** polls every ready run, stop requested or not. Its `inspect` commits the
   404 and answers `missing`. With the stop's removal issued and held, the reconciler's probe is
-  refused by the capture ledger and it writes nothing.
-- **Boat's convergence sweep** releases what a VM recorded absent still holds. If it gets there
-  first, the removal finds the row already absent and ends there. Two releases overlapping in real
-  time can leave one waiting on the gateway host lock: `stop()` still returns, because Boat no
-  longer has the VM, and the sweep finishes the cleanup on its next pass.
+  refused by the capture ledger and it writes nothing. Once the stop has recorded the run stopped
+  and until it has recorded the removal complete, the run is also an ended executor nothing settled,
+  which the reconciler looks at: it reads the removal as issued, and when it settles it finds it
+  held by the stop, or recorded complete by it meanwhile (`already-deleted`). Either way it settles
+  nothing and says nothing.
+- **Boat's convergence sweep** releases what a VM recorded absent still holds, on every tick. If it
+  gets there first, the removal finds the row already absent and ends there. The two releases meet
+  on the run's gateway host lock: one removes the gateway and releases the slot, and the other finds
+  the lock held and leaves it (`busy`), saying nothing. `stop()` still returns at once, because Boat
+  no longer has the VM. A slot one caller released is read again by the other, at its read or at its
+  write, and found released; the pin is released under the publication's row lock, where the second
+  caller finds it released. A real failure (the gateway host unavailable, a slot on another host) is
+  still warned of by the caller that met it.
 - **A second stop** (the expiry reaper's, the sweep's nudge) finds the drain claim held: `busy`.
 - **The recovery sweep** acts only on a retained run, under its own claim, and a removal issued by
   another path keeps it off.
@@ -187,8 +195,11 @@ Found by sandbox id:
 
 Boat and the agent are read at most once per VM per 60 s, or per 15 s once the run is stopping or
 failed, and `running` is answered in between. Only `running` is ever answered without a read: an
-`exited` or `missing` is never served from memory. The daemon's last output is redacted with the
-run's bearer only.
+`exited` or `missing` is never served from memory. An absence already committed on the run's row is
+answered `missing` before that pacing, on every call: it is read from the row, not from memory, and
+costs no call to Boat. So a caller that asks a moment after another committed it (the removal that
+polled Boat's deletion, the exit reconciler) is never told `running` for a VM Boat no longer has,
+and no stop drains one. The daemon's last output is redacted with the run's bearer only.
 
 `BoatVm.observe` writes what Boat said on the run's row (`created_seen_at`, or `absent_at` with its
 basis) and nothing else. The run's runtime row and its capture record are written by the shared
@@ -202,7 +213,15 @@ Exec jobs and the API keep `connectMaterial`, which also requires a ready run th
 
 ## Convergence
 
-`BoatConvergence.reconcile` runs every 30 s, a page at a time:
+`BoatConvergence.reconcile` runs every 30 s, a page of twenty at a time. It pages only the runs with
+something left to settle (`BoatRunRepo.listUnsettled`), each condition read from the column its own
+writer sets: Boat's absence is not committed (`absent_at`); the tunnel slot is not released
+(`boat_tunnels.released_at`); the publication pin is not released
+(`native_publication_consumers.state`); the run is stopping or failed and not recorded stopped; or
+it never had a VM and its capture record is not ended. A run with none of these is settled and is
+never read again, so every unsettled run is visited within ceil(unsettled / 20) ticks whatever the
+deployment's history. A run can leave the set only by the last of those writes, never while it still
+holds a VM, a slot or a pin.
 
 - **No VM.** A run whose create was never issued, or whose VM Boat never made: the shared stop never
   calls the adapter for a run that names no VM, so the conclusion that Boat holds none
@@ -212,9 +231,16 @@ Exec jobs and the API keep `connectMaterial`, which also requires a ready run th
   accepted whose operation is on record is polled here whatever a read of the VM says: a VM never
   seen past creation reads 404 as still being created, so presence alone would hold it for good.
 - **The nudge.** For a run that is stopping or failed and still has a VM, the shared stop is called.
-  The nudge decides nothing.
+  The nudge decides nothing. It is not called while a removal of the VM is in flight: a deletion
+  operation on record and not complete is polled (`draining`), and a DELETE another caller has out,
+  its claim live and no operation recorded yet, is left to that caller (`draining`). The visit that
+  finds the deletion complete releases what the VM held and nudges in the same visit; the shared
+  stop then reads the committed absence and records the run stopped without a drain.
 
-A VM kept because its FINAL cannot be confirmed is reported once an hour per run.
+A VM kept because its FINAL cannot be confirmed, and a create nobody can resolve, are visited on
+every tick and reported once an hour per run. The worker's `Boat stop obligations remain` lists what
+nothing is settling (`discharging`, `unavailable`) on every tick, and a held run when it is first
+held and then once an hour.
 
 ## A run without resources has no tunnel
 

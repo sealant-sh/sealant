@@ -62,10 +62,18 @@ client from them, to open Boat sessions' control connections.
 `boatVmWorkerLayer` composes the run repository, sealed exchange owner and real guest transport. The
 application owns one managed runtime and disposes it at shutdown. A non-overlapping 30-second tick
 walks twenty run IDs at a time, with four observations in parallel and a 120-second bound per entry.
-The cursor advances over held, pending and failed entries. Individual record parsing happens after
-pagination so malformed rows do not starve later records. At the end, the next tick wraps to the
-beginning. Restarting the worker restarts this read cursor without resetting any durable operation.
-No network call runs inside a database transaction.
+It pages only the runs whose create is not resolved (`BoatRunRepo.listUnresolved`: no VM on record
+and no absence committed), which is everything the sweep can change, so a run is visited within
+ceil(unresolved / 20) ticks whatever the deployment's history. The cursor advances over held,
+pending and failed entries. Individual record parsing happens after pagination so malformed rows do
+not starve later records. At the end, the next tick wraps to the beginning. Restarting the worker
+restarts this read cursor without resetting any durable operation. No network call runs inside a
+database transaction.
+
+The worker warns `Boat allocation obligations remain` for what an operator should look at: a read
+that failed and a launch Boat holds more than one VM for, on every tick. Any other held run is
+listed when it is first held and then once an hour, and a launch still being created is never
+listed.
 
 The existing `BoatApi` owns HTTP and inventory parsing. `BoatRunRepo` is necessary because neither
 an ephemeral job claim nor the publication catalog can own a run's issued create and atomic runtime

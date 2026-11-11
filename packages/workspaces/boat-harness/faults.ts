@@ -24,6 +24,42 @@ import {
   type SettleExpectation,
 } from "./scenario.js";
 import type { HarnessStack } from "./stack.js";
+import { workerLogOffset, workerLogSince } from "./worker-log.js";
+
+/**
+ * Ends a stuck deletion. `BOAT_HARNESS_COMPLETE_ON_POLL=1`: inside the next poll of its operation,
+ * whichever caller polls. `=convergence` (with `runId`): inside a poll made while the run's
+ * recovery is between attempts (its last line "has not finished it; asked again soon"), when the
+ * only caller waiting on the operation is the Boat sweep's convergence step: the timing in which
+ * that step's own poll is the first to hear Boat complete. Otherwise at once.
+ */
+export const completeStuckDeletion = async (stack: HarnessStack, id: string, runId?: string) => {
+  const mode = process.env.BOAT_HARNESS_COMPLETE_ON_POLL;
+  if (mode !== "1" && mode !== "convergence") {
+    await stack.boat.completeDeletion(id);
+    return;
+  }
+  const state = { idle: false, on: true };
+  const offset = await workerLogOffset(stack);
+  const watched = mode === "convergence" ? runId : undefined;
+  const watch = (async () => {
+    if (watched === undefined) return;
+    while (state.on) {
+      const recovery = (await workerLogSince(stack, offset)).filter((entry) =>
+        entry.includes(`Executor recovery · run ${watched}`),
+      );
+      state.idle = recovery.at(-1)?.includes("has not finished it") ?? false;
+      await new Promise((done) => setTimeout(done, 100));
+    }
+  })();
+  const accept = () => mode === "1" || state.idle;
+  const inPoll = await stack.boat.completeOnNextPoll(id, 180_000, accept);
+  state.on = false;
+  await watch;
+  process.stderr.write(
+    `[boat-harness] stuck deletion of ${id} completed ${inPoll ? `inside a poll of its operation${mode === "convergence" ? " while its recovery was between attempts" : ""}` : "with no such poll in 180 s, outside one"}\n`,
+  );
+};
 
 /** Production session VMs carry `sealant-run`; build VMs do not. */
 export const isSession = (sandbox: Pick<FakeSandbox, "labels">) =>
@@ -449,7 +485,7 @@ export const scenarios = {
         expect(held.tunnel_released).toBe(false);
         expect(held.pin).not.toBe("released");
         expect(stack.boat.liveSandboxes().some((vm) => vm.id === id)).toBe(true);
-        await stack.boat.completeDeletion(id);
+        await completeStuckDeletion(stack, id, run.runId);
         await assertSettled(stack, run, Date.now(), {
           terminal: ["failed", "stopped"],
         });

@@ -1755,9 +1755,11 @@ describe("what a removal records of an executor's work", () => {
   });
 
   it.each([undefined, false] as const)(
-    "records `stopped` for every basis and every record on a runtime that does not report a missing executor as lost (%s)",
+    "records the basis it was removed on, whatever the record says, on a runtime that does not report a missing executor as lost: `discarded` on the owner's discard, `stopped` on every other (%s)",
     (reportsMissingAsLost) => {
       for (const basis of ["missing", "observed-complete", "discarded", "nothing-to-save"] as const)
+        // A discard that is merely on the record does not relabel a removal made on another
+        // basis: a run removed because its final flush was complete stopped normally.
         for (const record of [saved, unsaved, discarded, { readable: false } as const])
           expect(
             removalObservation({
@@ -1768,7 +1770,7 @@ describe("what a removal records of an executor's work", () => {
               removed: "the runtime was removed",
             }),
           ).toEqual({
-            state: "stopped",
+            state: basis === "discarded" ? "discarded" : "stopped",
             detail: `the runtime was removed: ${describeDeletionBasis(basis)}`,
           });
     },
@@ -1790,7 +1792,11 @@ describe("what a removal records of an executor's work", () => {
     expect(observe("missing", { readable: false })).toBe("gone");
     expect(observe("missing", saved)).toBe("stopped");
     expect(observe("missing", discarded)).toBe("discarded");
-    for (const basis of ["observed-complete", "attested-complete", "nothing-to-save"] as const)
+    for (const basis of ["observed-complete", "attested-complete", "nothing-to-save"] as const) {
       expect(observe(basis, unsaved)).toBe("stopped");
+      // A discard on the record does not relabel a removal made on another basis.
+      expect(observe(basis, discarded)).toBe("stopped");
+    }
+    expect(observe("discarded", unsaved)).toBe("discarded");
   });
 });

@@ -10,7 +10,7 @@ import { SealantApiError } from "@sealant/sdk";
 import { expect } from "vitest";
 import { z } from "zod";
 
-import { isSession, withFaults } from "./faults.js";
+import { completeStuckDeletion, isSession, withFaults } from "./faults.js";
 import {
   assertReleased,
   assertSettled,
@@ -224,7 +224,7 @@ const stopWithStuckDeletion = async (
       expect(held.pin).not.toBe("released");
       expect(stack.boat.liveSandboxes().some((vm) => vm.id === sandbox)).toBe(true);
       expect(stuck).toBe(sandbox);
-      await stack.boat.completeDeletion(sandbox);
+      await completeStuckDeletion(stack, sandbox);
       await assertSettled(stack, run, Date.now(), { terminal: ["stopped"] });
       await assertReleased(stack, run, { discard: false });
       assertOneDelete(stack, sandbox);

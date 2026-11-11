@@ -421,24 +421,43 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       Effect.map((read) => (read.readable ? read.entry?.discardRequested : undefined)),
     );
 
+    // The owner discarded this run's unsaved captures (recorded, with who and when, by the API).
+    // Nothing is drained and nothing is kept: the runtime is terminated outright. What is logged
+    // before the adapter answers is the request; only its success is the termination.
+    const discardRuntime = (
+      discarding: WorkspaceStopCaptureDrain,
+      requested: { readonly atMs: number; readonly by: string },
+      /** The run's drain claim, when the caller holds it: renewed while the runtime is removed. */
+      claim?: CaptureDrainClaim,
+    ) =>
+      Effect.gen(function* () {
+        const audit = `by ${requested.by}, requested ${new Date(requested.atMs).toISOString()}`;
+        yield* Effect.logWarning(
+          `Workspace stop (${discarding.label}): run ${options.runId}: unsaved captures discard requested by the owner (${audit}); terminating the runtime without a drain.`,
+        );
+        const terminated = yield* stopRuntime({
+          adapter,
+          resourceId,
+          reference,
+          fence: true,
+          drain: discarding,
+          claim,
+        });
+        if (terminated === "pending") {
+          // Accepted by the runtime and not finished: the discard stands, and the next call asks.
+          return stopOutcome("draining");
+        }
+        const detail = `unsaved captures discarded at the owner's request (${audit}); the runtime was terminated without a drain`;
+        yield* Effect.logError(
+          `Workspace stop (${discarding.label}): run ${options.runId}: ${detail}.`,
+        );
+        yield* discarding.ledger.observe(options.runId, { state: "discarded", detail });
+        yield* finishStop;
+        return stopOutcome("stopped");
+      });
+
     if (drain !== undefined && discard !== undefined) {
-      // The owner discarded this run's unsaved captures (recorded, with who and when, by the
-      // API). Nothing is drained and nothing is kept: the runtime is terminated outright. What is
-      // logged before the adapter answers is the request; only its success is the termination.
-      const audit = `by ${discard.by}, requested ${new Date(discard.atMs).toISOString()}`;
-      yield* Effect.logWarning(
-        `Workspace stop (${drain.label}): run ${options.runId}: unsaved captures discard requested by the owner (${audit}); terminating the runtime without a drain.`,
-      );
-      const terminated = yield* stopRuntime({ adapter, resourceId, reference, fence: true, drain });
-      if (terminated === "pending") {
-        // Accepted by the runtime and not finished: the discard stands, and the next call asks.
-        return stopOutcome("draining");
-      }
-      const detail = `unsaved captures discarded at the owner's request (${audit}); the runtime was terminated without a drain`;
-      yield* Effect.logError(`Workspace stop (${drain.label}): run ${options.runId}: ${detail}.`);
-      yield* drain.ledger.observe(options.runId, { state: "discarded", detail });
-      yield* finishStop;
-      return stopOutcome("stopped");
+      return yield* discardRuntime(drain, discard);
     }
 
     // The source is read whether or not a drain was passed: an omitted `captureDrain` says nothing
@@ -478,6 +497,12 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
         // Read under the claim: a drain that held the run until now may have recorded its outcome.
         const record = yield* readRecord;
         const recorded = record.readable ? record.entry : undefined;
+        // So may the owner's discard have been, since this stop first read the record and before
+        // it took the claim. It is honoured here as it is above: the executor is not drained, and
+        // nothing is weighed for it but the discard.
+        if (drain !== undefined && recorded?.discardRequested !== undefined) {
+          return yield* discardRuntime(drain, recorded.discardRequested, claim);
+        }
         const state = yield* runtimeState(adapter, resourceId);
         const drainedBefore = captureSourced ? recorded : undefined;
         const executor = { runId: options.runId, resourceId, reference };

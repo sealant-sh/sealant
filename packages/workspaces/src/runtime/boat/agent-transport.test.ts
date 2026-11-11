@@ -518,6 +518,8 @@ const memoryRepo = (t: BoatExecutionTarget): BoatRunRepo["Service"] => {
     list: unused,
     listTunnelled: unused,
     listBearing: unused,
+    listUnresolved: unused,
+    listUnsettled: unused,
     isActive: unused,
     launchInFlight: unused,
     createAgeMs: unused,

@@ -75,6 +75,7 @@ export {
   BoatConvergenceError,
   boatConvergenceLayer,
   boatConvergenceLayerNoDeps,
+  boatConvergenceObligations,
   type BoatConvergenceOutcome,
   type BoatConvergenceSweep,
   type BoatSharedStop,

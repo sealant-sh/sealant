@@ -47,6 +47,7 @@ import {
   type Project,
 } from "./scenario.js";
 import {
+  discardWhileDeleting,
   finalUnconfirmedThenCompletes,
   finalUnconfirmedThenDiscard,
   launchNeverReachedGuest,
@@ -359,6 +360,12 @@ describe("a ready session's daemon and its deletion", () => {
 // Boat's stop on the shared stop path (#600): closers meeting, a FINAL not confirmed, a launch no
 // daemon ran on, and a worker killed mid-removal.
 describe("the shared stop", () => {
+  scenario(
+    "saved, then the owner's discard while Boat deletes: FINAL first, edit restored (sealant#622)",
+    undefined,
+    () => discardWhileDeleting(stack, project),
+    20 * 60_000,
+  );
   scenario("FINAL not confirmed: kept and retained, then the owner's discard", undefined, () =>
     finalUnconfirmedThenDiscard(stack, project),
   );

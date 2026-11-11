@@ -579,8 +579,12 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
    * Boat is read at most once per VM per `BOAT_INSPECT_READ_MS` (`BOAT_INSPECT_STOPPING_READ_MS`
    * once the run is stopping or failed) and `running` is answered in between. Only `running` is
    * ever answered without a read, and only after a read that answered `running`: an `exited` or
-   * `missing` is never served from memory. The daemon's last output is redacted with the run's
-   * bearer only (the agent removes the launch's secrets itself).
+   * `missing` is never served from memory. An absence already committed on the run's row is not
+   * memory: it is read from the row on every call and answered `missing` whatever the pacing,
+   * so a caller that asks a moment after another committed it (the removal that polled Boat's
+   * deletion, the exit reconciler) is never told `running` for a VM Boat no longer has. The
+   * daemon's last output is redacted with the run's bearer only (the agent removes the launch's
+   * secrets itself).
    */
   async inspect(input: RuntimeAdapterInspectInput): Promise<RuntimeAdapterInspectResult> {
     const { deploymentId, runtime } = this.options;
@@ -592,6 +596,11 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
       const run = yield* (yield* BoatRunRepo).getBySandbox({ deploymentId, sandboxId });
       // No run of this deployment names the VM: nothing here can say anything of it.
       if (run === undefined) return running;
+      // Boat's absence of the VM is committed on the run's row: that is Boat's own answer, read
+      // from the row and never from memory, and it costs no call to Boat. It comes before the
+      // pacing below, which would otherwise answer `running` for up to a period after another
+      // writer committed it.
+      if (run.absentAt !== null) return { state: "missing" } as const;
       const instance = yield* (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(
         run.runId,
       );

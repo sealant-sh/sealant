@@ -259,12 +259,14 @@ export {
 export {
   BoatAllocationError,
   BoatVm,
+  boatAllocationObligations,
   boatVmLayer,
   boatVmLayerNoDeps,
   type BoatPresence,
   type BoatVmService,
   type BoatVmSweep,
 } from "./boat/vm.js";
+export { BOAT_KEPT_REPORT_MS, boatKeptReports } from "./boat/kept-report.js";
 export { BoatAllocationProvider } from "./boat/provider.js";
 
 export { HttpBoatApi } from "./boat/api.js";

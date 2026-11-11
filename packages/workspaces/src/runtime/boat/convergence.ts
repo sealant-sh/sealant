@@ -16,8 +16,14 @@ import { Clock, Context, Effect, Exit, Layer } from "effect";
 import { BoatResourcesHost } from "../../worker/boat-resources.js";
 import type { WorkspaceStopOutcome } from "../../worker/process-workspace-stop.js";
 import type { BoatExecution } from "./execution.js";
+import { boatKeptReports } from "./kept-report.js";
 import type { BoatAllocationProvider } from "./provider.js";
-import { BoatRemoval, boatRemovalLayer, type BoatRemovalProvider } from "./removal.js";
+import {
+  BOAT_REMOVAL_CLAIM_MS,
+  BoatRemoval,
+  boatRemovalLayer,
+  type BoatRemovalProvider,
+} from "./removal.js";
 
 /** The sweep's page could not be read, or its bounds are not a page. */
 export class BoatConvergenceError extends Error {
@@ -29,7 +35,8 @@ export class BoatConvergenceError extends Error {
 
 /**
  * What one pass did for one run. `stopped`, `draining`, `kept`, `busy`: what the shared stop
- * answered when nudged. `cleaned`: Boat no longer has the VM and everything it held is released.
+ * answered when nudged. `busy` also when another caller is releasing what the VM held right now
+ * (the stop's own removal): nothing is left undone that is not being done. `cleaned`: Boat no longer has the VM and everything it held is released.
  * `discharging`: Boat no longer has it and something it held is not released yet. `held`: nothing
  * here can settle it (a create nobody can resolve, a VM this sweep may not touch). `skipped`:
  * nothing to do. `unavailable`: a read or the nudge failed; the next pass tries again.
@@ -42,7 +49,12 @@ export type BoatConvergenceOutcome =
   | "skipped"
   | "unavailable";
 
-/** One bounded page; the worker carries its cursor independently of the VM sweep and resources. */
+/**
+ * One bounded page of the runs with something left to settle (`BoatRunRepo.listUnsettled`); the
+ * worker carries its cursor independently of the VM sweep and resources. A settled run is never in
+ * a page, so every unsettled one is visited within ceil(unsettled / page) ticks whatever the
+ * deployment's history.
+ */
 export interface BoatConvergenceSweep {
   readonly entries: readonly {
     readonly runId: string;
@@ -75,14 +87,19 @@ export type BoatSharedStop = (run: {
  *    ends whatever a read of the VM answers; that sends no DELETE either.
  *  - **The nudge.** A run that is stopping or failed and still has a VM: the shared stop is
  *    called for it, as the expiry reaper calls it. The nudge decides nothing: whether the VM is
- *    drained, kept, recovered or deleted is the shared path's decision, on its own evidence.
+ *    drained, kept, recovered or deleted is the shared path's decision, on its own evidence. It is
+ *    not called while a removal of the VM is in flight: a deletion operation on record and not
+ *    complete is polled, and a DELETE another caller has out is left to that caller. Once Boat's
+ *    absence is committed, in this visit or before it, the shared stop reads it (`inspect`
+ *    answers `missing` from the run's row) and records the run stopped without a drain.
  *
  * One VM is deleted from here, on Core's own record that nothing ran on it: a VM adopted by its
  * labels after its run was already recorded stopped (a create whose reply was lost, found later),
  * which was never bound and which no stop will ever visit again.
  *
  * A VM kept because its FINAL cannot be confirmed is kept without bound, by design: nothing
- * discards it automatically. The sweep says so once an hour per kept run.
+ * discards it automatically. The sweep visits it on every tick and says so once an hour per kept
+ * run; a create nobody can resolve is said as often.
  */
 export class BoatConvergence extends Context.Service<
   BoatConvergence,
@@ -95,10 +112,25 @@ export class BoatConvergence extends Context.Service<
   }
 >()("@sealant/workspaces/boat/BoatConvergence") {}
 
-/** How often a kept VM is reported, per run. */
-export const BOAT_KEPT_REPORT_MS = 60 * 60_000;
-/** Past this many remembered kept runs, the ones last reported more than a period ago are forgotten. */
-const BOAT_KEPT_REMEMBERED = 1_024;
+export { BOAT_KEPT_REPORT_MS } from "./kept-report.js";
+
+/**
+ * The sweep's entries an operator should hear about now. What nothing is settling (`discharging`,
+ * `unavailable`) is said on every pass. A run held as it is (`held`: a kept VM, a create nobody
+ * can resolve) is visited on every tick for as long as it is held, and is said when first met and
+ * then once a period (`due`). A stop still draining or busy is at work, and a kept one is reported
+ * by the sweep itself.
+ */
+export const boatConvergenceObligations = (
+  entries: BoatConvergenceSweep["entries"],
+  due: (runId: string) => boolean,
+): BoatConvergenceSweep["entries"] =>
+  entries.filter(
+    (entry) =>
+      entry.outcome === "discharging" ||
+      entry.outcome === "unavailable" ||
+      (entry.outcome === "held" && due(entry.runId)),
+  );
 
 type Dependencies =
   | BoatRunRepo
@@ -116,19 +148,15 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
     const canonical = yield* WorkspaceCaptureDrainRepo;
     const removal = yield* BoatRemoval;
     const host = yield* BoatResourcesHost;
-    /** When each kept run was last reported. This process only. */
-    const reported = new Map<string, number>();
+    /** Whether a kept run, or an unresolved create, is due its hourly line. This process only. */
+    const keptDue = boatKeptReports();
+    const unresolvedDue = boatKeptReports();
 
     /** Says once an hour that a run's VM is kept, and why, for as long as it is. */
     const reportKept = (run: BoatRun) =>
       Effect.gen(function* () {
         const { runId } = run;
-        const now = yield* Clock.currentTimeMillis;
-        const last = reported.get(runId);
-        if (last !== undefined && now - last < BOAT_KEPT_REPORT_MS) return;
-        if (reported.size >= BOAT_KEPT_REMEMBERED)
-          for (const [id, at] of reported) if (now - at >= BOAT_KEPT_REPORT_MS) reported.delete(id);
-        reported.set(runId, now);
+        if (!keptDue(runId, yield* Clock.currentTimeMillis)) return;
         const record = yield* canonical
           .getByRunId(runId)
           .pipe(Effect.orElseSucceed(() => undefined));
@@ -201,6 +229,17 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
         return "draining" as const;
       const run = (yield* runs.get(id)) ?? found;
       const { runId } = run;
+      // Another caller claimed the VM's first DELETE and Boat has not answered it yet: its claim
+      // is live and no operation is on record. That call decides what becomes of the VM, and the
+      // shared stop is not asked meanwhile: it would drain a VM that is being deleted. A claim
+      // whose caller vanished lapses, and the next pass nudges again.
+      if (
+        run.absentAt === null &&
+        run.deletionOperationId === null &&
+        run.deletionClaimedAt !== null &&
+        (yield* Clock.currentTimeMillis) - run.deletionClaimedAt.getTime() < BOAT_REMOVAL_CLAIM_MS
+      )
+        return "draining" as const;
       const instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
       const stopping =
         instance?.adapter === "boat" &&
@@ -227,9 +266,11 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
                   "The owner discarded this launch while Boat could not say whether its create made a VM.",
               });
           }
-          yield* Effect.logWarning(
-            `Boat convergence · run ${runId}: create was issued more than Boat's key retention ago and no VM carries its labels; it is held for an operator until a VM is found or the owner discards it.`,
-          );
+          // Held for as long as nobody resolves it, and visited on every tick: said once an hour.
+          if (unresolvedDue(runId, yield* Clock.currentTimeMillis))
+            yield* Effect.logWarning(
+              `Boat convergence · run ${runId}: create was issued more than Boat's key retention ago and no VM carries its labels; it is held for an operator until a VM is found or the owner discards it.`,
+            );
           return "held" as const;
         }
         let ended = run;
@@ -251,7 +292,11 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
           !(yield* runs.launchInFlight(id))
         )
           yield* nudge(instance.stopReason ?? "failed");
-        return cleaned === "removed" ? ("cleaned" as const) : ("discharging" as const);
+        return cleaned === "removed"
+          ? ("cleaned" as const)
+          : cleaned === "busy"
+            ? ("busy" as const)
+            : ("discharging" as const);
       }
 
       // Boat no longer has the VM (its own committed 404, or its deletion operation recorded
@@ -279,7 +324,9 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
           ? ("cleaned" as const)
           : cleaned === "discharging"
             ? ("discharging" as const)
-            : ("skipped" as const);
+            : cleaned === "busy"
+              ? ("busy" as const)
+              : ("skipped" as const);
       if (instance.status !== "stopped" || gone) return "skipped" as const;
 
       // The run is recorded stopped and Boat still has a VM for it, which no stop will visit
@@ -308,8 +355,9 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
         return yield* Effect.fail(new BoatConvergenceError("invalid-page"));
       // Pins with no Boat row are no VM's to discharge; release the ones whose run is over.
       yield* releaseEndedPins;
+      // Only the runs with something left to settle: a tick's page is never spent on ended ones.
       const ids = yield* runs
-        .list({
+        .listUnsettled({
           deploymentId: host.deploymentId,
           limit: input.limit,
           ...(input.after === undefined ? {} : { after: input.after }),

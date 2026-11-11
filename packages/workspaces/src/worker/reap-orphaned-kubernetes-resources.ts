@@ -38,6 +38,7 @@ import type { KubernetesRuntimeAdapter } from "../runtime/kubernetes/adapter.js"
 import {
   blueprintSourceKind,
   describeDeletionBasis,
+  removalState,
   recordedDeletionEvidence,
   authorizedDeletion,
   removeUnderDeletion,
@@ -119,9 +120,10 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
       if (ok) {
         reaped += 1;
         if (captureRemoval !== undefined && options.ledger !== undefined) {
-          // Its retention ends and the sealed capture token kept for its recovery is cleared.
+          // Its retention ends and the sealed capture token kept for its recovery is cleared. On
+          // the owner's discard it reads `discarded`; on every other basis, `stopped`.
           yield* options.ledger.observe(runId, {
-            state: "stopped",
+            state: removalState(captureRemoval),
             detail: `the ended Pod was removed: ${describeDeletionBasis(captureRemoval)}`,
           });
         }
