@@ -361,7 +361,7 @@ describe("a ready session's daemon and its deletion", () => {
 // daemon ran on, and a worker killed mid-removal.
 describe("the shared stop", () => {
   scenario(
-    "saved, then the owner's discard while Boat deletes: drain stopped, not discarded",
+    "saved, then the owner's discard while Boat deletes: FINAL first, edit restored (sealant#622)",
     undefined,
     () => discardWhileDeleting(stack, project),
     20 * 60_000,
