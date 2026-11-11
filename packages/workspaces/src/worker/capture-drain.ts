@@ -321,7 +321,9 @@ export type DeletionAuthorization =
 
 /**
  * How an issued removal whose issuer's hold lapsed was settled (review 8 #7): `deleted` (the
- * runtime no longer has the executor), `reissue` (it still does, and the evidence the removal was
+ * runtime no longer has the executor: recorded by this call), `already-deleted` (it was recorded
+ * removed before this call, by its issuer completing it or an earlier settlement: nothing was
+ * settled here), `reissue` (it still does, and the evidence the removal was
  * authorized on still stands: taken over by `ticket`, to be issued again), `outstanding` (it
  * still does, the evidence changed since, and the request may still act: it stays issued and
  * exclusionary, and the executor is kept; review 9 #5), `released` (it still does, the evidence
@@ -332,6 +334,7 @@ export type DeletionAuthorization =
  */
 export type IssuedDeletionSettlement =
   | { readonly kind: "deleted" }
+  | { readonly kind: "already-deleted" }
   | { readonly kind: "reissue"; readonly ticket: DeletionTicket }
   | { readonly kind: "outstanding" }
   | { readonly kind: "released" }
@@ -924,7 +927,7 @@ export const inMemoryCaptureDrainLedger = (
         const row = store.rows.get(runId);
         const deletion = row?.deletion;
         if (deletion?.state === "deleted") {
-          return { kind: "deleted" };
+          return { kind: "already-deleted" };
         }
         if (row === undefined || deletion === undefined || deletion.state !== "deleting-issued") {
           return { kind: "none" };
@@ -1493,6 +1496,11 @@ const settleIssuedRemoval = (
         yield* Effect.logWarning(
           `${prefix}: the removal of its executor issued earlier was carried out (the runtime no longer has it); recorded deleted.`,
         );
+        return { kind: "settled" as const };
+      case "already-deleted":
+        // Recorded removed between this pass's read of it as issued and now: its issuer finished
+        // and recorded it, as every ordinary removal ends. Nothing was settled here, and there is
+        // nothing to say.
         return { kind: "settled" as const };
       case "reissue":
         yield* Effect.logWarning(

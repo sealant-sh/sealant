@@ -816,6 +816,11 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     // The runtime no longer has it: deleted.
     expect(await reconcile(gone.runId, "gone")).toBe("deleted");
     expect(await state(gone.runId)).toBe("deleted");
+    // Settled once: a pass that read it as issued before that, and settles it now, is told it was
+    // recorded removed already, whatever the runtime says. Nothing is settled a second time.
+    expect(await reconcile(gone.runId, "gone")).toBe("already-deleted");
+    expect(await reconcile(gone.runId, "present")).toBe("already-deleted");
+    expect(await state(gone.runId)).toBe("deleted");
 
     // Still there, evidence unchanged: taken over, still issued, the old issuer's hold gone.
     const present = await issuedAndLapsed();

@@ -274,8 +274,9 @@ export interface WorkspaceCaptureDrainRepoService {
    * the evidence version bumped) and decided again on what is current. No `fenceMs`: the runtime
    * gives no such bound, and it stays `outstanding` until the runtime no longer has the executor
    * or the evidence stands again. `held`: its issuer holds it again (or someone took it over);
-   * `none`: nothing issued is left to settle; `deleted` also when it was recorded removed
-   * meanwhile.
+   * `none`: nothing issued is left to settle. `already-deleted`: it was recorded removed before
+   * this call, by its issuer or an earlier settlement: this call settled nothing, and a caller
+   * that read it as issued a moment ago has only met its ordinary completion.
    */
   readonly reconcileIssuedDeletion: (input: {
     readonly runId: string;
@@ -290,7 +291,7 @@ export interface WorkspaceCaptureDrainRepoService {
      */
     readonly reauthorizedVersion?: number | undefined;
   }) => Effect.Effect<
-    "deleted" | "reissue" | "released" | "outstanding" | "held" | "none",
+    "deleted" | "already-deleted" | "reissue" | "released" | "outstanding" | "held" | "none",
     WorkspaceCaptureDrainRepoError
   >;
   /**
@@ -1024,7 +1025,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
                 .for("update");
               if (current?.deletionState === "deleted") {
-                return "deleted" as const;
+                return "already-deleted" as const;
               }
               if (current === undefined || current.deletionState !== "deleting-issued") {
                 return "none" as const;

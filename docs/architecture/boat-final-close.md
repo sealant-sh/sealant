@@ -157,11 +157,19 @@ that absence. Four callers can overlap one stop:
 
 - **The exit reconciler** polls every ready run, stop requested or not. Its `inspect` commits the
   404 and answers `missing`. With the stop's removal issued and held, the reconciler's probe is
-  refused by the capture ledger and it writes nothing.
-- **Boat's convergence sweep** releases what a VM recorded absent still holds. If it gets there
-  first, the removal finds the row already absent and ends there. Two releases overlapping in real
-  time can leave one waiting on the gateway host lock: `stop()` still returns, because Boat no
-  longer has the VM, and the sweep finishes the cleanup on its next pass.
+  refused by the capture ledger and it writes nothing. Once the stop has recorded the run stopped
+  and until it has recorded the removal complete, the run is also an ended executor nothing settled,
+  which the reconciler looks at: it reads the removal as issued, and when it settles it finds it
+  held by the stop, or recorded complete by it meanwhile (`already-deleted`). Either way it settles
+  nothing and says nothing.
+- **Boat's convergence sweep** releases what a VM recorded absent still holds, on every tick. If it
+  gets there first, the removal finds the row already absent and ends there. The two releases meet
+  on the run's gateway host lock: one removes the gateway and releases the slot, and the other finds
+  the lock held and leaves it (`busy`), saying nothing. `stop()` still returns at once, because Boat
+  no longer has the VM. A slot one caller released is read again by the other, at its read or at its
+  write, and found released; the pin is released under the publication's row lock, where the second
+  caller finds it released. A real failure (the gateway host unavailable, a slot on another host) is
+  still warned of by the caller that met it.
 - **A second stop** (the expiry reaper's, the sweep's nudge) finds the drain claim held: `busy`.
 - **The recovery sweep** acts only on a retained run, under its own claim, and a removal issued by
   another path keeps it off.

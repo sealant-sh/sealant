@@ -29,7 +29,8 @@ export class BoatConvergenceError extends Error {
 
 /**
  * What one pass did for one run. `stopped`, `draining`, `kept`, `busy`: what the shared stop
- * answered when nudged. `cleaned`: Boat no longer has the VM and everything it held is released.
+ * answered when nudged. `busy` also when another caller is releasing what the VM held right now
+ * (the stop's own removal): nothing is left undone that is not being done. `cleaned`: Boat no longer has the VM and everything it held is released.
  * `discharging`: Boat no longer has it and something it held is not released yet. `held`: nothing
  * here can settle it (a create nobody can resolve, a VM this sweep may not touch). `skipped`:
  * nothing to do. `unavailable`: a read or the nudge failed; the next pass tries again.
@@ -251,7 +252,11 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
           !(yield* runs.launchInFlight(id))
         )
           yield* nudge(instance.stopReason ?? "failed");
-        return cleaned === "removed" ? ("cleaned" as const) : ("discharging" as const);
+        return cleaned === "removed"
+          ? ("cleaned" as const)
+          : cleaned === "busy"
+            ? ("busy" as const)
+            : ("discharging" as const);
       }
 
       // Boat no longer has the VM (its own committed 404, or its deletion operation recorded
@@ -279,7 +284,9 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
           ? ("cleaned" as const)
           : cleaned === "discharging"
             ? ("discharging" as const)
-            : ("skipped" as const);
+            : cleaned === "busy"
+              ? ("busy" as const)
+              : ("skipped" as const);
       if (instance.status !== "stopped" || gone) return "skipped" as const;
 
       // The run is recorded stopped and Boat still has a VM for it, which no stop will visit

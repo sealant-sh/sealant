@@ -5,6 +5,7 @@ import {
   BoatRunRepo,
   BoatRunRepoLive,
   BoatTunnelRepo,
+  BoatTunnelStoreError,
   boatTunnelRepoLayer,
   NativePublicationRepo,
   NativePublicationRepoLive,
@@ -112,11 +113,14 @@ export class BoatRemoval extends Context.Service<
     /**
      * Releases what a VM Boat no longer has still holds, and nothing else: nothing is read from
      * Boat, nothing is fenced and no DELETE is ever sent. `present`: no absence of the VM is
-     * committed, so nothing was released.
+     * committed, so nothing was released. `busy`: another caller is releasing what the same VM
+     * held right now (the removal's own release, another cleanup), or the run's gateway is held
+     * for a moment: nothing failed, nothing was done twice, and that caller or the next pass
+     * finishes it.
      */
     readonly cleanup: (
       run: BoatRun,
-    ) => Effect.Effect<"removed" | "discharging" | "present", BoatRemovalError>;
+    ) => Effect.Effect<"removed" | "discharging" | "present" | "busy", BoatRemovalError>;
   }
 >()("@sealant/workspaces/boat/BoatRemoval") {}
 
@@ -537,10 +541,60 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
     );
 
   /**
+   * Removes the run's gateway and releases its tunnel slot, one caller at a time. The removal's
+   * own release, the convergence sweep's cleanup and a second stop all come here for the same
+   * absent VM, and the gateway host's lock for the run decides which of them acts: the gateway is
+   * removed once, and the slot is read again under the lock, so a caller that waited its turn
+   * finds it released and does nothing. `busy`: another caller holds the run's gateway right now
+   * (the other release, or a configuration that is finishing). Nothing failed and nothing is
+   * removed twice; that caller, or the next pass, settles it.
+   */
+  const releaseTunnel = (run: BoatRun) =>
+    Effect.gen(function* () {
+      const reservation = yield* tunnels.get(run.runId);
+      if (reservation === undefined || reservation.released === true) return "released" as const;
+      // A slot recorded by another gateway host is that host's to clean; it is never guessed. A
+      // deployment with no resource gateway has no host of its own to clean one from.
+      const gateway = host.gateway;
+      if (gateway === undefined || reservation.binding.gatewayHostId !== gateway.hostId)
+        return yield* Effect.fail("foreign-host" as const);
+      if (reservation.closeId === undefined) {
+        const frozen = yield* Effect.result(tunnels.freeze(reservation, randomUUID()));
+        if (Result.isFailure(frozen)) {
+          if (frozen.failure.code === "operation-held") return "busy" as const;
+          // Another caller froze it between this call's read and its write: what is stored
+          // decides. Anything else stands.
+          if ((yield* tunnels.get(run.runId))?.closeId === undefined)
+            return yield* Effect.fail(frozen.failure);
+        }
+      }
+      const released = yield* Effect.result(
+        tunnels.withHostLock(
+          reservation.binding,
+          Effect.gen(function* () {
+            // Read again under the lock: the caller that held it before may have released it.
+            const held = yield* tunnels.get(run.runId);
+            if (held === undefined || held.released === true) return;
+            yield* gateway.tunnel.remove(held.binding.target);
+            yield* tunnels.releaseAbsent(held);
+          }).pipe(Effect.mapError((error) => ({ release: error }))),
+        ),
+      );
+      if (Result.isSuccess(released)) return "released" as const;
+      const failure = released.failure;
+      // What the release itself failed on (the gateway host, the slot's record) is reported.
+      if (!(failure instanceof BoatTunnelStoreError)) return yield* Effect.fail(failure.release);
+      // The lock is tried, never queued for: held, another caller is at this run's gateway.
+      if (failure.code === "operation-held") return "busy" as const;
+      return yield* Effect.fail(failure);
+    });
+
+  /**
    * Releases what a VM Boat no longer has still holds, against the committed absence alone;
-   * without one, nothing is. Each obligation is idempotent and retried on its own. The gateway is
-   * removed and its tunnel slot released first; the publication pin goes last, and only once
-   * that is done.
+   * without one, nothing is. Each obligation is idempotent and retried on its own, and each is
+   * safe for two callers at once: the one that finds the work done, or another caller at it,
+   * says nothing. The gateway is removed and its tunnel slot released first; the publication pin
+   * goes last, and only once that is done.
    */
   const discharge = (given: BoatRun) =>
     reporting(() =>
@@ -549,44 +603,34 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
         if (run.absentAt === null) return "present" as const;
         const settle = <A, E>(obligation: "tunnel" | "publication", effect: Effect.Effect<A, E>) =>
           Effect.exit(effect).pipe(
-            Effect.tap((exit) =>
-              Exit.isSuccess(exit)
-                ? Effect.void
-                : Effect.logWarning(
-                    `Boat discharge · run ${run.runId}: ${obligation} is not settled yet; retried on the next pass.`,
-                    exit.cause,
-                  ),
+            Effect.flatMap(
+              (exit): Effect.Effect<A | "unsettled"> =>
+                Exit.isSuccess(exit)
+                  ? Effect.succeed(exit.value)
+                  : Effect.logWarning(
+                      `Boat discharge · run ${run.runId}: ${obligation} is not settled yet; retried on the next pass.`,
+                      exit.cause,
+                    ).pipe(Effect.as("unsettled" as const)),
             ),
-            Effect.map(Exit.isSuccess),
           );
-        const tunnelSettled = yield* settle(
-          "tunnel",
-          Effect.gen(function* () {
-            const reservation = yield* tunnels.get(run.runId);
-            if (reservation === undefined || reservation.released === true) return;
-            // A slot recorded by another gateway host is that host's to clean; it is never
-            // guessed. A deployment with no resource gateway has no host of its own to clean
-            // one from.
-            const gateway = host.gateway;
-            if (gateway === undefined || reservation.binding.gatewayHostId !== gateway.hostId)
-              return yield* Effect.fail("foreign-host" as const);
-            const frozen =
-              reservation.closeId === undefined
-                ? yield* tunnels.freeze(reservation, randomUUID())
-                : reservation;
-            yield* gateway.tunnel.remove(frozen.binding.target);
-            yield* tunnels.releaseAbsent(frozen);
-          }),
-        );
-        if (!tunnelSettled) return "discharging" as const;
-        const pinReleased = yield* settle(
+        const tunnel = yield* settle("tunnel", releaseTunnel(run));
+        if (tunnel === "unsettled") return "discharging" as const;
+        if (tunnel === "busy") return "busy" as const;
+        // The catalog's guarded release takes the publication's row lock: of two callers, the
+        // second finds the pin released and succeeds.
+        const pin = yield* settle(
           "publication",
-          catalog.release(
-            nativeArtifactConsumerSchema.parse({ runId: run.runId, runtimeInstanceId: run.runId }),
-            run.publicationId,
-          ),
+          catalog
+            .release(
+              nativeArtifactConsumerSchema.parse({
+                runId: run.runId,
+                runtimeInstanceId: run.runId,
+              }),
+              run.publicationId,
+            )
+            .pipe(Effect.as("released" as const)),
         );
-        return pinReleased ? ("removed" as const) : ("discharging" as const);
+        return pin === "unsettled" ? ("discharging" as const) : ("removed" as const);
       }),
     );
 
@@ -598,8 +642,9 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
     if (outcome === "deleting") return "deleting" as const;
     // Boat no longer has the VM: the removal is done whatever becomes of the cleanup, which the
     // next pass retries alone. A failure from here on is never a failure to remove it, and it is
-    // what a caller that met another pass discharging the same run sees: said, never warned. A
-    // cleanup that stays undone is the convergence sweep's to report, every tick.
+    // what a caller that met another pass discharging the same run sees: said, never warned. So
+    // is `busy`: another caller is releasing what the VM held. A cleanup that stays undone is
+    // the convergence sweep's to report, every tick.
     return yield* discharge(run).pipe(
       Effect.map((discharged) =>
         discharged === "removed" ? discharged : ("discharging" as const),
