@@ -131,7 +131,11 @@ export interface WorkspaceCaptureDrainRepoService {
   ) => Effect.Effect<ReadonlyMap<string, WorkspaceCaptureDrain>, WorkspaceCaptureDrainRepoError>;
   /**
    * Record an observation outside a drain (the stop that followed it failed or finished, or a
-   * discard ended the runtime); the lease is untouched.
+   * discard ended the runtime); the lease is untouched. Once the owner's discard is on the record
+   * (`discard_requested_at`), a terminal state (`stopped`, `gone`) is recorded `discarded`,
+   * whoever writes it and on whatever basis: the run ended on a discard, and a later writer that
+   * found the runtime gone or removed its remains must not relabel it a normal stop. A record
+   * with no discard requested is written exactly as given.
    */
   readonly recordObservation: (input: {
     readonly runId: string;
@@ -655,7 +659,16 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
             yield* db
               .insert(workspaceCaptureDrains)
               .values({ runId: input.runId, ...set } satisfies NewWorkspaceCaptureDrain)
-              .onConflictDoUpdate({ target: workspaceCaptureDrains.runId, set });
+              .onConflictDoUpdate({
+                target: workspaceCaptureDrains.runId,
+                set: endsRetention
+                  ? {
+                      ...set,
+                      // The owner's discard, once requested, is how the run ended.
+                      state: sql<WorkspaceCaptureDrainState>`case when ${workspaceCaptureDrains.discardRequestedAt} is not null then 'discarded' else ${input.state} end`,
+                    }
+                  : set,
+              });
           }),
         ),
 

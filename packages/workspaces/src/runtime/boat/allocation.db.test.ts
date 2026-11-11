@@ -341,6 +341,11 @@ const sharedPaths = (input: {
        */
       beforeSettleIssued: async (): Promise<void> => {},
       /**
+       * Runs when a stop has read the run's record and is about to take its drain claim: between
+       * what it read and everything it does under the claim.
+       */
+      beforeClaim: async (): Promise<void> => {},
+      /**
        * How far the adapter's clock moves before each shared path call: a whole `inspect` period,
        * so each pass reads Boat as a later tick would. `0`: the pass follows the last read of the
        * VM at once, inside its pacing window.
@@ -393,6 +398,8 @@ const sharedPaths = (input: {
     );
     const ledger: typeof recorded = {
       ...recorded,
+      claim: (...claimed) =>
+        Effect.promise(() => hooks.beforeClaim()).pipe(Effect.andThen(recorded.claim(...claimed))),
       reconcileIssuedDeletion: (...settlement) =>
         Effect.promise(() => hooks.beforeSettleIssued()).pipe(
           Effect.andThen(recorded.reconcileIssuedDeletion(...settlement)),
@@ -8528,6 +8535,107 @@ describe.runIf(databaseUrl !== undefined)("Boat convergence: what stays Boat's o
       expect(paths.daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
       expect(s.provider.deleteCalls).toBe(1);
       expect(await released(s, runId)).toMatchObject(REMOVED);
+    }));
+
+  it("an owner's discard recorded while another stop is between its read of the record and its claim ends the run discarded: that stop starts no drain, and no later writer relabels it stopped (#613)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const runId = target.runId;
+      // A FINAL that never completes: the run is kept.
+      const paths = await execute(s.final([captureStatus({ complete: false })]));
+      expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
+        { runId, outcome: "kept" },
+      ]);
+      const asked = paths.daemon.calls.length;
+      const drain = () => execute(s.canonical.getByRunId(runId));
+      const read = Promise.withResolvers<void>();
+      const discarded = Promise.withResolvers<void>();
+      try {
+        // The next nudge's stop has read the record, with no discard on it, and is about to
+        // take the run's claim.
+        paths.hooks.beforeClaim = async () => {
+          paths.hooks.beforeClaim = async () => {};
+          read.resolve();
+          await discarded.promise;
+        };
+        const nudged = execute(paths.sweep({ limit: 20 }));
+        await read.promise;
+        // The owner discards the kept run: the API records it, and the lifecycle stop terminates
+        // the VM without a drain.
+        await discardedBy(s, runId);
+        expect(await execute(paths.stop({ runId }))).toBe("stopped");
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await drain()).toMatchObject({
+          state: "discarded",
+          discardRequestedAt: expect.any(Date),
+        });
+        // The held stop goes on under its claim. It finds the discard on the record and honours
+        // it: the daemon is asked nothing, and the run still reads discarded.
+        discarded.resolve();
+        expect((await nudged).entries).toEqual([{ runId, outcome: "stopped" }]);
+        expect(paths.daemon.calls).toHaveLength(asked);
+        expect(await drain()).toMatchObject({ state: "discarded" });
+        // A sweep later, the exit reconciler and another stop: nothing relabels it.
+        expect(await execute(paths.reconcileExits())).toBe(0);
+        await execute(paths.sweep({ limit: 20 }));
+        expect(await execute(paths.stop({ runId }))).toBe("stopped");
+        expect(await drain()).toMatchObject({
+          state: "discarded",
+          detail: expect.stringContaining("discarded at the owner's request"),
+        });
+        // Nor does a writer that removed the ended runtime's remains on the discard, as the exit
+        // reconciler records it.
+        await execute(
+          paths.ledger.observe(runId, {
+            state: "stopped",
+            detail: "the ended runtime was removed: the owner discarded its unsaved captures",
+          }),
+        );
+        expect(await drain()).toMatchObject({ state: "discarded" });
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await released(s, runId)).toMatchObject(REMOVED);
+      } finally {
+        // A failed expectation above must not leave the nudge's stop held.
+        discarded.resolve();
+      }
+    }));
+
+  it("a stop already past its first read of the record honours a discard recorded before it takes the claim: the VM is terminated without a drain (#613)", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const runId = target.runId;
+      const paths = await execute(s.final([captureStatus({ complete: false })]));
+      expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
+        { runId, outcome: "kept" },
+      ]);
+      const asked = paths.daemon.calls.length;
+      const read = Promise.withResolvers<void>();
+      const discarded = Promise.withResolvers<void>();
+      try {
+        paths.hooks.beforeClaim = async () => {
+          paths.hooks.beforeClaim = async () => {};
+          read.resolve();
+          await discarded.promise;
+        };
+        const nudged = execute(paths.sweep({ limit: 20 }));
+        await read.promise;
+        // The owner's discard is recorded, and no other stop has acted on it yet: the VM is
+        // still there and its daemon still answers.
+        await discardedBy(s, runId);
+        discarded.resolve();
+        // The held stop reads the record again under its claim and honours the discard: it does
+        // not drain the daemon first and keep the run again.
+        expect((await nudged).entries).toEqual([{ runId, outcome: "stopped" }]);
+        expect(paths.daemon.calls).toHaveLength(asked);
+        expect(await execute(s.canonical.getByRunId(runId))).toMatchObject({
+          state: "discarded",
+          detail: expect.stringContaining("discarded at the owner's request"),
+        });
+        expect(s.provider.deleteCalls).toBe(1);
+        expect(await released(s, runId)).toMatchObject(REMOVED);
+      } finally {
+        discarded.resolve();
+      }
     }));
 
   it("never deletes a VM a daemon may have run on for a run already recorded stopped: held, and said so", () =>

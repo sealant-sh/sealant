@@ -179,8 +179,9 @@ describe("reapOrphanedKubernetesResources", () => {
     });
     expect(await h.run()).toBe(1);
     expect(h.stopped()).toEqual(["ws-discarded"]);
+    // Removed on the owner's discard: that is how its drain record reads, not a normal stop.
     expect(ledger.store.rows.get("discarded")).toMatchObject({
-      observation: { state: "stopped" },
+      observation: { state: "discarded" },
       entry: expect.not.objectContaining({ retained: expect.anything() }),
     });
   });

@@ -495,7 +495,9 @@ export interface CaptureDrainLedger {
   readonly releaseRecovery: (runId: string, ticket: RecoveryTicket) => Effect.Effect<void>;
   /**
    * Record an observation outside a drain (what the stop that followed it did); no claim needed.
-   * `stopped`, `discarded` and `gone` also end a retention. Best-effort: a failed write is logged.
+   * `stopped`, `discarded` and `gone` also end a retention. On a record whose owner asked for a
+   * discard, `stopped` and `gone` are recorded `discarded`: that is how the run ended, whoever
+   * writes last. Best-effort: a failed write is logged.
    */
   readonly observe: (runId: string, observation: CaptureDrainObservation) => Effect.Effect<void>;
   /**
@@ -1057,8 +1059,13 @@ export const inMemoryCaptureDrainLedger = (
     observe: (runId, observation) =>
       Effect.sync(() => {
         const row = rowOf(runId);
-        row.observation = observation;
-        if (observationEndsRetention(observation.state)) {
+        const terminal = observationEndsRetention(observation.state);
+        // The owner's discard, once requested, is how the run ended.
+        row.observation =
+          terminal && row.entry.discardRequested !== undefined
+            ? { ...observation, state: "discarded" }
+            : observation;
+        if (terminal) {
           row.entry = { ...row.entry, retained: undefined };
         }
       }),
