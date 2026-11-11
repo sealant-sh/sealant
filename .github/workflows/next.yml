@@ -4,6 +4,10 @@
 #
 # - ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway}-next:<version>, the images Mend's bundle
 #   copies, amd64 and arm64, each built natively, tagged once the tests and the workspace e2e passed;
+# - ghcr.io/sealant-sh/sealant-boat-gateway-next:<version>, Boat's resource gateway
+#   (packages/workspaces/boat-tunnel), built and tagged the same way. Mend's setup pulls it by
+#   digest, and the bundled worker runs it on the server's Docker host for Boat sessions linked to
+#   project resources;
 # - @sealant/sdk-next and @sealant/api-contracts-next <version> on npm's `next` dist-tag, after the
 #   images.
 #
@@ -111,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [api, worker, ssh-gateway]
+        image: [api, worker, ssh-gateway, boat-gateway]
         platform:
           - { arch: amd64, runner: ubuntu-24.04 }
           - { arch: arm64, runner: ubuntu-24.04-arm }
@@ -148,8 +152,9 @@ jobs:
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
-          context: .
-          file: apps/${{ matrix.image }}/Dockerfile
+          # The Boat resource gateway builds from its own directory, as CI's boat-tunnel tests build it.
+          context: ${{ matrix.image == 'boat-gateway' && 'packages/workspaces/boat-tunnel' || '.' }}
+          file: ${{ matrix.image == 'boat-gateway' && 'packages/workspaces/boat-tunnel/Dockerfile' || format('apps/{0}/Dockerfile', matrix.image) }}
           platforms: linux/${{ matrix.platform.arch }}
           provenance: false
           labels: |
@@ -370,7 +375,7 @@ jobs:
     needs: [plan, image, test, workspace-e2e]
     strategy:
       matrix:
-        image: [api, worker, ssh-gateway]
+        image: [api, worker, ssh-gateway, boat-gateway]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -762,7 +767,7 @@ jobs:
           {
             echo "## Sealant $VERSION"
             echo
-            echo "From \`$GITHUB_SHA\`. \`@sealant/sdk-next@$VERSION\` and \`@sealant/api-contracts-next@$VERSION\` on npm \`next\`; \`ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway}-next:$VERSION\`."
+            echo "From \`$GITHUB_SHA\`. \`@sealant/sdk-next@$VERSION\` and \`@sealant/api-contracts-next@$VERSION\` on npm \`next\`; \`ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway,boat-gateway}-next:$VERSION\`."
             echo
             echo "Pin it in Mend: \`node scripts/sealant-pins.mjs pin $VERSION\`."
           } >> "$GITHUB_STEP_SUMMARY"
