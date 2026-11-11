@@ -8,6 +8,7 @@ import { stripVTControlCharacters } from "node:util";
 
 import { codex, Sealant, type Workspace, type WorkspaceStatus } from "@sealant/sdk";
 import { boatExecutionTargetSchema } from "@sealant/validators";
+import { expect } from "vitest";
 import { z } from "zod";
 
 import { boatTunnelName } from "../src/resources/boat-tunnel.js";
@@ -309,12 +310,17 @@ export const assertSettled = async (
       return terminal.has(value) ? value : undefined;
     },
     remaining(),
-    2000,
+    500,
   ).catch(async (error: unknown) => {
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}; public status ${await run.workspace.status()}; ${await evidence()}`,
     );
   });
+  const asked = stopsAskedAt.get(run.runId);
+  if (asked !== undefined)
+    process.stderr.write(
+      `[boat-harness] stop latency · ${expect.getState().currentTestName ?? "?"} · run ${run.runId}: ${status} ${((Date.now() - asked) / 1000).toFixed(1)} s after the Stop\n`,
+    );
   return { status, view };
 };
 
@@ -409,9 +415,21 @@ const cleanStops = new Set<string>();
 export const cleanStop = async (
   run: Pick<Launch, "runId"> & { readonly workspace: Pick<ReleaseRun["workspace"], "stop"> },
 ): Promise<void> => {
-  cleanStops.add(run.runId);
+  requireFinal(run.runId);
+  stopsAskedAt.set(run.runId, Date.now());
   await run.workspace.stop();
 };
+
+/**
+ * A run whose FINAL the invariant must check, like a clean Stop's, though it was stopped some
+ * other way (a stop kept it, and a later pass is to complete its FINAL).
+ */
+export const requireFinal = (runId: string): void => {
+  cleanStops.add(runId);
+};
+
+/** When each clean Stop was asked for, by run: `assertSettled` reports the Stop's latency from it. */
+const stopsAskedAt = new Map<string, number>();
 
 /** What the invariants read of the stack: its database and the fake Boat's VMs and events. */
 type InvariantStack = Pick<HarnessStack, "query"> & {
@@ -448,6 +466,9 @@ export const assertInvariants = async (
     );
   const view = await runtimeView(stack, run.runId);
   if (options.discarded) return { final: "skipped", reason: "released by the owner's discard" };
+  // The scenario itself gave the owner's discard: the run ended without a FINAL, by request.
+  if (view.drain === "discarded")
+    return { final: "skipped", reason: "the owner discarded its unsaved work" };
   if (view.stop_reason !== "user")
     return { final: "skipped", reason: `stop_reason ${JSON.stringify(view.stop_reason)}` };
   if (view.error_code !== null)

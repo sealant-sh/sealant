@@ -4,12 +4,9 @@
  * the fake does the same. Another closer of the same run (the 30 s lifecycle sweep, or an observer
  * that commits the 404 as absence) must not make the Stop's own pass fail and leave the close to a
  * later one. The meeting needs the sweep's tick inside the close, so the Stops here are spread
- * across the sweep's period.
+ * across the sweep's period. What a pass that did not finish logs is `isUnfinishedPass`
+ * (worker-log.ts); since #600 a clean Stop logs only its `Capture drain (lifecycle stop)` line.
  */
-import { open, stat } from "node:fs/promises";
-import { join } from "node:path";
-import { stripVTControlCharacters } from "node:util";
-
 import {
   awaitOutcome,
   cleanStop,
@@ -22,6 +19,13 @@ import {
   type Project,
 } from "./scenario.js";
 import type { HarnessStack } from "./stack.js";
+import {
+  entriesOf,
+  excerpt,
+  isUnfinishedPass,
+  workerLogOffset,
+  workerLogSince,
+} from "./worker-log.js";
 
 /**
  * Stop to Core's discharge (the allocation `deleted`, the workspace `stopped`). On real Boat a
@@ -38,27 +42,6 @@ const LATE_PASS_MS = 10_000;
 /** Boat's lifecycle sweep runs every 30 s (`apps/worker/src/workers/workspaces.ts`). */
 const SWEEP_PERIOD_MS = 30_000;
 
-/** What a close pass that did not finish logs, for the run or naming no run at all. */
-const FAILED_PASS = /Boat FINAL close: [a-z-]+|outcome nobody knows/;
-const NAMES_A_RUN = /run [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
-
-const workerLog = (stack: HarnessStack) => join(stack.scratch, "worker.log");
-
-/** The worker log's entries from byte `offset` on; an entry starts with `[HH:MM:SS.mmm]`. */
-const entriesSince = async (stack: HarnessStack, offset: number) => {
-  const file = await open(workerLog(stack), "r");
-  try {
-    const { size } = await file.stat();
-    const buffer = Buffer.alloc(Math.max(0, size - offset));
-    await file.read(buffer, 0, buffer.length, offset);
-    return stripVTControlCharacters(buffer.toString("utf8"))
-      .split(/\n(?=\[\d{2}:\d{2}:\d{2}\.\d{3}\])/)
-      .filter((entry) => entry.trim() !== "");
-  } finally {
-    await file.close();
-  }
-};
-
 /** How long a Stop took: to Mend's `stopped`, and to Core's discharge of the run. */
 export interface StopTimes {
   readonly stopped: number;
@@ -71,7 +54,7 @@ export interface StopTimes {
  * close pass for the run while it closed or in the `LATE_PASS_MS` after.
  */
 export const stopInOnePass = async (stack: HarnessStack, run: Launch): Promise<StopTimes> => {
-  const offset = (await stat(workerLog(stack))).size;
+  const offset = await workerLogOffset(stack);
   const stoppedAt = Date.now();
   await cleanStop(run);
   let stopped: number | undefined;
@@ -90,12 +73,10 @@ export const stopInOnePass = async (stack: HarnessStack, run: Launch): Promise<S
   );
   const times = { stopped: stopped ?? 0, discharged: Date.now() - stoppedAt };
   await new Promise((done) => setTimeout(done, LATE_PASS_MS));
-  const entries = (await entriesSince(stack, offset)).filter(
-    (entry) => entry.includes(run.runId) || !NAMES_A_RUN.test(entry),
-  );
-  const failed = entries.filter((entry) => FAILED_PASS.test(entry));
+  const entries = entriesOf(await workerLogSince(stack, offset), run.runId);
+  const failed = entries.filter(isUnfinishedPass);
   const gone = entries.filter((entry) => entry.includes("is gone"));
-  const evidence = [...failed, ...gone].map((entry) => entry.slice(0, 600)).join("\n  ");
+  const evidence = [...failed, ...gone].map(excerpt).join("\n  ");
   const took = `stopped for Mend ${(times.stopped / 1000).toFixed(1)} s and discharged ${(times.discharged / 1000).toFixed(1)} s after the Stop`;
   if (failed.length > 0 || times.discharged > ONE_PASS_BOUND_MS)
     throw new Error(

@@ -46,6 +46,15 @@ import {
   type Launch,
   type Project,
 } from "./scenario.js";
+import {
+  finalUnconfirmedThenCompletes,
+  finalUnconfirmedThenDiscard,
+  launchNeverReachedGuest,
+  operationOutlastsTheWait,
+  workerKilledAtDeleteNoResources,
+  workerKilledAtDeleteTunnel,
+  workerKilledDuringStuckDeletionTunnel,
+} from "./shared-stop-scenario.js";
 import { startStack, type HarnessStack } from "./stack.js";
 import { cleanStopsInOnePass, noResourcesStopsInOnePass } from "./stop-scenario.js";
 
@@ -344,6 +353,39 @@ describe("a ready session's daemon and its deletion", () => {
   );
   scenario("DELETE reply lost, VM gone by the next pass: one operation", undefined, () =>
     deleteReplyLost(stack, project),
+  );
+});
+
+// Boat's stop on the shared stop path (#600): closers meeting, a FINAL not confirmed, a launch no
+// daemon ran on, and a worker killed mid-removal.
+describe("the shared stop", () => {
+  scenario("FINAL not confirmed: kept and retained, then the owner's discard", undefined, () =>
+    finalUnconfirmedThenDiscard(stack, project),
+  );
+  scenario(
+    "FINAL not confirmed: kept, then completed on a later pass and deleted",
+    undefined,
+    () => finalUnconfirmedThenCompletes(stack, project),
+    20 * 60_000,
+  );
+  scenario(
+    "Boat's operation outlasts the removal's wait: the Stop ends on the 404",
+    undefined,
+    () => operationOutlastsTheWait(stack, project),
+  );
+  scenario("launch never reached the guest: deleted without a discard", undefined, () =>
+    launchNeverReachedGuest(stack, project),
+  );
+  scenario("worker killed at the DELETE (tunnel): time to terminal", undefined, () =>
+    workerKilledAtDeleteTunnel(stack, project),
+  );
+  scenario("worker killed at the DELETE (no resources): time to terminal", undefined, () =>
+    workerKilledAtDeleteNoResources(stack, project),
+  );
+  scenario(
+    "worker killed at the DELETE, deletion stuck (tunnel): time to terminal",
+    undefined,
+    () => workerKilledDuringStuckDeletionTunnel(stack, project),
   );
 });
 

@@ -109,6 +109,7 @@ describe("invariants checked after every scenario", () => {
       [{ row: { stop_reason: "expired" } }, 'stop_reason "expired"'],
       [{ row: { error_code: "launch-retained" } }, 'error_code "launch-retained"'],
       [{ events: [] }, "Boat was never asked to delete its VM"],
+      [{ row: { drain: "discarded" } }, "the owner discarded its unsaved work"],
     ] as const) {
       const { stack, run } = world(input);
       await expect(assertInvariants(stack, run, { discarded: false })).resolves.toEqual({
