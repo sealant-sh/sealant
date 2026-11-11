@@ -159,6 +159,8 @@ export const runtimeSchema = z.object({
   pin: z.string().nullable(),
   drain: z.string().nullable(),
   retained: z.boolean().nullable(),
+  /** The owner asked to discard the run's unsaved captures. */
+  discard_requested: z.boolean().nullable().optional(),
 });
 export type RuntimeView = z.infer<typeof runtimeSchema>;
 
@@ -200,7 +202,8 @@ export const runtimeView = async (
            ${LAUNCH_PHASE} as execution,
            t.released_at is not null as tunnel_released, t.runtime_instance_id is not null as has_tunnel,
            c.state as pin,
-           d.state as drain, d.retained_at is not null as retained
+           d.state as drain, d.retained_at is not null as retained,
+           d.discard_requested_at is not null as discard_requested
       from (select '${id}'::text as run_id) k
       left join workspace_runtime_instances r on r.run_id = k.run_id
       left join boat_runs b on b.run_id = k.run_id
@@ -467,7 +470,7 @@ export const assertInvariants = async (
   const view = await runtimeView(stack, run.runId);
   if (options.discarded) return { final: "skipped", reason: "released by the owner's discard" };
   // The scenario itself gave the owner's discard: the run ended without a FINAL, by request.
-  if (view.drain === "discarded")
+  if (view.discard_requested === true || view.drain === "discarded")
     return { final: "skipped", reason: "the owner discarded its unsaved work" };
   if (view.stop_reason !== "user")
     return { final: "skipped", reason: `stop_reason ${JSON.stringify(view.stop_reason)}` };
