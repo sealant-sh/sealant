@@ -3,7 +3,7 @@
 -- one guarded statement. This migration moves where the facts live and changes nothing Core does.
 --
 -- It is forward only. The three old tables are kept, frozen, for one release: a trigger on each
--- raises on any INSERT, UPDATE or DELETE, so a worker that predates this migration fails closed
+-- raises on any INSERT, UPDATE, DELETE or TRUNCATE, so a worker that predates this migration fails closed
 -- (it launches nothing and deletes nothing, and every VM is kept until it is upgraded). They are
 -- dropped by a later migration. Nothing is written to both.
 --
@@ -31,7 +31,8 @@ BEGIN
       USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
   -- `prepared` was written until the guest agent replaced the launch script (#515): bearer sealed
-  -- and launch material staged, nothing pushed. A launch that failed there left its row.
+  -- and launch material sealed; the material may have reached the guest, and no start was issued.
+  -- A launch that failed there left its row.
   SELECT count(*), array_to_string((array_agg(e."runtime_instance_id" ORDER BY e."runtime_instance_id"))[1:10], ', ') INTO found, named FROM "boat_executions" e
     WHERE e."record"->>'phase' IS NULL
        OR e."record"->>'phase' NOT IN ('exchange','control','prepared','installed','issued','running','held','aborted');

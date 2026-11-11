@@ -57,7 +57,7 @@ interface Ledgers {
     readonly phase:
       | "exchange"
       | "control"
-      /** Written until #515: bearer sealed and launch material staged, nothing pushed. */
+      /** Written until #515: launch material may have reached the guest; no start was issued. */
       | "prepared"
       | "installed"
       | "issued"
