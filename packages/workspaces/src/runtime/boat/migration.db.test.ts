@@ -877,7 +877,7 @@ describe.runIf(databaseUrl !== undefined)(
         expect(rows).toEqual([{ referenced: "boat_runs" }]);
       }));
 
-    it("freezes the three old tables: every INSERT, UPDATE, DELETE and TRUNCATE raises, one that matches no row included, and they keep what they held", () =>
+    it("leaves none of the three old tables behind: their run is on boat_runs, and the tables and their freeze function are dropped", () =>
       before(async ({ client, upgrade }, seed) => {
         const run = await seed({
           allocation: { phase: "bound" },
@@ -885,31 +885,21 @@ describe.runIf(databaseUrl !== undefined)(
           observation: { presence: "present", basis: "read" },
         });
         await upgrade();
-        const frozen = /is frozen: Boat runs live in boat_runs/;
-        for (const table of ["boat_allocations", "boat_executions", "boat_observations"]) {
-          // What an older worker's compare-and-set does: an update that may match nothing.
-          await expect(
-            client.query(`update ${table} set deployment_id = deployment_id where false`),
-          ).rejects.toThrow(frozen);
-          await expect(
-            client.query(
-              `update ${table} set deployment_id = 'other' where runtime_instance_id = $1`,
-              [run.runId],
-            ),
-          ).rejects.toThrow(frozen);
-          await expect(
-            client.query(`delete from ${table} where runtime_instance_id = $1`, [run.runId]),
-          ).rejects.toThrow(frozen);
-          await expect(
-            client.query(`insert into ${table} select * from ${table} where false`),
-          ).rejects.toThrow(frozen);
-          await expect(client.query(`truncate ${table} cascade`)).rejects.toThrow(frozen);
-          const { rows } = await client.query(
-            `select deployment_id from ${table} where runtime_instance_id = $1`,
-            [run.runId],
-          );
-          expect(rows).toEqual([{ deployment_id: DEPLOYMENT }]);
-        }
+        const onRuns = await client.query(`select run_id from boat_runs where run_id = $1`, [
+          run.runId,
+        ]);
+        expect(onRuns.rows).toEqual([{ run_id: run.runId }]);
+        const { rows } = await client.query(
+          `select to_regclass('boat_allocations') as allocations, to_regclass('boat_executions') as executions,
+                  to_regclass('boat_observations') as observations, to_regproc('boat_ledger_frozen') as frozen`,
+        );
+        expect(rows).toEqual([
+          { allocations: null, executions: null, observations: null, frozen: null },
+        ]);
+        // A worker that predates boat_runs fails closed: there is nothing left for it to write.
+        await expect(
+          client.query(`update boat_allocations set deployment_id = deployment_id where false`),
+        ).rejects.toThrow(/relation "boat_allocations" does not exist/);
       }));
 
     it("refuses an issue time in the future on boat_runs, by INSERT and by UPDATE", () =>
