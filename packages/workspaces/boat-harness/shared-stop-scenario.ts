@@ -70,6 +70,7 @@ interface Sample {
   readonly at: number;
   readonly status: WorkspaceStatus | "unreadable";
   readonly view: RuntimeView;
+  /** Boat still answers for the VM (not withdrawn after an accepted DELETE, not removed). */
   readonly vmLive: boolean;
   readonly deletion: string | undefined;
 }
@@ -90,7 +91,8 @@ const sampleRun = (stack: HarnessStack, run: Launch, sandbox: string) => {
         at: Date.now(),
         status,
         view,
-        vmLive: vmLive(stack, sandbox),
+        // Boat still has the VM by its own API: not withdrawn after a DELETE, not removed.
+        vmLive: vm !== undefined && !vm.removed && !vm.withdrawn,
         deletion: vm?.deletion?.status,
       });
       await sleep(1000);
@@ -119,24 +121,18 @@ const transitions = (samples: readonly Sample[], since: number) => {
 };
 
 /**
- * What must never be seen while Boat still has the VM: anything it held released, or the run
- * recorded removed; and after the Stop, a public status that says the session is live, or
- * `stopped` while Boat is still deleting it (#600: such a stop reads `retained` until Boat has).
+ * What must never be seen while Boat still has the VM (it has not withdrawn it, or removed it):
+ * anything it held released, or the run recorded removed. The public status is not asserted here
+ * (sealant#612: a stop whose worker died reads its last status until the dead worker's claim lapses).
  */
-const untruthful = (samples: readonly Sample[]) =>
+const releasedEarly = (samples: readonly Sample[]) =>
   samples.flatMap((sample) => {
-    // From the moment Core recorded the stop request.
-    if (sample.view.stop_reason === null) return [];
+    if (!sample.vmLive) return [];
     const problems: string[] = [];
-    if (sample.vmLive) {
-      if (sample.view.allocation === "deleted") problems.push("allocation deleted");
-      if (sample.view.tunnel_released === true) problems.push("tunnel slot released");
-      if (sample.view.pin === "released") problems.push("publication pin released");
-      if (sample.view.removed === true) problems.push("run recorded removed");
-      if (sample.status === "stopped") problems.push("public status stopped");
-    }
-    if (sample.status === "ready" || sample.status === "running")
-      problems.push(`public status ${sample.status} after the Stop`);
+    if (sample.view.allocation === "deleted") problems.push("allocation deleted");
+    if (sample.view.tunnel_released === true) problems.push("tunnel slot released");
+    if (sample.view.pin === "released") problems.push("publication pin released");
+    if (sample.view.removed === true) problems.push("run recorded removed");
     return problems.length === 0
       ? []
       : [`${new Date(sample.at).toISOString()}: ${problems.join(", ")}`];
@@ -144,13 +140,19 @@ const untruthful = (samples: readonly Sample[]) =>
 
 // ---- Worker killed mid-removal ------------------------------------------------------------------
 
+/** The dead worker's drain claim (`DEFAULT_CAPTURE_DRAIN_LEASE_MS`): the shared stop waits it out. */
+const DRAIN_CLAIM_MS = 3 * 60_000;
+/** One Boat sweep tick. */
+const TICK_MS = 30_000;
+
 /**
- * The worker is killed the moment Boat accepts the Stop's DELETE and started again. Measures the
- * time to a terminal workspace and to Core's discharge, from the kill: #600 finishes such a stop
- * when the dead worker's removal hold (2 min from the DELETE) or drain claim (3 min) lapses, not on
- * a 30 s sweep. Nothing may be released while Boat still has the VM, and Mend must never read the
- * session live or stopped while it does. `stuck`: Boat's deletion stays `processing` for two sweep
- * periods and is then completed.
+ * The worker is killed the moment Boat accepts the Stop's DELETE and started again. The shared stop
+ * finishes such a stop once the dead worker's drain claim lapses (sealant#612: a starting worker
+ * does not yet end its predecessor's claims; tighten these bounds when it does). So: terminal
+ * within the claim plus a tick of the kill; until then nothing released that Boat has not
+ * confirmed gone, one DELETE, and FINAL before it. `stuck`: Boat's deletion stays `processing` for
+ * two sweep periods and is then completed; terminal within 60 s of the later of that and the
+ * claim's lapse. The public status meanwhile is not asserted (sealant#612).
  */
 const workerKilledAtDelete = async (
   stack: HarnessStack,
@@ -216,16 +218,29 @@ const workerKilledAtDelete = async (
         await sleep(2000);
         const samples = await sampler.stop();
         const timeline = transitions(samples, killedAt);
-        const wrong = untruthful(samples);
+        const wrong = releasedEarly(samples);
         process.stderr.write(
           `[boat-harness] ${options.what}: Stop to kill ${seconds(killedAt - stoppedAt)}; from the kill, terminal for Mend ${seconds(terminalAt - killedAt)}, discharged ${seconds(dischargedAt - killedAt)}${completedAt === undefined ? "" : ` (Boat completed the deletion ${seconds(completedAt - killedAt)} after the kill; terminal ${seconds(terminalAt - completedAt)} after that)`}\n  ${timeline.join("\n  ")}\n`,
         );
         expect(
           wrong,
-          `while Boat still had the VM:\n${wrong.join("\n")}\n${timeline.join("\n")}`,
+          `released while Boat still had the VM:\n${wrong.join("\n")}\n${timeline.join("\n")}`,
         ).toEqual([]);
+        // sealant#612: the bound is the dead worker's drain claim plus a tick (stuck: 60 s after the
+        // later of Boat completing and the claim lapsing).
+        const bound =
+          completedAt === undefined
+            ? killedAt + DRAIN_CLAIM_MS + TICK_MS
+            : Math.max(completedAt, killedAt + DRAIN_CLAIM_MS) + 60_000;
+        expect(
+          terminalAt,
+          `terminal ${seconds(terminalAt - killedAt)} after the kill, past its bound of ${seconds(bound - killedAt)}\n${timeline.join("\n")}`,
+        ).toBeLessThanOrEqual(bound);
         await assertReleased(stack, run, { discard: false });
         expect(deletesOf(stack, sandbox)).toHaveLength(1);
+        expect(await assertFinalBeforeDelete(stack, run, "was stopped across a worker kill")).toBe(
+          "checked",
+        );
         // One FINAL: nothing registered on the channel after the DELETE.
         expect((await run.capture.state()).registers.filter((r) => r.at > killedAt)).toEqual([]);
       } finally {

@@ -376,14 +376,18 @@ describe("the shared stop", () => {
   scenario("launch never reached the guest: deleted without a discard", undefined, () =>
     launchNeverReachedGuest(stack, project),
   );
-  scenario("worker killed at the DELETE (tunnel): time to terminal", undefined, () =>
-    workerKilledAtDeleteTunnel(stack, project),
-  );
-  scenario("worker killed at the DELETE (no resources): time to terminal", undefined, () =>
-    workerKilledAtDeleteNoResources(stack, project),
+  scenario(
+    "worker killed at the DELETE (tunnel): terminal once its claim lapses (sealant#612)",
+    undefined,
+    () => workerKilledAtDeleteTunnel(stack, project),
   );
   scenario(
-    "worker killed at the DELETE, deletion stuck (tunnel): time to terminal",
+    "worker killed at the DELETE (no resources): terminal once its claim lapses (sealant#612)",
+    undefined,
+    () => workerKilledAtDeleteNoResources(stack, project),
+  );
+  scenario(
+    "worker killed at the DELETE, deletion stuck (tunnel): terminal once both end (sealant#612)",
     undefined,
     () => workerKilledDuringStuckDeletionTunnel(stack, project),
   );
