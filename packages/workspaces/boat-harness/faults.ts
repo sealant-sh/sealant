@@ -25,6 +25,22 @@ import {
 } from "./scenario.js";
 import type { HarnessStack } from "./stack.js";
 
+/**
+ * Ends a stuck deletion. With `BOAT_HARNESS_COMPLETE_ON_POLL=1` it completes inside the next poll
+ * of its operation (whichever caller polls), the timing in which a poll's own caller is the first to
+ * hear Boat's completion; otherwise at once.
+ */
+export const completeStuckDeletion = async (stack: HarnessStack, id: string) => {
+  if (process.env.BOAT_HARNESS_COMPLETE_ON_POLL !== "1") {
+    await stack.boat.completeDeletion(id);
+    return;
+  }
+  const inPoll = await stack.boat.completeOnNextPoll(id, 120_000);
+  process.stderr.write(
+    `[boat-harness] stuck deletion of ${id} completed ${inPoll ? "inside a poll of its operation" : "with no poll in 120 s, outside one"}\n`,
+  );
+};
+
 /** Production session VMs carry `sealant-run`; build VMs do not. */
 export const isSession = (sandbox: Pick<FakeSandbox, "labels">) =>
   sandbox.labels["sealant-run"] !== undefined;
@@ -449,7 +465,7 @@ export const scenarios = {
         expect(held.tunnel_released).toBe(false);
         expect(held.pin).not.toBe("released");
         expect(stack.boat.liveSandboxes().some((vm) => vm.id === id)).toBe(true);
-        await stack.boat.completeDeletion(id);
+        await completeStuckDeletion(stack, id);
         await assertSettled(stack, run, Date.now(), {
           terminal: ["failed", "stopped"],
         });

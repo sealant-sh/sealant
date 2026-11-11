@@ -616,6 +616,15 @@ export class FakeBoat {
       ) {
         const deletion = this.deletions.get(match[1] ?? "");
         if (deletion === undefined) throw new HttpError(404, "not_found");
+        // A stuck deletion armed to complete on its next poll completes inside this one: the
+        // poller is the first to hear `completed`.
+        const armed = this.#completeOnPoll.get(deletion.targetId);
+        if (armed !== undefined) {
+          this.#completeOnPoll.delete(deletion.targetId);
+          await this.completeDeletion(deletion.targetId);
+          this.#record("harness:completed-in-poll", deletion.targetId, deletion.id);
+          armed();
+        }
         return send(200, {
           ok: true,
           operation: { ...deletion, kind: "sandbox" },
@@ -883,6 +892,31 @@ export class FakeBoat {
     sandbox.removed = true;
     sandbox.ip = undefined;
     this.#record("harness:force-removed", id);
+  }
+
+  /** Stuck deletions that complete inside the next poll of their operation, by VM. */
+  readonly #completeOnPoll = new Map<string, () => void>();
+
+  /**
+   * Lets a stuck deletion finish inside the next `GET /deletion-operations/<id>` of it, so the
+   * caller polling it is the first to hear `completed`. Resolves once it has; after `timeoutMs`
+   * with no poll it completes it outside one and resolves `false`.
+   */
+  async completeOnNextPoll(id: string, timeoutMs: number): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    const polled = new Promise<boolean>((resolve) => {
+      this.#completeOnPoll.set(id, () => resolve(true));
+    });
+    const late = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    const inPoll = await Promise.race([polled, late]);
+    clearTimeout(timer);
+    if (!inPoll) {
+      this.#completeOnPoll.delete(id);
+      await this.completeDeletion(id);
+    }
+    return inPoll;
   }
 
   /** Lets a stuck deletion finish, for scenarios that release a fault mid-way. */
