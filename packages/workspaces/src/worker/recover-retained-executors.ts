@@ -86,6 +86,7 @@ import {
   describeDeletionBasis,
   drainCaptureBeforeStop,
   recordedDeletionEvidence,
+  removalState,
   removeUnderDeletion,
   authorizedDeletion,
   type CaptureDrainLedger,
@@ -412,7 +413,8 @@ const recoverOne = (
         const detail = `the retained executor was removed: ${describeDeletionBasis(basis)}${
           said === undefined ? "" : ` (${said})`
         }`;
-        yield* ledger.observe(runId, { state: "stopped", detail });
+        // On the owner's discard it reads `discarded`; on every other basis, `stopped`.
+        yield* ledger.observe(runId, { state: removalState(basis), detail });
         yield* Effect.logInfo(`${prefix}: ${detail}.`);
         return "released" as const;
       });

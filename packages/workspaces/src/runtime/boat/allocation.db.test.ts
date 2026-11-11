@@ -8600,6 +8600,38 @@ describe.runIf(databaseUrl !== undefined)("Boat convergence: what stays Boat's o
       }
     }));
 
+  it("a discard recorded while a removal authorized on a complete FINAL is deleting the VM does not relabel it: the run ends stopped, its work saved", () =>
+    test(async (s) => {
+      const target = await stopLaunched(s);
+      const runId = target.runId;
+      const paths = await execute(s.final([savedStatus()]));
+      // FINAL is saved and the removal authorized on it; Boat has the DELETE when the owner's
+      // discard is recorded.
+      let requested = false;
+      s.provider.beforeDeletion = async () => {
+        expect(paths.daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+        await discardedBy(s, runId);
+        requested = true;
+      };
+      expect(await execute(paths.stop({ runId }))).toBe("stopped");
+      expect(requested).toBe(true);
+      // The removal was made because the work was saved, not on the discard: a normal stop.
+      const ended = {
+        state: "stopped",
+        detail: expect.stringContaining("final flush complete"),
+        discardRequestedAt: expect.any(Date),
+        deletionState: "deleted",
+      };
+      expect(await execute(s.canonical.getByRunId(runId))).toMatchObject(ended);
+      // And it stays so for every later pass, though the discard is on the record.
+      expect(await execute(paths.reconcileExits())).toBe(0);
+      await execute(paths.sweep({ limit: 20 }));
+      expect(await execute(paths.stop({ runId }))).toBe("stopped");
+      expect(await execute(s.canonical.getByRunId(runId))).toMatchObject(ended);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await released(s, runId)).toMatchObject(REMOVED);
+    }));
+
   it("a stop already past its first read of the record honours a discard recorded before it takes the claim: the VM is terminated without a drain (#613)", () =>
     test(async (s) => {
       const target = await stopLaunched(s);

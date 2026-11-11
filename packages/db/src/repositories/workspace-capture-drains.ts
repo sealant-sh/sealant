@@ -131,11 +131,12 @@ export interface WorkspaceCaptureDrainRepoService {
   ) => Effect.Effect<ReadonlyMap<string, WorkspaceCaptureDrain>, WorkspaceCaptureDrainRepoError>;
   /**
    * Record an observation outside a drain (the stop that followed it failed or finished, or a
-   * discard ended the runtime); the lease is untouched. Once the owner's discard is on the record
-   * (`discard_requested_at`), a terminal state (`stopped`, `gone`) is recorded `discarded`,
-   * whoever writes it and on whatever basis: the run ended on a discard, and a later writer that
-   * found the runtime gone or removed its remains must not relabel it a normal stop. A record
-   * with no discard requested is written exactly as given.
+   * discard ended the runtime); the lease is untouched. The state is the writer's: a removal made
+   * on the owner's discard is written `discarded` by whoever made it, and one made because the
+   * work was saved is written `stopped` even when a discard was requested meanwhile. One thing is
+   * kept here: a row that already reads `discarded` is not relabelled by a later `stopped` or
+   * `gone` (a pass that finds the runtime gone after the discard's removal); its state and detail
+   * stay as the discard left them.
    */
   readonly recordObservation: (input: {
     readonly runId: string;
@@ -661,13 +662,18 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               .values({ runId: input.runId, ...set } satisfies NewWorkspaceCaptureDrain)
               .onConflictDoUpdate({
                 target: workspaceCaptureDrains.runId,
-                set: endsRetention
-                  ? {
-                      ...set,
-                      // The owner's discard, once requested, is how the run ended.
-                      state: sql<WorkspaceCaptureDrainState>`case when ${workspaceCaptureDrains.discardRequestedAt} is not null then 'discarded' else ${input.state} end`,
-                    }
-                  : set,
+                set:
+                  input.state === "stopped" || input.state === "gone"
+                    ? {
+                        ...set,
+                        // A run that ended on its owner's discard keeps reading so: a later pass
+                        // that finds the runtime gone does not relabel it.
+                        state: sql<WorkspaceCaptureDrainState>`case when ${workspaceCaptureDrains.state} = 'discarded' then 'discarded' else ${input.state} end`,
+                        detail: sql<
+                          string | null
+                        >`case when ${workspaceCaptureDrains.state} = 'discarded' then ${workspaceCaptureDrains.detail} else ${input.detail} end`,
+                      }
+                    : set,
               });
           }),
         ),

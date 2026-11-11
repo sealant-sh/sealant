@@ -427,6 +427,8 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     const discardRuntime = (
       discarding: WorkspaceStopCaptureDrain,
       requested: { readonly atMs: number; readonly by: string },
+      /** The run's drain claim, when the caller holds it: renewed while the runtime is removed. */
+      claim?: CaptureDrainClaim,
     ) =>
       Effect.gen(function* () {
         const audit = `by ${requested.by}, requested ${new Date(requested.atMs).toISOString()}`;
@@ -439,6 +441,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           reference,
           fence: true,
           drain: discarding,
+          claim,
         });
         if (terminated === "pending") {
           // Accepted by the runtime and not finished: the discard stands, and the next call asks.
@@ -498,7 +501,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
         // it took the claim. It is honoured here as it is above: the executor is not drained, and
         // nothing is weighed for it but the discard.
         if (drain !== undefined && recorded?.discardRequested !== undefined) {
-          return yield* discardRuntime(drain, recorded.discardRequested);
+          return yield* discardRuntime(drain, recorded.discardRequested, claim);
         }
         const state = yield* runtimeState(adapter, resourceId);
         const drainedBefore = captureSourced ? recorded : undefined;

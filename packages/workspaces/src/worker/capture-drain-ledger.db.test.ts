@@ -223,44 +223,69 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(read.readable && read.entry?.discardRequested?.by).toBe("user_owner");
   });
 
-  it("records a terminal state as discarded once the owner's discard is on the record, whoever writes it, and writes a record with no discard as given (#613)", async () => {
+  it("writes the state its writer gives, discard requested or not, and never relabels a record that already reads discarded as stopped or gone (#613)", async () => {
+    const saved = await newRun();
     const discarded = await newRun();
     const plain = await newRun();
     const layer = WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
-    const state = (runId: string) =>
+    const row = (runId: string) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          return (yield* (yield* WorkspaceCaptureDrainRepo).getByRunId(runId))?.state;
+          const stored = yield* (yield* WorkspaceCaptureDrainRepo).getByRunId(runId);
+          return { state: stored?.state, detail: stored?.detail };
         }).pipe(Effect.provide(layer)),
       );
-    const observe = (runId: string, written: "stopped" | "gone" | "discarded" | "kept") =>
+    const requestDiscard = (runId: string) =>
       Effect.runPromise(
-        worker(dbB, "worker-b").observe(runId, { state: written, detail: written }),
+        Effect.gen(function* () {
+          yield* (yield* WorkspaceCaptureDrainRepo).requestDiscard({
+            runId,
+            requestedBy: "user_owner",
+          });
+        }).pipe(Effect.provide(layer)),
       );
-    // Kept, then the owner discards it.
-    await observe(discarded, "kept");
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* (yield* WorkspaceCaptureDrainRepo).requestDiscard({
-          runId: discarded,
-          requestedBy: "user_owner",
-        });
-      }).pipe(Effect.provide(layer)),
-    );
-    // The discard's own stop, a pass that removed the remains, a pass that found the runtime gone.
-    for (const written of ["discarded", "stopped", "gone"] as const) {
-      await observe(discarded, written);
-      expect(await state(discarded), written).toBe("discarded");
+    const observe = (
+      runId: string,
+      state: "stopped" | "gone" | "discarded" | "kept",
+      detail: string,
+    ) => Effect.runPromise(worker(dbB, "worker-b").observe(runId, { state, detail }));
+
+    // A discard requested while a removal authorized on a saved FINAL is under way: the removal
+    // was not made on the discard, and its writer's `stopped` stands.
+    await observe(saved, "kept", "draining");
+    await requestDiscard(saved);
+    await observe(saved, "stopped", "the runtime was removed: the final flush was complete");
+    expect(await row(saved)).toEqual({
+      state: "stopped",
+      detail: "the runtime was removed: the final flush was complete",
+    });
+    // So does `gone`, written by a pass that found nothing of it left.
+    await observe(saved, "gone", "nothing of it is left");
+    expect((await row(saved)).state).toBe("gone");
+
+    // A run removed on its owner's discard reads discarded, and a later pass that finds the
+    // runtime gone, or removes its remains, does not relabel it: state and detail both stay.
+    await observe(discarded, "kept", "kept");
+    await requestDiscard(discarded);
+    await observe(discarded, "discarded", "discarded at the owner's request");
+    for (const later of ["stopped", "gone"] as const) {
+      await observe(discarded, later, `a later pass wrote ${later}`);
+      expect(await row(discarded), later).toEqual({
+        state: "discarded",
+        detail: "discarded at the owner's request",
+      });
     }
-    // A state that is not terminal is written as given, and the next terminal one is discarded.
-    await observe(discarded, "kept");
-    expect(await state(discarded)).toBe("kept");
-    await observe(discarded, "stopped");
-    expect(await state(discarded)).toBe("discarded");
+    // Another writer of `discarded` is taken as written.
+    await observe(discarded, "discarded", "the ended runtime was removed: the owner discarded it");
+    expect(await row(discarded)).toEqual({
+      state: "discarded",
+      detail: "the ended runtime was removed: the owner discarded it",
+    });
+
     // No discard requested: every state is recorded exactly as written, first write and later.
     for (const written of ["stopped", "kept", "gone", "stopped"] as const) {
-      await observe(plain, written);
-      expect(await state(plain), written).toBe(written);
+      await observe(plain, written, written);
+      expect(await row(plain), written).toEqual({ state: written, detail: written });
     }
   });
 
@@ -442,13 +467,13 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       expect(requested?.retainedAt).toEqual(first.retainedAt);
       expect(requested?.nextRecoveryAt?.getTime()).toBeLessThan(scheduled.getTime());
       expect(await dueNow()).toEqual([runId]);
-      // The retention ends with the executor; nothing is left to recover, or to ask for. The
-      // owner's discard is on the record, so its removal reads discarded whoever records it.
+      // The retention ends with the executor; nothing is left to recover, or to ask for. Its
+      // writer says `stopped`, and a discard that is merely on the record does not change that.
       await repo((drains) =>
         drains.recordObservation({ runId, state: "stopped", detail: "removed" }),
       );
       expect(await read()).toMatchObject({
-        state: "discarded",
+        state: "stopped",
         retainedAt: null,
         nextRecoveryAt: null,
         captureTokenSealed: null,

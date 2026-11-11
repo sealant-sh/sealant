@@ -495,9 +495,10 @@ export interface CaptureDrainLedger {
   readonly releaseRecovery: (runId: string, ticket: RecoveryTicket) => Effect.Effect<void>;
   /**
    * Record an observation outside a drain (what the stop that followed it did); no claim needed.
-   * `stopped`, `discarded` and `gone` also end a retention. On a record whose owner asked for a
-   * discard, `stopped` and `gone` are recorded `discarded`: that is how the run ended, whoever
-   * writes last. Best-effort: a failed write is logged.
+   * `stopped`, `discarded` and `gone` also end a retention. The state is the writer's (a removal
+   * made on the owner's discard is written `discarded`: `removalState`), with one thing kept: a
+   * record that already reads `discarded` is not relabelled by a later `stopped` or `gone`.
+   * Best-effort: a failed write is logged.
    */
   readonly observe: (runId: string, observation: CaptureDrainObservation) => Effect.Effect<void>;
   /**
@@ -1060,11 +1061,12 @@ export const inMemoryCaptureDrainLedger = (
       Effect.sync(() => {
         const row = rowOf(runId);
         const terminal = observationEndsRetention(observation.state);
-        // The owner's discard, once requested, is how the run ended.
-        row.observation =
-          terminal && row.entry.discardRequested !== undefined
-            ? { ...observation, state: "discarded" }
-            : observation;
+        // A run that ended on its owner's discard keeps reading so: a later pass that finds the
+        // runtime gone does not relabel it.
+        const relabels =
+          row.observation?.state === "discarded" &&
+          (observation.state === "stopped" || observation.state === "gone");
+        if (!relabels) row.observation = observation;
         if (terminal) {
           row.entry = { ...row.entry, retained: undefined };
         }
@@ -1281,10 +1283,20 @@ export const terminalCaptureState = (
       : "gone";
 
 /**
+ * How an executor's removal reads in its drain record, by the basis it was removed on: `discarded`
+ * when the owner's discard is what let it go, `stopped` on every other basis. A discard that is
+ * merely on the record does not decide it: a removal authorized because the work was saved is a
+ * normal stop, whatever was requested while it ran.
+ */
+export const removalState = (basis: ExecutorDeletionBasis): "stopped" | "discarded" =>
+  basis === "discarded" ? "discarded" : "stopped";
+
+/**
  * What a stop records on the drain once the runtime removed the executor (or found nothing of it
- * left) on `basis`. Every runtime records `stopped`, with why it could go. A runtime that
- * `reportsMissingAsLost` records an executor it no longer had (`missing`) from the evidence as it
- * stands (`terminalCaptureState`): `gone` unless something on record says the work was saved.
+ * left) on `basis`. Every runtime records `stopped`, with why it could go, or `discarded` when
+ * the owner's discard is why (`removalState`). A runtime that `reportsMissingAsLost` records an
+ * executor it no longer had (`missing`) from the evidence as it stands (`terminalCaptureState`):
+ * `gone` unless something on record says the work was saved.
  */
 export const removalObservation = (input: {
   readonly basis: ExecutorDeletionBasis;
@@ -1295,7 +1307,8 @@ export const removalObservation = (input: {
   readonly removed: string;
 }): CaptureDrainObservation => {
   const stopped: CaptureDrainObservation = {
-    state: "stopped",
+    // On the owner's discard it reads `discarded`, whoever removed it.
+    state: removalState(input.basis),
     detail: `${input.removed}: ${describeDeletionBasis(input.basis)}`,
   };
   if (input.basis !== "missing" || input.reportsMissingAsLost !== true) {
