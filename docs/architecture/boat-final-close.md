@@ -195,8 +195,11 @@ Found by sandbox id:
 
 Boat and the agent are read at most once per VM per 60 s, or per 15 s once the run is stopping or
 failed, and `running` is answered in between. Only `running` is ever answered without a read: an
-`exited` or `missing` is never served from memory. The daemon's last output is redacted with the
-run's bearer only.
+`exited` or `missing` is never served from memory. An absence already committed on the run's row is
+answered `missing` before that pacing, on every call: it is read from the row, not from memory, and
+costs no call to Boat. So a caller that asks a moment after another committed it (the removal that
+polled Boat's deletion, the exit reconciler) is never told `running` for a VM Boat no longer has,
+and no stop drains one. The daemon's last output is redacted with the run's bearer only.
 
 `BoatVm.observe` writes what Boat said on the run's row (`created_seen_at`, or `absent_at` with its
 basis) and nothing else. The run's runtime row and its capture record are written by the shared
@@ -228,7 +231,11 @@ holds a VM, a slot or a pin.
   accepted whose operation is on record is polled here whatever a read of the VM says: a VM never
   seen past creation reads 404 as still being created, so presence alone would hold it for good.
 - **The nudge.** For a run that is stopping or failed and still has a VM, the shared stop is called.
-  The nudge decides nothing.
+  The nudge decides nothing. It is not called while a removal of the VM is in flight: a deletion
+  operation on record and not complete is polled (`draining`), and a DELETE another caller has out,
+  its claim live and no operation recorded yet, is left to that caller (`draining`). The visit that
+  finds the deletion complete releases what the VM held and nudges in the same visit; the shared
+  stop then reads the committed absence and records the run stopped without a drain.
 
 A VM kept because its FINAL cannot be confirmed, and a create nobody can resolve, are visited on
 every tick and reported once an hour per run. The worker's `Boat stop obligations remain` lists what

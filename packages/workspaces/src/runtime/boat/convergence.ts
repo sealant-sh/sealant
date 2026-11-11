@@ -18,7 +18,12 @@ import type { WorkspaceStopOutcome } from "../../worker/process-workspace-stop.j
 import type { BoatExecution } from "./execution.js";
 import { boatKeptReports } from "./kept-report.js";
 import type { BoatAllocationProvider } from "./provider.js";
-import { BoatRemoval, boatRemovalLayer, type BoatRemovalProvider } from "./removal.js";
+import {
+  BOAT_REMOVAL_CLAIM_MS,
+  BoatRemoval,
+  boatRemovalLayer,
+  type BoatRemovalProvider,
+} from "./removal.js";
 
 /** The sweep's page could not be read, or its bounds are not a page. */
 export class BoatConvergenceError extends Error {
@@ -82,7 +87,11 @@ export type BoatSharedStop = (run: {
  *    ends whatever a read of the VM answers; that sends no DELETE either.
  *  - **The nudge.** A run that is stopping or failed and still has a VM: the shared stop is
  *    called for it, as the expiry reaper calls it. The nudge decides nothing: whether the VM is
- *    drained, kept, recovered or deleted is the shared path's decision, on its own evidence.
+ *    drained, kept, recovered or deleted is the shared path's decision, on its own evidence. It is
+ *    not called while a removal of the VM is in flight: a deletion operation on record and not
+ *    complete is polled, and a DELETE another caller has out is left to that caller. Once Boat's
+ *    absence is committed, in this visit or before it, the shared stop reads it (`inspect`
+ *    answers `missing` from the run's row) and records the run stopped without a drain.
  *
  * One VM is deleted from here, on Core's own record that nothing ran on it: a VM adopted by its
  * labels after its run was already recorded stopped (a create whose reply was lost, found later),
@@ -220,6 +229,17 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
         return "draining" as const;
       const run = (yield* runs.get(id)) ?? found;
       const { runId } = run;
+      // Another caller claimed the VM's first DELETE and Boat has not answered it yet: its claim
+      // is live and no operation is on record. That call decides what becomes of the VM, and the
+      // shared stop is not asked meanwhile: it would drain a VM that is being deleted. A claim
+      // whose caller vanished lapses, and the next pass nudges again.
+      if (
+        run.absentAt === null &&
+        run.deletionOperationId === null &&
+        run.deletionClaimedAt !== null &&
+        (yield* Clock.currentTimeMillis) - run.deletionClaimedAt.getTime() < BOAT_REMOVAL_CLAIM_MS
+      )
+        return "draining" as const;
       const instance = yield* runtimes.getRuntimeInstanceByRunId(runId);
       const stopping =
         instance?.adapter === "boat" &&
