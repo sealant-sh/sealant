@@ -26,6 +26,9 @@ import {
   BoatVm,
   boatConnectMaterial,
   boatDrainConnectMaterial,
+  boatAllocationObligations,
+  boatConvergenceObligations,
+  boatKeptReports,
   boatResourceObligations,
   DockerResourceRuntime,
   KubernetesCallerRuntime,
@@ -1070,6 +1073,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   let boatLiveResourceCursor: string | undefined;
   let boatConvergenceCursor: string | undefined;
   let boatSweepRunning = false;
+  // A run held as it is stays in the sweeps' pages and is visited on every tick: each line lists
+  // it when it is first held, then once an hour.
+  const boatAllocationHeldDue = boatKeptReports();
+  const boatConvergenceHeldDue = boatKeptReports();
   // The nudge: Boat's convergence sweep calls the shared stop for a Boat run that is stopping or
   // failed, as the expiry reaper calls it for every runtime. The stop decides; the sweep only asks.
   const stopBoatRun: BoatSharedStop = ({ runId, stopReason }) =>
@@ -1111,8 +1118,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         boatConvergenceCursor = converged.next;
         // A stop still draining or busy is at work, and a kept VM is reported by the sweep itself,
         // once an hour: only what nothing is settling is listed every tick.
-        const held = converged.entries.filter((entry) =>
-          ["held", "discharging", "unavailable"].includes(entry.outcome),
+        const held = boatConvergenceObligations(converged.entries, (runId) =>
+          boatConvergenceHeldDue(runId, Date.now()),
         );
         if (held.length > 0) console.warn("Boat stop obligations remain", { entries: held });
       }
@@ -1136,8 +1143,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
       }
       if (boatAssembly?.registration !== undefined) await boatAssembly.reconcileCatalog?.();
-      const unresolved = report.entries.filter(
-        (entry) => !["bound", "deleted"].includes(entry.outcome),
+      // A launch still being created is not an obligation, and a run held as it is is listed
+      // once an hour: a failed read and a launch with more than one VM are listed every tick.
+      const unresolved = boatAllocationObligations(report.entries, (runId) =>
+        boatAllocationHeldDue(runId, Date.now()),
       );
       if (unresolved.length > 0)
         console.warn("Boat allocation obligations remain", { entries: unresolved });

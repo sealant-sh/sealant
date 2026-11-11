@@ -51,14 +51,36 @@ type Failure =
   | BoatRunStoreError
   | Effect.Error<ReturnType<BoatExecutionService["exchange"]>>;
 
-/** One bounded page. The caller retains next and wraps to the beginning only at the end. */
+/**
+ * One bounded page of the runs whose create is not resolved (`BoatRunRepo.listUnresolved`). The
+ * caller retains next and wraps to the beginning only at the end.
+ */
 export interface BoatVmSweep {
   readonly entries: readonly {
     readonly runId: string;
     readonly outcome: "bound" | "pending" | "held" | "unavailable" | "deleted";
+    /** Why a held run is held, where its row says. */
+    readonly held?: NonNullable<BoatRun["heldReason"]>;
   }[];
   readonly next?: string;
 }
+
+/**
+ * The sweep's entries an operator should hear about now. A read that failed (`unavailable`) and a
+ * launch Boat holds more than one VM for (`allocation-conflict`) are said on every pass. Any other
+ * held run stays as it is with nothing for anyone to do this pass (a create unresolved past Boat's
+ * key retention, a run stopped before its create): it is said when first met and then once a
+ * period (`due`). A launch still being created (`pending`) is never one of them.
+ */
+export const boatAllocationObligations = (
+  entries: BoatVmSweep["entries"],
+  due: (runId: string) => boolean,
+): BoatVmSweep["entries"] =>
+  entries.filter(
+    (entry) =>
+      entry.outcome === "unavailable" ||
+      (entry.outcome === "held" && (entry.held === "allocation-conflict" || due(entry.runId))),
+  );
 
 /** What Boat says about one run's VM right now. Only `absent` is terminal. */
 export type BoatPresence =
@@ -100,7 +122,9 @@ export interface BoatVmService {
    * issued and has no VM on record is discovered by label, or replayed under its key inside the
    * window, and the VM found is adopted; a run that stopped before create was issued is held as
    * `run-stopped`. It issues no first create, binds nothing and exchanges nothing: a VM nothing
-   * launched on stays unbound, and is removed on Core's own record that nothing ran on it.
+   * launched on stays unbound, and is removed on Core's own record that nothing ran on it. So it
+   * reads only the runs with no VM on record and no absence committed; a run with a VM, and one
+   * Boat no longer has, is never in its page.
    */
   readonly reconcile: (input: {
     readonly limit: number;
@@ -555,7 +579,7 @@ const make: Effect.Effect<
   const reconcile = Effect.fn("BoatVm.reconcile")(function* (
     input: Parameters<BoatVmService["reconcile"]>[0],
   ) {
-    const ids = yield* runs.list({
+    const ids = yield* runs.listUnresolved({
       deploymentId,
       limit: input.limit,
       ...(input.after === undefined ? {} : { after: input.after }),
@@ -586,7 +610,17 @@ const make: Effect.Effect<
                 : ("unavailable" as const),
             ),
           ),
-          Effect.map((outcome) => ({ runId: id, outcome })),
+          Effect.flatMap((outcome) =>
+            // Why it is held, as its row says now: a conflict is an operator's to look at.
+            (outcome === "held" ? runs.get(id) : Effect.succeed(undefined)).pipe(
+              Effect.orElseSucceed(() => undefined),
+              Effect.map((held) => ({
+                runId: id,
+                outcome,
+                ...(held?.heldReason == null ? {} : { held: held.heldReason }),
+              })),
+            ),
+          ),
         ),
       { concurrency: 4 },
     );

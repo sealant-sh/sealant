@@ -1333,9 +1333,8 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         // Reconstruct the old worker's terminal allocation with its untouched pre-launch drain:
         // the exit reconciler's sweep of ended executors nothing settled reports it gone.
         await execute(restoreUnprogressedCaptureDrain(s.db, f.input.runId, token.sealed));
-        expect(await execute(f.close.sweep({ limit: 10 }))).toMatchObject({
-          entries: [{ runId: f.input.runId, outcome: "cleaned" }],
-        });
+        // Boat's own sweep has nothing left of the run: it is settled, and not in its page.
+        expect(await execute(f.close.sweep({ limit: 10 }))).toEqual({ entries: [] });
         await execute(f.close.reconcileExits());
         expect(await execute(s.canonical.getByRunId(f.input.runId))).toMatchObject({
           state: "gone",
@@ -1378,9 +1377,8 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         expect(s.provider.deleteCalls).toBe(0);
         expect(await execute(f.close.stop({ runId: f.input.runId }))).toBe("stopped");
         expect((await execute(nativeConsumerRows(s.db, f.input.runId)))[0]?.state).toBe("released");
-        expect(await execute(s.allocations.reconcile({ limit: 10 }))).toMatchObject({
-          entries: [{ outcome: "deleted" }],
-        });
+        // A run Boat no longer has a VM for is not in the VM sweep's page.
+        expect(await execute(s.allocations.reconcile({ limit: 10 }))).toEqual({ entries: [] });
         expect(await execute(s.resourceOwner.reconcile({ limit: 10 }))).toMatchObject({
           entries: [{ outcome: "closed" }],
         });
@@ -1914,10 +1912,8 @@ describe.runIf(databaseUrl !== undefined)(
         expect(await execute(paths.sweep({ limit: 1, after: target.runId }))).toEqual({
           entries: [],
         });
-        // Ended and released: a later pass finds nothing left to do, and asks Boat nothing.
-        expect((await execute(paths.sweep({ limit: 1 }))).entries).toEqual([
-          { runId: target.runId, outcome: "cleaned" },
-        ]);
+        // Ended and released: the run is settled, so a later pass does not read it at all.
+        expect(await execute(paths.sweep({ limit: 1 }))).toEqual({ entries: [] });
         expect(s.provider.deleteCalls).toBe(1);
         for (const limit of [0, -1, 21, 1.5])
           await expect(execute(paths.sweep({ limit }))).rejects.toThrow("invalid-page");
@@ -2479,9 +2475,8 @@ describe.runIf(databaseUrl !== undefined)(
         const { paths, daemon } = await execute(s.final([]));
         expect(await execute(paths.stop(target))).toBe("stopped");
         expect(await execute(paths.stop(target))).toBe("stopped");
-        expect(await execute(paths.sweep({ limit: 20 }))).toMatchObject({
-          entries: [{ runId: target.runId, outcome: "cleaned" }],
-        });
+        // Settled by the stop: nothing is left for Boat's own sweep.
+        expect(await execute(paths.sweep({ limit: 20 }))).toEqual({ entries: [] });
         expect(await execute(s.resourceOwner.reconcile({ limit: 20 }))).toMatchObject({
           entries: [{ runId: target.runId, outcome: "closed" }],
         });
@@ -3155,9 +3150,8 @@ describe.runIf(databaseUrl !== undefined)(
         expect(await launchPhase(s, s.input.consumer.runId)).toBe("exchange");
         s.guest.fail = false;
         const exchanges = s.guest.targets.length;
-        expect((await execute(s.allocations.reconcile({ limit: 20 }))).entries[0]?.outcome).toBe(
-          "bound",
-        );
+        // A run with a VM on record is not in the sweep's page: only a launch binds or exchanges.
+        expect(await execute(s.allocations.reconcile({ limit: 20 }))).toEqual({ entries: [] });
         expect(await execute(s.repo.get(s.input.consumer.runId))).toEqual(before);
         // The launch read the boot once; the sweep asked the VM nothing.
         expect(s.provider.commands).toEqual(["/usr/bin/cat /proc/sys/kernel/random/boot_id"]);
@@ -3573,10 +3567,8 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       const ended = await runOf(s, target.runId);
       expect(ended.admissionOperationId).not.toBeNull();
       expect(ended.sealedLaunch).toBeNull();
-      // The deleted VM is no longer driven as if it were current.
-      expect(await execute(s.allocations.reconcile({ limit: 10 }))).toMatchObject({
-        entries: [{ runId: target.runId, outcome: "deleted" }],
-      });
+      // The deleted VM is no longer driven as if it were current: the sweep does not read it.
+      expect(await execute(s.allocations.reconcile({ limit: 10 }))).toEqual({ entries: [] });
     }));
 
   it("ends a ready VM's execution when Boat no longer has it, reporting its work lost (audit S6)", () =>
@@ -3637,9 +3629,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       expect(s.provider.deleteCalls).toBe(0);
       // Nothing is left for a later pass of either sweep.
       expect(await execute(paths.reconcileExits())).toBe(0);
-      expect(await execute(paths.sweep({ limit: 10 }))).toMatchObject({
-        entries: [{ runId: target.runId, outcome: "cleaned" }],
-      });
+      expect(await execute(paths.sweep({ limit: 10 }))).toEqual({ entries: [] });
     }));
 
   it("adopts a launch whose worker died as failed and closes it (audit S3)", () =>
@@ -4203,12 +4193,10 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       const target = await launch;
       expect(target.runId).toBe(s.input.consumer.runId);
       expect(await launchPhase(s, target.runId)).toBe("control");
-      // Once the launch's ownership lapses, the sweep owns the allocation again.
+      // Its create is resolved and its VM bound: nothing is left for the VM sweep, even once the
+      // launch's ownership lapses.
       await execute(strandBoatLaunch(s.db, { runId: target.runId, sandboxId: target.sandboxId }));
-      expect((await execute(s.allocations.reconcile({ limit: 20 }))).entries).toContainEqual({
-        runId: target.runId,
-        outcome: "bound",
-      });
+      expect(await execute(s.allocations.reconcile({ limit: 20 }))).toEqual({ entries: [] });
     }));
 
   it("continues a launch through a lost create reply by finding the VM Boat accepted (harness: create reply lost)", () =>
@@ -8364,10 +8352,9 @@ describe.runIf(databaseUrl !== undefined)("Boat convergence: what stays Boat's o
         captureTokenSealed: null,
       });
       expect((await execute(nativeConsumerRows(s.db, runId)))[0]?.state).toBe("released");
-      // Idempotent.
-      expect((await execute(paths.sweep({ limit: 20 }))).entries).toEqual([
-        { runId, outcome: "cleaned" },
-      ]);
+      // Settled: its row, its pin, its stop and its capture record are all ended, so a later pass
+      // does not read it.
+      expect(await execute(paths.sweep({ limit: 20 }))).toEqual({ entries: [] });
     }));
 
   it("removes a VM adopted by its labels after its run was already recorded stopped: never bound, so nothing ran on it", () =>

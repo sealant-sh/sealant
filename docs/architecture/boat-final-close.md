@@ -210,7 +210,15 @@ Exec jobs and the API keep `connectMaterial`, which also requires a ready run th
 
 ## Convergence
 
-`BoatConvergence.reconcile` runs every 30 s, a page at a time:
+`BoatConvergence.reconcile` runs every 30 s, a page of twenty at a time. It pages only the runs with
+something left to settle (`BoatRunRepo.listUnsettled`), each condition read from the column its own
+writer sets: Boat's absence is not committed (`absent_at`); the tunnel slot is not released
+(`boat_tunnels.released_at`); the publication pin is not released
+(`native_publication_consumers.state`); the run is stopping or failed and not recorded stopped; or
+it never had a VM and its capture record is not ended. A run with none of these is settled and is
+never read again, so every unsettled run is visited within ceil(unsettled / 20) ticks whatever the
+deployment's history. A run can leave the set only by the last of those writes, never while it still
+holds a VM, a slot or a pin.
 
 - **No VM.** A run whose create was never issued, or whose VM Boat never made: the shared stop never
   calls the adapter for a run that names no VM, so the conclusion that Boat holds none
@@ -222,7 +230,10 @@ Exec jobs and the API keep `connectMaterial`, which also requires a ready run th
 - **The nudge.** For a run that is stopping or failed and still has a VM, the shared stop is called.
   The nudge decides nothing.
 
-A VM kept because its FINAL cannot be confirmed is reported once an hour per run.
+A VM kept because its FINAL cannot be confirmed, and a create nobody can resolve, are visited on
+every tick and reported once an hour per run. The worker's `Boat stop obligations remain` lists what
+nothing is settling (`discharging`, `unavailable`) on every tick, and a held run when it is first
+held and then once an hour.
 
 ## A run without resources has no tunnel
 
