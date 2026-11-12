@@ -10,6 +10,7 @@
 import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import {
+  BoatAccountRepo,
   ConnectedAccountRepo,
   ResourceDomainRepo,
   GitHubInstallationRepo,
@@ -282,6 +283,8 @@ const makeLayer = (store: Store) => {
 
   return Layer.mergeAll(
     Layer.mock(ConnectedAccountRepo, {}),
+    // No spec here names a Boat account.
+    Layer.mock(BoatAccountRepo, {}),
     Layer.mock(GitHubInstallationRepo, {}),
     Layer.mock(GitHubInstallationRepositoryCacheRepo, {}),
     Layer.mock(GitHubSourceIntegrationService, {

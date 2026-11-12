@@ -12,9 +12,8 @@ import {
 } from "@sealant/telemetry";
 import { urlForDisplay } from "@sealant/validators/url-for-display";
 import {
-  BoatAllocationProvider,
   SealantRuntimeControlLive,
-  boatControlMaterialLayer,
+  boatAccountControlMaterialLayer,
   boatProviderFromEnv,
 } from "@sealant/workspaces";
 import { Effect, Layer, Redacted } from "effect";
@@ -172,20 +171,16 @@ const credentialCipher = credentialCipherLayer({
  *
  * Built only where the deployment gives the API its Boat key, the way it holds AWS credentials for
  * MicroVM. Each control connection to a Boat run (sessions, credential pushes) reads the run's
- * sealed bearer and asks Boat for a fresh hosted cookie. Without a key, nothing Boat is built.
+ * sealed bearer and asks Boat for a fresh hosted cookie, with the key of the Boat account the run
+ * was created under: the env key for the default account, a stored account's own key otherwise.
+ * Without an env key, nothing Boat is built.
  */
 const boatProvider = boatProviderFromEnv(env);
 const boatControlLayer =
   boatProvider === undefined
     ? Layer.empty
-    : boatControlMaterialLayer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            databaseClientLayer,
-            credentialCipher,
-            Layer.succeed(BoatAllocationProvider, boatProvider),
-          ),
-        ),
+    : boatAccountControlMaterialLayer({ defaultAccount: boatProvider }).pipe(
+        Layer.provide(Layer.mergeAll(databaseClientLayer, credentialCipher)),
       );
 
 export const requestDependenciesLayer = Layer.mergeAll(

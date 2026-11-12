@@ -23,7 +23,6 @@ import { deleteExpiredRunRecords } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
   BOAT_RESOURCE_PASS,
-  BoatVm,
   boatConnectMaterial,
   boatDrainConnectMaterial,
   boatAllocationObligations,
@@ -94,7 +93,7 @@ import {
 } from "@sealant/workspaces";
 import { Effect, Layer } from "effect";
 
-import { assembleBoat } from "./boat-assembly.js";
+import { assembleBoat, type BoatWorkerStack } from "./boat-assembly.js";
 import { processRunExecJob } from "./process-run-exec-job.js";
 import {
   CLAUDE_SESSION_REFRESH_INTERVAL_MS,
@@ -414,7 +413,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     docker: resourceAssembly,
   });
   boatResourceReach = boatAssembly?.reach;
-  const boatRuntime = boatAssembly?.runtime;
   const targetOptions = {
     ...baseTargetOptions,
     ...(boatAssembly?.control === undefined
@@ -1066,12 +1064,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
 
   resourceTick();
   const resourceTickTimer = setInterval(resourceTick, env.SEALANT_RESOURCE_TICK_MS);
-  let boatCursor: string | undefined;
-  let boatResourceCursor: string | undefined;
-  // Live runs have a cursor of their own, so a link is applied within ceil(live runs / page)
-  // ticks however many ended allocations the cursor above still has to page through.
-  let boatLiveResourceCursor: string | undefined;
-  let boatConvergenceCursor: string | undefined;
   let boatSweepRunning = false;
   // A run held as it is stays in the sweeps' pages and is visited on every tick: each line lists
   // it when it is first held, then once an hour.
@@ -1095,61 +1087,79 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         label: "Boat convergence",
       },
     });
+  /**
+   * One tick of Boat's sweeps for one account, each sweep from where it stopped last for that
+   * account: its creates, its stops and cleanups, its resource links, its build journals.
+   */
+  const sweepBoatAccount = async (stack: BoatWorkerStack) => {
+    const { cursors } = stack;
+    const account = stack.accountId ?? "default";
+    const report = await stack.reconcileAllocations({
+      limit: 20,
+      ...(cursors.vm === undefined ? {} : { after: cursors.vm }),
+    });
+    cursors.vm = report.next;
+    if (stack.reconcileConvergence !== undefined) {
+      const converged = await stack.reconcileConvergence({
+        limit: 20,
+        ...(cursors.convergence === undefined ? {} : { after: cursors.convergence }),
+        stop: stopBoatRun,
+      });
+      cursors.convergence = converged.next;
+      // A stop still draining or busy is at work, and a kept VM is reported by the sweep itself,
+      // once an hour: only what nothing is settling is listed every tick.
+      const held = boatConvergenceObligations(converged.entries, (runId) =>
+        boatConvergenceHeldDue(runId, Date.now()),
+      );
+      if (held.length > 0) console.warn("Boat stop obligations remain", { account, entries: held });
+    }
+    if (stack.reconcileResources !== undefined) {
+      const resources = await stack.reconcileResources({
+        limit: 20,
+        ...(cursors.resource === undefined ? {} : { after: cursors.resource }),
+        live: {
+          limit: BOAT_RESOURCE_PASS.livePage,
+          ...(cursors.liveResource === undefined ? {} : { after: cursors.liveResource }),
+        },
+      });
+      cursors.resource = resources.next;
+      cursors.liveResource = resources.live?.next;
+      // A live run both pages reached is listed once: the second reports the first's outcome.
+      const paged = new Set(resources.entries.map((entry) => entry.runId));
+      const held = boatResourceObligations([
+        ...(resources.live?.entries ?? []).filter((entry) => !paged.has(entry.runId)),
+        ...resources.entries,
+      ]);
+      if (held.length > 0)
+        console.warn("Boat resource obligations remain", { account, entries: held });
+    }
+    await stack.reconcileCatalog?.();
+    // A launch still being created is not an obligation, and a run held as it is is listed
+    // once an hour: a failed read and a launch with more than one VM are listed every tick.
+    const unresolved = boatAllocationObligations(report.entries, (runId) =>
+      boatAllocationHeldDue(runId, Date.now()),
+    );
+    if (unresolved.length > 0)
+      console.warn("Boat allocation obligations remain", { account, entries: unresolved });
+  };
+  /** Every Boat account that has runs, the default one first; one failing stops no other. */
   const runBoatSweep = async () => {
-    if (boatRuntime === undefined || boatSweepRunning) return;
+    if (boatAssembly === undefined || boatSweepRunning) return;
     boatSweepRunning = true;
     try {
-      const report = await boatRuntime.runPromise(
-        Effect.gen(function* () {
-          const vms = yield* BoatVm;
-          return yield* vms.reconcile({
-            limit: 20,
-            ...(boatCursor === undefined ? {} : { after: boatCursor }),
+      for (const stack of await boatAssembly.sweptStacks()) {
+        await sweepBoatAccount(stack).catch(() => {
+          console.error("Boat allocation reconciliation tick failed", {
+            account: stack.accountId ?? "default",
           });
-        }),
-      );
-      boatCursor = report.next;
-      if (boatAssembly?.reconcileConvergence !== undefined) {
-        const converged = await boatAssembly.reconcileConvergence({
-          limit: 20,
-          ...(boatConvergenceCursor === undefined ? {} : { after: boatConvergenceCursor }),
-          stop: stopBoatRun,
         });
-        boatConvergenceCursor = converged.next;
-        // A stop still draining or busy is at work, and a kept VM is reported by the sweep itself,
-        // once an hour: only what nothing is settling is listed every tick.
-        const held = boatConvergenceObligations(converged.entries, (runId) =>
-          boatConvergenceHeldDue(runId, Date.now()),
-        );
-        if (held.length > 0) console.warn("Boat stop obligations remain", { entries: held });
       }
-      if (boatAssembly?.reconcileResources !== undefined) {
-        const resources = await boatAssembly.reconcileResources({
-          limit: 20,
-          ...(boatResourceCursor === undefined ? {} : { after: boatResourceCursor }),
-          live: {
-            limit: BOAT_RESOURCE_PASS.livePage,
-            ...(boatLiveResourceCursor === undefined ? {} : { after: boatLiveResourceCursor }),
-          },
-        });
-        boatResourceCursor = resources.next;
-        boatLiveResourceCursor = resources.live?.next;
-        // A live run both pages reached is listed once: the second reports the first's outcome.
-        const paged = new Set(resources.entries.map((entry) => entry.runId));
-        const held = boatResourceObligations([
-          ...(resources.live?.entries ?? []).filter((entry) => !paged.has(entry.runId)),
-          ...resources.entries,
-        ]);
-        if (held.length > 0) console.warn("Boat resource obligations remain", { entries: held });
-      }
-      if (boatAssembly?.registration !== undefined) await boatAssembly.reconcileCatalog?.();
-      // A launch still being created is not an obligation, and a run held as it is is listed
-      // once an hour: a failed read and a launch with more than one VM are listed every tick.
-      const unresolved = boatAllocationObligations(report.entries, (runId) =>
-        boatAllocationHeldDue(runId, Date.now()),
-      );
-      if (unresolved.length > 0)
-        console.warn("Boat allocation obligations remain", { entries: unresolved });
+      const removals = await boatAssembly.reconcileRemovals?.();
+      for (const removal of removals ?? [])
+        if (removal.outcome === "removed")
+          console.log("Boat account removed; its saved images are deleted", {
+            account: removal.accountId,
+          });
     } catch {
       console.error("Boat allocation reconciliation tick failed");
     } finally {
@@ -1186,7 +1196,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             }
           },
         });
-  const boatSweepTimer = boatRuntime === undefined ? undefined : setInterval(runBoatSweep, 30_000);
+  const boatSweepTimer = boatAssembly === undefined ? undefined : setInterval(runBoatSweep, 30_000);
   boatSweepTimer?.unref();
   void runBoatSweep();
   // A restart dropped every tunnel carrier this worker held. The sweep above reopens a run's only
@@ -1240,8 +1250,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       if (boatSweepTimer !== undefined) clearInterval(boatSweepTimer);
       // Before the Boat runtime goes: a delivery in flight finishes its configuration on it.
       await boatLinkConsumer?.cancel();
-      await boatRuntime?.dispose();
-      await boatAssembly?.disposeCatalog?.();
+      await boatAssembly?.dispose();
       exitWatch.close();
       if (imageRetentionBootTimer !== undefined) clearTimeout(imageRetentionBootTimer);
       if (imageRetentionTimer !== undefined) clearInterval(imageRetentionTimer);

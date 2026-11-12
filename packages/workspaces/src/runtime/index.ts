@@ -269,8 +269,14 @@ export {
 export { BOAT_KEPT_REPORT_MS, boatKeptReports } from "./boat/kept-report.js";
 export { BoatAllocationProvider } from "./boat/provider.js";
 
-export { HttpBoatApi } from "./boat/api.js";
-export { BoatSecret } from "./boat/config.js";
+export { HttpBoatApi, type BoatApi } from "./boat/api.js";
+export {
+  BoatApiError,
+  BoatSecret,
+  boatSandboxIdSchema,
+  boatSnapshotNameSchema,
+  type BoatResult,
+} from "./boat/config.js";
 export {
   BoatTunnelCredentialsOwner,
   BoatTunnelCredentialsError,

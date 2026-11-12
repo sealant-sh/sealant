@@ -26,6 +26,10 @@ export const corruptBoatRun = (
 interface BoatRunSeed {
   readonly runId: string;
   readonly deploymentId?: string;
+  /** The stored Boat account the run is under; absent, the install's default one. */
+  readonly accountId?: string;
+  /** The publication the run launches from; absent, a new one (written by `seedBoatRun`). */
+  readonly publicationId?: string;
   readonly workspaceId?: string;
   readonly launchAttemptId?: string;
   readonly sandboxId?: string;
@@ -35,7 +39,7 @@ interface BoatRunSeed {
 
 /** The rows `seedBoatRun` writes, for a caller that writes many at once. */
 export const boatRunSeedRows = (input: BoatRunSeed) => {
-  const publicationId = randomUUID();
+  const publicationId = input.publicationId ?? randomUUID();
   const deploymentId = input.deploymentId ?? "test";
   const target: BoatExecutionTarget = boatExecutionTargetSchema.parse({
     deploymentId,
@@ -64,6 +68,7 @@ export const boatRunSeedRows = (input: BoatRunSeed) => {
     run: {
       runId: target.runId,
       deploymentId,
+      accountId: input.accountId ?? null,
       publicationId,
       workspaceId: target.workspaceId,
       launchAttemptId: target.launchAttemptId,
@@ -181,4 +186,18 @@ export const holdBoatLaunch = (db: DB, runId: string) =>
       launchOwner: "worker-still-launching",
       launchLeaseExpiresAt: new Date(Date.now() + 5 * 60_000),
     })
+    .where(eq(workspaceRuntimeInstances.runId, runId));
+
+/** A run's stop is asked, as the stop worker records it before its drain. */
+export const requestBoatRunStop = (db: DB, runId: string) =>
+  db
+    .update(workspaceRuntimeInstances)
+    .set({ stopReason: "user" })
+    .where(eq(workspaceRuntimeInstances.runId, runId));
+
+/** A run's stop is recorded, as the shared stop records it once its executor is gone. */
+export const recordBoatRunStopped = (db: DB, runId: string) =>
+  db
+    .update(workspaceRuntimeInstances)
+    .set({ status: "stopped", stopReason: "user", removedAt: new Date() })
     .where(eq(workspaceRuntimeInstances.runId, runId));

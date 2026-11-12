@@ -78,10 +78,7 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
     state = await mkdtemp(join(tmpdir(), "boat-assembly-"));
   });
   afterAll(async () => {
-    for (const boat of assembled) {
-      await boat.runtime.dispose();
-      await boat.disposeCatalog?.();
-    }
+    for (const boat of assembled) await boat.dispose();
     await rm(state, { recursive: true, force: true });
   });
 
@@ -139,14 +136,18 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
     ).toThrow(expect.objectContaining({ code: "gateway-unavailable" }));
     // No gateway means no resource reach to account for, and its sweeps run with nothing to do.
     expect(boat.reach).toBeUndefined();
-    expect(await boat.reconcileConvergence?.({ limit: 20, stop: neverStops })).toEqual({
+    // The sweeps visit the default account first.
+    const [only] = await boat.sweptStacks();
+    if (only === undefined) throw new Error("the default account is not swept");
+    expect(only.accountId).toBeNull();
+    expect(await only.reconcileConvergence?.({ limit: 20, stop: neverStops })).toEqual({
       entries: [],
     });
-    expect(await boat.reconcileResources?.({ limit: 20 })).toEqual({ entries: [] });
+    expect(await only.reconcileResources?.({ limit: 20 })).toEqual({ entries: [] });
     // The shared stop, exit and recovery paths hold the one adapter the launches use.
     expect(boat.lifecycle).toBe(registration.adapter);
     // A tick with its page of live runs, and a link job, find nothing to configure here.
-    expect(await boat.reconcileResources?.({ limit: 20, live: { limit: 20 } })).toEqual({
+    expect(await only.reconcileResources?.({ limit: 20, live: { limit: 20 } })).toEqual({
       entries: [],
       live: { entries: [] },
     });
@@ -181,8 +182,9 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
       supported: true,
     });
     expect(await boat.reach?.()).toEqual([]);
-    expect(await boat.reconcileResources?.({ limit: 20 })).toEqual({ entries: [] });
-    expect(await boat.reconcileResources?.({ limit: 20, live: { limit: 20 } })).toEqual({
+    const [only] = await boat.sweptStacks();
+    expect(await only?.reconcileResources?.({ limit: 20 })).toEqual({ entries: [] });
+    expect(await only?.reconcileResources?.({ limit: 20, live: { limit: 20 } })).toEqual({
       entries: [],
       live: { entries: [] },
     });
@@ -203,12 +205,15 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
       control: undefined,
       lifecycle: undefined,
     });
-    expect(keyOnly?.reconcileConvergence).toBeUndefined();
+    const [keyOnlyStack] = (await keyOnly?.sweptStacks()) ?? [];
+    expect(keyOnlyStack?.reconcileConvergence).toBeUndefined();
+    expect(await keyOnlyStack?.reconcileAllocations({ limit: 20 })).toEqual({ entries: [] });
     // No resource owner here: this worker takes no link jobs.
     expect(keyOnly?.applyLink).toBeUndefined();
     const sweeps = await assemble({ ...provider, ...gateway }, dockerHost);
     expect(sweeps?.registration).toBeUndefined();
-    expect(await sweeps?.reconcileConvergence?.({ limit: 20, stop: neverStops })).toEqual({
+    const [sweepsStack] = (await sweeps?.sweptStacks()) ?? [];
+    expect(await sweepsStack?.reconcileConvergence?.({ limit: 20, stop: neverStops })).toEqual({
       entries: [],
     });
     // It launches nothing and still ends Boat sessions: only it can release their tunnels, so

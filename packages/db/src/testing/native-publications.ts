@@ -37,3 +37,10 @@ export const nativeConsumerRows = (db: DB, runId: string) =>
     })
     .from(nativePublicationConsumers)
     .where(eq(nativePublicationConsumers.runId, runId));
+
+/** A seeded reservation whose build is over (superseded): no build of it is in flight. */
+export const supersedeNativePublication = (db: DB, id: string) =>
+  db
+    .update(nativePublications)
+    .set({ state: "superseded", reason: "native-interrupted" })
+    .where(eq(nativePublications.id, id));

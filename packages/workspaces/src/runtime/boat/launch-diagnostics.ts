@@ -121,6 +121,7 @@ const diagnosticSchema = z.object({
       "guest-failed",
       "carrier-unavailable",
       "admission-refused",
+      "account-unavailable",
       "launch-held",
       "close-pending",
       "held",

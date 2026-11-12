@@ -513,6 +513,12 @@ export const workspaceSpecRuntimeSchema = z
     envFrom: z.array(workspaceEnvFromSourceSchema).max(16).default([]),
     kubernetes: workspaceSpecKubernetesSchema,
     resources: workspaceResourcesSchema.optional(),
+    /**
+     * The stored Boat account (`POST /v1/boat-accounts`) the workspace's VMs run in and are billed
+     * to. Only for a workspace that requires the Boat runtime. Absent: the install's default Boat
+     * account, the env key. Kept for the workspace's life, so a restart runs in the same account.
+     */
+    boatAccountId: z.uuid().optional(),
   })
   .prefault({});
 

@@ -541,6 +541,17 @@ export {
 } from "./repositories/native-publications.js";
 
 export {
+  BoatAccountRepo,
+  BoatAccountRepoLive,
+  BoatAccountStoreError,
+  boatAccountBuilderOwner,
+  boatAccountDeploymentId,
+  type BoatAccountRecord,
+  type BoatAccountRemovalRequest,
+  type BoatAccountRepoService,
+  type BoatAccountSealedKey,
+} from "./repositories/boat-accounts.js";
+export {
   BoatRunRepo,
   BoatRunRepoLive,
   BoatRunStoreError,

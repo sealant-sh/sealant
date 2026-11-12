@@ -14,6 +14,8 @@ import type {
   CreateAccessTokenRequest,
   ConnectedAccountProvider,
   CreateConnectedAccountRequest,
+  CreateBoatAccountRequest,
+  RotateBoatAccountKeyRequest,
   CreateSshKeyRequest,
   EnsureUserRequest,
   PersonBindingWire,
@@ -321,6 +323,27 @@ export const bindUserPersonOp = (userId: string, payload: PersonBindingWire) =>
 
 export const getUserOp = (userId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.users.getUser({ params: { userId } }));
+
+// ---- boat accounts ----
+
+export const createBoatAccountOp = (payload: CreateBoatAccountRequest) =>
+  Effect.flatMap(SealantApiClient, (client) => client.boatAccounts.createBoatAccount({ payload }));
+
+export const listBoatAccountsOp = () =>
+  Effect.flatMap(SealantApiClient, (client) => client.boatAccounts.listBoatAccounts({}));
+
+export const rotateBoatAccountKeyOp = (
+  boatAccountId: string,
+  payload: RotateBoatAccountKeyRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.boatAccounts.rotateBoatAccountKey({ params: { boatAccountId }, payload }),
+  );
+
+export const removeBoatAccountOp = (boatAccountId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.boatAccounts.removeBoatAccount({ params: { boatAccountId } }),
+  );
 
 // ---- connected accounts ----
 

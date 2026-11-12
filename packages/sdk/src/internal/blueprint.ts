@@ -57,6 +57,16 @@ export const buildCreateWorkspaceRequest = (
       { code: "invalid_create_options" },
     );
   }
+  if (
+    options.boatAccountId !== undefined &&
+    options.runtime !== undefined &&
+    options.runtime !== "boat"
+  ) {
+    throw new SealantError(
+      "workspaces.create `boatAccountId` names a Boat account: it is only for a workspace on the Boat runtime.",
+      { code: "invalid_create_options" },
+    );
+  }
   if ((options.repository === undefined) === (options.source === undefined)) {
     throw new SealantError(
       "workspaces.create requires exactly one of `repository` (a git remote to clone) or `source` (a caller-owned mount).",
@@ -218,6 +228,7 @@ export const buildCreateWorkspaceRequest = (
     ...(options.network?.cloudMetadata === true ? { network: { cloudMetadata: true } } : {}),
     // Sent only when asked: absent is the control plane's default (the workspace may be linked).
     ...(options.resources === undefined ? {} : { resources: options.resources }),
+    ...(options.boatAccountId === undefined ? {} : { boatAccountId: options.boatAccountId }),
     ...(options.credentialsHome === undefined
       ? {}
       : {
