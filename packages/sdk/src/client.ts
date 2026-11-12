@@ -11,6 +11,7 @@
  * against the final shape today.
  */
 import type {
+  BoatAccountWire,
   ConnectedAccountSummary,
   WorkspaceCreateState as WireWorkspaceCreateState,
 } from "@sealant/api-contracts";
@@ -20,6 +21,7 @@ import {
   archiveSshKeyOp,
   cancelWorkspaceCreateOp,
   createAccessTokenOp,
+  createBoatAccountOp,
   createConnectedAccountOp,
   createSshKeyOp,
   createWorkspaceOp,
@@ -32,10 +34,13 @@ import {
   getWorkspaceOp,
   inferenceRespondOp,
   inspectWorkspaceImageOp,
+  listBoatAccountsOp,
   listConnectedAccountsOp,
   listSshKeysOp,
   listWorkspacesOp,
   markConnectedAccountInvalidOp,
+  removeBoatAccountOp,
+  rotateBoatAccountKeyOp,
   setConnectedAccountDefaultOp,
 } from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
@@ -66,6 +71,8 @@ import { mapSshKey, mapWorkspaceSshInfo } from "./internal/ssh.js";
 import { makeScopes, type ScopesNamespace } from "./scopes.js";
 import type {
   AccessTokensNamespace,
+  BoatAccount,
+  BoatAccountsNamespace,
   ConnectedAccount,
   ConnectedAccountsNamespace,
   CreateOptions,
@@ -89,6 +96,14 @@ const toCreateState = (wire: WireWorkspaceCreateState): WorkspaceCreateState => 
   ...(wire.workspaceId === undefined ? {} : { workspaceId: wire.workspaceId }),
   ...(wire.runId === undefined ? {} : { runId: wire.runId }),
   ...(wire.launchId === undefined ? {} : { launchId: wire.launchId }),
+});
+
+const mapBoatAccount = (wire: BoatAccountWire): BoatAccount => ({
+  boatAccountId: wire.boatAccountId,
+  label: wire.label,
+  state: wire.state,
+  createdAt: wire.createdAt,
+  keyRotatedAt: wire.keyRotatedAt,
 });
 
 const mapConnectedAccount = (wire: ConnectedAccountSummary): ConnectedAccount => ({
@@ -368,6 +383,24 @@ export class Sealant {
       );
       return { userId: wire.userId, person: wire.person, created: wire.created };
     },
+  };
+
+  /**
+   * The Boat accounts the control plane keeps beside its default one: one Boat API key each, for
+   * the workspaces created with `boatAccountId`. With a service key; keys go in, none come out.
+   */
+  readonly boatAccounts: BoatAccountsNamespace = {
+    create: async (options) =>
+      mapBoatAccount(
+        await this.#runtime.run(
+          createBoatAccountOp({ label: options.label, apiKey: options.apiKey }),
+        ),
+      ),
+    list: async () => (await this.#runtime.run(listBoatAccountsOp())).items.map(mapBoatAccount),
+    rotateKey: async (boatAccountId, apiKey) =>
+      mapBoatAccount(await this.#runtime.run(rotateBoatAccountKeyOp(boatAccountId, { apiKey }))),
+    remove: async (boatAccountId) =>
+      mapBoatAccount(await this.#runtime.run(removeBoatAccountOp(boatAccountId))),
   };
 
   /** This client's owner's Claude / Codex / GitHub accounts. Secrets go in; none come out. */

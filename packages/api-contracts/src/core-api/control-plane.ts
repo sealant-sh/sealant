@@ -1,6 +1,7 @@
 import { HttpApi, OpenApi } from "effect/http-api";
 
 import { AccessTokensGroup } from "./access-tokens.js";
+import { BoatAccountsGroup } from "./boat-accounts.js";
 import { RequestBudget } from "./budgets.js";
 import { ConnectedAccountsGroup } from "./connected-accounts.js";
 import { GitHubGroup } from "./github.js";
@@ -32,6 +33,7 @@ export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
   .add(RegistriesGroup.prefix("/v1/registries"))
   .add(GitHubGroup.prefix("/v1/github"))
   .add(UsersGroup.prefix("/v1/users"))
+  .add(BoatAccountsGroup.prefix("/v1/boat-accounts"))
   .add(ResourceDomainsGroup.prefix("/v1/resource-domains"))
   .add(ResourceInstancesGroup.prefix("/v1/resource-domains"))
   // Last, so it reaches every endpoint above (`HttpApi.middleware` skips endpoints added after it).

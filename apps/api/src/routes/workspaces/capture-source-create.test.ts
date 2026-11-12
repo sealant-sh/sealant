@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { WorkspaceSshOwnerRefusedError, type CreateWorkspaceRequest } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import {
+  BoatAccountRepo,
   ConnectedAccountRepo,
   ResourceDomainRepo,
   ResourceDomainRepoLive,
@@ -380,6 +381,8 @@ const makeRecordingLayer = (
 
   return Layer.mergeAll(
     Layer.mock(ConnectedAccountRepo, {}),
+    // No spec here names a Boat account.
+    Layer.mock(BoatAccountRepo, {}),
     Layer.mock(GitHubInstallationRepo, {}),
     Layer.mock(GitHubInstallationRepositoryCacheRepo, {}),
     Layer.mock(GitHubSourceIntegrationService, {
