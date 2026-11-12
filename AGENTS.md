@@ -2,6 +2,10 @@
 
 Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible coding environments.
 
+Rules and skills shared by every Sealant repo, including Linear, PRs, verification and model choice,
+live in the home repo, cloned beside this one at `../agent-home`. Start sessions there when work
+spans repos.
+
 - `apps/web`: TanStack Start product web app.
 - `apps/api`: Hono control-plane API.
 - `apps/worker`: background workspace build worker.
@@ -21,18 +25,12 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 
 - Submit pull requests as ready for review, never as drafts. With `gh stack`, use
   `gh stack submit --auto --open`.
-- Every PR lands on the owner's roadmap page, `~/Developer/OSS/Sealant/roadmap-site/` (outside the
-  repositories). When you open a PR in `mend`, `sealant` (Core) or `sealantd` — feature, fix, docs,
-  CI or version bump — add `["<repo>", <number>]` to the `prs` of its feature in `roadmap.json`,
-  under the version it ships in, then run `node build.mjs` there (it reads live PR states from
-  GitHub and writes `index.html`).
-- A PR that starts a feature the roadmap lacks adds the feature: a `name` and a one-line
-  `description` of what it does and why. A decision only the owner can make goes in `decisions` with
-  your `recommendation`; once it is made, remove it and record the outcome in the feature. When
-  scope moves between releases, move the feature. If the roadmap directory is missing on your
-  machine, say so in your report.
 - After code changes, always run `pnpm format:fix`.
-- For type-checking, use `pnpm typecheck`. It runs TypeScript 7's native `tsc` in every package.
+- For type-checking, use `pnpm typecheck`. It runs [tsrs](https://github.com/oxc-project/tsrs), a
+  Rust port of the TypeScript 7 checker, in every package, as `tsrs --checkers 1`. It is in beta and
+  pinned exactly; if you think it is wrong about an error, compare with `tsc` and report any
+  difference upstream. Package builds still emit with `tsc`. `pnpm lint:types` runs oxlint's
+  type-aware rules with tsrs as the type engine (`OXLINT_TSGOLINT_PATH=…/tsrs-lint`).
 - `pnpm-lock.yaml` is generated, never hand-edited: let `pnpm install` / `pnpm add` write it, and
   commit the result alongside the `package.json` change that caused it. CI and every image build
   install with `--frozen-lockfile`, so a dependency change without its lockfile update fails CI. No
@@ -47,48 +45,11 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
   authority in `pnpm-workspace.yaml`.
 - For any non-tiny UI change in `apps/web`, read `apps/web/DESIGN.md` first and follow it as the
   design source of truth.
+- Tests passing is not verification. To see a change working, and to screenshot every UI change for
+  its PR, use the `verify` skill in `.agents/skills/verify/`.
 - Do not add `"use client"` anywhere; this repo is not Next.js.
 - In React code, avoid `useEffect` unless there is no cleaner data-flow option.
 - Avoid `any` and avoid type assertions/casts like `as X` unless absolutely unavoidable.
-
-## Picking the right models for workflows and subagents
-
-Rankings, higher = better. Cost reflects what I actually pay (OpenAI has really generous limits),
-not list price. Intelligence is how hard a problem you can hand the model unsupervised. Taste covers
-UI/UX, code quality, API design, and copy.
-
-| model    | cost | intelligence | taste |
-| -------- | ---- | ------------ | ----- |
-| gpt-5.5  | 9    | 8            | 5     |
-| sonnet-5 | 5    | 5            | 7     |
-| opus-4.8 | 4    | 7            | 8     |
-| fable-5  | 2    | 9            | 9     |
-
-How to apply:
-
-- These are defaults, not limits. You have standing permission to override them: if a cheaper
-  model's output doesn't meet the bar, rerun or redo the work with a smarter model without asking.
-  Judge the output, not the price tag. Escalating costs less than shipping mediocre work.
-- Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste >
-  cost.
-- Bulk/mechanical work (clear-spec implementation, data analysis, migrations): gpt-5.5 — it's
-  effectively free.
-- Anything user-facing (UI, copy, API design) needs taste ≥ 7.
-- Reviews of plans/implementations: fable-5 or opus-4.8, optionally gpt-5.5 as an extra independent
-  perspective.
-- Never use Haiku.
-- Mechanics: gpt-5.5 is only reachable through the Codex CLI — `codex exec` / `codex review` (my
-  ~/.codex/config.toml defaults to gpt-5.5). Use the codex-implementation, codex-review, and
-  codex-computer-use skills; for work they don't cover (investigation, data analysis), run
-  `codex exec -s read-only` directly with a self-contained prompt.
-- Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
-
-Using gpt-5.5 inside workflows and subagents (the model parameter only takes Claude models, so use a
-wrapper):
-
-- Spawn a thin Claude wrapper agent with `model: 'sonnet', effort: 'low'` whose prompt instructs it
-  to write a self-contained codex prompt, run `codex exec` via Bash, and return the codex output
-  verbatim.
 
 <!-- effect-solutions:start -->
 
@@ -115,22 +76,22 @@ Never guess at Effect patterns - check the guide first.
 
 The Effect v4 repository is cloned to `~/.local/share/effect-solutions/effect` for reference. Use
 this to explore APIs, find usage examples, and understand implementation details when the
-documentation isn't enough.
+documentation isn't enough. If the clone is missing, make it with
+`git clone --depth 1 https://github.com/Effect-TS/effect-smol ~/.local/share/effect-solutions/effect`.
 
 <!-- intent-skills:start -->
 
-# Skill mappings - when working in these areas, load the linked skill file into context.
+## Skill Loading
 
-skills:
+Use the repository’s installed Intent. If it is unavailable, report the missing dependency instead
+of downloading a replacement. Before editing files for a substantial task:
 
-- task: "add tRPC on the web app (server router/context/procedures)" load:
-  "/home/yiannis/Developer/OS/Sealant/apps/web/node_modules/@trpc/server/skills/server-setup/SKILL.md"
-- task: "add tRPC on the web app endpoint in TanStack Start routes" load:
-  "/home/yiannis/Developer/OS/Sealant/apps/web/node_modules/@trpc/server/skills/adapter-fetch/SKILL.md"
-- task: "add tRPC on the web app with React Query integration" load:
-  "/home/yiannis/Developer/OS/Sealant/apps/web/node_modules/@trpc/tanstack-react-query/skills/react-query-setup/SKILL.md"
-- task: "route auth guards and redirects in TanStack Router" load:
-  "/home/yiannis/Developer/OS/Sealant/node_modules/.pnpm/@tanstack+router-core@1.167.5/node_modules/@tanstack/router-core/skills/router-core/auth-and-guards/SKILL.md"
-- task: "TanStack Start API route handlers under src/routes/api" load:
-"/home/yiannis/Developer/OS/Sealant/node_modules/.pnpm/@tanstack+start-client-core@1.166.13/node_modules/@tanstack/start-client-core/skills/start-core/server-routes/SKILL.md"
+- Run `pnpm exec intent list` from the workspace root to see available local skills.
+- If a listed skill matches the task, run `pnpm exec intent load <package>#<skill>` before changing
+  files.
+- Use the loaded `SKILL.md` guidance while making the change.
+- Monorepos: when working across packages, run the skill check from the workspace root and prefer
+  the local skill for the package being changed.
+- Multiple matches: prefer the most specific local skill for the package or concern you are
+changing; load additional skills only when the task spans multiple packages or concerns.
 <!-- intent-skills:end -->
