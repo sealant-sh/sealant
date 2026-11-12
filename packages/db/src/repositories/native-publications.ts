@@ -21,6 +21,7 @@ import { and, asc, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
+import { boatAccounts } from "../schema/boat-accounts.js";
 import { boatRuns } from "../schema/boat-runs.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 import { workspaceAttempts } from "../schema/control-plane.js";
@@ -41,7 +42,8 @@ export class NativeCatalogStoreError extends Error {
       | "consumer-conflict"
       | "consumer-released"
       | "stale-claim"
-      | "invalid-input",
+      | "invalid-input"
+      | "account-unavailable",
   ) {
     super(`Native catalog store failed during ${operation}: ${code}`);
   }
@@ -118,6 +120,15 @@ export interface NativePublicationRepoService {
     ownership: NativeBuildOwnership,
   ) => Effect.Effect<NativeCatalogRecord | undefined, NativeCatalogStoreError>;
   readonly removed: (claim: NativeCatalogClaim) => Effect.Effect<void, NativeCatalogStoreError>;
+  /**
+   * What a deployment still holds in Boat or may yet: its saved images (ready, retiring, or a
+   * removal still pending) and its builds in flight (reserved, building). What a Boat account's
+   * removal deletes, and waits for, before the account is gone. Oldest first.
+   */
+  readonly heldByDeployment: (input: {
+    readonly deploymentId: string;
+    readonly limit: number;
+  }) => Effect.Effect<ReadonlyArray<NativeCatalogRecord>, NativeCatalogStoreError>;
 }
 
 /** One database owner for reservations, claims, pins and removal fences. */
@@ -282,6 +293,18 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       const { key, consumer } = parsed;
       return yield* db.transaction(() =>
         Effect.gen(function* () {
+          // A stored Boat account's images are reserved under its row, the row its removal takes
+          // `for update`: none is reserved, or built, once its removal was asked. The install's
+          // default account has no row.
+          const [account] = yield* db
+            .select({ removalRequestedAt: boatAccounts.removalRequestedAt })
+            .from(boatAccounts)
+            .where(eq(boatAccounts.deploymentId, key.deploymentId))
+            .for("share");
+          if (account !== undefined && account.removalRequestedAt !== null)
+            return yield* Effect.fail(
+              new NativeCatalogStoreError("reserve", "account-unavailable"),
+            );
           // Serialize only this recipe. Publication locks still precede consumer locks,
           // as they do in release/retirement. Redelivery keeps its original binding.
           yield* db.execute(
@@ -805,6 +828,28 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       retire: (id, policy) => boundary("retire", retire(id, policy)),
       withdraw: (ownership) => boundary("withdraw", withdraw(ownership)),
       removed: (claim) => boundary("removed", removed(claim)),
+      heldByDeployment: (input) =>
+        boundary(
+          "heldByDeployment",
+          Effect.gen(function* () {
+            if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 200)
+              return yield* Effect.fail(
+                new NativeCatalogStoreError("heldByDeployment", "invalid-input"),
+              );
+            const rows = yield* db
+              .select()
+              .from(publications)
+              .where(
+                and(
+                  eq(publications.deploymentId, input.deploymentId),
+                  sql`(${publications.state} in ('reserved','building','ready','retiring') or (${publications.state} = 'quarantined' and ${publications.reason} = 'native-removal-pending'))`,
+                ),
+              )
+              .orderBy(asc(publications.createdAt), asc(publications.id))
+              .limit(input.limit);
+            return yield* Effect.forEach(rows, parseRow);
+          }),
+        ),
     });
   },
 );

@@ -239,6 +239,12 @@ These call the live API and work end-to-end:
   (`./install.sh`) running as the person or `null`; `bootstrap.wait()` resolves with its exit code
   and output. See
   [Workspace Images and People](/docs/reference/workspace-images#a-persons-dotfiles).
+- **Boat accounts:** `sealant.boatAccounts.create({ label, apiKey })`, `.list()`,
+  `.rotateKey(boatAccountId, apiKey)` and `.remove(boatAccountId)` keep one Boat API key per account
+  beside the control plane's default one, and `create({ runtime: "boat", boatAccountId })` runs the
+  workspace's VMs in that account, restarts included. A key goes in and never comes out; Boat checks
+  it before it is stored. Needs a service key. See
+  [Boat accounts](/docs/reference/http-api#boat-accounts) for what each call refuses.
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside

@@ -157,7 +157,7 @@ import { z } from "zod";
 
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
 import { env } from "../../runtime-env.js";
-import { requireBoatConfigured } from "../../services/boat-availability.js";
+import { requireBoatAccount, requireBoatConfigured } from "../../services/boat-availability.js";
 import {
   RunExecPublisherService,
   WorkspaceBuildJobPublisherService,
@@ -1675,6 +1675,7 @@ export const createWorkspace = (input: {
         });
       yield* requireBoatConfigured;
     }
+    yield* requireBoatAccount(parsedSpec, runtimeFamily);
     if (idempotencyKey !== undefined) {
       const reservation = yield* withInternalError(
         reservations.reserve({
@@ -3918,6 +3919,8 @@ export const restartWorkspace = (input: {
         });
       yield* requireBoatConfigured;
     }
+    // A restart runs in the account the workspace was created in: one removed since is refused.
+    yield* requireBoatAccount(recordedSpec, runtimeFamily);
 
     // The snapshot never carries the dotfiles archive payloads (`snapshotSpecOf`); the previous
     // build job does. Relaunch with them, so the restarted workspace applies the same dotfiles

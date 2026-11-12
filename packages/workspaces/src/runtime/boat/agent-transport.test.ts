@@ -427,6 +427,7 @@ const memoryRepo = (t: BoatExecutionTarget): BoatRunRepo["Service"] => {
   let row: BoatRun = boatRunSchema.parse({
     runId: t.runId,
     deploymentId: t.deploymentId,
+    accountId: null,
     publicationId: t.sourceId,
     workspaceId: t.workspaceId,
     launchAttemptId: t.launchAttemptId,
@@ -515,6 +516,7 @@ const memoryRepo = (t: BoatExecutionTarget): BoatRunRepo["Service"] => {
       }),
     fence: () => write(true, { fencedAt: row.fencedAt ?? new Date() }),
     getBySandbox: unused,
+    locateSandbox: unused,
     list: unused,
     listTunnelled: unused,
     listBearing: unused,

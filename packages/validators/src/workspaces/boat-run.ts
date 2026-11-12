@@ -38,6 +38,11 @@ export type BoatAdmissionPins = z.infer<typeof boatAdmissionPinsSchema>;
 /** The worker must authorize scope before reservation. A consumer already pins this exact publication. */
 export const boatRunInputSchema = z.strictObject({
   deploymentId: name,
+  /**
+   * The stored Boat account the run is created under (its key, its deployment). Absent: the
+   * install's default account, the env key.
+   */
+  accountId: z.uuid().optional(),
   workspaceId: name,
   consumer: nativeArtifactConsumerSchema,
   launchAttemptId: name,
@@ -100,6 +105,8 @@ export const boatRunSchema = z
   .strictObject({
     runId: name,
     deploymentId: name,
+    /** The stored Boat account the run was created under; null for the install's default one. */
+    accountId: z.uuid().nullable(),
     publicationId: z.uuid(),
     workspaceId: name,
     launchAttemptId: name,

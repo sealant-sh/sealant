@@ -18,6 +18,7 @@ import { and, asc, eq, exists, gt, inArray, isNotNull, isNull, ne, or, sql } fro
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
+import { boatAccounts } from "../schema/boat-accounts.js";
 import { boatRuns, type BoatRunRow } from "../schema/boat-runs.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 import { nativePublications, nativePublicationConsumers } from "../schema/native-publications.js";
@@ -38,7 +39,8 @@ export class BoatRunStoreError extends Error {
       | "pin-unavailable"
       | "stale-transition"
       | "run-stopped"
-      | "target-conflict",
+      | "target-conflict"
+      | "account-unavailable",
   ) {
     super(`Boat run store: ${code}`);
   }
@@ -66,6 +68,18 @@ export interface BoatRunRepoService {
     readonly deploymentId: string;
     readonly sandboxId: string;
   }) => Failing<BoatRun | undefined>;
+  /**
+   * Which runs, of any deployment of this install, name a VM: what a caller that knows only the VM
+   * reads to find the account whose key answers for it. Boat's VM ids are its own and unique, so
+   * this is one run, or none; more than one is a conflict for the caller to refuse.
+   */
+  readonly locateSandbox: (sandboxId: string) => Failing<
+    readonly {
+      readonly runId: string;
+      readonly deploymentId: string;
+      readonly accountId: string | null;
+    }[]
+  >;
   readonly list: (input: {
     readonly deploymentId: string;
     readonly limit: number;
@@ -321,6 +335,17 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
         ),
     );
   });
+  const locateSandbox = Effect.fn("BoatRunRepo.locateSandbox")(function* (sandboxId: string) {
+    return yield* db
+      .select({
+        runId: boatRuns.runId,
+        deploymentId: boatRuns.deploymentId,
+        accountId: boatRuns.accountId,
+      })
+      .from(boatRuns)
+      .where(eq(boatRuns.sandboxId, sandboxId))
+      .limit(2);
+  });
   const list = Effect.fn("BoatRunRepo.list")(function* (
     input: Parameters<BoatRunRepoService["list"]>[0],
     ...conditions: Parameters<typeof and>
@@ -495,6 +520,24 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     const { consumer, publication, scope } = input;
     return yield* db.transaction(() =>
       Effect.gen(function* () {
+        // A run under a stored account takes its row first, the row the account's removal takes
+        // `for update`: no run is reserved under an account whose removal was asked.
+        if (input.accountId !== undefined) {
+          const [account] = yield* db
+            .select({
+              deploymentId: boatAccounts.deploymentId,
+              removalRequestedAt: boatAccounts.removalRequestedAt,
+            })
+            .from(boatAccounts)
+            .where(eq(boatAccounts.id, input.accountId))
+            .for("share");
+          if (
+            account === undefined ||
+            account.removalRequestedAt !== null ||
+            account.deploymentId !== input.deploymentId
+          )
+            return yield* Effect.fail(new BoatRunStoreError("account-unavailable"));
+        }
         // The catalog uses this same lock order for release and retirement.
         const [owner] = yield* db
           .select()
@@ -534,6 +577,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
           .values({
             runId: consumer.runId,
             deploymentId: input.deploymentId,
+            accountId: input.accountId ?? null,
             publicationId: publication.publicationId,
             workspaceId: input.workspaceId,
             launchAttemptId: input.launchAttemptId,
@@ -549,6 +593,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
         if (
           saved === undefined ||
           saved.deploymentId !== input.deploymentId ||
+          saved.accountId !== (input.accountId ?? null) ||
           saved.publicationId !== publication.publicationId ||
           saved.workspaceId !== input.workspaceId ||
           saved.launchAttemptId !== input.launchAttemptId ||
@@ -608,6 +653,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       saved !== undefined &&
       runtime !== undefined &&
       saved.deploymentId === input.deploymentId &&
+      saved.accountId === (input.accountId ?? null) &&
       saved.publicationId === publication.publicationId &&
       saved.workspaceId === input.workspaceId &&
       saved.launchAttemptId === input.launchAttemptId &&
@@ -1090,6 +1136,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
   return BoatRunRepo.of({
     get: (runId) => boundary(get(runId)),
     getBySandbox: (input) => boundary(getBySandbox(input)),
+    locateSandbox: (sandboxId) => boundary(locateSandbox(sandboxId)),
     list: (input) => boundary(list(input)),
     listTunnelled: (input) => boundary(listTunnelled(input)),
     listBearing: (input) =>

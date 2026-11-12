@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./cloudflare/bridge-contract": "./src/runtime/cloudflare/bridge-contract.ts",
-    "./git/working-tree-changes": "./src/git/working-tree-changes.ts"
+    "./git/working-tree-changes": "./src/git/working-tree-changes.ts",
+    "./testing/recorded-boat": "./src/runtime/boat/recorded-boat.fixture.ts"
   },
   "scripts": {
     "lint": "oxlint .",

@@ -11,6 +11,7 @@ export default defineConfig({
     "./src/schema/resource-domains.ts",
     "./src/schema/resource-instances.ts",
     "./src/schema/native-publications.ts",
+    "./src/schema/boat-accounts.ts",
     "./src/schema/boat-runs.ts",
     "./src/schema/boat-tunnels.ts",
     "./src/schema/telemetry.ts",
