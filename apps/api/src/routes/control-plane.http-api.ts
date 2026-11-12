@@ -3,6 +3,7 @@ import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 
 import { AccessTokensHandlersLive } from "./access-tokens/access-tokens.http-api.js";
+import { BoatAccountsHandlersLive } from "./boat-accounts/boat-accounts.http-api.js";
 import { ConnectedAccountsHandlersLive } from "./connected-accounts/connected-accounts.http-api.js";
 import { GitHubHandlersLive } from "./github/github.http-api.js";
 import { InferenceHandlersLive } from "./inference/inference.http-api.js";
@@ -34,6 +35,7 @@ const ControlPlaneHandlersLive = Layer.mergeAll(
   RegistriesHandlersLive,
   GitHubHandlersLive,
   UsersHandlersLive,
+  BoatAccountsHandlersLive,
   ResourceDomainsHandlersLive,
   ResourceInstancesHandlersLive,
 );

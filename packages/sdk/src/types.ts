@@ -987,6 +987,17 @@ export interface CreateOptions {
    * older than the option rejects the create (400): its spec is strict.
    */
   readonly resources?: "none";
+  /**
+   * The stored Boat account (`sealant.boatAccounts.create()`) whose VMs this workspace runs in and
+   * is billed to. Only for a workspace on the Boat runtime (`runtime: "boat"`, or a control plane
+   * whose default runtime is Boat). Kept for the workspace's life: every run of it, restarts
+   * included, stays in that account and uses its key. Omitted, the workspace runs in the
+   * control plane's default Boat account.
+   *
+   * An unknown or removed account rejects the create with a `SealantApiError` (404), one being
+   * removed with a 409, and naming one for a workspace not on Boat with a 400.
+   */
+  readonly boatAccountId?: string;
   /** When true (default), resolve only once the workspace runtime is live. */
   readonly wait?: boolean;
   /**
@@ -2468,6 +2479,50 @@ export interface UsersNamespace {
     userId: string,
     person: UserPerson,
   ): Promise<{ readonly userId: string; readonly person: UserPerson; readonly created: boolean }>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Boat accounts (the control plane's stored Boat API keys)
+// ---------------------------------------------------------------------------------------------
+
+/** A stored Boat account as every surface sees it: NEVER its key. */
+export interface BoatAccount {
+  readonly boatAccountId: string;
+  readonly label: string;
+  /** `active`: workspaces may run in it. `removing`: its removal was asked; none may. */
+  readonly state: "active" | "removing";
+  readonly createdAt: string;
+  /** When its key was last replaced; null while it has the key it was created with. */
+  readonly keyRotatedAt: string | null;
+}
+
+/**
+ * The Boat accounts the control plane keeps beside its default one (its env key), each with its
+ * own Boat API key: a workspace created with `boatAccountId` runs its VMs in, and bills them to,
+ * that account. Install-scoped: needs a service key. A key goes in and never comes out.
+ */
+export interface BoatAccountsNamespace {
+  /**
+   * Stores a Boat account. The key is checked with Boat by one read-only call first: a key Boat
+   * refuses rejects with a `SealantApiError` (422, `reason` `boat-key-refused`; `boat-key-unverified`
+   * when Boat did not answer) and nothing is stored. No error names the key.
+   */
+  create(options: { readonly label: string; readonly apiKey: string }): Promise<BoatAccount>;
+  /** Every stored account not removed, oldest first. */
+  list(): Promise<readonly BoatAccount[]>;
+  /**
+   * Replaces the account's key. The new key must see every VM the account runs and every saved
+   * image its launches use, or the call rejects (409, `reason` `boat-key-cannot-see`) and nothing
+   * changes. Running workspaces stay in the account and use the new key from then on.
+   */
+  rotateKey(boatAccountId: string, apiKey: string): Promise<BoatAccount>;
+  /**
+   * Removes the account. Rejects (409, `reason` `boat-account-in-use`, with the count in the
+   * message) while it has workspaces whose VMs Boat may still hold, or an image build in flight.
+   * Otherwise it answers `state: "removing"`: no new workspace runs in it, and the control plane
+   * deletes the saved images it built in the account before the account is gone from `list()`.
+   */
+  remove(boatAccountId: string): Promise<BoatAccount>;
 }
 
 // ---------------------------------------------------------------------------------------------

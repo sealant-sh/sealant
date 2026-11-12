@@ -1,6 +1,7 @@
 import { Layer } from "effect";
 
 import { AccessTokenRepoLive } from "./repositories/access-tokens.js";
+import { BoatAccountRepoLive } from "./repositories/boat-accounts.js";
 import { ConnectedAccountRepoLive } from "./repositories/connected-accounts.js";
 import { GitHubInstallationRepositoryCacheRepoLive } from "./repositories/github-installation-repositories.js";
 import { GitHubInstallationRepoLive } from "./repositories/github-installations.js";
@@ -67,6 +68,7 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   ProfileRepoLive,
   SshKeyRepoLive,
   UserRepoLive,
+  BoatAccountRepoLive,
   ResourceDomainRepoLive,
   ResourceInstanceRepoLive,
   ConnectedAccountRepoLive,
