@@ -13,7 +13,7 @@
   },
   "scripts": {
     "lint": "oxlint .",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
     "@sealant/db": "workspace:*",

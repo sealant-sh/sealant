@@ -10,7 +10,7 @@
   "scripts": {
     "lint": "oxlint .",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
     "effect": "catalog:",
