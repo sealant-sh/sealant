@@ -387,6 +387,18 @@ export class HttpBoatApi implements BoatApi {
       : { kind: "conflict", ownership, matches: complete };
   }
 
+  /**
+   * Whether Boat accepts the key, by one read-only call that names no VM: the first page of the
+   * VMs Core labels as its own. It never creates, changes or deletes anything. A key Boat refuses
+   * answers its typed error (401, 403); nothing about the key is in the error.
+   */
+  async verifyCredential(): Promise<BoatResult<void>> {
+    const query = new URLSearchParams({ limit: "1" });
+    query.append("label", "sealant-runtime=boat");
+    const page = await this.#request("verify", "GET", `/sandboxes?${query}`, inventoryResponse);
+    return page.ok ? { ok: true, value: undefined } : page;
+  }
+
   get(id: BoatSandboxId): Promise<BoatResult<BoatSandbox>> {
     return this.#request(
       "get",

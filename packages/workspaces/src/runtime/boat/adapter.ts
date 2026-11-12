@@ -129,6 +129,34 @@ const BOAT_INSPECT_REMEMBERED = 1_024;
 const unsupported = (detail: string) => ({ outcome: "unsupported", detail }) as const;
 const nothingToSave = (detail: string) => ({ outcome: "nothing-to-save", detail }) as const;
 
+/**
+ * Whether Boat serves a workspace, from its spec and whether the install has a resource gateway:
+ * the same answer for every Boat account of the install.
+ */
+export const boatAdapterSupports = (
+  input: Parameters<RuntimeAdapter<NativePublication>["supports"]>[0],
+  resourceGateway: boolean,
+) => {
+  const support = boatSupport(input.blueprint);
+  if (!support.supported) return support;
+  if (
+    input.blueprint.sources.workspace.kind !== "capture" ||
+    input.blueprint.runtime.dotfilesArchives.length > 0
+  )
+    return {
+      supported: false as const,
+      reason: "runtime-requirement-unsupported" as const,
+      message: "Boat currently requires a capture source without inline dotfiles archives.",
+    };
+  if (!resourceGateway && input.blueprint.runtime.resources !== "none")
+    return {
+      supported: false as const,
+      reason: "gateway-unavailable" as const,
+      message: BOAT_GATEWAY_UNAVAILABLE_MESSAGE,
+    };
+  return { supported: true as const };
+};
+
 /** Ordinary capture workspaces use the same durable owners as reconciliation. */
 export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
   readonly id = "boat" as const;
@@ -141,6 +169,8 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
   constructor(
     private readonly options: {
       readonly deploymentId: string;
+      /** The stored Boat account this adapter launches in; absent: the install's default one. */
+      readonly accountId?: string | undefined;
       readonly runtime: ManagedRuntime.ManagedRuntime<BoatAdapterServices, never>;
       readonly control?: ControlChannel;
       /**
@@ -164,24 +194,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
   readonly #nothingToSave = new Map<string, number>();
 
   supports(input: Parameters<RuntimeAdapter<NativePublication>["supports"]>[0]) {
-    const support = boatSupport(input.blueprint);
-    if (!support.supported) return support;
-    if (
-      input.blueprint.sources.workspace.kind !== "capture" ||
-      input.blueprint.runtime.dotfilesArchives.length > 0
-    )
-      return {
-        supported: false as const,
-        reason: "runtime-requirement-unsupported" as const,
-        message: "Boat currently requires a capture source without inline dotfiles archives.",
-      };
-    if (this.options.resourceGateway === false && input.blueprint.runtime.resources !== "none")
-      return {
-        supported: false as const,
-        reason: "gateway-unavailable" as const,
-        message: BOAT_GATEWAY_UNAVAILABLE_MESSAGE,
-      };
-    return { supported: true as const };
+    return boatAdapterSupports(input, this.options.resourceGateway !== false);
   }
 
   async launch(raw: RuntimeLaunch<NativePublication>, hooks?: RuntimeAdapterLaunchHooks) {
@@ -233,7 +246,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         pins: input.admissionPins,
         docker: input.blueprint.tooling.services?.docker?.enabled === true,
       });
-      const deploymentId = this.options.deploymentId;
+      const { deploymentId, accountId } = this.options;
       step = "prepare-allocation";
       const target = await this.options.runtime.runPromise(
         Effect.gen(function* () {
@@ -249,6 +262,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
           if (!scope.success) return yield* Effect.fail(new BoatAdapterError("target-mismatch"));
           return yield* (yield* BoatVm).prepare({
             deploymentId,
+            ...(accountId === undefined ? {} : { accountId }),
             workspaceId,
             consumer: nativeArtifactConsumerSchema.parse({ runId, runtimeInstanceId: runId }),
             launchAttemptId: input.launchId ?? runId,

@@ -27,7 +27,7 @@ const ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 const sandboxId = () =>
   `bx_${Array.from({ length: 8 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join("")}`;
 
-interface Vm {
+export interface RecordedVm {
   readonly id: string;
   readonly key: string;
   /** The fake's clock when Boat accepted the create (key retention runs from here). */
@@ -44,9 +44,11 @@ interface Deletion {
 }
 
 export class RecordedBoat {
-  readonly vms = new Map<string, Vm>();
+  readonly vms = new Map<string, RecordedVm>();
   readonly deletions = new Map<string, Deletion>();
   readonly requests: string[] = [];
+  /** The bearer each request carried, in order: which key Core called Boat with. Fixture keys only. */
+  readonly bearers: string[] = [];
   /** Saved snapshots by name, as `GET /saved-snapshots/:name` returns them. */
   readonly savedSnapshots = new Map<
     string,
@@ -76,6 +78,11 @@ export class RecordedBoat {
   loseDeleteReply = false;
   /** Fault: every request fails at the transport. */
   unreachable = false;
+  /**
+   * The keys this Boat account accepts; any other is refused with Boat's 401, as Boat refuses a key
+   * that is not this account's. Absent: every key is accepted.
+   */
+  acceptsOnly: readonly string[] | undefined;
   /** How many polls a deletion takes to complete. */
   deletionPolls = 2;
   /** Boat completes each deletion right after accepting it, without being polled. */
@@ -127,7 +134,7 @@ export class RecordedBoat {
     await new Promise<void>((resolve) => this.#server?.close(() => resolve()));
   }
 
-  #view(vm: Vm) {
+  #view(vm: RecordedVm) {
     return {
       id: vm.id,
       state: vm.state,
@@ -145,8 +152,14 @@ export class RecordedBoat {
   async #serve(request: http.IncomingMessage, response: http.ServerResponse) {
     const url = new URL(request.url ?? "/", "http://boat");
     this.requests.push(`${request.method} ${url.pathname}`);
+    this.bearers.push((request.headers.authorization ?? "").replace(/^Bearer /, ""));
     if (this.unreachable) {
       response.destroy();
+      return;
+    }
+    if (this.acceptsOnly !== undefined && !this.acceptsOnly.includes(this.bearers.at(-1) ?? "")) {
+      response.writeHead(401, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ ok: false, code: "unauthorized" }));
       return;
     }
     let raw = "";

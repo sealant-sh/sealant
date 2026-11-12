@@ -234,7 +234,10 @@ const make: Effect.Effect<
   BoatRunRepo | BoatAllocationProvider | BoatExecution
 > = Effect.gen(function* () {
   const runs = yield* BoatRunRepo;
-  const { api, deploymentId } = yield* BoatAllocationProvider;
+  const { api, deploymentId, accountId } = yield* BoatAllocationProvider;
+  /** The run is this account's: created under it, so every call for it uses this key. */
+  const ours = (run: { readonly deploymentId: string; readonly accountId: string | null }) =>
+    run.deploymentId === deploymentId && run.accountId === (accountId ?? null);
   const execution = yield* BoatExecution;
   const load = (runId: string) =>
     runs
@@ -284,8 +287,7 @@ const make: Effect.Effect<
     launch: BoatRunInput | undefined,
   ) {
     const run = yield* load(runId);
-    if (run.deploymentId !== deploymentId)
-      return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
+    if (!ours(run)) return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
     const phase = boatRunVmPhase(run);
     const unresolved = run.heldReason === "create-unresolved";
     if (["held", "deleting", "deleted"].includes(phase) && !unresolved)
@@ -563,7 +565,7 @@ const make: Effect.Effect<
     );
   const prepare = Effect.fn("BoatVm.prepare")(function* (raw: BoatRunInput) {
     const input = yield* attempt(() => boatRunInputSchema.parse(raw));
-    if (input.deploymentId !== deploymentId)
+    if (!ours({ deploymentId: input.deploymentId, accountId: input.accountId ?? null }))
       return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
     const manifestDigest = yield* attempt(() => manifestOf(input));
     const existing = yield* runs.get(input.consumer.runId);

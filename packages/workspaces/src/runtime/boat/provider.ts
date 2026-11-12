@@ -8,6 +8,8 @@ export class BoatAllocationProvider extends Context.Service<
   BoatAllocationProvider,
   {
     readonly deploymentId: string;
+    /** The stored Boat account this provider is for; absent: the install's default account. */
+    readonly accountId?: string | undefined;
     readonly api: Pick<
       BoatApi,
       "create" | "discover" | "get" | "getSnapshot" | "execute" | "hostControl"

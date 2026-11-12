@@ -92,6 +92,26 @@ export {
 } from "./runtime/boat/removal.js";
 
 export { loadBoatCredential } from "./runtime/boat/credential.js";
+export {
+  BoatAccountDirectory,
+  httpBoatClientFactory,
+  type BoatAccountDirectoryOptions,
+  type BoatAccountId,
+  type BoatAccountProvider,
+  type BoatClientFactory,
+} from "./runtime/boat/accounts.js";
+export {
+  BoatAccountRouterAdapter,
+  boatAccountCatalog,
+  boatAccountControl,
+  boatAccountOf,
+  type BoatAccountStack,
+  type BoatAccountStacks,
+} from "./runtime/boat/account-router.js";
+export {
+  boatAccountControlMaterial,
+  boatAccountControlMaterialLayer,
+} from "./runtime/boat/account-control.js";
 export { boatProviderFromEnv, type BoatProviderEnvLike } from "./runtime/boat/provider-env.js";
 export {
   BoatControlError,
