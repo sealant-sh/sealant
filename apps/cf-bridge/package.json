@@ -9,7 +9,7 @@
     "dev": "wrangler dev",
     "lint": "oxlint .",
     "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
     "@cloudflare/sandbox": "0.13.0-next.751.1",

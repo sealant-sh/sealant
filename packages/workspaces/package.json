@@ -15,7 +15,7 @@
     "test": "vitest run",
     "test:boat-harness": "vitest run --config vitest.boat-harness.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
     "@aws-sdk/client-lambda-microvms": "3.1131.0",

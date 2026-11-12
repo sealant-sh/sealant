@@ -35,7 +35,7 @@
     "lint": "oxlint .",
     "prepublishOnly": "pnpm run build",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
     "@sealant/api-contracts": "workspace:*"

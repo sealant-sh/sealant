@@ -186,8 +186,8 @@ disables the normal download flow (the part that fails on NixOS). Place end-to-e
 - `direnv` + Nix provide a reproducible shell with Node.js 26.4 and the pnpm version declared in
   `package.json`.
 - `Turborepo` + `pnpm` give task orchestration, caching, and strict, centralized dependencies.
-- `oxlint` (with `oxlint-tsgolint` for type-aware rules) handles linting; `oxfmt` handles
-  formatting.
+- `oxlint` handles linting and `oxfmt` formatting. `tsrs`, a Rust port of the TypeScript 7 checker,
+  type-checks every package and is oxlint's engine for type-aware rules.
 - `typescript` 7 is the native compiler: `tsc` typechecks, and `tsc --lsp` is the editor's language
   server.
 

@@ -21,7 +21,7 @@
     "lint": "turbo lint --ui=tui",
     "lint:fix": "oxlint . --fix",
     "lint:tui": "turbo lint --ui=tui",
-    "lint:types": "oxlint . --type-aware --type-check",
+    "lint:types": "OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint . --type-aware --type-check",
     "playwright:open-google": "node tooling/playwright/open-google.mjs",
     "ssh:setup:dev": "node tooling/scripts/setup-ssh-gateway-dev.mjs",
     "test": "turbo test",
@@ -30,7 +30,7 @@
     "test:tui": "turbo test --ui=tui",
     "test:watch": "vitest",
     "typecheck": "turbo typecheck --ui=tui",
-    "typecheck:tsc": "tsc -p tsconfig.json --noEmit",
+    "typecheck:root": "tsrs -p tsconfig.json --noEmit --checkers 1",
     "typecheck:tui": "turbo typecheck --ui=tui"
   },
   "dependencies": {
@@ -41,17 +41,24 @@
     "@actions/expressions": "^0.3.61",
     "@changesets/cli": "^2.29.5",
     "@playwright/test": "^1.56.1",
+    "@tanstack/intent": "^0.5.6",
     "@types/node": "^24.0.0",
     "effect-solutions": "^0.5.2",
     "esbuild": "^0.28.1",
     "oxfmt": "^0.40.0",
     "oxlint": "1.70.0",
-    "oxlint-tsgolint": "^0.17.0",
+    "tsrs": "0.24.0-ts7.1.0-beta",
     "tsx": "^4.20.6",
     "turbo": "2.11.9",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "yaml": "catalog:"
   },
-  "packageManager": "pnpm@11.10.0"
+  "packageManager": "pnpm@11.10.0",
+  "intent": {
+    "skills": [
+      "@tanstack/*",
+      "@trpc/*"
+    ]
+  }
 }

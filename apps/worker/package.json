@@ -9,7 +9,7 @@
     "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "lint": "oxlint .",
     "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "catalog:",
