@@ -69,6 +69,13 @@ describe("the workspace package catalog", () => {
     }
   });
 
+  it("creates /usr/local/bin before installing a release, which nixos/nix doesn't ship", () => {
+    const containerfile = containerfileFor("nix", ["doppler"]);
+    const created = containerfile.indexOf("mkdir -p /usr/local/bin; for m in $members");
+    expect(created).toBeGreaterThan(-1);
+    expect(created).toBeLessThan(containerfile.indexOf('install -m 0755 "$d/$m"'));
+  });
+
   it("uses the same Doppler release for custom bases and keeps other package names verbatim", () => {
     const { containerfile, imagePlan } = planWorkspaceImageBuild({
       platform: "linux/arm64",

@@ -626,9 +626,10 @@ export const releaseInstallCommands = (release: ReleaseInstall): readonly string
     release.directory === undefined
       ? `install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"`
       : `install -D -m 0644 "$d/$m" ${shellSingleQuote(release.directory)}"/$(basename "$m")"`;
+  // nixos/nix ships no /usr/local/bin, and `install` doesn't create the target's directory.
   const installAll =
     release.tree === undefined
-      ? `for m in $members; do ${installOne}; done`
+      ? `${release.directory === undefined ? "mkdir -p /usr/local/bin; " : ""}for m in $members; do ${installOne}; done`
       : `mkdir -p ${shellSingleQuote(release.tree.directory)}; cp -a "$d/"${shellSingleQuote(release.tree.root)}"/." ${shellSingleQuote(release.tree.directory)}`;
   const zip = release.format === "zip";
   const archive = `$d/archive.${zip ? "zip" : "tar.gz"}`;
