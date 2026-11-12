@@ -12,6 +12,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import { boatAccounts } from "./boat-accounts.js";
 import { workspaceAttempts } from "./control-plane.js";
 import { nativePublications } from "./native-publications.js";
 
@@ -34,6 +35,12 @@ export const boatRuns = snakeCase.table(
       .primaryKey()
       .references(() => workspaceAttempts.id, { onDelete: "restrict" }),
     deploymentId: text().notNull(),
+    /**
+     * The stored Boat account the run was created under, whose key every later call for the run
+     * uses. Null: the install's default account (the env key), as every run made before accounts
+     * existed is.
+     */
+    accountId: uuid().references(() => boatAccounts.id, { onDelete: "restrict" }),
     publicationId: uuid()
       .notNull()
       .references(() => nativePublications.id, { onDelete: "restrict" }),
@@ -82,6 +89,7 @@ export const boatRuns = snakeCase.table(
   (table) => [
     uniqueIndex("boat_runs_sandbox").on(table.deploymentId, table.sandboxId),
     index("boat_runs_deployment").on(table.deploymentId, table.runId),
+    index("boat_runs_account").on(table.accountId, table.runId),
     // The runs Boat may still hold a VM for, which is what the sweeps page through: an ended run
     // leaves this index when its absence is committed.
     index("boat_runs_present")
