@@ -552,10 +552,9 @@ export const getRunLoss = (runId: string, ownerUserId?: string) =>
       sequenceGapCount: report.sequenceGapCount,
       watchOverflowCount: report.watchOverflowCount,
       earlyClose: report.earlyClose,
-      // kind/detectedVia are DB-enum-constrained at the source; cast to the wire literal unions.
       spans: report.spans.map(
         (span): LossSpan => ({
-          kind: span.kind as LossSpan["kind"],
+          kind: span.kind,
           ...(span.fromSequence === null || span.fromSequence === undefined
             ? {}
             : { fromSequence: span.fromSequence.toString() }),
@@ -565,7 +564,7 @@ export const getRunLoss = (runId: string, ownerUserId?: string) =>
           ...(span.droppedCount === null || span.droppedCount === undefined
             ? {}
             : { droppedCount: span.droppedCount.toString() }),
-          detectedVia: span.detectedVia as LossSpan["detectedVia"],
+          detectedVia: span.detectedVia,
           ...(span.reason === null || span.reason === undefined ? {} : { reason: span.reason }),
         }),
       ),

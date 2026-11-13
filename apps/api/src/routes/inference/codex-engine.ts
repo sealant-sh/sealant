@@ -32,7 +32,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { EndpointUrl } from "@sealant/api-contracts";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Predicate } from "effect";
 
 import { InferenceEngineError, type InferenceEngineTurn } from "./claude-engine.js";
 import { extractJson, providerCliEnv, soundsLikeAuthFailure } from "./support.js";
@@ -131,28 +131,28 @@ const foldEventLine = (state: ParsedExchange, line: string): void => {
   } catch {
     return;
   }
-  if (typeof event !== "object" || event === null) {
+  if (!Predicate.isObject(event)) {
     return;
   }
-  const record = event as Record<string, unknown>;
+  const record = event;
 
   if (record.type === "item.completed") {
     const item = record.item;
-    if (typeof item === "object" && item !== null) {
-      const itemRecord = item as Record<string, unknown>;
-      if (itemRecord.type === "agent_message" && typeof itemRecord.text === "string") {
-        state.text = itemRecord.text;
-      }
+    if (
+      Predicate.isObject(item) &&
+      item.type === "agent_message" &&
+      typeof item.text === "string"
+    ) {
+      state.text = item.text;
     }
     return;
   }
 
   if (record.type === "turn.completed") {
     const usage = record.usage;
-    if (typeof usage === "object" && usage !== null) {
-      const usageRecord = usage as Record<string, unknown>;
-      const inputTokens = usageRecord.input_tokens;
-      const outputTokens = usageRecord.output_tokens;
+    if (Predicate.isObject(usage)) {
+      const inputTokens = usage.input_tokens;
+      const outputTokens = usage.output_tokens;
       if (typeof inputTokens === "number" && typeof outputTokens === "number") {
         state.usage = { inputTokens, outputTokens };
       }
