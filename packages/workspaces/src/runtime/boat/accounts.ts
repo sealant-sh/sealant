@@ -130,6 +130,8 @@ export class StoredAccountApi implements BoatApi {
   readonly #router: BoatObjectRouter;
   /** Known and unreachable objects, which never move again. */
   readonly #settled = new Map<string, BoatObjectWallet>();
+  /** Objects of unknown wallet that Boat answered for with no wallet named. */
+  readonly #answered = new Set<string>();
   constructor(router: BoatObjectRouter) {
     this.#router = router;
   }
@@ -230,7 +232,13 @@ export class StoredAccountApi implements BoatApi {
       return this.#in(operation, current?.kind === "known" ? current.wallet : null, call);
     }
     const answered = await this.#in(operation, null, call);
-    if (!missed(answered)) return answered;
+    if (!missed(answered)) {
+      if (answered.ok) this.#answered.add(refKey(ref));
+      return answered;
+    }
+    // A miss with no wallet named, for an object Boat answered for there before (sealant's own
+    // delete, then the read that confirms it): Boat's word about that wallet, not a lost object.
+    if (this.#answered.has(refKey(ref))) return answered;
     const located = await this.#locate(operation, ref, probe, nowhere).catch(() =>
       objectUnlocated(operation),
     );

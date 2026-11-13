@@ -8,6 +8,8 @@ import type { CredentialCipherService } from "@sealant/credentials";
 import {
   BoatAccountRepo,
   BoatAccountRepoLive,
+  BoatKeyProofRepo,
+  BoatKeyProofRepoLive,
   BoatRunRepo,
   BoatRunRepoLive,
   NativePublicationRepo,
@@ -1128,6 +1130,15 @@ describe.skipIf(DATABASE_URL === undefined)(
             docker: undefined,
             snapshotBuilder: walletBuilders(faults),
             clientFor,
+            proofClientFor: (credential, options) =>
+              HttpBoatApi.create({
+                credential,
+                baseUrl: fake.baseUrl,
+                timeoutMs: 5_000,
+                ...(options?.organization === undefined
+                  ? {}
+                  : { organization: options.organization }),
+              }),
             keyClientFor: (credential, options) =>
               HttpBoatApi.create({
                 credential,
@@ -1399,6 +1410,78 @@ describe.skipIf(DATABASE_URL === undefined)(
         expect(c.fake.heldIn("personal").snapshots).toEqual([rebuilt.snapshot.identity.name]);
         expect(await c.stateOf(rebuilt.publicationId)).toBe("ready");
       }));
+
+    it("review 2: what sealant deletes itself under a key that cannot list its wallets ends deleted, not unreachable; an unreachable full check gates nothing", () =>
+      withWallets(
+        async (c) => {
+          const account = await c.store("personal", "personal");
+          await c.legacy(account.id);
+          const live = await c.seedRun({
+            ...account,
+            accountId: account.id,
+            vm: { wallet: "personal" },
+          });
+          const checkVm = sandboxId();
+          c.fake.seedSandbox({
+            id: checkVm,
+            wallet: "personal",
+            labels: { "sealant-key-proof": "x" },
+          });
+          const proofRow = (id: string, issued: boolean) =>
+            Effect.runPromise(
+              c.db.insert(schema.boatKeyProofs).values({
+                id,
+                account: account.id,
+                createKey: randomUUID(),
+                snapshotName: `sealant-key-proof-${id.slice(0, 8)}`,
+                startedAt: new Date(Date.now() - 3_600_000),
+                claimedUntil: new Date(Date.now() - 60_000),
+                ...(issued
+                  ? { createIssuedAt: new Date(Date.now() - 3_600_000), sandboxId: checkVm }
+                  : {}),
+              }),
+            );
+          const outstanding = () =>
+            Effect.runPromise(
+              Effect.flatMap(BoatKeyProofRepo, (proofs) => proofs.outstanding(account.id)).pipe(
+                Effect.provide(BoatKeyProofRepoLive),
+                Effect.provideService(SealantDB, c.db),
+              ),
+            );
+          // Before: a full check and a session the released build left, wallets not known, under a
+          // key Boat refuses `/orgs` (no account.read).
+          const check = randomUUID();
+          await proofRow(check, true);
+          // The step: sealant deletes each itself, and reads it gone under the wallet the delete
+          // was made in.
+          expect(await c.worker.sweepKeyProofs()).toEqual([{ proofId: check, outcome: "settled" }]);
+          await stopSession(c, live.sandboxId);
+          // Outcome: both deleted and read gone, neither recorded unreachable.
+          expect(c.fake.heldIn("personal").sandboxes).toEqual([]);
+          expect(await c.objectOf(account.id, { sandbox: checkVm })).toEqual({ kind: "unknown" });
+          expect(await outstanding()).toEqual([]);
+          expect((await c.runOf(live.runId))?.absentBasis).not.toBe("unreachable");
+          expect(await c.unreachable(account.id)).toMatchObject({ runs: [] });
+
+          // Before: a check the released build left with nothing on record to look for.
+          c.fake.faults = {};
+          const lost = randomUUID();
+          await proofRow(lost, false);
+          // The step: the resolve pass looks for it in every wallet, finds nothing, records it
+          // unreachable.
+          await c.worker.resolveWallets();
+          expect(
+            await c.objectOf(account.id, { snapshot: `sealant-key-proof-${lost.slice(0, 8)}` }),
+          ).toEqual({
+            kind: "unreachable",
+          });
+          // Outcome: it is finished for everything that gates: not outstanding, and a new check
+          // of the account can be recorded.
+          expect(await outstanding()).toEqual([]);
+          await proofRow(randomUUID(), false);
+        },
+        { prepare: noAccountRead },
+      ));
 
     it("after an upgrade: a create issued with no VM on record is replayed where it was made, stopped, and the account pinned", () =>
       withWallets(async (c) => {

@@ -9,6 +9,8 @@ ALTER TABLE "boat_runs" ADD COLUMN "boat_wallet" text;--> statement-breakpoint
 ALTER TABLE "boat_runs" ADD COLUMN "boat_wallet_state" text DEFAULT 'unknown' NOT NULL;--> statement-breakpoint
 DROP INDEX "native_publications_key_active";--> statement-breakpoint
 CREATE UNIQUE INDEX "native_publications_key_active" ON "native_publications" ("key_hash",coalesce("boat_wallet", '')) WHERE "state" not in ('removed','superseded','retiring') and "boat_wallet_state" <> 'unreachable';--> statement-breakpoint
+DROP INDEX "boat_key_proofs_one_running";--> statement-breakpoint
+CREATE UNIQUE INDEX "boat_key_proofs_one_running" ON "boat_key_proofs" ("account") WHERE ("finished_at" is null or "cleanup_pending") and "boat_wallet_state" <> 'unreachable';--> statement-breakpoint
 ALTER TABLE "native_publications" ADD CONSTRAINT "native_publications_wallet" CHECK ("boat_wallet_state" in ('known','unknown','unreachable') and ("boat_wallet_state" = 'known' or "boat_wallet" is null));--> statement-breakpoint
 ALTER TABLE "boat_accounts" ADD CONSTRAINT "boat_accounts_key_kind" CHECK ("key_kind" in ('personal','organization'));--> statement-breakpoint
 ALTER TABLE "boat_key_proofs" ADD CONSTRAINT "boat_key_proofs_wallet" CHECK ("boat_wallet_state" in ('known','unknown','unreachable') and ("boat_wallet_state" = 'known' or "boat_wallet" is null));--> statement-breakpoint

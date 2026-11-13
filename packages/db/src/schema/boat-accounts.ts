@@ -187,6 +187,8 @@ export const boatKeyProofs = snakeCase.table(
     ),
     uniqueIndex("boat_key_proofs_one_running")
       .on(table.account)
-      .where(sql`${table.finishedAt} is null or ${table.cleanupPending}`),
+      .where(
+        sql`(${table.finishedAt} is null or ${table.cleanupPending}) and ${table.boatWalletState} <> 'unreachable'`,
+      ),
   ],
 );

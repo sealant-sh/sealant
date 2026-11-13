@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "18f780f6-0419-4336-9c13-43c562e6b675",
+  "id": "1b65ba76-5f0c-4cc7-b1f5-4edb3d92ab1f",
   "prevIds": ["057c9038-c594-4925-9b44-237e0dd33e1b"],
   "ddl": [
     {
@@ -12123,7 +12123,7 @@
         }
       ],
       "isUnique": true,
-      "where": "\"finished_at\" is null or \"cleanup_pending\"",
+      "where": "(\"finished_at\" is null or \"cleanup_pending\") and \"boat_wallet_state\" <> 'unreachable'",
       "with": "",
       "method": "btree",
       "concurrently": false,

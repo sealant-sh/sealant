@@ -206,6 +206,8 @@ const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.ge
             and(
               eq(boatKeyProofs.account, account),
               or(isNull(boatKeyProofs.finishedAt), eq(boatKeyProofs.cleanupPending, true)),
+              // Boat has what it made in no wallet the key can bill: finished, as the sweep reads it.
+              ne(boatKeyProofs.boatWalletState, "unreachable"),
             ),
           )
           .orderBy(boatKeyProofs.startedAt)
