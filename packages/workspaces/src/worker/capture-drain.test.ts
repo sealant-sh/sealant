@@ -6,6 +6,7 @@
  * that answers without moving is kept; progress and the stall window carry across calls AND
  * across workers; one worker at a time drains a run, and a dead worker's claim is taken over.
  */
+import { fakeService } from "@sealant/db/testing/fake-service";
 import { Effect, Exit, Fiber, Layer, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -1711,7 +1712,7 @@ describe("an observation cut off at the deadline (e2e 8 F9)", () => {
     // A daemon that has not answered yet.
     const pending = Layer.succeed(SealantRuntime, {
       connect: () =>
-        Effect.succeed({ captureStatus: () => Effect.never } as unknown as SealantSession),
+        Effect.succeed(fakeService<SealantSession>({ captureStatus: () => Effect.never })),
       openForwardConnection: () => Effect.die("forwards are unused in drain tests"),
     });
     const fiber = Effect.runFork(

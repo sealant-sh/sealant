@@ -9,7 +9,11 @@ import {
   ConnectedAccountRepo,
   type ConnectedAccount,
   type ConnectedAccountRepoService,
+  type UpdateConnectedAccountSyncStateInput,
+  ConnectedAccountRepoUnexpectedError,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { connectedAccountRow } from "@sealant/db/testing/rows";
 import { newWorkspaceSchema, type NewWorkspace } from "@sealant/validators";
 import { Effect, Layer } from "effect";
 import { vi } from "vitest";
@@ -27,7 +31,7 @@ const fakeCipher: CredentialCipherService = {
 };
 
 const createAccount = (overrides: Partial<ConnectedAccount> = {}): ConnectedAccount =>
-  ({
+  connectedAccountRow({
     id: "cacc_1",
     ownerUserId: "usr_1",
     provider: "claude",
@@ -46,15 +50,23 @@ const createAccount = (overrides: Partial<ConnectedAccount> = {}): ConnectedAcco
     invalidAt: null,
     archivedAt: null,
     ...overrides,
-  }) as ConnectedAccount;
+  });
 
 const connectedAccountRepoStub = (accounts: readonly ConnectedAccount[]) => ({
-  getById: vi.fn((id: string) => Effect.succeed(accounts.find((account) => account.id === id))),
-  updateSyncState: vi.fn((_input: unknown) => Effect.succeed(accounts[0])),
+  getById: vi.fn((id: string) =>
+    Effect.succeed(
+      accounts
+        .filter((account) => account.id === id)
+        .map((account) => ({ ...account, isDefault: false }))[0],
+    ),
+  ),
+  updateSyncState: vi.fn((_input: UpdateConnectedAccountSyncStateInput) =>
+    Effect.succeed(accounts[0]),
+  ),
 });
 
-const provideAccounts = (stub: unknown) =>
-  Layer.succeed(ConnectedAccountRepo, stub as ConnectedAccountRepoService);
+const provideAccounts = (stub: Partial<ConnectedAccountRepoService>) =>
+  Layer.succeed(ConnectedAccountRepo, fakeService(stub));
 
 const createBlueprint = (credentialRefs: NewWorkspace["runtime"]["credentialRefs"]): NewWorkspace =>
   newWorkspaceSchema.parse({
@@ -261,8 +273,16 @@ describe("resolveCredentialInjections", () => {
 
   it.effect("does not fail the launch when the last_used_at bookkeeping write fails", () => {
     const accounts = {
-      getById: vi.fn((_id: string) => Effect.succeed(createAccount())),
-      updateSyncState: vi.fn((_input: unknown) => Effect.fail(new Error("db hiccup"))),
+      getById: vi.fn((_id: string) => Effect.succeed({ ...createAccount(), isDefault: false })),
+      updateSyncState: vi.fn((_input: unknown) =>
+        Effect.fail(
+          new ConnectedAccountRepoUnexpectedError({
+            operation: "updateSyncState",
+            message: "db hiccup",
+            cause: new Error("db hiccup"),
+          }),
+        ),
+      ),
     };
 
     return Effect.gen(function* () {

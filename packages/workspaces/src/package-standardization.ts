@@ -466,13 +466,16 @@ export interface PackageResolutionCacheValue {
  * absorbed (e.g. by disabling the cache) rather than surfaced — so both methods are total.
  */
 export interface PackageResolutionCacheStore {
-  getByQuery(query: string): Effect.Effect<PackageResolutionCacheValue | null>;
-  setByQuery(input: PackageResolutionCacheValue): Effect.Effect<void>;
+  readonly getByQuery: (query: string) => Effect.Effect<PackageResolutionCacheValue | null>;
+  readonly setByQuery: (input: PackageResolutionCacheValue) => Effect.Effect<void>;
 }
 
 export interface RepologyClient {
-  getProject(projectName: string): Promise<readonly RepologyProjectResponseEntry[]>;
-  searchProjects(query: string, targetOs: PackageTargetOs): Promise<RepologySearchResponse>;
+  readonly getProject: (projectName: string) => Promise<readonly RepologyProjectResponseEntry[]>;
+  readonly searchProjects: (
+    query: string,
+    targetOs: PackageTargetOs,
+  ) => Promise<RepologySearchResponse>;
 }
 
 export interface RepologyClientOptions {

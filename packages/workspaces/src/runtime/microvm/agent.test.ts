@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { Predicate, Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
@@ -25,6 +26,24 @@ import {
   launchSecretForRun,
   type AgentLaunchRequest,
 } from "./agent-contract.js";
+
+/** What the fake sealantd writes about its latest boot. */
+const BootRecord = Schema.fromJsonString(
+  Schema.Struct({
+    argv: Schema.Array(Schema.String),
+    env: Schema.Record(Schema.String, Schema.String),
+  }),
+);
+const readBootRecord = async (file: string) =>
+  Schema.decodeUnknownSync(BootRecord)(await readFile(file, "utf8"));
+
+/** The daemon exit an agent's health answer reports, if it reports one. */
+const daemonExitOf = (body: unknown): unknown =>
+  Predicate.isObject(body) ? body["daemonExit"] : undefined;
+const daemonExitCodeOf = (body: unknown): unknown => {
+  const exit = daemonExitOf(body);
+  return Predicate.isObject(exit) ? exit["code"] : undefined;
+};
 
 const AGENT = fileURLToPath(new URL("../../../microvm-image/agent.mjs", import.meta.url));
 
@@ -363,7 +382,7 @@ describe("microvm agent", () => {
         JSON.parse(raw);
         return true;
       } catch (error) {
-        lastMalformed = `${(error as Error).message} (${raw.length} bytes)`;
+        lastMalformed = `${error instanceof Error ? error.message : "not JSON"} (${raw.length} bytes)`;
         return false;
       }
     }).catch((error: Error) => {
@@ -371,10 +390,7 @@ describe("microvm agent", () => {
         lastMalformed === null ? error.message : `record never parsed: ${lastMalformed}`,
       );
     });
-    const record = JSON.parse(await readFile(agent.recordFile, "utf8")) as {
-      argv: string[];
-      env: Record<string, string>;
-    };
+    const record = await readBootRecord(agent.recordFile);
     expect(record.argv).toEqual(["boot"]);
     expect(record.env).toMatchObject({
       SEALANT_WORKSPACE_SOURCE: "capture",
@@ -700,7 +716,9 @@ describe("microvm agent", () => {
           try {
             JSON.parse(raw);
           } catch (error) {
-            partial.push(`${path.basename(file)}: ${(error as Error).message} (${raw.length} B)`);
+            partial.push(
+              `${path.basename(file)}: ${error instanceof Error ? error.message : "not JSON"} (${raw.length} B)`,
+            );
           }
           if (file === secretFile) {
             const mode = await stat(file).then(
@@ -748,7 +766,7 @@ describe("microvm agent", () => {
       let health: { readonly status: number; readonly body: unknown } | undefined;
       await waitFor(async () => {
         health = await call(failing, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
-        return (health.body as { daemonExit?: unknown }).daemonExit !== undefined;
+        return daemonExitOf(health.body) !== undefined;
       });
       expect(health?.status).toBe(503);
       const parsed = agentHealthResponseSchema.parse(health?.body);
@@ -790,7 +808,7 @@ describe("microvm agent", () => {
       let health: { readonly status: number; readonly body: unknown } | undefined;
       await waitFor(async () => {
         health = await call(failing, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
-        return (health.body as { daemonExit?: unknown }).daemonExit !== undefined;
+        return daemonExitOf(health.body) !== undefined;
       });
       const output = agentHealthResponseSchema.parse(health?.body).daemonExit?.output ?? "";
       expect(output).not.toContain("secret");
@@ -837,7 +855,7 @@ describe("microvm agent", () => {
       let health: { readonly status: number; readonly body: unknown } | undefined;
       await waitFor(async () => {
         health = await call(crashing, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
-        return (health.body as { daemonExit?: unknown }).daemonExit !== undefined;
+        return daemonExitOf(health.body) !== undefined;
       });
       expect(health?.status).toBe(503);
       expect(agentHealthResponseSchema.parse(health?.body).daemonExit).toEqual({
@@ -892,7 +910,7 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
       ).toMatchObject({ status: 200 });
       await waitFor(async () => {
         const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
-        return (health.body as { daemonExit?: { code?: number } }).daemonExit?.code === 75;
+        return daemonExitCodeOf(health.body) === 75;
       });
 
       // Only the control token may ask; the request names this VM's run and only the token.
@@ -923,10 +941,7 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
         const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
         return health.status === 200;
       });
-      const record = JSON.parse(await readFile(agent.recordFile, "utf8")) as {
-        argv: string[];
-        env: Record<string, string>;
-      };
+      const record = await readBootRecord(agent.recordFile);
       // `sealantd boot --recovery` with the first boot's environment.
       expect(record.argv).toEqual(["boot", "--recovery"]);
       expect(record.env["SEALANT_WORKSPACE_SOURCE"]).toBe("capture");
@@ -1002,7 +1017,7 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
           const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, {
             bearer: "control-token",
           });
-          return (health.body as { daemonExit?: { code?: number } }).daemonExit?.code === 75;
+          return daemonExitCodeOf(health.body) === 75;
         });
         const orphanFile = `${agent.recordFile}.orphan`;
         const size = async () => (await stat(orphanFile).catch(() => ({ size: 0 }))).size;
@@ -1029,9 +1044,10 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
         // swept like any other writer: its file stops growing.
         const flushed = await inFlight;
         expect(flushed.status).toBe(200);
-        expect(
-          (flushed.body as { flush: { durationMs: number } }).flush.durationMs,
-        ).toBeGreaterThanOrEqual(900);
+        const flush = Predicate.isObject(flushed.body) ? flushed.body["flush"] : undefined;
+        expect(Predicate.isObject(flush) ? flush["durationMs"] : undefined).toBeGreaterThanOrEqual(
+          900,
+        );
         const childSize = async () =>
           (await stat(sealantctlChildFile).catch(() => ({ size: 0 }))).size;
         const childAfter = await childSize();
@@ -1042,20 +1058,26 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
         // The recovery boot is told what to spare: the agent (PID 1 here) by pid and start
         // time; no process is spared by its name.
         await waitFor(async () => {
-          const record = JSON.parse(await readFile(agent.recordFile, "utf8")) as {
-            argv: string[];
-          };
+          const record = await readBootRecord(agent.recordFile);
           return record.argv.includes("--recovery");
         });
-        const record = JSON.parse(await readFile(agent.recordFile, "utf8")) as {
-          env: Record<string, string>;
-        };
+        const record = await readBootRecord(agent.recordFile);
         const exemptFile = record.env["SEALANT_SWEEP_EXEMPT_FILE"] ?? "";
         expect(exemptFile).toBe(path.join(agent.stateDir, "sweep-exempt.json"));
-        const exempt = JSON.parse(await readFile(exemptFile, "utf8")) as {
-          version: number;
-          exempt: Array<{ pid: number; startTime: string; role: string }>;
-        };
+        const exempt = Schema.decodeUnknownSync(
+          Schema.fromJsonString(
+            Schema.Struct({
+              version: Schema.Number,
+              exempt: Schema.Array(
+                Schema.Struct({
+                  pid: Schema.Number,
+                  startTime: Schema.String,
+                  role: Schema.String,
+                }),
+              ),
+            }),
+          ),
+        )(await readFile(exemptFile, "utf8"));
         expect(exempt.version).toBe(1);
         expect(exempt.exempt).toContainEqual(
           expect.objectContaining({ pid: 1, role: "agent", startTime: expect.any(String) }),
@@ -1086,7 +1108,7 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
       ).toMatchObject({ status: 200 });
       await waitFor(async () => {
         const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
-        return (health.body as { daemonExit?: { code?: number } }).daemonExit?.code === 75;
+        return daemonExitCodeOf(health.body) === 75;
       });
       const recovered = await call(agent, "POST", AGENT_RECOVER_ROUTE, {
         body: recoverBody,

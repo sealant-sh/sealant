@@ -1,4 +1,5 @@
-import type { PublishedWorkspaceImage, WorkspaceBuildJob } from "@sealant/db";
+import type { DB, PublishedWorkspaceImage, WorkspaceBuildJob } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RegistryClient } from "../registry/client.js";
@@ -59,32 +60,51 @@ const published: Array<PublishedWorkspaceImage> = [
 vi.mock("@sealant/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@sealant/db")>();
   const { Effect, Layer } = await import("effect");
-  const jobByRun = new Map<string, Partial<WorkspaceBuildJob>>([
-    ["run-live", { runId: "run-live", publishedDigest: "sha256:a2" }],
-    ["run-running", { runId: "run-running", publishedDigest: "sha256:d1" }],
-    ["run-stopped", { runId: "run-stopped", publishedDigest: "sha256:a1" }],
+  // The factory runs hoisted above this file's imports, so it imports what it uses itself.
+  const { fakeService: fake } = await import("@sealant/db/testing/fake-service");
+  const { buildJobRow, runtimeInstanceRow, workspaceRow } =
+    await import("@sealant/db/testing/rows");
+  const jobByRun = new Map<string, WorkspaceBuildJob>([
+    ["run-live", buildJobRow({ runId: "run-live", publishedDigest: "sha256:a2" })],
+    ["run-running", buildJobRow({ runId: "run-running", publishedDigest: "sha256:d1" })],
+    ["run-stopped", buildJobRow({ runId: "run-stopped", publishedDigest: "sha256:a1" })],
   ]);
   return {
     ...actual,
-    WorkspaceRepoLive: Layer.succeed(actual.WorkspaceRepo, {
-      listWorkspaces: (input: { statuses?: readonly string[] }) => {
-        expect(input.statuses).toEqual(["queued", "running", "ready"]);
-        return Effect.succeed([
-          { id: "ws-live", status: "ready", latestRunId: "run-live" },
-          { id: "ws-queued", status: "queued", latestRunId: null },
-        ]);
-      },
-    } as never),
-    WorkspaceRuntimeInstanceRepoLive: Layer.succeed(actual.WorkspaceRuntimeInstanceRepo, {
-      listRunningInstances: () => Effect.succeed([{ runId: "run-running", status: "ready" }]),
-    } as never),
-    WorkspaceBuildJobRepoLive: Layer.succeed(actual.WorkspaceBuildJobRepo, {
-      listPublishedImages: () => Effect.succeed(published),
-      listLatestJobsByRunIds: (runIds: readonly string[]) =>
-        Effect.succeed(
-          new Map(runIds.flatMap((id) => (jobByRun.has(id) ? [[id, jobByRun.get(id)]] : []))),
-        ),
-    } as never),
+    WorkspaceRepoLive: Layer.succeed(
+      actual.WorkspaceRepo,
+      fake({
+        listWorkspaces: (input) => {
+          expect(input?.statuses).toEqual(["queued", "running", "ready"]);
+          return Effect.succeed([
+            workspaceRow({ id: "ws-live", status: "ready", latestRunId: "run-live" }),
+            workspaceRow({ id: "ws-queued", status: "queued", latestRunId: null }),
+          ]);
+        },
+      }),
+    ),
+    WorkspaceRuntimeInstanceRepoLive: Layer.succeed(
+      actual.WorkspaceRuntimeInstanceRepo,
+      fake({
+        listRunningInstances: () =>
+          Effect.succeed([runtimeInstanceRow({ runId: "run-running", status: "ready" })]),
+      }),
+    ),
+    WorkspaceBuildJobRepoLive: Layer.succeed(
+      actual.WorkspaceBuildJobRepo,
+      fake({
+        listPublishedImages: () => Effect.succeed(published),
+        listLatestJobsByRunIds: (runIds: readonly string[]) =>
+          Effect.succeed(
+            new Map(
+              runIds.flatMap((id) => {
+                const job = jobByRun.get(id);
+                return job === undefined ? [] : [[id, job] as const];
+              }),
+            ),
+          ),
+      }),
+    ),
   };
 });
 
@@ -94,7 +114,7 @@ const store = (
   const deleteImage = vi.fn(async (input: { repository: string; digest: string }) =>
     respond(input),
   );
-  return { deleteImage, registryClient: { deleteImage } as unknown as RegistryClient };
+  return { deleteImage, registryClient: fakeService<RegistryClient>({ deleteImage }) };
 };
 
 describe("reapWorkspaceImages", () => {
@@ -106,7 +126,7 @@ describe("reapWorkspaceImages", () => {
     const { deleteImage, registryClient } = store(() => "deleted");
 
     const summary = await reapWorkspaceImages({
-      db: {} as never,
+      db: fakeService<DB>({}),
       registryClient,
       retainedPlans: 3,
       ...noAgeFloor,
@@ -131,7 +151,7 @@ describe("reapWorkspaceImages", () => {
     const { deleteImage, registryClient } = store(() => "deleted");
 
     await reapWorkspaceImages({
-      db: {} as never,
+      db: fakeService<DB>({}),
       registryClient,
       retainedPlans: 1,
       ...noAgeFloor,
@@ -152,10 +172,10 @@ describe("reapWorkspaceImages", () => {
       if (input.digest === "sha256:a1") throw new Error("daemon hiccup");
       return "deleted" as const;
     });
-    const registryClient = { deleteImage } as unknown as RegistryClient;
+    const registryClient = fakeService<RegistryClient>({ deleteImage });
 
     const summary = await reapWorkspaceImages({
-      db: {} as never,
+      db: fakeService<DB>({}),
       registryClient,
       retainedPlans: 0,
       maxDeletesPerTick: 3,
@@ -178,7 +198,7 @@ describe("reapWorkspaceImages", () => {
 
     // Floor at 4.5 h: a1 (4 h) and everything newer survive; d1 (5 h) and e1 (6 h) go.
     await reapWorkspaceImages({
-      db: {} as never,
+      db: fakeService<DB>({}),
       registryClient,
       retainedPlans: 0,
       now,
@@ -191,7 +211,7 @@ describe("reapWorkspaceImages", () => {
   it("keeps everything from the last week by default", async () => {
     const { deleteImage, registryClient } = store(() => "deleted");
 
-    const summary = await reapWorkspaceImages({ db: {} as never, registryClient, now });
+    const summary = await reapWorkspaceImages({ db: fakeService<DB>({}), registryClient, now });
 
     expect(deleteImage).not.toHaveBeenCalled();
     expect(summary.deleted).toBe(0);

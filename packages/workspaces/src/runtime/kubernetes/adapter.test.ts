@@ -28,13 +28,11 @@ const config: KubernetesRuntimeConfig = kubernetesRuntimeConfigSchema.parse({
 
 const clientTls = { caPath: "/tls/ca.crt", certPath: "/tls/tls.crt", keyPath: "/tls/tls.key" };
 
-const controlChannel = (): ControlChannel & {
-  health: ReturnType<typeof vi.fn>;
-  writeCredentialFiles: ReturnType<typeof vi.fn>;
-} => ({
-  health: vi.fn(async () => undefined),
-  writeCredentialFiles: vi.fn(async () => undefined),
-});
+const controlChannel = () =>
+  ({
+    health: vi.fn(async (): Promise<void> => {}),
+    writeCredentialFiles: vi.fn(async (): Promise<void> => {}),
+  }) satisfies ControlChannel;
 
 const adapterFor = (
   cluster: FakeCluster,

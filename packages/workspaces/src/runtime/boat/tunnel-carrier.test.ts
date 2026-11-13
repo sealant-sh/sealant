@@ -1,5 +1,4 @@
 import dgram from "node:dgram";
-import type { AddressInfo } from "node:net";
 
 import { Effect, Layer, ManagedRuntime, Redacted } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
@@ -43,8 +42,10 @@ const startAgent = async (options: { readonly refuse?: number } = {}) => {
     socket.on("message", (data: Buffer) => received.push(Buffer.from(data)));
   });
   cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("the server is not on TCP");
   return {
-    url: `ws://127.0.0.1:${String((server.address() as AddressInfo).port)}/sealant/tunnel`,
+    url: `ws://127.0.0.1:${String(address.port)}/sealant/tunnel`,
     sockets,
     received,
     headers,

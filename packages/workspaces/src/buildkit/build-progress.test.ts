@@ -199,11 +199,9 @@ describe("compileWorkspaceBuildSpec progress", () => {
       async (_command: string, args: string[], options?: BuildkitCommandOptions) => {
         if (args[0] === "build") {
           options?.onOutput?.(`${APT_STEP}\n#5 3.1 Get:1 http://archive.ubuntu.com/ubuntu\n`);
-          const error = new Error("docker wrote nothing for 600 s and was stopped") as Error & {
-            code: string;
-          };
-          error.code = COMMAND_IDLE_TIMEOUT_CODE;
-          throw error;
+          throw Object.assign(new Error("docker wrote nothing for 600 s and was stopped"), {
+            code: COMMAND_IDLE_TIMEOUT_CODE,
+          });
         }
         return { stdout: "", stderr: "" };
       },

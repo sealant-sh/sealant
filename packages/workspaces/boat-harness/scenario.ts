@@ -12,6 +12,7 @@ import { expect } from "vitest";
 import { z } from "zod";
 
 import { boatTunnelName } from "../src/resources/boat-tunnel.js";
+import { describeFailure } from "./failure.js";
 import type { FakeBoatEvent, FakeSandbox } from "./fake-boat.js";
 import { QueryError, type CaptureSession, type CaptureState, type HarnessStack } from "./stack.js";
 
@@ -235,7 +236,7 @@ export const until = async <T>(
     if (Date.now() > deadline)
       throw new Error(
         `timed out after ${Math.round(timeoutMs / 1000)}s waiting for ${what}` +
-          (last === undefined ? "" : `; last error: ${String(last)}`),
+          (last === undefined ? "" : `; last error: ${describeFailure(last)}`),
       );
     await new Promise((done) => setTimeout(done, intervalMs));
   }

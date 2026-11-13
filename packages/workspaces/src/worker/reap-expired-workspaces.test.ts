@@ -15,6 +15,7 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -75,19 +76,25 @@ const sweep = async (daemon: ReturnType<typeof fakeCaptureDaemon>) => {
     inspect: async () => ({ state: "running" }),
   };
   const layer = Layer.mergeAll(
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      listRunningInstances: () => Effect.succeed([]),
-      listRetainedLaunches: () => Effect.succeed([retainedRow]),
-      getRuntimeInstanceByRunId: () => Effect.succeed(retainedRow),
-      markStopped,
-      markRemoved: () => Effect.void,
-      markStopRequested: () => Effect.void,
-    } as unknown as WorkspaceRuntimeInstanceRepoService),
-    Layer.succeed(WorkspaceRepo, { setWorkspaceStatus } as unknown as WorkspaceRepoService),
-    Layer.succeed(WorkspaceAttemptRepo, {
-      getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-    } as unknown as WorkspaceAttemptRepoService),
-    Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepoService>({
+        listRunningInstances: () => Effect.succeed([]),
+        listRetainedLaunches: () => Effect.succeed([retainedRow]),
+        getRuntimeInstanceByRunId: () => Effect.succeed(retainedRow),
+        markStopped,
+        markRemoved: () => Effect.void,
+        markStopRequested: () => Effect.void,
+      }),
+    ),
+    Layer.succeed(WorkspaceRepo, fakeService<WorkspaceRepoService>({ setWorkspaceStatus })),
+    Layer.succeed(
+      WorkspaceAttemptRepo,
+      fakeService<WorkspaceAttemptRepoService>({
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      }),
+    ),
+    Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
     daemon.layer,
   );
   const reaped = await Effect.runPromise(
@@ -160,22 +167,31 @@ describe("reapExpiredWorkspaces · a removal the runtime has not finished", () =
     };
     const ledger = inMemoryCaptureDrainLedger();
     const layer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        listRunningInstances: () => Effect.succeed([]),
-        listRetainedLaunches: () => Effect.succeed(rows),
-        getRuntimeInstanceByRunId: (runId: string) =>
-          Effect.succeed(rows.find((row) => row.runId === runId)),
-        markStopped,
-        markRemoved: () => Effect.void,
-        markStopRequested: () => Effect.void,
-      } as unknown as WorkspaceRuntimeInstanceRepoService),
-      Layer.succeed(WorkspaceRepo, {
-        setWorkspaceStatus: () => Effect.succeed(null),
-      } as unknown as WorkspaceRepoService),
-      Layer.succeed(WorkspaceAttemptRepo, {
-        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceAttemptRepoService),
-      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService<WorkspaceRuntimeInstanceRepoService>({
+          listRunningInstances: () => Effect.succeed([]),
+          listRetainedLaunches: () => Effect.succeed(rows),
+          getRuntimeInstanceByRunId: (runId: string) =>
+            Effect.succeed(rows.find((row) => row.runId === runId)),
+          markStopped,
+          markRemoved: () => Effect.void,
+          markStopRequested: () => Effect.void,
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRepo,
+        fakeService<WorkspaceRepoService>({
+          setWorkspaceStatus: () => Effect.succeed(null),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceAttemptRepo,
+        fakeService<WorkspaceAttemptRepoService>({
+          getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
       fakeCaptureDaemon([savedStatus()]).layer,
     );
     const reaped = await Effect.runPromise(

@@ -15,17 +15,23 @@ import {
   makeInMemoryCredentialHomes,
   type InMemoryCredentialHomes,
 } from "@sealant/db/testing/credential-homes";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { connectedAccountRow, runtimeInstanceRow } from "@sealant/db/testing/rows";
 import { Effect, Layer } from "effect";
 
 import { HOME_SCRIPT_EXIT, type HomeCredentialChannel } from "../runtime/home-credentials.js";
 import type { ControlChannel } from "../runtime/kubernetes/adapter.js";
 import { instancesHoldingAccount, pushCredentialCopy } from "./credential-push.js";
 
+/** An account as `getById` answers it: none of these is the owner's default. */
+const byId = (row: ConnectedAccount | undefined) =>
+  row === undefined ? undefined : { ...row, isDefault: false };
+
 const instance = (
   runId: string,
   injections: WorkspaceRuntimeInstance["launchCredentialInjections"],
 ): WorkspaceRuntimeInstance =>
-  ({
+  runtimeInstanceRow({
     runId,
     status: "ready",
     adapter: "docker",
@@ -33,7 +39,7 @@ const instance = (
     reference: `container-${runId}`,
     endpoint: `unix:///run/sealant/${runId}.sock`,
     launchCredentialInjections: injections,
-  }) as WorkspaceRuntimeInstance;
+  });
 
 const running = [
   instance("a", [
@@ -61,16 +67,19 @@ const running = [
 ];
 
 const instancesRepo = (instances: readonly WorkspaceRuntimeInstance[]) =>
-  Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-    listRunningInstances: () => Effect.succeed(instances),
-  } as unknown as WorkspaceRuntimeInstanceRepoService);
+  Layer.succeed(
+    WorkspaceRuntimeInstanceRepo,
+    fakeService<WorkspaceRuntimeInstanceRepoService>({
+      listRunningInstances: () => Effect.succeed(instances),
+    }),
+  );
 
 const noHomes = makeInMemoryCredentialHomes(() => running);
 const repo = Layer.mergeAll(
   instancesRepo(running),
   Layer.succeed(WorkspaceCredentialHomeRepo, noHomes.service),
   Layer.succeed(CredentialPlacementRepo, noHomes.placements),
-  Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+  Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
 );
 
 const account = (
@@ -111,9 +120,12 @@ const homesOf = (
     instancesRepo(instances),
     Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
     Layer.succeed(CredentialPlacementRepo, homes.placements),
-    Layer.succeed(ConnectedAccountRepo, {
-      getById: (id: string) => Effect.succeed(accounts.find((row) => row.id === id)),
-    } as unknown as ConnectedAccountRepoService),
+    Layer.succeed(
+      ConnectedAccountRepo,
+      fakeService<ConnectedAccountRepoService>({
+        getById: (id: string) => Effect.succeed(byId(accounts.find((row) => row.id === id))),
+      }),
+    ),
   );
   return { homes, layer };
 };
@@ -218,14 +230,21 @@ describe("pushCredentialCopy re-reads the account before writing at $HOME", () =
       instancesRepo(holding),
       Layer.succeed(WorkspaceCredentialHomeRepo, emptyHomes.service),
       Layer.succeed(CredentialPlacementRepo, emptyHomes.placements),
-      Layer.succeed(ConnectedAccountRepo, {
-        getById: () =>
-          Effect.succeed({
-            id: "cacc_1",
-            archivedAt: null,
-            encryptedPayload: `sealed:${JSON.stringify(payload)}`,
-          }),
-      } as unknown as ConnectedAccountRepoService),
+      Layer.succeed(
+        ConnectedAccountRepo,
+        fakeService<ConnectedAccountRepoService>({
+          getById: () =>
+            Effect.succeed(
+              byId(
+                connectedAccountRow({
+                  id: "cacc_1",
+                  archivedAt: null,
+                  encryptedPayload: `sealed:${JSON.stringify(payload)}`,
+                }),
+              ),
+            ),
+        }),
+      ),
     );
   it.effect("writes nothing once the account holds a key", () => {
     const written: string[] = [];
@@ -316,10 +335,11 @@ describe("pushCredentialCopy into homes", () => {
       });
 
       expect(summary).toEqual({ written: 2, failed: 0, unreachable: 0, released: 0 });
-      expect(ran.map((entry) => entry.script.match(/home='([^']+)'/)?.[1]).toSorted()).toEqual([
-        "/home/alice",
-        "/run/mend/conv/ses_1",
-      ]);
+      expect(
+        ran
+          .map((entry) => entry.script.match(/home='([^']+)'/)?.[1] ?? "")
+          .toSorted((a, b) => a.localeCompare(b)),
+      ).toEqual(["/home/alice", "/run/mend/conv/ses_1"]);
       for (const entry of ran) {
         expect(Buffer.from(entry.stdin.trim(), "base64").toString()).toContain("at-alice-2");
         expect(entry.script).toContain(".claude/.credentials.json");
@@ -386,12 +406,15 @@ describe("pushCredentialCopy into homes", () => {
           controlChannel: silentLaunchChannel,
           homeChannel: recordingHomeChannel(ran),
         }).pipe(
-          Effect.provideService(ConnectedAccountRepo, {
-            getById: (id: string) =>
-              Effect.sync(() => read.push(id)).pipe(
-                Effect.as(accounts.find((row) => row.id === id)),
-              ),
-          } as unknown as ConnectedAccountRepoService),
+          Effect.provideService(
+            ConnectedAccountRepo,
+            fakeService<ConnectedAccountRepoService>({
+              getById: (id: string) =>
+                Effect.sync(() => read.push(id)).pipe(
+                  Effect.as(byId(accounts.find((row) => row.id === id))),
+                ),
+            }),
+          ),
         );
         expect(summary).toEqual({ written: 0, failed: 0, unreachable: 0, released: 1 });
         expect(ran).toEqual([]);

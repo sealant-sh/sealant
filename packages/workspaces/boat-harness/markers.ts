@@ -2,6 +2,8 @@
  * Expected-failure markers: a scenario that meets a known defect passes only while it fails with
  * that defect's named failure. Kept free of sealant imports so a marker can be checked on its own.
  */
+import { describeFailure } from "./failure.js";
+
 /** A known defect: a scenario fails with its signature until the fix lands, then must pass. */
 export interface Defect {
   readonly id: string;
@@ -75,7 +77,7 @@ export const expectDefect = async (defect: Defect, body: () => Promise<void>): P
       `${defect.id} (${defect.title}) no longer reproduces: this scenario now passes. Remove its expected-failure marker in defects.ts.`,
     );
   }
-  const message = failure instanceof Error ? failure.message : String(failure);
+  const message = failure instanceof Error ? failure.message : describeFailure(failure);
   if (!defectMatches(defect, message)) {
     if (failure instanceof Error)
       failure.message = `not the expected ${defect.id} (${defect.title}): ${failure.message}`;

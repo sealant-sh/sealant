@@ -1,5 +1,4 @@
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 
 import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
@@ -56,7 +55,9 @@ const frontend = async (refusal?: { readonly status: number; readonly body: stri
   });
   servers.push(server);
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  return `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("the server is not on TCP");
+  return `http://127.0.0.1:${String(address.port)}`;
 };
 
 const probeFailure = (origin: string) =>

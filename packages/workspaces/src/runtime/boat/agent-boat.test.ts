@@ -2002,7 +2002,7 @@ describe("boat agent · network", () => {
       // Give anything started in the background time to show, then read what ran: `ip` and `wg`.
       await new Promise((resolve) => setTimeout(resolve, 300));
       const tools = new Set((await netLines(vm)).map((line) => line.split(" ")[0]));
-      expect([...tools].toSorted()).toEqual(["ip", "wg"]);
+      expect([...tools].toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual(["ip", "wg"]);
       expect(await exists(`${vm.netLog}.iptables-restore-stdin`)).toBe(false);
       expect(await exists(`${vm.netLog}.ip6tables-restore-stdin`)).toBe(false);
     },
@@ -2040,7 +2040,7 @@ const upgrade = (
         resolve({
           status: response.statusCode ?? 0,
           body,
-          type: String(response.headers["content-type"] ?? ""),
+          type: response.headers["content-type"] ?? "",
         }),
       );
     });

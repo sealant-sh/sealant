@@ -25,6 +25,7 @@
  * 2026-10-24). GitHub-hosted runners are not yet measured.
  */
 import { parseWorkspaceBlueprint } from "@sealant/validators";
+import { Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { KubernetesRuntimeAdapter } from "../runtime/kubernetes/adapter.js";
@@ -172,13 +173,23 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
       podName = result.resourceId;
       target = { kind: "websocket", url: result.endpoint ?? "", tls: clientTls };
 
-      const spec = JSON.parse(await kubectl("get", "pod", podName, "-o", "json")) as {
-        spec: {
-          hostUsers?: boolean;
-          initContainers?: Array<{ name: string; securityContext?: { privileged?: boolean } }>;
-          containers: Array<{ name: string; securityContext?: { privileged?: boolean } }>;
-        };
-      };
+      const container = Schema.Struct({
+        name: Schema.String,
+        securityContext: Schema.optionalKey(
+          Schema.Struct({ privileged: Schema.optionalKey(Schema.Boolean) }),
+        ),
+      });
+      const spec = Schema.decodeUnknownSync(
+        Schema.fromJsonString(
+          Schema.Struct({
+            spec: Schema.Struct({
+              hostUsers: Schema.optionalKey(Schema.Boolean),
+              initContainers: Schema.optionalKey(Schema.Array(container)),
+              containers: Schema.Array(container),
+            }),
+          }),
+        ),
+      )(await kubectl("get", "pod", podName, "-o", "json"));
       expect(spec.spec.hostUsers).toBe(false);
       expect(spec.spec.initContainers?.map((c) => c.name)).toEqual(["docker"]);
       expect(spec.spec.initContainers?.[0]?.securityContext?.privileged).toBe(true);

@@ -4,7 +4,7 @@ import { WebSocket, type RawData } from "ws";
 import { z } from "zod";
 
 /** A WebSocket message's bytes as text. A default (nodebuffer) socket delivers one Buffer. */
-const messageText = (data: RawData): string =>
+export const messageText = (data: RawData): string =>
   Buffer.isBuffer(data)
     ? data.toString()
     : Array.isArray(data)

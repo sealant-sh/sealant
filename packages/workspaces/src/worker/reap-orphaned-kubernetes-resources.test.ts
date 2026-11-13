@@ -7,6 +7,8 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { attemptSnapshotRow, runtimeInstanceRow, sourceSpec } from "@sealant/db/testing/rows";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -17,13 +19,20 @@ import { reapOrphanedKubernetesResourcesEffect } from "./reap-orphaned-kubernete
 const row = (
   runId: string,
   overrides: Partial<WorkspaceRuntimeInstance>,
-): Partial<WorkspaceRuntimeInstance> => ({ runId, resourceId: `ws-${runId}`, ...overrides });
+): WorkspaceRuntimeInstance =>
+  runtimeInstanceRow({
+    runId,
+    adapter: "k8s",
+    resourceId: `ws-${runId}`,
+    reference: null,
+    ...overrides,
+  });
 
 const harness = (input: {
-  readonly rows: ReadonlyMap<string, Partial<WorkspaceRuntimeInstance>>;
+  readonly rows: ReadonlyMap<string, WorkspaceRuntimeInstance>;
   readonly pods: readonly string[];
   /** Source kind in each run's attempt snapshot; absent = no snapshot. */
-  readonly snapshots?: ReadonlyMap<string, string>;
+  readonly snapshots?: ReadonlyMap<string, "git" | "capture">;
   readonly upsertFails?: boolean;
   readonly ledger?: CaptureDrainLedger;
 }) => {
@@ -33,7 +42,7 @@ const harness = (input: {
     outcome: "stopped" as const,
   }));
   const upserts: UpsertWorkspaceRuntimeInstanceInput[] = [];
-  const adapter = {
+  const adapter = fakeService<KubernetesRuntimeAdapter>({
     listManagedWorkspaces: async () =>
       input.pods.map((runId) => ({ runId, resourceId: `ws-${runId}` })),
     launchIdentityFor: (runId: string) => ({
@@ -43,28 +52,35 @@ const harness = (input: {
       endpoint: `wss://ws-${runId}.sealant.svc:7443`,
     }),
     stop,
-  } as unknown as KubernetesRuntimeAdapter;
-  const instances = {
+  });
+  const instances = fakeService<WorkspaceRuntimeInstanceRepoService>({
     listRuntimeInstancesByRunIds: (ids: readonly string[]) =>
       Effect.succeed(
-        new Map(ids.flatMap((id) => (input.rows.has(id) ? [[id, input.rows.get(id)]] : []))),
+        new Map(
+          ids.flatMap((id) => {
+            const found = input.rows.get(id);
+            return found === undefined ? [] : [[id, found] as const];
+          }),
+        ),
       ),
     upsertRuntimeInstance: (request: UpsertWorkspaceRuntimeInstanceInput) => {
       if (input.upsertFails === true) {
         return Effect.die(new Error("violates foreign key constraint"));
       }
       upserts.push(request);
-      return Effect.succeed({} as WorkspaceRuntimeInstance);
+      return Effect.succeed(runtimeInstanceRow({ runId: request.runId }));
     },
-  } as unknown as WorkspaceRuntimeInstanceRepoService;
-  const attempts = {
+  });
+  const attempts = fakeService<WorkspaceAttemptRepoService>({
     getAttemptSnapshotByRunId: (runId: string) => {
       const kind = input.snapshots?.get(runId);
       return Effect.succeed(
-        kind === undefined ? undefined : { blueprintPayload: { sources: { workspace: { kind } } } },
+        kind === undefined
+          ? undefined
+          : attemptSnapshotRow({ runId, blueprintPayload: sourceSpec(kind) }),
       );
     },
-  } as unknown as WorkspaceAttemptRepoService;
+  });
   const run = () =>
     Effect.runPromise(
       reapOrphanedKubernetesResourcesEffect({

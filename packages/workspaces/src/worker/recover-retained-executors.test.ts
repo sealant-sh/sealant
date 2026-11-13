@@ -12,6 +12,8 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { captureDrainRow, runtimeInstanceRow } from "@sealant/db/testing/rows";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -84,14 +86,14 @@ const harness = (input: {
   const ledger = inMemoryCaptureDrainLedger({ now: () => NOW });
   Effect.runSync(ledger.markRetained("run_1", "executor exited · exit 75"));
   const attempts: Array<{ runId: string; error: string | null; nextRecoveryAt: Date }> = [];
-  const row = {
+  const row = captureDrainRow({
     runId: "run_1",
     retainedAt: new Date(NOW - 1_000),
     recoveryAttempts: input.attempts ?? 0,
     captureTokenSealed:
       input.captureTokenSealed === undefined ? "sealed:token" : input.captureTokenSealed,
-  } as WorkspaceCaptureDrain;
-  const drains = {
+  });
+  const drains = fakeService<WorkspaceCaptureDrainRepoService>({
     listRetainedDue: () => Effect.succeed([row]),
     recordRecoveryAttempt: (request: {
       runId: string;
@@ -101,16 +103,16 @@ const harness = (input: {
       Effect.sync(() => {
         attempts.push(request);
       }),
-  } as unknown as WorkspaceCaptureDrainRepoService;
+  });
   const markStopped = vi.fn((request: { runId: string; stopReason: string }) =>
     Effect.succeed(instance({ runId: request.runId, status: "stopped" })),
   );
-  const instances = {
+  const instances = fakeService<WorkspaceRuntimeInstanceRepoService>({
     getRuntimeInstanceByRunId: () =>
       Effect.succeed(instance({ adapter: input.adapterId ?? "docker", ...input.instance })),
     markStopped,
     markRemoved: () => Effect.void,
-  } as unknown as WorkspaceRuntimeInstanceRepoService;
+  });
   const stop = vi.fn<RuntimeAdapter["stop"]>(
     input.stop ??
       (async (request) => ({
@@ -907,36 +909,43 @@ describe("recovery attempts are independent, bounded and ordered by deadline (re
   const retainedRows = (ledger: ReturnType<typeof inMemoryCaptureDrainLedger>, ids: string[]) =>
     ids.map((runId) => {
       Effect.runSync(ledger.markRetained(runId, "exit 75"));
-      return {
+      return captureDrainRow({
         runId,
         retainedAt: new Date(NOW - 1_000),
         recoveryAttempts: 0,
         captureTokenSealed: "sealed",
-      } as WorkspaceCaptureDrain;
+      });
     });
   const layerFor = (rows: readonly WorkspaceCaptureDrain[], deadlines: Record<string, number>) => {
     const attempts: Array<{ runId: string; error: string | null }> = [];
     const layer = Layer.mergeAll(
-      Layer.succeed(WorkspaceCaptureDrainRepo, {
-        listRetainedDue: () => Effect.succeed(rows),
-        recordRecoveryAttempt: (request: { runId: string; error: string | null }) =>
-          Effect.sync(() => {
-            attempts.push({ runId: request.runId, error: request.error });
-          }),
-      } as unknown as WorkspaceCaptureDrainRepoService),
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        getRuntimeInstanceByRunId: (runId: string) =>
-          Effect.succeed(
-            instance({
-              runId,
-              resourceId: runId,
-              adapter: "microvm",
-              runtimeDeadlineAt: new Date(NOW + (deadlines[runId] ?? 3_600_000)),
+      Layer.succeed(
+        WorkspaceCaptureDrainRepo,
+        fakeService<WorkspaceCaptureDrainRepoService>({
+          listRetainedDue: () => Effect.succeed(rows),
+          recordRecoveryAttempt: (request: { runId: string; error: string | null }) =>
+            Effect.sync(() => {
+              attempts.push({ runId: request.runId, error: request.error });
             }),
-          ),
-        markStopped: () => Effect.void,
-        markRemoved: () => Effect.void,
-      } as unknown as WorkspaceRuntimeInstanceRepoService),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService<WorkspaceRuntimeInstanceRepoService>({
+          getRuntimeInstanceByRunId: (runId: string) =>
+            Effect.succeed(
+              instance({
+                runId,
+                resourceId: runId,
+                adapter: "microvm",
+                runtimeDeadlineAt: new Date(NOW + (deadlines[runId] ?? 3_600_000)),
+              }),
+            ),
+          markStopped: (input) =>
+            Effect.succeed(runtimeInstanceRow({ runId: input.runId, status: "stopped" })),
+          markRemoved: () => Effect.void,
+        }),
+      ),
       fakeCaptureDaemon([savedStatus()]).layer,
     );
     return { layer, attempts };
