@@ -348,7 +348,10 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             sql`${publications.state} not in ('removed','superseded')`,
             inWallet(publications, current.wallet),
           ),
-        );
+        )
+        // A retiring one beside it is an old image's duplicate being removed: the other is the one.
+        .orderBy(sql`${publications.state} = 'retiring'`)
+        .limit(1);
       if (row === undefined) return undefined;
       const record = yield* parseRow(row);
       if (!isDeepStrictEqual(record.ownership.key, key))
@@ -432,6 +435,9 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 inWallet(publications, wallet.wallet),
               ),
             )
+            // A retiring one beside it is an old image's duplicate being removed: the other is the one.
+            .orderBy(sql`${publications.state} = 'retiring'`)
+            .limit(1)
             .for("update");
           let row = active;
           let record = row === undefined ? undefined : yield* parseRow(row);

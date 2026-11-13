@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "2ecb68fb-0bc1-4fa8-bb78-ec0ffcbbe6ec",
+  "id": "18f780f6-0419-4336-9c13-43c562e6b675",
   "prevIds": ["057c9038-c594-4925-9b44-237e0dd33e1b"],
   "ddl": [
     {
@@ -12025,7 +12025,7 @@
         }
       ],
       "isUnique": true,
-      "where": "\"state\" not in ('removed','superseded') and \"boat_wallet_state\" <> 'unreachable'",
+      "where": "\"state\" not in ('removed','superseded','retiring') and \"boat_wallet_state\" <> 'unreachable'",
       "with": "",
       "method": "btree",
       "concurrently": false,

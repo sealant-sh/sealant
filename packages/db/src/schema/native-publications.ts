@@ -58,11 +58,12 @@ export const nativePublications = snakeCase.table(
   },
   (table) => [
     // One image of a recipe per wallet: a launch uses only the one in the account's wallet, and
-    // builds there when there is none. One sealant cannot reach is recorded, and in nobody's way.
+    // builds there when there is none. One sealant cannot reach is recorded, and in nobody's way;
+    // so is one being removed (a duplicate an old image's location left, `locateImage`).
     uniqueIndex("native_publications_key_active")
       .on(table.keyHash, sql`coalesce(${table.boatWallet}, '')`)
       .where(
-        sql`${table.state} not in ('removed','superseded') and ${table.boatWalletState} <> 'unreachable'`,
+        sql`${table.state} not in ('removed','superseded','retiring') and ${table.boatWalletState} <> 'unreachable'`,
       ),
     check(
       "native_publications_wallet",

@@ -15,6 +15,7 @@ import {
   ne,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
@@ -29,7 +30,7 @@ import {
 } from "../schema/boat-accounts.js";
 import { boatRuns } from "../schema/boat-runs.js";
 import { nativePublications } from "../schema/native-publications.js";
-import { createWalletOf, inOtherWallet } from "./boat-wallets.js";
+import { createWalletOf, inOtherWallet, inWallet } from "./boat-wallets.js";
 
 /** Safe failure codes: never the key, its ciphertext or a provider body. */
 export class BoatAccountStoreError extends Error {
@@ -929,6 +930,61 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     } satisfies BoatUnknownObjects;
   });
 
+  /**
+   * Records the wallet an image of unknown wallet was found in. If its recipe already has an image
+   * there (one a launch built after the account was pinned), the found one is a saved image nobody
+   * will launch from: it is recorded there as retiring, and removed under that wallet by the
+   * removal retention runs. A build found there beside another is left as it is. Run under the
+   * owner's row, which a reservation reads `for share`, so no image is reserved meanwhile.
+   */
+  const locateImage = (where: SQL | undefined, wallet: string | null) =>
+    Effect.gen(function* () {
+      const rows = yield* db
+        .select({
+          id: nativePublications.id,
+          keyHash: nativePublications.keyHash,
+          saved: isNotNull(nativePublications.publication),
+        })
+        .from(nativePublications)
+        .where(and(where, eq(nativePublications.boatWalletState, "unknown")));
+      for (const row of rows) {
+        const [taken] = yield* db
+          .select({ id: nativePublications.id })
+          .from(nativePublications)
+          .where(
+            and(
+              eq(nativePublications.keyHash, row.keyHash),
+              ne(nativePublications.id, row.id),
+              sql`${nativePublications.state} not in ('removed','superseded','retiring')`,
+              inWallet(nativePublications, wallet),
+            ),
+          )
+          .limit(1);
+        if (taken !== undefined && !row.saved) continue;
+        yield* db
+          .update(nativePublications)
+          .set({
+            boatWallet: wallet,
+            boatWalletState: "known",
+            ...(taken === undefined
+              ? {}
+              : {
+                  state: "retiring",
+                  generation: sql`${nativePublications.generation} + 1`,
+                  claimToken: null,
+                  claimUntil: null,
+                  claimPurpose: null,
+                }),
+          })
+          .where(
+            and(
+              eq(nativePublications.id, row.id),
+              eq(nativePublications.boatWalletState, "unknown"),
+            ),
+          );
+      }
+    });
+
   /** The rows of the owner's that name an object, per table. */
   const objectRows = (owner: BoatWalletOwner, ref: BoatObjectRef) =>
     Effect.gen(function* () {
@@ -1013,6 +1069,8 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         : ({ boatWallet: known ?? null, boatWalletState: "known" } as const);
     yield* db.transaction(() =>
       Effect.gen(function* () {
+        // The row a launch's reservation reads `for share`: no image is reserved meanwhile.
+        yield* lockOwner(owner);
         if (where.runs !== undefined)
           yield* db
             .update(boatRuns)
@@ -1030,10 +1088,12 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             .set(set)
             .where(and(where.proofs, eq(boatKeyProofs.boatWalletState, "unknown")));
         if (where.images !== undefined)
-          yield* db
-            .update(nativePublications)
-            .set(set)
-            .where(and(where.images, eq(nativePublications.boatWalletState, "unknown")));
+          yield* found === "unreachable"
+            ? db
+                .update(nativePublications)
+                .set(set)
+                .where(and(where.images, eq(nativePublications.boatWalletState, "unknown")))
+            : locateImage(where.images, found.wallet);
       }),
     );
   });
@@ -1094,57 +1154,65 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     owner: BoatWalletOwner,
     resolution: BoatWalletResolution,
   ) {
+    const deploymentId = yield* ownerDeployment(owner);
+    // Where each was found, onto rows whose wallet is still unknown: each object in a transaction
+    // of its own under the owner's row, so one that cannot be recorded leaves the others recorded.
+    const each = <A, E, R>(write: Effect.Effect<A, E, R>) =>
+      db
+        .transaction(() => Effect.flatMap(lockOwner(owner), () => write))
+        .pipe(Effect.orElseSucceed(() => undefined));
+    for (const run of resolution.runs)
+      yield* each(
+        db
+          .update(boatRuns)
+          .set(
+            "unreachable" in run
+              ? unreachableRun
+              : { boatWallet: run.wallet, boatWalletState: "known" },
+          )
+          .where(
+            and(
+              eq(boatRuns.runId, run.runId),
+              ownedRuns(owner),
+              eq(boatRuns.boatWalletState, "unknown"),
+              isNull(boatRuns.absentAt),
+            ),
+          ),
+      );
+    for (const image of resolution.images) {
+      const where = and(
+        eq(nativePublications.id, image.publicationId),
+        eq(nativePublications.deploymentId, deploymentId),
+      );
+      yield* each(
+        "unreachable" in image
+          ? db
+              .update(nativePublications)
+              .set({ boatWallet: null, boatWalletState: "unreachable" })
+              .where(and(where, eq(nativePublications.boatWalletState, "unknown")))
+          : locateImage(where, image.wallet),
+      );
+    }
+    for (const proof of resolution.proofs)
+      yield* each(
+        db
+          .update(boatKeyProofs)
+          .set(
+            "unreachable" in proof
+              ? { boatWallet: null, boatWalletState: "unreachable" }
+              : { boatWallet: proof.wallet, boatWalletState: "known" },
+          )
+          .where(
+            and(
+              eq(boatKeyProofs.id, proof.id),
+              eq(boatKeyProofs.account, proofAccount(owner)),
+              eq(boatKeyProofs.boatWalletState, "unknown"),
+            ),
+          ),
+      );
     return yield* db.transaction(() =>
       Effect.gen(function* () {
         const locked = yield* lockOwner(owner);
-        const deploymentId = yield* ownerDeployment(owner);
-        // Where each was found, onto rows whose wallet is still unknown.
-        for (const run of resolution.runs)
-          yield* db
-            .update(boatRuns)
-            .set(
-              "unreachable" in run
-                ? unreachableRun
-                : { boatWallet: run.wallet, boatWalletState: "known" },
-            )
-            .where(
-              and(
-                eq(boatRuns.runId, run.runId),
-                ownedRuns(owner),
-                eq(boatRuns.boatWalletState, "unknown"),
-                isNull(boatRuns.absentAt),
-              ),
-            );
-        for (const image of resolution.images)
-          yield* db
-            .update(nativePublications)
-            .set(
-              "unreachable" in image
-                ? { boatWallet: null, boatWalletState: "unreachable" }
-                : { boatWallet: image.wallet, boatWalletState: "known" },
-            )
-            .where(
-              and(
-                eq(nativePublications.id, image.publicationId),
-                eq(nativePublications.deploymentId, deploymentId),
-                eq(nativePublications.boatWalletState, "unknown"),
-              ),
-            );
-        for (const proof of resolution.proofs)
-          yield* db
-            .update(boatKeyProofs)
-            .set(
-              "unreachable" in proof
-                ? { boatWallet: null, boatWalletState: "unreachable" }
-                : { boatWallet: proof.wallet, boatWalletState: "known" },
-            )
-            .where(
-              and(
-                eq(boatKeyProofs.id, proof.id),
-                eq(boatKeyProofs.account, proofAccount(owner)),
-                eq(boatKeyProofs.boatWalletState, "unknown"),
-              ),
-            );
         const pin = resolution.pin;
         if (pin === undefined) return "recorded" as const;
         if (createWalletOf(locked.organization, locked.keyKind).kind === "known")

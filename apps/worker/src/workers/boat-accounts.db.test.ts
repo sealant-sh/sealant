@@ -18,6 +18,7 @@ import {
   schema,
   user,
   workspaceAttempts,
+  type BoatObjectRef,
   type DB,
 } from "@sealant/db";
 import {
@@ -1060,6 +1061,8 @@ describe.skipIf(DATABASE_URL === undefined)(
         }) => Promise<{ readonly runId: string; readonly sandboxId: string }>;
         readonly runOf: (runId: string) => Promise<BoatRun | undefined>;
         readonly unreachable: (accountId: string) => Promise<unknown>;
+        /** The wallet sealant records for one of an account's objects. */
+        readonly objectOf: (accountId: string, ref: BoatObjectRef) => Promise<unknown>;
         readonly namedSince: (from: { readonly sent: number; readonly named: number }) => string[];
       }) => Promise<void>,
       /** The worker's Boat settings beside the state directory, and the fake before it starts. */
@@ -1319,6 +1322,12 @@ describe.skipIf(DATABASE_URL === undefined)(
               return { runId, sandboxId: id };
             },
             runOf: (runId) => repo(Effect.flatMap(BoatRunRepo, (runs) => runs.get(runId))),
+            objectOf: (accountId, ref) =>
+              repo(
+                Effect.flatMap(BoatAccountRepo, (accounts) =>
+                  accounts.objectWallet({ accountId }, ref),
+                ),
+              ),
             unreachable: (accountId) =>
               repo(
                 Effect.flatMap(BoatAccountRepo, (accounts) => accounts.unreachable({ accountId })),
@@ -1350,6 +1359,47 @@ describe.skipIf(DATABASE_URL === undefined)(
     // leaves them, through the worker's own passes on the fake Boat. Each ends the same way: the old
     // session stops, a new one starts in the wallet the account is pinned to, and Boat holds nothing
     // sealant recorded gone. No row is edited after the setup.
+    it("review 1: locating an old image whose recipe a launch already rebuilt in that wallet records it there for removal, and rolls back nothing else", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        const old = await c.launchImage(account.id);
+        const oldName = old.snapshot.identity.name;
+        await c.legacy(account.id);
+        const live = await c.seedRun({
+          ...account,
+          accountId: account.id,
+          vm: { wallet: "personal" },
+        });
+        // Before: the first pass pins the account while Boat does not answer about the old image.
+        c.fake.faults = {
+          refuse: ({ method, path }) =>
+            method === "GET" && path === `/saved-snapshots/${oldName}`
+              ? { status: 503, code: "unavailable", message: "Boat is busy." }
+              : undefined,
+        };
+        await c.worker.resolveWallets();
+        expect(await c.account(account.id)).toMatchObject({ organization: "personal" });
+        expect(await c.walletOf(old.publicationId)).toEqual({ state: "unknown" });
+        // A session of the same recipe launches: it builds its own image in the pinned wallet.
+        const rebuilt = await c.launchImage(account.id);
+        expect(rebuilt.publicationId).not.toBe(old.publicationId);
+        // The step that used to fail: the next pass finds the old image in that same wallet.
+        c.fake.faults = {};
+        await c.worker.resolveWallets();
+        // Outcome: the old image is recorded there, retiring; the run found in the same pass stays
+        // recorded; retention removes the old image under its wallet and keeps the new one.
+        expect(await c.walletOf(old.publicationId)).toEqual({ state: "known", wallet: "personal" });
+        expect(await c.stateOf(old.publicationId)).toBe("retiring");
+        expect(await c.objectOf(account.id, { run: live.runId })).toEqual({
+          kind: "known",
+          wallet: "personal",
+        });
+        await c.worker.reapImages?.({ stoppedSince: new Date(), unusedSince: new Date(0) });
+        expect(await c.stateOf(old.publicationId)).toBe("removed");
+        expect(c.fake.heldIn("personal").snapshots).toEqual([rebuilt.snapshot.identity.name]);
+        expect(await c.stateOf(rebuilt.publicationId)).toBe("ready");
+      }));
+
     it("after an upgrade: a create issued with no VM on record is replayed where it was made, stopped, and the account pinned", () =>
       withWallets(async (c) => {
         const account = await c.store("personal", "personal");
