@@ -2486,27 +2486,32 @@ export interface UsersNamespace {
 // Boat accounts (the control plane's stored Boat API keys)
 // ---------------------------------------------------------------------------------------------
 
-/**
- * A Boat account as every surface sees it: NEVER its key. `list()` includes the install's own key
- * as `boatAccountId` `default` (`source: "environment"`), which cannot be rotated or removed here.
- */
+/** A stored Boat account as every surface sees it: NEVER its key. */
 export interface BoatAccount {
   readonly boatAccountId: string;
   readonly label: string;
   /** `active`: workspaces may run in it. `removing`: its removal was asked; none may. */
   readonly state: "active" | "removing";
-  /** When it was stored; for the install's own key, when this control plane started serving it. */
   readonly createdAt: string;
   /** When its key was last replaced; null while it has the key it was created with. */
   readonly keyRotatedAt: string | null;
-  /** `stored` through this API, or the install's own key from its `environment`. */
-  readonly source: "stored" | "environment";
   /** The Boat organization the account bills, named on every request; null: none named. */
   readonly organization: string | null;
   /**
    * What the last check observed of the key, and when (`report.observedAt`); null until checked.
    * Each fact is `observed: true` with its value, or `observed: false` with Boat's reason.
    */
+  readonly report: BoatKeyReport | null;
+}
+
+/**
+ * The control plane's own Boat key (its environment's), which workspaces run in when they name no
+ * account: never the key, only its last report. Not in `list()`; it cannot be rotated or removed
+ * through the API.
+ */
+export interface BoatInstallKey {
+  readonly label: string;
+  /** What the last check observed of the key, and when; null until it is checked. */
   readonly report: BoatKeyReport | null;
 }
 
@@ -2541,11 +2546,15 @@ export interface BoatAccountsNamespace {
    */
   rotateKey(boatAccountId: string, apiKey: string): Promise<BoatAccount>;
   /**
-   * Checks the account's key with Boat again (read-only; `default` for the install's own key) and
-   * answers the new report. A key Boat now refuses is reported, not refused; Boat not answering
-   * rejects (422, `reason` `boat-key-unverified`) and keeps the last report.
+   * Checks a stored account's key with Boat again (read-only) and answers the new report. A key
+   * Boat now refuses is reported, not refused; Boat not answering, or asking to wait, rejects
+   * (422, `reason` `boat-key-unverified`) and keeps the last report.
    */
   check(boatAccountId: string): Promise<BoatAccount>;
+  /** The control plane's own Boat key's last report (`BoatInstallKey`). */
+  installKey(): Promise<BoatInstallKey>;
+  /** Checks the control plane's own Boat key with Boat now, as `check` does a stored one. */
+  checkInstallKey(): Promise<BoatInstallKey>;
   /**
    * Removes the account. Rejects (409, `reason` `boat-account-in-use`, with the count in the
    * message) while it has workspaces whose VMs Boat may still hold, or an image build in flight.

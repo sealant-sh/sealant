@@ -25,7 +25,11 @@ const BoatAccountId = Schema.String.check(
   Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
 );
 
-/** The install's own Boat key (its env key) as `list` and `check` name it. */
+/**
+ * The install's own Boat key (its env key), as rotation and removal refuse it
+ * (`boat-account-environment`). It is read through `install-key`, never listed: `list` answers
+ * stored accounts only, with ids every released client decodes.
+ */
 export const BOAT_DEFAULT_ACCOUNT_ID = "default";
 const BoatAccountRef = Schema.Union([BoatAccountId, Schema.Literal(BOAT_DEFAULT_ACCOUNT_ID)]);
 
@@ -102,25 +106,31 @@ export const boatKeyReportSchema = Schema.Struct({
 export type BoatKeyReport = typeof boatKeyReportSchema.Type;
 
 export const boatAccountSchema = Schema.Struct({
-  /** The account's id; `default` for the install's own key (`source: environment`). */
-  boatAccountId: BoatAccountRef,
+  boatAccountId: BoatAccountId,
   label: NonEmptyString,
   /** `active`: workspaces may run in it. `removing`: its removal was asked; none may. */
   state: Schema.Literals(["active", "removing"]),
   createdAt: Schema.String,
   /** When its key was last replaced; null when it still has the key it was created with. */
   keyRotatedAt: Schema.NullOr(Schema.String),
-  /**
-   * `stored`: kept through this API. `environment`: the install's own key, set in its environment
-   * (`SEALANT_BOAT_API_KEY`); it cannot be rotated or removed here.
-   */
-  source: Schema.optional(Schema.Literals(["stored", "environment"])),
   /** The Boat organization the account bills, sent on every request for it; null: none named. */
   organization: Schema.optional(Schema.NullOr(Schema.String)),
   /** The key's last report, with when it was observed; null until the key is checked. */
   report: Schema.optional(Schema.NullOr(boatKeyReportSchema)),
 });
 export type BoatAccountWire = typeof boatAccountSchema.Type;
+
+/**
+ * The install's own Boat key (`SEALANT_BOAT_API_KEY`), which workspaces run in when they name no
+ * account: never its value, only its last report. It is set in the install's environment, so it
+ * cannot be rotated or removed through this API.
+ */
+export const boatInstallKeySchema = Schema.Struct({
+  label: NonEmptyString,
+  /** The key's last report, with when it was observed; null until it is checked. */
+  report: Schema.NullOr(boatKeyReportSchema),
+});
+export type BoatInstallKeyWire = typeof boatInstallKeySchema.Type;
 
 export const createBoatAccountRequestSchema = Schema.Struct({
   /** The caller's name for the account (an organization's name, say). At most 200 characters. */
@@ -223,7 +233,9 @@ export class BoatAccountInternalServerError extends Schema.TaggedError<BoatAccou
   { httpApiStatus: 500 },
 ) {}
 
-const boatAccountIdParams = Schema.Struct({ boatAccountId: BoatAccountRef });
+const boatAccountIdParams = Schema.Struct({ boatAccountId: BoatAccountId });
+/** Rotation and removal also take `default`, to refuse it by name (`boat-account-environment`). */
+const boatAccountRefParams = Schema.Struct({ boatAccountId: BoatAccountRef });
 
 export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
   .add(
@@ -246,7 +258,7 @@ export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
   )
   .add(
     HttpApiEndpoint.put("rotateBoatAccountKey", "/:boatAccountId/key", {
-      params: boatAccountIdParams,
+      params: boatAccountRefParams,
       payload: rotateBoatAccountKeyRequestSchema,
       success: boatAccountSchema,
       error: [
@@ -260,7 +272,25 @@ export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
     }),
   )
   .add(
-    // Checks the account's key with Boat again (read-only) and stores the report it answers.
+    // The install's own key's last report (never the key).
+    HttpApiEndpoint.get("getBoatInstallKey", "/install-key", {
+      success: boatInstallKeySchema,
+      error: [BoatAccountServiceUnavailableError, BoatAccountInternalServerError],
+    }),
+  )
+  .add(
+    // Checks the install's own key with Boat now (read-only) and stores the report it answers.
+    HttpApiEndpoint.post("checkBoatInstallKey", "/install-key", {
+      success: boatInstallKeySchema,
+      error: [
+        BoatAccountKeyRefusedError,
+        BoatAccountServiceUnavailableError,
+        BoatAccountInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Checks a stored account's key with Boat again (read-only) and stores the report it answers.
     HttpApiEndpoint.post("checkBoatAccount", "/:boatAccountId/check", {
       params: boatAccountIdParams,
       success: boatAccountSchema,
@@ -276,7 +306,7 @@ export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
     // The removal's first step: the account takes no new workspace at once, and its saved images
     // are deleted from Boat by the worker before it is gone from the list.
     HttpApiEndpoint.delete("removeBoatAccount", "/:boatAccountId", {
-      params: boatAccountIdParams,
+      params: boatAccountRefParams,
       success: boatAccountSchema,
       error: [
         BoatAccountNotFoundError,

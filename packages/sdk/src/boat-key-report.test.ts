@@ -67,15 +67,13 @@ describe("Boat key reports", () => {
             }),
             { status: 422, headers: { "content-type": "application/json" } },
           );
+        const installKey = new URL(request.url).pathname.endsWith("/install-key");
         return new Response(
-          JSON.stringify({
-            ...account,
-            boatAccountId:
-              request.method === "POST" && text === "" ? "default" : account.boatAccountId,
-            source: text === "" ? "environment" : "stored",
-            organization: "team_acme",
-            report,
-          }),
+          JSON.stringify(
+            installKey
+              ? { label: "This install's Boat key", report }
+              : { ...account, organization: "team_acme", report },
+          ),
           {
             status: request.method === "POST" && text !== "" ? 201 : 200,
             headers: { "content-type": "application/json" },
@@ -90,8 +88,9 @@ describe("Boat key reports", () => {
       organization: "team_acme",
     });
     expect(created).toMatchObject({ organization: "team_acme", report });
-    const checked = await sealant.boatAccounts.check("default");
-    expect(checked).toMatchObject({ boatAccountId: "default", source: "environment", report });
+    const checked = await sealant.boatAccounts.checkInstallKey();
+    expect(checked).toEqual({ label: "This install's Boat key", report });
+    expect(await sealant.boatAccounts.installKey()).toEqual(checked);
     refuse = true;
     const error: unknown = await sealant.boatAccounts
       .create({ label: "B", apiKey: "fixture-boat-key-other" })
@@ -103,7 +102,7 @@ describe("Boat key reports", () => {
       boatKeyReport: report,
     });
     expect(JSON.stringify(error)).not.toContain("fixture-boat-key-other");
-    expect(seen.slice(0, 2)).toEqual([
+    expect(seen.slice(0, 3)).toEqual([
       {
         path: "/v1/boat-accounts",
         method: "POST",
@@ -113,7 +112,8 @@ describe("Boat key reports", () => {
           organization: "team_acme",
         },
       },
-      { path: "/v1/boat-accounts/default/check", method: "POST", body: undefined },
+      { path: "/v1/boat-accounts/install-key", method: "POST", body: undefined },
+      { path: "/v1/boat-accounts/install-key", method: "GET", body: undefined },
     ]);
     await sealant.close();
   });

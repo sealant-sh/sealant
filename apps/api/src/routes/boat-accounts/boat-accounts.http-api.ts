@@ -3,7 +3,9 @@ import { HttpApiBuilder } from "effect/http-api";
 
 import {
   checkBoatAccount,
+  checkBoatInstallKey,
   createBoatAccount,
+  getBoatInstallKey,
   listBoatAccounts,
   removeBoatAccount,
   rotateBoatAccountKey,
@@ -20,5 +22,7 @@ export const BoatAccountsHandlersLive = HttpApiBuilder.group(
         rotateBoatAccountKey(params.boatAccountId, payload),
       )
       .handle("checkBoatAccount", ({ params }) => checkBoatAccount(params.boatAccountId))
+      .handle("getBoatInstallKey", () => getBoatInstallKey())
+      .handle("checkBoatInstallKey", () => checkBoatInstallKey())
       .handle("removeBoatAccount", ({ params }) => removeBoatAccount(params.boatAccountId)),
 );
