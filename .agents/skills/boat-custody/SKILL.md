@@ -23,10 +23,11 @@ it; Boat is an adversary bounded by its docs. The record of what is verified, th
 assumptions, Boat's silences and the open findings is `docs/verification/boat-custody/README.md`.
 Read it before you judge a counterexample.
 
-**Sync commit: `dd39b9de`.** The models were last confirmed to describe the code there. SLNT-825's
-change since (`markReplay` and `recordFirstCreateRefused`, the fix of P1-A) is mirrored in
-`BoatRunLedger.tla`. The hunks sealant#641 made in the covered files (each object's wallet, the
-`unreachable` absence) are not yet read against the models: read them before you move this commit.
+**Sync commit: `dd39b9de`.** The models were last confirmed to describe the code there.
+sealant#648's change since (`markReplay` and `recordFirstCreateRefused`, the fix of P1-A) is
+mirrored in `BoatRunLedger.tla`. The hunks sealant#641 made in the covered files (each object's
+wallet, the `unreachable` absence) are not yet read against the models: read them before you move
+this commit.
 
 ## 1. Does the change touch it?
 
@@ -165,9 +166,9 @@ Full check, `BoatKeyProof.tla`:
 ## Open findings
 
 Each has a case that is expected to fail until the code and the model change; the record tells each
-one in full, with its likelihood and a proposed fix the model accepts. P1-A is fixed (SLNT-825): its
-case `ledger-finding-replay-during-first-create` passes, and `ledger-broken-no-replay-mark` must
-fail.
+one in full, with its likelihood and a proposed fix the model accepts. P1-A is fixed (sealant#648,
+SLNT-825): its case `ledger-finding-replay-during-first-create` passes, and
+`ledger-broken-no-replay-mark` must fail.
 
 | Case                                 | Finding                                                                                                              |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |

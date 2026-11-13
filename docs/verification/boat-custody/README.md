@@ -6,7 +6,7 @@ and keep them in step with the code. This file is the record: what is verified, 
 and assumptions, and what the check found.
 
 Confirmed against the code at `dd39b9de` (main, 2026-11-13), and the run ledger's create, replay and
-never-created rules again at SLNT-825's change, which fixed P1-A. Run with TLC 2.19 (TLA+ tools
+never-created rules again at sealant#648 (SLNT-825), which fixed P1-A. Run with TLC 2.19 (TLA+ tools
 1.7.4, from the nixpkgs this repository's `flake.lock` pins).
 
 ## The two promises
@@ -34,7 +34,7 @@ of Boat's; three do (marked), and one of those (P1-C) needs a Boat behaviour the
 out. For each but P2-D a proposed fix is expressed in the model, and the `-fixes` cases pass with
 every schedule on (P2-D's silence aside): within these bounds these are the only breaks.
 
-### P1-A (fixed, SLNT-825): a stopped launch recorded never-created while the sweep's replay made the VM
+### P1-A (fixed by sealant#648, SLNT-825): a stopped launch recorded never-created while the sweep's replay made the VM
 
 Case `ledger-finding-replay-during-first-create`, now expected to pass. The code before the fix is
 `ledger-broken-no-replay-mark`, which must fail. Needed no silence of Boat's.
@@ -219,13 +219,13 @@ which gives P2-B its form without a stall.
 
 ## Each property fails on a broken variant
 
-| Property                 | Broken variant (case)                                                                                                                     | What the model finds                                                                                                                                                                      |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NoForgottenVM`          | `ledger-broken-pre634`: vm.ts before sealant#634's review round, where a replay refused for `DEFINITE_REFUSALS` recorded never-created    | The first create makes the VM but answers 5xx; the listing lags; the replay is refused `api_key_expired`; `recordNeverCreated` (14 steps). The reviewer's leak.                           |
-| `NoForgottenVM`          | `ledger-broken-no-replay-mark`: vm.ts before SLNT-825, with no `markReplay` and the first create's refusal recorded whatever a sweep sent | The owner stops the run while its first create is out; a sweep loads it, finds no VM and is about to replay; the refusal records never-created; the replay makes the VM (17 steps). P1-A. |
-| `KeyKeptWhileLeftover`   | `proof-broken-pre638`: removal and rotation before sealant#638's review round, which never read `boat_key_proofs`                         | A check creates its VM; the owner rotates the key meanwhile (8 steps). The reviewer's finding.                                                                                            |
-| `NothingLeftWhenSettled` | `proof-broken-no-listing-lag`: the sweep trusts an empty label search at once                                                             | The check's create reply is lost and it dies; the sweep's search, before the list shows the VM, settles the row (14 steps).                                                               |
-| `EventuallyDeleted`      | `proof-broken-no-pending-live`: `finish` never sets `cleanup_pending`                                                                     | The check's cleanup misses its VM and finishes clean; no sweep looks again; the account can then be removed.                                                                              |
+| Property                 | Broken variant (case)                                                                                                                                   | What the model finds                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NoForgottenVM`          | `ledger-broken-pre634`: vm.ts before sealant#634's review round, where a replay refused for `DEFINITE_REFUSALS` recorded never-created                  | The first create makes the VM but answers 5xx; the listing lags; the replay is refused `api_key_expired`; `recordNeverCreated` (14 steps). The reviewer's leak.                           |
+| `NoForgottenVM`          | `ledger-broken-no-replay-mark`: vm.ts before sealant#648 (SLNT-825), with no `markReplay` and the first create's refusal recorded whatever a sweep sent | The owner stops the run while its first create is out; a sweep loads it, finds no VM and is about to replay; the refusal records never-created; the replay makes the VM (17 steps). P1-A. |
+| `KeyKeptWhileLeftover`   | `proof-broken-pre638`: removal and rotation before sealant#638's review round, which never read `boat_key_proofs`                                       | A check creates its VM; the owner rotates the key meanwhile (8 steps). The reviewer's finding.                                                                                            |
+| `NothingLeftWhenSettled` | `proof-broken-no-listing-lag`: the sweep trusts an empty label search at once                                                                           | The check's create reply is lost and it dies; the sweep's search, before the list shows the VM, settles the row (14 steps).                                                               |
+| `EventuallyDeleted`      | `proof-broken-no-pending-live`: `finish` never sets `cleanup_pending`                                                                                   | The check's cleanup misses its VM and finishes clean; no sweep looks again; the account can then be removed.                                                                              |
 
 The skill's own run on a scratch change (`running-limit` added to what `replayRejected` treats as
 definite) failed `ledger` with the same leak as the review's, and passed again once the change was
