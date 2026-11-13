@@ -457,7 +457,7 @@ export const WorkspaceRepoLive = Layer.effect(
 );
 
 /*
-Example usage in an Effect program (following effect-solutions services-and-layers guidance):
+Example usage in an Effect program:
 
 import { Effect, Layer } from "effect";
 import { WorkspaceRepo, WorkspaceRepoLive, SealantDBLive } from "@sealant/db";
