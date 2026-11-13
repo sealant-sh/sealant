@@ -207,6 +207,8 @@ export const requireBoatAccount = (
     // there again, and hold the change up until its workspace stopped.
     if (account.organizationChange !== null)
       return yield* new WorkspaceConflictError({
-        message: `Boat account ${accountId} is changing the Boat wallet it bills, and Core is deleting its saved images from the old one: no new workspace runs in it until that is done, usually within a few minutes. Try again then.`,
+        code: "boat-account-changing-organization",
+        message:
+          "The Boat account this workspace names is changing the Boat wallet it bills, and Core is deleting its saved images from the old one: no new workspace starts in it until that is done, usually within a few minutes. Try again then.",
       });
   });

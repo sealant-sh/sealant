@@ -288,19 +288,22 @@ These call the live API and work end-to-end:
   whether the account is `pinned`, an organization's key, or follows the key's `active-wallet`, with
   `walletChanged` when that moved). `.setOrganization(boatAccountId, organization)` points an
   account with a personal key at a wallet (an organization's id from `wallets`, or `personal`) or at
-  none (`null`), without its key. It rejects with `boat-account-in-use` while the account has VMs,
-  runs to settle or builds in Boat, and `boat-key-organization` for an organization's key. An
-  account with saved images answers `organizationChange` (`organization`, `requestedAt`,
-  `imagesLeft`): the control plane deletes them from the old wallet before it switches. The control
-  plane's own key is not in `list()`: `.installKey()` reads its last report and `.checkInstallKey()`
-  checks it now (`BoatInstallKey`: `label`, `report`). A refused key rejects with `SealantApiError`,
-  whose `boat`, `missingPermissions` and `boatKeyReport` say why. `.prove(boatAccountId)` runs a
-  full check with a throwaway VM and answers a `BoatKeyProof` (`outcome`, `steps` each `passed`,
-  `refused` with Boat's reason, `no-answer` or `not-reached`, `starts`, `leftBehind` with
-  `removalConfirmed`). While the sweep still owns what a check left, `rotateKey` and `remove` reject
-  with `boat-proof-running` and name it. `list()` carries each account's `lastProof`. Needs a
-  service key. See [Boat accounts](/docs/reference/http-api#boat-accounts) for what each call
-  refuses.
+  none (`null`), without its key. When everything the account holds is in that wallet already (an
+  unpinned account pinned to the wallet it bills, say), it is relabelled at once and nothing is
+  deleted. Otherwise it rejects with `boat-account-in-use` while the account has VMs, runs to settle
+  or builds in Boat, `boat-account-images-unlocated` when a saved image is in none of the key's
+  wallets, and `boat-key-organization` for an organization's key. An account with saved images
+  answers `organizationChange` (`organization`, `requestedAt`, `imagesLeft`): the control plane
+  deletes each from the wallet it found it in before it switches, and meanwhile rejects creates,
+  `rotateKey` and `prove` with `boat-account-changing-organization`. The control plane's own key is
+  not in `list()`: `.installKey()` reads its last report and `.checkInstallKey()` checks it now
+  (`BoatInstallKey`: `label`, `report`). A refused key rejects with `SealantApiError`, whose `boat`,
+  `missingPermissions` and `boatKeyReport` say why. `.prove(boatAccountId)` runs a full check with a
+  throwaway VM and answers a `BoatKeyProof` (`outcome`, `steps` each `passed`, `refused` with Boat's
+  reason, `no-answer` or `not-reached`, `starts`, `leftBehind` with `removalConfirmed`). While the
+  sweep still owns what a check left, `rotateKey` and `remove` reject with `boat-proof-running` and
+  name it. `list()` carries each account's `lastProof`. Needs a service key. See
+  [Boat accounts](/docs/reference/http-api#boat-accounts) for what each call refuses.
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside

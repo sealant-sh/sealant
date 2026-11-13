@@ -19,7 +19,6 @@ import {
   type BoatInstallKeyWire,
   type BoatFailure,
   type BoatKeyReport,
-  type BoatKeyWalletChoice,
   boatKeyProofSchema,
   boatKeyReportSchema,
   type CreateBoatAccountRequest,
@@ -330,6 +329,13 @@ export const getBoatInstallKey = () =>
     return installKeyWire(storedReport(reports.get(BOAT_DEFAULT_ACCOUNT_ID)?.report));
   });
 
+/** A call that waits for an unfinished change of the wallet the account bills. */
+const changingOrganization = (call: string) =>
+  new BoatAccountConflictError({
+    code: "boat-account-changing-organization",
+    message: `This Boat account is changing the Boat wallet it bills, and Core is deleting its saved images from the old one; nothing was changed. Try the ${call} again once that is done, usually within a few minutes.`,
+  });
+
 const notFound = (boatAccountId: string) =>
   new BoatAccountNotFoundError({ message: `No Boat account ${boatAccountId} on this install.` });
 const removing = (boatAccountId: string) =>
@@ -426,11 +432,7 @@ export const proveBoatAccount = (boatAccountId: string) =>
     const { account, credential } = yield* openStoredAccount(boatAccountId);
     if (account.removalRequestedAt !== null) return yield* removing(boatAccountId);
     // What it would make belongs to the wallet the account is leaving: it waits for the change.
-    if (account.organizationChange !== null)
-      return yield* new BoatAccountConflictError({
-        code: "boat-account-in-use",
-        message: `Boat account ${boatAccountId} is changing the Boat wallet it bills, and Core is deleting its saved images from the old one; try the full check again once that is done.`,
-      });
+    if (account.organizationChange !== null) return yield* changingOrganization("full check");
     const client = yield* openClient(credential, account.organization);
     const proofs = yield* BoatKeyProofRepo;
     const proven = yield* Effect.tryPromise({
@@ -545,6 +547,9 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
       .pipe(Effect.mapError(internal("Failed to read the Boat account.")));
     if (account === undefined || account.removedAt !== null) return yield* notFound(boatAccountId);
     if (account.removalRequestedAt !== null) return yield* removing(boatAccountId);
+    // The new key would be checked under the wallet the account is leaving, not the one it moves
+    // to: the change finishes first.
+    if (account.organizationChange !== null) return yield* changingOrganization("key rotation");
     // A key of another Boat wallet could not delete what a full check made with this one.
     const leftovers = yield* proofLeftovers(boatAccountId);
     if (leftovers !== undefined)
@@ -680,22 +685,54 @@ export const removeBoatAccount = (boatAccountId: string) =>
 /** `n thing` or `n things`. */
 const count = (n: number, one: string, many = `${one}s`) => `${String(n)} ${n === 1 ? one : many}`;
 
+/** The wallet an observed report's `wallet` is, as a pin names it: an organization's id, or `personal`. */
+const walletId = (wallet: BoatKeyReport["wallet"]) =>
+  !wallet.observed ? undefined : wallet.kind === "personal" ? "personal" : wallet.organizationId;
+
+/**
+ * Where something Core made is, looked for under each wallet in turn with requests that name it:
+ * the one wallet that has it, `nowhere` (every wallet answered that it has not), or `unanswered`.
+ */
+type Located = { readonly in: string } | { readonly kind: "nowhere" | "unanswered" };
+const locate = (
+  wallets: readonly string[],
+  read: (wallet: string) => Promise<"found" | "absent" | "unanswered">,
+) =>
+  Effect.promise(async (): Promise<Located> => {
+    let unanswered = false;
+    for (const wallet of wallets) {
+      const seen = await read(wallet).catch(() => "unanswered" as const);
+      if (seen === "found") return { in: wallet };
+      if (seen === "unanswered") unanswered = true;
+    }
+    return { kind: unanswered ? "unanswered" : "nowhere" };
+  });
+
 /**
  * `PUT /v1/boat-accounts/:id/organization`: points a stored account with a personal key at the
  * wallet it bills from now on (an organization's id or name, or `personal`), or at none (null),
- * without its key. The key is checked with Boat (read-only) under the new wallet first, which
- * must be one its Boat account can bill; an organization's key is refused, it bills its own
- * organization only.
+ * without its key. The key is checked with Boat (read-only), under the wallet the account names
+ * now and under the new one, which must be one its Boat account can bill; an organization's key
+ * is refused, it bills its own organization only.
  *
- * VMs and saved images belong to the wallet that paid for them, and the account's requests, once
- * they name another wallet, could neither see nor delete them there. So the change is refused
- * while the account has anything in Boat but saved images: runs whose VM Boat may hold, runs not
- * settled yet, image builds in flight or being cleaned up, or a full check's leftovers, counted
- * in the refusal. An account that holds nothing switches at once. One that holds saved images
- * keeps billing the wallet it bills now while the worker deletes them there, with requests that
- * still name it, by the catalog's recorded removal (the same as image retention and an account's
- * removal); it switches once none is left (`organizationChange` says how many). They are built
- * again in the new wallet at the next launch. Until then no new workspace runs in the account.
+ * VMs and saved images belong to the wallet that paid for them, and a request that names another
+ * wallet can neither see nor delete them. So Core first finds where the account's things are:
+ * a pinned account's are in the wallet it names (it named it on every request); an unpinned
+ * account's could be in any wallet its key's account has had active, so each saved image, and
+ * each live VM, is looked for under each wallet the key can bill, by name. Then:
+ *
+ * - Everything it holds is in the new wallet already: it is relabelled at once, nothing deleted,
+ *   whatever runs (an unpinned account pinned to the wallet it bills, say).
+ * - An image Boat shows in none of those wallets: refused, naming it. Core never records as
+ *   removed something it could not find.
+ * - Otherwise it is a move, refused while the account has anything in Boat but saved images (runs
+ *   whose VM Boat may hold, runs not settled yet, image builds in flight or being cleaned up, a
+ *   full check's leftovers), counted in the refusal. With nothing in Boat it switches at once.
+ *   With saved images it keeps billing what it bills now while the worker deletes each image with
+ *   requests that name the wallet it was found in (the catalog's recorded removal, as retention and
+ *   an account's removal use), then switches (`organizationChange` says how many are left). They
+ *   are built again in the new wallet at the next launch; until then no new workspace runs in it.
+ *
  * Asking for the organization it bills calls off an unfinished change.
  */
 export const setBoatAccountOrganization = (
@@ -726,101 +763,154 @@ export const setBoatAccountOrganization = (
         message: leftovers,
       });
 
-    // A wallet the key's Boat account cannot bill, by its last report: Boat is not asked.
-    const notAChoice = (choices: readonly BoatKeyWalletChoice[]) =>
-      requested !== null &&
-      requested.toLowerCase() !== "personal" &&
-      !choices.some(
-        (choice) =>
-          choice.id === requested || choice.name?.toLowerCase() === requested.toLowerCase(),
-      )
-        ? new BoatAccountBadRequestError({
-            message: `${requested} is not one of the wallets this key's Boat account can bill (${choices.map((choice) => choice.id).join(", ")}); nothing was changed.`,
-          })
-        : undefined;
-    const last = storedReport(yield* lastReport(account.id));
-    if (last?.wallets?.observed === true && notAChoice(last.wallets.choices) !== undefined) {
-      // The last report may predate an organization the person joined since: Boat is asked for
-      // the wallets now, under the wallet the account bills, before the change is refused.
-      const now = yield* runCheck(
-        yield* openClient(credential, account.organization),
-        account.organization,
-      );
-      const refusal =
-        now.kind === "checked" && now.report.wallets?.observed === true
-          ? notAChoice(now.report.wallets.choices)
-          : notAChoice(last.wallets.choices);
-      if (refusal !== undefined) return yield* refusal;
-    }
-
-    // The key, checked under the wallet it would bill: Boat says which one that is.
-    const client = yield* openClient(credential, requested);
-    const check = yield* runCheck(client, requested, yield* lastReport(account.id));
     const outcome = "nothing was changed.";
-    if (check.kind === "unverified") return yield* unverified(check.failure, outcome);
+    const previous = yield* lastReport(account.id);
     const organizationKey = new BoatAccountConflictError({
       code: "boat-key-organization",
       message: `Boat account ${boatAccountId} has a Boat organization's key, which bills that organization and nothing else; there is no wallet to choose, and nothing was changed.`,
     });
-    if (check.kind === "refused") {
-      if (check.failure.kind === "organization-mismatch") return yield* organizationKey;
-      return yield* new BoatAccountKeyRefusedError({
-        code: "boat-key-refused",
-        message: `${refusedWords(check.failure)} (${check.failure.code ?? check.failure.kind}); ${outcome}`,
-        boat: check.failure,
+    /** A check under `organization`, refused as a pin is: an organization's key, a refused key. */
+    const checked = (organization: string | null) =>
+      Effect.gen(function* () {
+        const check = yield* runCheck(
+          yield* openClient(credential, organization),
+          organization,
+          previous,
+        );
+        if (check.kind === "unverified") return yield* unverified(check.failure, outcome);
+        if (check.kind === "refused") {
+          if (check.failure.kind === "organization-mismatch") return yield* organizationKey;
+          return yield* new BoatAccountKeyRefusedError({
+            code: "boat-key-refused",
+            message: `${refusedWords(check.failure)} (${check.failure.code ?? check.failure.kind}); ${outcome}`,
+            boat: check.failure,
+          });
+        }
+        if (check.report.keyKind.observed && check.report.keyKind.kind === "organization")
+          return yield* organizationKey;
+        return check.report;
       });
-    }
-    const report = check.report;
-    if (report.keyKind.observed && report.keyKind.kind === "organization")
-      return yield* organizationKey;
+
+    // The key as the account uses it now: the wallets it can bill, and the one it bills.
+    const now = yield* checked(account.organization);
+    const choices = now.wallets?.observed === true ? now.wallets.choices : undefined;
     let organization: string | null = null;
     if (requested !== null) {
-      const fresh =
-        report.wallets?.observed === true ? notAChoice(report.wallets.choices) : undefined;
-      if (fresh !== undefined) return yield* fresh;
-      // Kept as Boat answered it: the organization's id (never a name another one may take
-      // later), or `personal`.
-      organization = !report.wallet.observed
-        ? null
-        : report.wallet.kind === "personal"
-          ? "personal"
-          : (report.wallet.organizationId ?? null);
-      if (organization === null)
+      if (choices === undefined)
         return yield* new BoatAccountKeyRefusedError({
           code: "boat-key-unverified",
-          message: `Boat did not show which wallet the key bills when a request names ${requested}; ${outcome} Try again.`,
-          ...(report.wallet.observed || report.wallet.boat === undefined
-            ? {}
-            : { boat: report.wallet.boat }),
+          message: `Boat did not show which wallets the key can bill; ${outcome} Try again.`,
+          ...(now.wallets?.observed === false && now.wallets.boat !== undefined
+            ? { boat: now.wallets.boat }
+            : {}),
         });
+      const lowered = requested.toLowerCase();
+      const choice =
+        lowered === "personal"
+          ? { id: "personal" }
+          : choices.find((each) => each.id === requested || each.name?.toLowerCase() === lowered);
+      if (choice === undefined)
+        return yield* new BoatAccountBadRequestError({
+          message: `${requested} is not one of the wallets this key's Boat account can bill (${choices.map((each) => each.id).join(", ")}); ${outcome}`,
+        });
+      // Kept as Boat lists it: the organization's id (never a name another may take later).
+      organization = choice.id;
     }
-    // The report as the account will keep it: under the organization as stored.
-    const kept: BoatKeyReport =
-      organization === null
-        ? report
-        : { ...report, organization, billing: { mode: "pinned", organization } };
+    // The key under the new wallet: Boat accepts it, and says which wallet that bills.
+    const target = organization === account.organization ? now : yield* checked(organization);
+    const targetWallet = walletId(target.wallet);
+    if (targetWallet === undefined)
+      return yield* new BoatAccountKeyRefusedError({
+        code: "boat-key-unverified",
+        message: `Boat did not show which wallet the key bills ${organization === null ? "with no wallet named" : `when a request names ${organization}`}; ${outcome} Try again.`,
+        ...(!target.wallet.observed && target.wallet.boat !== undefined
+          ? { boat: target.wallet.boat }
+          : {}),
+      });
 
-    // A pin that names the wallet the account bills already, by another name (an organization's
-    // name stored at create, its id now): nothing moves, so nothing is deleted.
-    const billed =
-      last?.organization === account.organization && last.wallet.observed
-        ? last.wallet.kind === "personal"
-          ? "personal"
-          : last.wallet.organizationId
-        : undefined;
-    const sameWallet =
-      account.organization !== null && organization !== null && billed === organization;
+    const clients = yield* BoatKeyClients;
+    /** A client that names `wallet` on every request: what looks for something there. */
+    const clientIn = (wallet: string) => {
+      const opened = clients(credential, { organization: wallet });
+      return opened.ok ? opened.value : undefined;
+    };
+    const repo = yield* BoatAccountRepo;
+    const images = yield* repo
+      .heldImages(account.id)
+      .pipe(Effect.mapError(internal("Failed to read the Boat account's images.")));
+    const sandboxes = yield* repo
+      .liveSandboxes(account.id)
+      .pipe(Effect.mapError(internal("Failed to read the Boat account's runs.")));
+    // Where each image is: a pinned account named its wallet on every request; an unpinned one's
+    // are looked for under every wallet its key can bill.
+    const locations: Record<string, string> = {};
+    let relabel: "always" | { readonly runs: readonly string[] } | undefined;
+    if (account.organization !== null) {
+      for (const name of images) locations[name] = account.organization;
+      if (walletId(now.wallet) === targetWallet) relabel = "always";
+    } else if (organization !== account.organization) {
+      const wallets = choices?.map((each) => each.id);
+      if (wallets === undefined && images.length > 0)
+        return yield* new BoatAccountKeyRefusedError({
+          code: "boat-key-unverified",
+          message: `Boat did not show which wallets the key can bill, so Core cannot tell where the account's saved images are; ${outcome} Try again.`,
+        });
+      const missing: string[] = [];
+      for (const name of images) {
+        const snapshot = boatSnapshotNameSchema.safeParse(name);
+        const found = snapshot.success
+          ? yield* locate(wallets ?? [], async (wallet) => {
+              const client = clientIn(wallet);
+              if (client === undefined) return "unanswered";
+              const read = await client.getSnapshot(snapshot.data);
+              return read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered";
+            })
+          : ({ kind: "nowhere" } as const);
+        if ("in" in found) locations[name] = found.in;
+        else if (found.kind === "unanswered")
+          return yield* new BoatAccountKeyRefusedError({
+            code: "boat-key-unverified",
+            message: `Boat did not answer while Core looked for the account's saved image ${name} in each wallet the key can bill; ${outcome} Try again.`,
+          });
+        else missing.push(name);
+      }
+      if (missing.length > 0)
+        return yield* new BoatAccountConflictError({
+          code: "boat-account-images-unlocated",
+          message: `Boat shows ${missing.length === 1 ? "the saved image" : "the saved images"} ${missing.join(", ")} of Boat account ${boatAccountId} in none of the wallets this key can bill (${(wallets ?? []).join(", ")}), so Core cannot delete ${missing.length === 1 ? "it" : "them"} from the wallet ${missing.length === 1 ? "it is" : "they are"} in and will not record ${missing.length === 1 ? "it" : "them"} as removed. Look for ${missing.length === 1 ? "it" : "them"} under Saved snapshots in Boat, in each organization the key's Boat account has been in; ${outcome}`,
+        });
+      // Everything already in the new wallet, VMs included: a relabel, nothing moves.
+      if (images.every((name) => locations[name] === targetWallet)) {
+        const runs: string[] = [];
+        let elsewhere = false;
+        for (const { runId, sandboxId } of sandboxes) {
+          const id = boatSandboxIdSchema.safeParse(sandboxId);
+          const client = clientIn(targetWallet);
+          const read =
+            id.success && client !== undefined
+              ? yield* Effect.promise(() => client.get(id.data).catch(() => undefined))
+              : undefined;
+          if (
+            read?.ok === true &&
+            read.value.labels?.["sealant-deployment"] === account.deploymentId
+          )
+            runs.push(runId);
+          else elsewhere = true;
+        }
+        if (!elsewhere) relabel = { runs };
+      }
+    }
 
     const unsettled = yield* Effect.flatMap(BoatRunRepo, (runs) =>
       runs.listUnsettled({ deploymentId: account.deploymentId, limit: 100 }),
     ).pipe(Effect.mapError(internal("Failed to read the Boat account's runs.")));
-    const repo = yield* BoatAccountRepo;
     const change = yield* repo
       .requestOrganizationChange(boatAccountId, {
         organization,
         expected: account.organization,
         unsettled,
-        sameWallet,
+        ...(relabel === undefined ? {} : { relabel }),
+        locations,
       })
       .pipe(
         Effect.mapError(
@@ -834,7 +924,7 @@ export const setBoatAccountOrganization = (
                 : error.code === "stale-revision"
                   ? new BoatAccountConflictError({
                       code: "boat-account-changed",
-                      message: `Boat account ${boatAccountId}'s organization was changed by another call meanwhile; ${outcome}`,
+                      message: `Boat account ${boatAccountId} changed while Core looked at it (its organization, or something it started in Boat); ${outcome} Try again.`,
                     })
                   : new BoatAccountInternalServerError({
                       message: "Failed to change the Boat account's organization.",
@@ -869,7 +959,11 @@ export const setBoatAccountOrganization = (
     // The report is the account's own only once it bills that wallet; a change still under way
     // keeps the last one, which still says the wallet it bills.
     if (change.kind === "pending")
-      return toWire(change.account, storedReport(yield* lastReport(account.id)), change.imagesLeft);
+      return toWire(change.account, storedReport(previous), change.imagesLeft);
+    const kept: BoatKeyReport =
+      organization === null
+        ? target
+        : { ...target, organization, billing: { mode: "pinned", organization } };
     yield* saveReport(account.id, kept);
     return toWire(change.account, kept);
   });

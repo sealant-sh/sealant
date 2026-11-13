@@ -336,7 +336,11 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * still hold what one made (the message names the VM and the snapshot): a second check, a key
  * rotation, a removal and a change of organization wait until Core has deleted it.
  * `boat-key-organization`: a change of organization for an organization's Boat key, which bills
- * its own organization and nothing else. A change of organization is also refused
+ * its own organization and nothing else. `boat-account-images-unlocated`: a change of organization
+ * for an account with no pin, one of whose saved images Boat shows in none of the wallets its key
+ * can bill, so Core cannot delete it where it is (the message names it).
+ * `boat-account-changing-organization`: a key rotation or a full check while a change of
+ * organization is unfinished. A change of organization is also refused
  * `boat-account-in-use` while the account has runs whose VMs Boat may hold (`liveRuns`), runs
  * still being settled (`unsettledRuns`) or image builds in flight or being cleaned up
  * (`buildsInFlight`).
@@ -353,6 +357,8 @@ export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConf
       "boat-account-environment",
       "boat-proof-running",
       "boat-key-organization",
+      "boat-account-images-unlocated",
+      "boat-account-changing-organization",
     ]),
     liveRuns: Schema.optional(Schema.Int),
     unsettledRuns: Schema.optional(Schema.Int),

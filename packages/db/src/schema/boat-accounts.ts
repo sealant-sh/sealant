@@ -54,6 +54,14 @@ export const boatAccounts = snakeCase.table(
      */
     organizationChangeRequestedAt: instant(),
     organizationChangeTarget: text(),
+    /**
+     * Where each saved image the change deletes is, by its snapshot name: the wallet to name
+     * (`X-Boat-Org`: an organization's id or name, or `personal`) on every request that removes it.
+     * Found by looking for each image under each wallet the key can bill when the change was asked,
+     * so a removal never asks the wallet that happens to be active, and Boat not finding an image
+     * there is evidence it is gone.
+     */
+    organizationChangeLocations: jsonb().$type<Readonly<Record<string, string>>>(),
     createdAt: instant().notNull().defaultNow(),
     keyRotatedAt: instant(),
     removalRequestedAt: instant(),

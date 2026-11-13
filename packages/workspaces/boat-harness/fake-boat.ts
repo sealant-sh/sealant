@@ -476,6 +476,51 @@ export class FakeBoat {
     };
   }
 
+  /**
+   * A saved snapshot that is in `wallet` already, as one Core saved there earlier would be (a test
+   * that starts from what an account made under another active wallet).
+   */
+  seedSnapshot(input: { readonly name: string; readonly wallet: string }): void {
+    this.snapshots.set(input.name, {
+      name: input.name,
+      sourceSandboxId: "bx_3456789a",
+      snapshotId: randomUUID(),
+      createdAt: now(),
+      image: `unit-${input.name}`,
+      dockerData: `unit-${input.name}-docker`,
+      status: "ready",
+      wallet: input.wallet,
+    });
+  }
+
+  /** A running VM in `wallet`, with these labels, and no twin behind it. */
+  seedSandbox(input: {
+    readonly id: string;
+    readonly wallet: string;
+    readonly labels: Readonly<Record<string, string>>;
+  }): void {
+    this.sandboxes.set(input.id, {
+      id: input.id,
+      labels: { ...input.labels },
+      ttlSeconds: null,
+      snapshots: false,
+      monitoring: false,
+      container: `boat-harness-${this.options.runId}-${input.id.replace("_", "-")}`,
+      image: this.options.baseImage,
+      createdAt: now(),
+      hostToken: randomBytes(24).toString("hex"),
+      state: "idle",
+      hydrated: true,
+      stoppedAt: null,
+      ip: undefined,
+      deletion: undefined,
+      withdrawn: false,
+      removed: false,
+      dockerSeed: undefined,
+      wallet: input.wallet,
+    });
+  }
+
   /** The account's organizations, `GET /orgs` as it lists them, the active wallet marked. */
   #orgs(): readonly Readonly<Record<string, unknown>>[] {
     const orgs = this.account.orgs ?? [

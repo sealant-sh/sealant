@@ -89,6 +89,8 @@ describe.skipIf(DATABASE_URL === undefined)(
       boat.account = { orgs: TWO_ORGANIZATIONS, activeWallet: "team_acme" };
       boat.faults = {};
       boat.organizationHeaders.length = 0;
+      boat.snapshots.clear();
+      boat.sandboxes.clear();
     });
 
     type Services = BoatAccountRepo | BoatKeyProofRepo | BoatRunRepo | CredentialCipher | SealantDB;
@@ -164,10 +166,18 @@ describe.skipIf(DATABASE_URL === undefined)(
       );
       return { runId, publicationId: seeded.sourceId };
     };
-    /** A saved image Core built in the account, ready: what retention and removal delete. */
-    const savedImage = async (accountId: string, state: "ready" | "reserved" = "ready") => {
+    /**
+     * A saved image Core built in the account, ready: what retention and removal delete. `wallet`:
+     * the fake Boat holds it there too, as the wallet the account billed when it was saved.
+     */
+    const savedImage = async (
+      accountId: string,
+      state: "ready" | "reserved" = "ready",
+      wallet?: string,
+    ) => {
       const account = await stored(accountId);
       const id = randomUUID();
+      if (wallet !== undefined) boat.seedSnapshot({ name: `sealant-${id.slice(0, 8)}`, wallet });
       await Effect.runPromise(
         db.insert(schema.nativePublications).values({
           id,
@@ -371,7 +381,7 @@ describe.skipIf(DATABASE_URL === undefined)(
     it("with only saved images, waits for them to be deleted from the old wallet, refuses new workspaces meanwhile, and can be called off", async () => {
       const created = await connect("Images");
       const id = created.boatAccountId;
-      const image = await savedImage(id);
+      const image = await savedImage(id, "ready", "team_acme");
       const pending = await run(routes.setBoatAccountOrganization(id, { organization: "zeta" }));
       // Not switched yet: it still bills the old wallet, and the report still says so.
       expect(pending).toMatchObject({
@@ -398,10 +408,22 @@ describe.skipIf(DATABASE_URL === undefined)(
       );
       expect(
         await refusal(availability.requireBoatAccount({ runtime: { boatAccountId: id } }, "boat")),
-      ).toMatchObject({ _tag: "WorkspaceConflictError" });
-      // Nor does a full check, whose VM and snapshot would be the old wallet's.
+      ).toMatchObject({
+        _tag: "WorkspaceConflictError",
+        code: "boat-account-changing-organization",
+        message: expect.not.stringContaining(id),
+      });
+      // Nor does a full check, whose VM and snapshot would be the old wallet's, nor a rotation,
+      // whose new key would be checked under the wallet the account is leaving.
       expect(await refusal(routes.proveBoatAccount(id))).toMatchObject({
-        code: "boat-account-in-use",
+        code: "boat-account-changing-organization",
+      });
+      expect(await refusal(routes.rotateBoatAccountKey(id, { apiKey: ACCOUNT_KEY }))).toMatchObject(
+        { code: "boat-account-changing-organization" },
+      );
+      // Where Core found the image, which the worker's removal names on every request.
+      expect((await stored(id)).organizationChange?.locations).toEqual({
+        [`sealant-${image.slice(0, 8)}`]: "team_acme",
       });
       // The worker's pass finishes once they are gone (`boat-wallet-change.db.test.ts`); here, the
       // same statement it ends with.
@@ -463,7 +485,9 @@ describe.skipIf(DATABASE_URL === undefined)(
       const created = await connect("Released");
       await run(routes.setBoatAccountOrganization(created.boatAccountId, { organization: "acme" }));
       await savedImage(created.boatAccountId);
-      await run(routes.setBoatAccountOrganization(created.boatAccountId, { organization: null }));
+      await run(
+        routes.setBoatAccountOrganization(created.boatAccountId, { organization: "personal" }),
+      );
       const listed = await run(routes.listBoatAccounts());
       // The account and its report as @sealant/api-contracts-next@0.40.0-next.874 ships them.
       const notObserved = Schema.Struct({
@@ -514,7 +538,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       const mine = listed.items.find((item) => item.boatAccountId === created.boatAccountId);
       expect(mine).toMatchObject({
         organization: "team_acme",
-        organizationChange: { organization: null, imagesLeft: 1 },
+        organizationChange: { organization: "personal", imagesLeft: 1 },
         report: { wallets: { observed: true }, billing: { mode: "pinned" } },
       });
     });
@@ -558,6 +582,154 @@ describe.skipIf(DATABASE_URL === undefined)(
           Effect.flatMap(BoatAccountRepo, (repo) => repo.heldImages(created.boatAccountId)),
         ),
       ).toEqual([`sealant-${image.slice(0, 8)}`]);
+    });
+
+    describe("an account with no pin, whose owner switched the active wallet after it built images", () => {
+      /** Unpinned, on the personal wallet, one image saved there; then `boat org switch`. */
+      const switchedAfterBuilding = async (label: string) => {
+        boat.account = { ...boat.account, activeWallet: "personal" };
+        const created = await connect(label);
+        const image = await savedImage(created.boatAccountId, "ready", "personal");
+        boat.account = { ...boat.account, activeWallet: "team_zeta" };
+        const checked = await run(routes.checkBoatAccount(created.boatAccountId));
+        expect(checked.report?.billing).toMatchObject({
+          mode: "active-wallet",
+          walletChanged: { from: { kind: "personal" } },
+        });
+        return { id: created.boatAccountId, name: `sealant-${image.slice(0, 8)}`, image };
+      };
+
+      it("pinned to the wallet its images are in: a relabel, nothing deleted", async () => {
+        const { id, name } = await switchedAfterBuilding("Back to personal");
+        const pinned = await run(
+          routes.setBoatAccountOrganization(id, { organization: "personal" }),
+        );
+        expect(pinned).toMatchObject({ organization: "personal", organizationChange: null });
+        expect(boat.heldIn("personal").snapshots).toEqual([name]);
+        expect(await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.heldImages(id)))).toEqual([
+          name,
+        ]);
+      });
+
+      it("pinned to the wallet active now: waits on the image, found in the wallet it was saved in, not the active one", async () => {
+        const { id, name } = await switchedAfterBuilding("To the active wallet");
+        const pending = await run(
+          routes.setBoatAccountOrganization(id, { organization: "team_zeta" }),
+        );
+        expect(pending).toMatchObject({
+          organization: null,
+          organizationChange: { organization: "team_zeta", imagesLeft: 1 },
+        });
+        // The worker removes it with requests that name `personal` (boat-accounts.db.test.ts).
+        expect((await stored(id)).organizationChange?.locations).toEqual({ [name]: "personal" });
+        // It was looked for by name in each wallet, never in "whatever is active".
+        expect(boat.organizationHeaders).toContainEqual({
+          method: "GET",
+          path: `/saved-snapshots/${name}`,
+          organization: "personal",
+        });
+      });
+
+      it("refuses, naming it, an image Boat shows in none of the key's wallets, and records nothing removed", async () => {
+        const { id, name, image } = await switchedAfterBuilding("Lost image");
+        boat.snapshots.delete(name);
+        for (const organization of ["team_zeta", "personal"]) {
+          const refused = await refusal(routes.setBoatAccountOrganization(id, { organization }));
+          expect(refused).toMatchObject({
+            _tag: "BoatAccountConflictError",
+            code: "boat-account-images-unlocated",
+          });
+          expect(refused.message).toContain(name);
+          expect(refused.message).toContain("personal, team_acme, team_zeta");
+        }
+        expect(await stored(id)).toMatchObject({ organization: null, organizationChange: null });
+        expect(await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.heldImages(id)))).toEqual([
+          `sealant-${image.slice(0, 8)}`,
+        ]);
+      });
+    });
+
+    describe("a pin that names the wallet the account bills already", () => {
+      it("pins an unpinned account with images and a running VM at once, deletes nothing, leaves the VM, and names the wallet from then on", async () => {
+        boat.account = { ...boat.account, activeWallet: "personal" };
+        const created = await connect("Upgrade");
+        const id = created.boatAccountId;
+        const image = await savedImage(id, "ready", "personal");
+        const live = await liveRun(id);
+        const account = await stored(id);
+        const [vm] = await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.liveSandboxes(id)));
+        if (vm === undefined) throw new Error("no VM");
+        boat.seedSandbox({
+          id: vm.sandboxId,
+          wallet: "personal",
+          labels: { "sealant-runtime": "boat", "sealant-deployment": account.deploymentId },
+        });
+        const pinned = await run(
+          routes.setBoatAccountOrganization(id, { organization: "personal" }),
+        );
+        expect(pinned).toMatchObject({
+          organization: "personal",
+          organizationChange: null,
+          report: { billing: { mode: "pinned", organization: "personal" } },
+        });
+        expect(boat.heldIn("personal")).toEqual({
+          sandboxes: [vm.sandboxId],
+          snapshots: [`sealant-${image.slice(0, 8)}`],
+        });
+        expect(
+          await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.liveSandboxes(id))),
+        ).toEqual([{ runId: live.runId, sandboxId: vm.sandboxId }]);
+        // New workspaces are not refused, and every later request names the wallet.
+        await run(
+          Effect.flatMap(BoatAccountRepo, (repo) =>
+            repo.reportLaunch({
+              worker: `worker-${randomUUID()}`,
+              launches: true,
+              defaultAccount: true,
+              resourceGateway: true,
+              observedAt: new Date(),
+            }),
+          ),
+        );
+        await run(availability.requireBoatAccount({ runtime: { boatAccountId: id } }, "boat"));
+        const from = mark();
+        await run(routes.checkBoatAccount(id));
+        everyRequestNamed(from, "personal");
+      });
+
+      it("removes a pin to the wallet active now at once, deleting nothing, whatever runs", async () => {
+        boat.account = { ...boat.account, activeWallet: "personal" };
+        const created = await run(
+          routes.createBoatAccount({
+            label: "Unpin",
+            apiKey: ACCOUNT_KEY,
+            organization: "personal",
+          }),
+        );
+        const image = await savedImage(created.boatAccountId, "ready", "personal");
+        await liveRun(created.boatAccountId);
+        const unpinned = await run(
+          routes.setBoatAccountOrganization(created.boatAccountId, { organization: null }),
+        );
+        expect(unpinned).toMatchObject({
+          organization: null,
+          organizationChange: null,
+          report: { billing: { mode: "active-wallet" } },
+        });
+        expect(boat.heldIn("personal").snapshots).toEqual([`sealant-${image.slice(0, 8)}`]);
+      });
+
+      it("is a move when a VM is not in the wallet named: refused while it runs", async () => {
+        boat.account = { ...boat.account, activeWallet: "personal" };
+        const created = await connect("VM elsewhere");
+        await savedImage(created.boatAccountId, "ready", "personal");
+        // Its VM was started while the active wallet was another; the fake holds it in team_acme.
+        await liveRun(created.boatAccountId);
+        const refused = await refusal(
+          routes.setBoatAccountOrganization(created.boatAccountId, { organization: "personal" }),
+        );
+        expect(refused).toMatchObject({ code: "boat-account-in-use", liveRuns: 1 });
+      });
     });
   },
 );

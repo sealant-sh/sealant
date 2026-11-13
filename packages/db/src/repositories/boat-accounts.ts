@@ -65,6 +65,8 @@ export interface BoatAccountRecord {
   readonly organizationChange: {
     readonly organization: string | null;
     readonly requestedAt: Date;
+    /** The wallet each saved image to delete is in, by its snapshot name (see the column). */
+    readonly locations: Readonly<Record<string, string>>;
   } | null;
   readonly createdAt: Date;
   readonly keyRotatedAt: Date | null;
@@ -259,10 +261,15 @@ export interface BoatAccountRepoService {
        */
       readonly unsettled: readonly string[];
       /**
-       * `organization` names the wallet the account bills already, by another name (Boat's id for
-       * an organization stored by its name): it is relabelled at once, nothing held is in the way.
+       * Everything the account holds in Boat is in the wallet `organization` names already: it is
+       * relabelled at once and nothing is deleted. `always`: the account named that wallet on every
+       * request it ever made (by another name), so nothing it made can be elsewhere. `runs`: the
+       * runs whose VMs were found there; the relabel happens only if those are all its live runs,
+       * and no image build or full check of it is under way, as one statement reads them.
        */
-      readonly sameWallet?: boolean;
+      readonly relabel?: "always" | { readonly runs: readonly string[] };
+      /** For a change that waits on images: the wallet each is in, by its snapshot name. */
+      readonly locations?: Readonly<Record<string, string>>;
     },
   ) => Failing<BoatAccountOrganizationChange>;
   /**
@@ -303,6 +310,7 @@ const record = (row: BoatAccountRow): BoatAccountRecord => ({
       : {
           organization: row.organizationChangeTarget,
           requestedAt: row.organizationChangeRequestedAt,
+          locations: row.organizationChangeLocations ?? {},
         },
   createdAt: row.createdAt,
   keyRotatedAt: row.keyRotatedAt,
@@ -521,6 +529,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             removalRequestedAt: sql`now()`,
             organizationChangeRequestedAt: null,
             organizationChangeTarget: null,
+            organizationChangeLocations: null,
           })
           .where(eq(boatAccounts.id, id))
           .returning();
@@ -568,6 +577,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         boatOrganization: organization,
         organizationChangeRequestedAt: null,
         organizationChangeTarget: null,
+        organizationChangeLocations: null,
         keyRevision: sql`${boatAccounts.keyRevision} + 1`,
       })
       .where(eq(boatAccounts.id, id))
@@ -596,18 +606,16 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
               return { kind: "unchanged", account: record(row) } as const;
             const [updated] = yield* db
               .update(boatAccounts)
-              .set({ organizationChangeRequestedAt: null, organizationChangeTarget: null })
+              .set({
+                organizationChangeRequestedAt: null,
+                organizationChangeTarget: null,
+                organizationChangeLocations: null,
+              })
               .where(eq(boatAccounts.id, id))
               .returning();
             if (updated === undefined)
               return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
             return { kind: "unchanged", account: record(updated) } as const;
-          }
-          if (input.sameWallet === true) {
-            const [updated] = yield* switchOrganization(id, input.organization);
-            if (updated === undefined)
-              return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
-            return { kind: "changed", account: record(updated) } as const;
           }
           const held = yield* holdings(row);
           const live =
@@ -624,6 +632,34 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
                     ),
                   );
           const unsettledRuns = input.unsettled.length - live.length;
+          // A relabel moves nothing. One from an unpinned account holds only if what was found in
+          // the wallet is all it has: a run that started since, one still being settled, a build
+          // or a full check may involve another wallet, and then it is a move, refused below with
+          // the counts.
+          const located =
+            input.relabel === undefined || input.relabel === "always"
+              ? undefined
+              : new Set(input.relabel.runs);
+          const running =
+            located === undefined
+              ? []
+              : yield* db
+                  .select({ runId: boatRuns.runId })
+                  .from(boatRuns)
+                  .where(and(eq(boatRuns.accountId, id), isNull(boatRuns.absentAt)));
+          const relabels =
+            input.relabel === "always" ||
+            (located !== undefined &&
+              held.buildsInFlight === 0 &&
+              held.proofs === 0 &&
+              unsettledRuns === 0 &&
+              running.every((run) => located.has(run.runId)));
+          if (relabels) {
+            const [updated] = yield* switchOrganization(id, input.organization);
+            if (updated === undefined)
+              return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+            return { kind: "changed", account: record(updated) } as const;
+          }
           if (held.liveRuns > 0 || unsettledRuns > 0 || held.buildsInFlight > 0 || held.proofs > 0)
             return {
               kind: "in-use",
@@ -642,6 +678,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             .update(boatAccounts)
             .set({
               organizationChangeTarget: input.organization,
+              organizationChangeLocations: input.locations ?? {},
               // A change under way that is pointed elsewhere keeps when it was first asked.
               organizationChangeRequestedAt: sql`coalesce(${boatAccounts.organizationChangeRequestedAt}, now())`,
             })

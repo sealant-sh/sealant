@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "ba45ef90-20de-43cc-b554-fb9d51da7f6b",
+  "id": "5a3e0024-f87b-46b1-91f6-701b5a355d97",
   "prevIds": ["057c9038-c594-4925-9b44-237e0dd33e1b"],
   "ddl": [
     {
@@ -7451,6 +7451,19 @@
       "generated": null,
       "identity": null,
       "name": "organization_change_target",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "boat_accounts"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "organization_change_locations",
       "entityType": "columns",
       "schema": "public",
       "table": "boat_accounts"

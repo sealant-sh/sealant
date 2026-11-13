@@ -1063,15 +1063,25 @@ describe.skipIf(DATABASE_URL === undefined)(
           const oldName = boatSnapshotNameSchema.parse(old.snapshot.identity.name);
           expect((await stale?.api.getSnapshot(oldName))?.ok).toBe(true);
 
+          // The owner switches their active wallet in Boat for their own use: a request that names
+          // no wallet no longer sees the image, which is still in `personal`.
+          fake.account = { ...fake.account, activeWallet: "team_acme" };
+          expect((await stale?.api.getSnapshot(oldName))?.ok).toBe(false);
+
+          // Then pins the account to the wallet active now. The route found the image in
+          // `personal` (boat-account-organization.db.test.ts); the change keeps where.
           const asked = await repo(
             Effect.flatMap(BoatAccountRepo, (accounts) =>
               accounts.requestOrganizationChange(account.id, {
                 organization: "team_acme",
                 expected: null,
                 unsettled: [],
+                locations: { [oldName]: "personal" },
               }),
             ),
           );
+          const apiCalls = () => fake.events.filter((event) => event.kind === "api").length;
+          const beforeRemoval = { sent: apiCalls(), named: fake.organizationHeaders.length };
           expect(asked).toMatchObject({ kind: "pending", imagesLeft: 1 });
           /** The account is on exactly one wallet, and nothing of its own is in the other. */
           const onOneWallet = async (wallet: "personal" | "team_acme") => {
@@ -1120,31 +1130,44 @@ describe.skipIf(DATABASE_URL === undefined)(
           ]);
           await onOneWallet("team_acme");
           expect(await current()).toMatchObject({ organizationChange: null, keyRevision: 2 });
-          expect(fake.organizationHeaders).toEqual([]);
+          // Every request the removal made named `personal`, where the image was; none asked the
+          // wallet active now, where Boat would have answered 404.
+          const removal = fake.organizationHeaders.slice(beforeRemoval.named);
+          expect(removal).toHaveLength(apiCalls() - beforeRemoval.sent);
+          expect(new Set(removal.map((each) => each.organization))).toEqual(new Set(["personal"]));
+          expect(removal).toContainEqual({
+            method: "DELETE",
+            path: `/saved-snapshots/${oldName}`,
+            organization: "personal",
+          });
           expect(await restarted.reconcileOrganizationChanges?.()).toEqual([]);
 
           // The first worker still holds a client opened before the switch; its next launch builds
           // the image again, in the new wallet, and every request names it.
-          const sent = fake.events.filter((event) => event.kind === "api").length;
+          const sent = apiCalls();
+          const namedBefore = fake.organizationHeaders.length;
           const fresh = await launchImage(owner);
           expect(fresh.publicationId).not.toBe(old.publicationId);
           expect(fake.heldIn("team_acme").snapshots).toEqual([fresh.snapshot.identity.name]);
           expect(fake.heldIn("personal")).toEqual({ sandboxes: [], snapshots: [] });
-          const after = fake.events.filter((event) => event.kind === "api").length - sent;
+          const after = apiCalls() - sent;
+          const launched = fake.organizationHeaders.slice(namedBefore);
           expect(after).toBeGreaterThanOrEqual(3);
-          expect(fake.organizationHeaders).toHaveLength(after);
-          expect(fake.organizationHeaders.map((each) => `${each.method} ${each.path}`)).toEqual(
+          expect(launched).toHaveLength(after);
+          expect(launched.map((each) => `${each.method} ${each.path}`)).toEqual(
             expect.arrayContaining([
               "POST /sandboxes",
               "POST /saved-snapshots",
               expect.stringMatching(/^DELETE \/sandboxes\/bx_/),
             ]),
           );
-          expect(new Set(fake.organizationHeaders.map((each) => each.organization))).toEqual(
+          expect(new Set(launched.map((each) => each.organization))).toEqual(
             new Set(["team_acme"]),
           );
-          // The other process still holds the client that names the old wallet: Boat not finding
-          // the new image there makes it read the key's revision again, and find it in the new one.
+          // The other process still holds the client that names no wallet, and the owner switches
+          // back to `personal`: Boat not finding the new image there makes it read the key's
+          // revision again, and find it in the wallet the account names now.
+          fake.account = { ...fake.account, activeWallet: "personal" };
           const seen = await stale?.api.getSnapshot(
             boatSnapshotNameSchema.parse(fresh.snapshot.identity.name),
           );

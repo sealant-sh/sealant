@@ -228,6 +228,33 @@ export class BoatAccountDirectory {
     return outcome;
   }
 
+  /**
+   * A client for the account that names `organization` on every request (`X-Boat-Org`: an
+   * organization's id or name, or `personal`), whatever the account names: what removes something
+   * Core found in that wallet. The key is opened on first use and kept for the client's life.
+   */
+  walletApi(accountId: string, organization: string): BoatApi {
+    let opened: Promise<BoatResult<BoatApi>> | undefined;
+    return new StoredAccountApi(() => {
+      opened ??= this.#openIn(accountId, organization);
+      return opened;
+    });
+  }
+
+  async #openIn(accountId: string, organization: string): Promise<BoatResult<BoatApi>> {
+    const sealed = await this.#run(
+      Effect.flatMap(BoatAccountRepo, (repo) => repo.sealedKey(accountId)),
+    );
+    if (sealed === undefined) return { ok: false, error: keyUnavailable("credential") };
+    const opened = await Effect.runPromise(
+      this.#options.cipher.decrypt(sealed.sealedKey).pipe(Effect.option),
+    );
+    if (Option.isNone(opened)) return { ok: false, error: keyUnavailable("credential") };
+    const credential = BoatSecret.parse(opened.value);
+    if (!credential.ok) return { ok: false, error: keyUnavailable("credential") };
+    return (this.#options.clientFor ?? httpBoatClientFactory)(credential.value, { organization });
+  }
+
   /** The accounts with a change of the organization they bill under way. */
   listChangingOrganization(): Promise<readonly BoatAccountRecord[]> {
     return this.#run(Effect.flatMap(BoatAccountRepo, (repo) => repo.listChangingOrganization()));

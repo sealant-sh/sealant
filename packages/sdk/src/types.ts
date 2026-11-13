@@ -2637,10 +2637,14 @@ export interface BoatAccountsNamespace {
    * `reason` `boat-account-in-use`, the message counting them) while the account has workspaces
    * whose VMs Boat may hold, runs still being settled, or image builds in flight, and
    * `boat-proof-running` while a full check's leftovers may be there. An account that holds
-   * nothing switches at once. One that holds saved images answers with `organizationChange` set:
-   * the control plane deletes them from the old wallet, then switches, and they are built again in
-   * the new one at the next launch; no new workspace runs in it meanwhile. Naming the organization
-   * it bills calls an unfinished change off. An organization's Boat key rejects (409,
+   * nothing switches at once, and so does one whose every VM and saved image is in the new wallet
+   * already (an unpinned account pinned to the wallet it bills): nothing is deleted. One that holds
+   * saved images elsewhere answers with `organizationChange` set: the control plane deletes each
+   * from the wallet it found it in, then switches, and they are built again in the new one at the
+   * next launch; meanwhile a create, `rotateKey` and `prove` reject
+   * (`boat-account-changing-organization`). A saved image Boat shows in none of the key's wallets
+   * rejects (`boat-account-images-unlocated`, the message naming it). Naming the organization it
+   * bills calls an unfinished change off. An organization's Boat key rejects (409,
    * `boat-key-organization`): it bills its own organization only. A wallet the key cannot bill
    * rejects (400). The control plane's own key is set in its environment
    * (`SEALANT_BOAT_ORGANIZATION`; 409, `boat-account-environment`).

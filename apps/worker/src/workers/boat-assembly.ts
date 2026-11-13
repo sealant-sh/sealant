@@ -196,6 +196,16 @@ export interface BoatWorkerStack extends BoatAccountStack {
   readonly reapImages:
     | ((policy: BoatImageRetention) => Promise<NativeCatalogSweep["entries"] | undefined>)
     | undefined;
+  /**
+   * A stored account's catalog whose builder names `organization` on every request, whatever the
+   * account names: what removes an image Core found in that wallet. Disposed by the caller.
+   */
+  readonly catalogIn:
+    | ((organization: string) => Promise<{
+        readonly service: BoatNativeCatalogService;
+        readonly dispose: () => Promise<void>;
+      }>)
+    | undefined;
   /** Where each of the sweeps above stopped last; the next tick starts there. */
   readonly cursors: {
     vm?: string | undefined;
@@ -359,6 +369,7 @@ export const assembleBoat = async (input: {
         reconcileResources: undefined,
         reconcileCatalog: undefined,
         reapImages: undefined,
+        catalogIn: undefined,
         reach: undefined,
         reopenCarriers: undefined,
         verifyBearers: undefined,
@@ -432,6 +443,25 @@ export const assembleBoat = async (input: {
       });
       return catalog;
     };
+    const catalogIn =
+      accountId === null || !launches || journals === undefined
+        ? undefined
+        : async (organization: string) => {
+            const owner = provider.builderOwner;
+            if (owner === undefined) throw new Error("The account builds no images here.");
+            const builder = await makeBuilder({
+              api: directory.walletApi(accountId, organization),
+              journalDirectory: journals,
+              owner,
+            });
+            const scoped = ManagedRuntime.make(
+              boatNativeCatalogLayer({ deploymentId, builder }).pipe(Layer.provide(Infra)),
+            );
+            return {
+              service: await scoped.runPromise(BoatNativeCatalog),
+              dispose: () => scoped.dispose(),
+            };
+          };
     /** Whether this account ever built here: its journals exist. */
     const hasJournals = async () =>
       journals !== undefined &&
@@ -445,6 +475,7 @@ export const assembleBoat = async (input: {
       adapter,
       control,
       catalog: catalogOf,
+      catalogIn,
       reconcileAllocations: (page) =>
         runtime.runPromise(Effect.flatMap(BoatVm, (vms) => vms.reconcile(page))),
       reconcileConvergence: (page) =>
@@ -663,27 +694,43 @@ export const assembleBoat = async (input: {
     const report: { accountId: string; outcome: "changed" | "pending" }[] = [];
     for (const account of await directory.listChangingOrganization()) {
       const outcome = await (async () => {
+        const change = account.organizationChange;
         const stack = await stackOf(account.id);
-        const service = await stack?.catalog();
-        if (stack === undefined || service === undefined) return "pending" as const;
+        if (change === null || stack?.catalogIn === undefined) return "pending" as const;
         const held = await runRepo(
           Effect.flatMap(NativePublicationRepo, (catalog) =>
             catalog.heldByDeployment({ deploymentId: account.deploymentId, limit: 50 }),
           ),
         );
         let remaining = 0;
+        // Each image is removed with requests that name the wallet it was found in when the change
+        // was asked (a pinned account's: the one it names), never the wallet active now.
+        const byWallet = new Map<string, (typeof held)[number][]>();
         for (const record of held) {
           // A build is never started under an account with a change under way (the API refuses
           // its creates), and the change was refused while one was in flight; one queued before
           // it is waited for.
-          if (record.state === "reserved" || record.state === "building") {
+          const name = record.publication?.snapshot.identity.name;
+          const wallet =
+            name === undefined ? undefined : (change.locations[name] ?? account.organization);
+          if (record.state === "reserved" || record.state === "building" || wallet == null) {
             remaining += 1;
             continue;
           }
-          const withdrawn = await Effect.runPromise(
-            Effect.result(service.withdraw(record.ownership)),
-          );
-          if (Result.isFailure(withdrawn)) remaining += 1;
+          byWallet.set(wallet, [...(byWallet.get(wallet) ?? []), record]);
+        }
+        for (const [wallet, records] of byWallet) {
+          const catalog = await stack.catalogIn(wallet);
+          try {
+            for (const record of records) {
+              const withdrawn = await Effect.runPromise(
+                Effect.result(catalog.service.withdraw(record.ownership)),
+              );
+              if (Result.isFailure(withdrawn)) remaining += 1;
+            }
+          } finally {
+            await catalog.dispose();
+          }
         }
         if (remaining > 0 || held.length === 50) return "pending" as const;
         return (await directory.finishOrganizationChange(account.id)) === "changed"
