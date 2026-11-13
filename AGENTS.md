@@ -37,7 +37,8 @@ spans repos.
   carrying on.
 - Fix a problem straight away only if it meets Fix Now or File in `../agent-home/AGENTS.md`. File
   the rest in Linear.
-- Open PRs with the `file-pr` skill (`../agent-home/.agents/skills/file-pr/`).
+- Every change lands through a PR, docs and config included; never push to `main`. Open it with the
+  `file-pr` skill (`../agent-home/.agents/skills/file-pr/`).
 
 ## Checks Before a PR
 
