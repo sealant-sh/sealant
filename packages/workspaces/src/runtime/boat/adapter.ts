@@ -11,8 +11,8 @@ import {
 import { Effect, Option, Redacted, Result, type ManagedRuntime } from "effect";
 import { z } from "zod";
 
-import { nativeWorkspaceInstallation } from "../../buildkit/buildkit-builder.js";
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
+import { nativeLaunchBootEntries } from "../../images/boat/recipe.js";
 import { SealantControlError } from "../../sealantd/runtime.js";
 import { BoatReadiness } from "../../worker/boat-readiness.js";
 import { liveControlChannel, type ControlChannel } from "../kubernetes/adapter.js";
@@ -221,7 +221,8 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
         );
       const binds = bindsEnv(input.binds);
       const bootEnv = {
-        ...Object.fromEntries(nativeWorkspaceInstallation(input.blueprint).bootEntries),
+        // The image's own `PATH` on Nix: sealantd and every session it starts find the profile.
+        ...Object.fromEntries(nativeLaunchBootEntries(input.blueprint)),
         ...(binds === undefined ? {} : { SEALANT_BINDS: binds }),
         ...nativeBootEnv(input, {
           secretEnvFile: true,
