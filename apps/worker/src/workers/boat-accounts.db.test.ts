@@ -1483,6 +1483,31 @@ describe.skipIf(DATABASE_URL === undefined)(
         { prepare: noAccountRead },
       ));
 
+    it("review 3: a build left unfinished in a wallet the account no longer names is reconciled under its own wallet, then removed there", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        const built = await c.launchImage(account.id);
+        // Before: the account is pointed at team_acme while a build recorded in personal is in
+        // flight, and the worker stops before finishing it (its save is done in Boat).
+        await c.sql(
+          `update native_publications set state = 'reserved', publication = null, ready_at = null where id = '${built.publicationId}'`,
+        );
+        expect(await c.change(account.id, "personal", "team_acme")).toBe("changed");
+        expect(await c.walletOf(built.publicationId)).toEqual({
+          state: "known",
+          wallet: "personal",
+        });
+        // The step that did nothing: the worker's passes after the restart.
+        await c.worker.resolveWallets();
+        await c.worker.removeImagesElsewhere?.();
+        // Outcome: the build is finished under personal, and its image then removed there.
+        expect(await c.stateOf(built.publicationId)).not.toBe("reserved");
+        await c.worker.removeImagesElsewhere?.();
+        expect(await c.stateOf(built.publicationId)).toBe("removed");
+        expect(c.fake.heldIn("personal").snapshots).toEqual([]);
+        expect(await c.building(account.deploymentId)).toBe(false);
+      }));
+
     it("after an upgrade: a create issued with no VM on record is replayed where it was made, stopped, and the account pinned", () =>
       withWallets(async (c) => {
         const account = await c.store("personal", "personal");

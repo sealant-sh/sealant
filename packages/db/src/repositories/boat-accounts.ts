@@ -349,6 +349,13 @@ export interface BoatAccountRepoService {
     input: { readonly organization: string; readonly expected: string | null },
   ) => Failing<BoatAccountOrganizationChange>;
   /**
+   * Image builds not finished (queued, building, or their cleanup pending) recorded in a wallet
+   * other than the one the owner creates in now: reconciled with requests that name their own.
+   */
+  readonly buildsElsewhere: (
+    owner: BoatWalletOwner,
+  ) => Failing<readonly { readonly publicationId: string; readonly wallet: string | null }[]>;
+  /**
    * Saved images recorded in a wallet other than the one the owner creates in now (ready,
    * retiring, or a removal pending): removed with requests that name their own wallet.
    */
@@ -794,6 +801,25 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         .where(eq(boatInstall.id, "install"));
       return row === undefined ? undefined : createWalletOf(row.organization, row.keyKind);
     });
+
+  const buildsElsewhere = Effect.fn("BoatAccountRepo.buildsElsewhere")(function* (
+    owner: BoatWalletOwner,
+  ) {
+    const current = yield* ownerWallet(owner);
+    if (current === undefined || current.kind === "unresolved") return [];
+    const deploymentId = yield* ownerDeployment(owner);
+    return yield* db
+      .select({ publicationId: nativePublications.id, wallet: nativePublications.boatWallet })
+      .from(nativePublications)
+      .where(
+        and(
+          eq(nativePublications.deploymentId, deploymentId),
+          imageBuildInFlight,
+          inOtherWallet(nativePublications, current.wallet),
+        ),
+      )
+      .orderBy(asc(nativePublications.id));
+  });
 
   const imagesElsewhere = Effect.fn("BoatAccountRepo.imagesElsewhere")(function* (
     owner: BoatWalletOwner,
@@ -1447,6 +1473,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     listRemoving: () => boundary(listRemoving()),
     setKeyKind: (id, keyKind) => boundary(setKeyKind(id, keyKind)),
     changeOrganization: (owner, input) => boundary(changeOrganization(owner, input)),
+    buildsElsewhere: (owner) => boundary(buildsElsewhere(owner)),
     imagesElsewhere: (owner) => boundary(imagesElsewhere(owner)),
     unreachable: (owner) => boundary(unreachable(owner)),
     installWallet: () => boundary(installWallet()),

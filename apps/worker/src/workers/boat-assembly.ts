@@ -822,6 +822,20 @@ export const assembleBoat = async (input: {
     const report: { accountId: string; removed: number; pending: number }[] = [];
     for (const { accountId, owner } of await owners()) {
       const outcome = await (async () => {
+        // Builds not finished in a wallet the account no longer names (a change of wallet, or of
+        // the install's setting, then a restart mid-build): each reconciled under its own wallet.
+        const builds = await accountRepo(
+          Effect.flatMap(BoatAccountRepo, (repo) => repo.buildsElsewhere(owner)),
+        );
+        if (builds.length > 0) {
+          const stack = await stackOf(accountId);
+          for (const unfinished of builds)
+            await (async () => {
+              const service = await stack?.catalogIn?.(unfinished.wallet);
+              if (service?.reconcilePublication !== undefined)
+                await Effect.runPromise(service.reconcilePublication(unfinished.publicationId));
+            })().catch(() => undefined);
+        }
         const elsewhere = await accountRepo(
           Effect.flatMap(BoatAccountRepo, (repo) => repo.imagesElsewhere(owner)),
         );
@@ -1243,7 +1257,10 @@ export const assembleBoat = async (input: {
     resolveWallets,
     /** The pass above as the worker's start runs it, which nothing in the worker waits on. */
     startup,
-    /** One pass removing saved images recorded in another wallet than their account's now. */
+    /**
+     * One pass over what is recorded in another wallet than its account's now: unfinished builds
+     * reconciled there, and saved images removed there.
+     */
     removeImagesElsewhere: registration === undefined ? undefined : removeImagesElsewhere,
     /** One image retention pass (`reapImages` above); only a worker that builds images has one. */
     reapImages: registration === undefined ? undefined : reapImages,
