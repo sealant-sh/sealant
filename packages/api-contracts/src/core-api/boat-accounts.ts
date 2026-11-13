@@ -62,7 +62,11 @@ export const boatKeyReportSchema = Schema.Struct({
   organization: Schema.NullOr(Schema.String),
   /** Who the key is (`GET /me`). */
   identity: observedOr({
-    userId: Schema.optional(Schema.String),
+    /**
+     * Boat's id for the account the key belongs to (`GET /me` `user.id`). A Boat account, never a
+     * Sealant person: it is not a `PersonId` and names no one on this install.
+     */
+    accountId: Schema.optional(Schema.String),
     login: Schema.optional(Schema.String),
     displayName: Schema.optional(Schema.String),
     serviceAccount: Schema.optional(Schema.Boolean),

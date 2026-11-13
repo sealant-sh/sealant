@@ -72,7 +72,7 @@ describe("a Boat key's check", () => {
         organization: null,
         identity: {
           observed: true,
-          userId: "usr_fake",
+          accountId: "usr_fake",
           login: "fake-owner",
           displayName: "Fake Owner",
           serviceAccount: false,
