@@ -15,7 +15,7 @@ vi.mock("./telemetry.js", () => ({ startTelemetryWorker: telemetry.start }));
 
 const { startWorkers } = await import("./index.js");
 
-// The env is passed through untouched; nothing here reads it.
+// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the env is passed through untouched; nothing here reads it.
 const env = {} as WorkerEnv;
 
 describe("startWorkers", () => {

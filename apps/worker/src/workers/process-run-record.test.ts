@@ -4,13 +4,20 @@
  * failed append fails it, but saying why, with the changes the commands made, and the commands
  * after it do not run. Driven against a fake daemon session, sink and run repository.
  */
-import { RunRepo, type RunRepoService } from "@sealant/db";
+import { RunRepo } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
 import {
   produceExecRun,
   TelemetrySink,
   TelemetrySinkConflictError,
   type TelemetrySinkService,
 } from "@sealant/telemetry";
+import {
+  capabilitiesReport,
+  daemonEvent,
+  execAccepted,
+  healthReport,
+} from "@sealant/telemetry/testing";
 import {
   SealantRuntime,
   type SealantExecOptions,
@@ -25,10 +32,8 @@ type EventEnvelope = Stream.Success<SealantSession["events"]>;
 const RUN = "run_record";
 const TARGET: SealantTarget = { kind: "docker-exec", containerId: "c1", socketPath: "/s" };
 
-// The protobuf message type carries `$typeName` brands a plain object cannot; the normalizer
-// reads only these fields.
 const exited = (processId: string, exitCode: number, executionId?: string): EventEnvelope =>
-  ({
+  daemonEvent({
     schemaVersion: 1,
     eventId: `evt_${processId}`,
     runtimeId: "rt_1",
@@ -40,18 +45,18 @@ const exited = (processId: string, exitCode: number, executionId?: string): Even
     processId,
     ...(executionId === undefined ? {} : { executionId }),
     payload: { case: "processExited", value: { exitCode, reason: 1 } },
-  }) as unknown as EventEnvelope;
+  });
 
 const world = () => {
   const execs: SealantExecOptions[] = [];
   const outcomes: Array<Record<string, unknown>> = [];
-  const session = {
-    health: Effect.succeed({ runtimeId: "rt_1" }),
-    capabilities: Effect.succeed({ supports: ["exec.user"] }),
+  const session = fakeService<SealantSession>({
+    health: Effect.succeed(healthReport("rt_1")),
+    capabilities: Effect.succeed(capabilitiesReport(["exec.user"])),
     exec: (options: SealantExecOptions) =>
       Effect.sync(() => {
         execs.push(options);
-        return { processId: `proc_${String(execs.length)}`, pid: 7 };
+        return execAccepted(`proc_${String(execs.length)}`, 7);
       }),
     // The command exits 3; the changes reading exits 1 (no reading), which is enough here.
     events: Stream.suspend(() => {
@@ -64,7 +69,7 @@ const world = () => {
         ),
       );
     }),
-  } as unknown as SealantSession;
+  });
   const sink: TelemetrySinkService = {
     openEpoch: () => Effect.succeed({ epochId: "tep_1", resumeFromSequence: null }),
     appendBatch: () =>
@@ -87,18 +92,21 @@ const world = () => {
       openForwardConnection: () => Effect.die("forwards are unused here"),
     }),
     Layer.succeed(TelemetrySink, sink),
-    Layer.succeed(RunRepo, {
-      markRunCompleted: (input: Record<string, unknown>) =>
-        Effect.sync(() => {
-          outcomes.push({ status: "completed", ...input });
-          return null;
-        }),
-      markRunFailed: (input: Record<string, unknown>) =>
-        Effect.sync(() => {
-          outcomes.push({ status: "failed", ...input });
-          return null;
-        }),
-    } as unknown as RunRepoService),
+    Layer.succeed(
+      RunRepo,
+      fakeService({
+        markRunCompleted: (input) =>
+          Effect.sync(() => {
+            outcomes.push({ status: "completed", ...input });
+            return null;
+          }),
+        markRunFailed: (input) =>
+          Effect.sync(() => {
+            outcomes.push({ status: "failed", ...input });
+            return null;
+          }),
+      }),
+    ),
   );
   const run = () =>
     Effect.runPromise(

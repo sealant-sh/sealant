@@ -44,7 +44,7 @@ import {
   pushCredentialCopy,
   type SealantTargetDerivationOptions,
 } from "@sealant/workspaces";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 
 /** How often the sweeper scans. A Codex access token lives about ten days. */
 export const CODEX_SESSION_REFRESH_INTERVAL_MS = 60 * 60 * 1_000;
@@ -64,15 +64,15 @@ const REFRESH_CLAIM_MS = 10 * 60 * 1_000;
 /** The access token's `exp` claim, in ms; undefined when the file or the JWT cannot be read. */
 export const codexAccessTokenExpiresAt = (authJson: string): number | undefined => {
   try {
-    const document = JSON.parse(authJson) as { tokens?: { access_token?: unknown } | null };
-    const token = document.tokens?.access_token;
+    const document: unknown = JSON.parse(authJson);
+    const tokens = Predicate.isObject(document) ? document["tokens"] : undefined;
+    const token = Predicate.isObject(tokens) ? tokens["access_token"] : undefined;
     if (typeof token !== "string") return undefined;
     const segment = token.split(".")[1];
     if (segment === undefined) return undefined;
-    const claims = JSON.parse(Buffer.from(segment, "base64url").toString("utf8")) as {
-      exp?: unknown;
-    };
-    return typeof claims.exp === "number" ? claims.exp * 1_000 : undefined;
+    const claims: unknown = JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
+    const exp = Predicate.isObject(claims) ? claims["exp"] : undefined;
+    return typeof exp === "number" ? exp * 1_000 : undefined;
   } catch {
     return undefined;
   }
@@ -137,15 +137,17 @@ const runCodexRefresh = (codexHome: string): Promise<{ readonly refusedForGood: 
     child.on("exit", (code) => finish(new Error(`Codex app-server exited (${String(code)}).`)));
     const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
     createInterface({ input: child.stdout }).on("line", (line) => {
-      let message: { id?: unknown; result?: unknown; error?: { message?: unknown } };
+      let message: unknown;
       try {
-        message = JSON.parse(line) as typeof message;
+        message = JSON.parse(line);
       } catch {
         return;
       }
-      if (message.id === 1) {
-        if (message.error !== undefined) {
-          finish(new Error(`Codex initialize failed: ${String(message.error.message)}`));
+      if (!Predicate.isObject(message)) return;
+      const error = Predicate.isObject(message["error"]) ? message["error"] : undefined;
+      if (message["id"] === 1) {
+        if (error !== undefined) {
+          finish(new Error(`Codex initialize failed: ${String(error["message"])}`));
           return;
         }
         send({ method: "initialized" });
@@ -156,18 +158,18 @@ const runCodexRefresh = (codexHome: string): Promise<{ readonly refusedForGood: 
         });
         return;
       }
-      if (message.id === 2) {
-        if (message.error !== undefined) {
-          finish(new Error(`Codex getAuthStatus failed: ${String(message.error.message)}`));
+      if (message["id"] === 2) {
+        if (error !== undefined) {
+          finish(new Error(`Codex getAuthStatus failed: ${String(error["message"])}`));
           return;
         }
         // The token itself is never kept or logged: only whether it was withheld.
-        const result = message.result as { authMethod?: unknown; authToken?: unknown } | undefined;
+        const result = Predicate.isObject(message["result"]) ? message["result"] : undefined;
         const withheld =
           result !== undefined &&
-          result.authMethod !== null &&
-          result.authMethod !== undefined &&
-          (result.authToken === null || result.authToken === undefined);
+          result["authMethod"] !== null &&
+          result["authMethod"] !== undefined &&
+          (result["authToken"] === null || result["authToken"] === undefined);
         finish({ refusedForGood: withheld });
       }
     });

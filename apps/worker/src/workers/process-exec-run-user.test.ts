@@ -12,9 +12,16 @@ import {
   WorkspaceAttemptRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
-  type RunRepoService,
 } from "@sealant/db";
-import { produceExecRun, TelemetrySink, type TelemetrySinkService } from "@sealant/telemetry";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runRow, runtimeInstanceRow, workspaceRow } from "@sealant/db/testing/rows";
+import { produceExecRun, TelemetrySink } from "@sealant/telemetry";
+import {
+  capabilitiesReport,
+  daemonEvent,
+  execAccepted,
+  healthReport,
+} from "@sealant/telemetry/testing";
 import {
   SealantRuntime,
   type ProcessUserChannel,
@@ -33,9 +40,7 @@ const RUN = "run_exec";
 const TARGET: SealantTarget = { kind: "docker-exec", containerId: "c1", socketPath: "/s" };
 
 const exited = (processId: string, exitCode: number, executionId?: string): EventEnvelope =>
-  // The protobuf message type carries `$typeName` brands a plain object cannot; the normalizer
-  // reads only these fields.
-  ({
+  daemonEvent({
     schemaVersion: 1,
     eventId: `evt_${processId}`,
     runtimeId: "rt_1",
@@ -47,18 +52,18 @@ const exited = (processId: string, exitCode: number, executionId?: string): Even
     processId,
     ...(executionId === undefined ? {} : { executionId }),
     payload: { case: "processExited", value: { exitCode, reason: 1 } },
-  }) as unknown as EventEnvelope;
+  });
 
 const world = (supports: readonly string[] = ["exec.user"]) => {
   const execs: SealantExecOptions[] = [];
   const outcomes: Array<Record<string, unknown>> = [];
-  const session = {
-    health: Effect.succeed({ runtimeId: "rt_1" }),
-    capabilities: Effect.succeed({ supports: [...supports] }),
+  const session = fakeService<SealantSession>({
+    health: Effect.succeed(healthReport("rt_1")),
+    capabilities: Effect.succeed(capabilitiesReport(supports)),
     exec: (options: SealantExecOptions) =>
       Effect.sync(() => {
         execs.push(options);
-        return { processId: `proc_${String(execs.length)}`, pid: 7 };
+        return execAccepted(`proc_${String(execs.length)}`, 7);
       }),
     // Each command exits 0; the changes reading exits 1 (no reading), which is enough here.
     events: Stream.suspend(() => {
@@ -71,29 +76,35 @@ const world = (supports: readonly string[] = ["exec.user"]) => {
         ),
       );
     }),
-  } as unknown as SealantSession;
+  });
   const layer = Layer.mergeAll(
     Layer.succeed(SealantRuntime, {
       connect: () => Effect.succeed(session),
       openForwardConnection: () => Effect.die("forwards are unused here"),
     }),
-    Layer.succeed(TelemetrySink, {
-      openEpoch: () => Effect.void,
-      appendBatch: () => Effect.succeed([]),
-      closeEpoch: () => Effect.void,
-    } as unknown as TelemetrySinkService),
-    Layer.succeed(RunRepo, {
-      markRunCompleted: (input: Record<string, unknown>) =>
-        Effect.sync(() => {
-          outcomes.push({ status: "completed", ...input });
-          return null;
-        }),
-      markRunFailed: (input: Record<string, unknown>) =>
-        Effect.sync(() => {
-          outcomes.push({ status: "failed", ...input });
-          return null;
-        }),
-    } as unknown as RunRepoService),
+    Layer.succeed(
+      TelemetrySink,
+      fakeService({
+        openEpoch: () => Effect.succeed({ epochId: "tep_1", resumeFromSequence: null }),
+        appendBatch: () => Effect.succeed([]),
+        closeEpoch: () => Effect.void,
+      }),
+    ),
+    Layer.succeed(
+      RunRepo,
+      fakeService({
+        markRunCompleted: (input) =>
+          Effect.sync(() => {
+            outcomes.push({ status: "completed", ...input });
+            return null;
+          }),
+        markRunFailed: (input) =>
+          Effect.sync(() => {
+            outcomes.push({ status: "failed", ...input });
+            return null;
+          }),
+      }),
+    ),
   );
   const run = (user?: string) =>
     Effect.runPromise(
@@ -149,7 +160,7 @@ describe("produceExecRun as a user", () => {
 describe("a run as a user that reaches another executor than the API checked", () => {
   const job = (answer: "fails" | number) => {
     const checked: string[] = [];
-    const failed: string[] = [];
+    const failed: Array<string | undefined> = [];
     const channel: ProcessUserChannel = {
       check: (_target, user) => {
         checked.push(user);
@@ -159,35 +170,48 @@ describe("a run as a user that reaches another executor than the API checked", (
       },
     };
     const layer = Layer.mergeAll(
-      Layer.succeed(RunRepo, {
-        claimRunForExec: () => Effect.succeed({ outcome: "claimed", run: {} }),
-        getRunById: () => Effect.succeed({ workspaceId: "ws_1" }),
-        markRunFailed: (input: { errorMessage: string }) =>
-          Effect.sync(() => {
-            failed.push(input.errorMessage);
-            return null;
-          }),
-      } as unknown as RunRepoService),
+      Layer.succeed(
+        RunRepo,
+        fakeService({
+          claimRunForExec: () => Effect.succeed({ outcome: "claimed", run: runRow() }),
+          getRunById: () => Effect.succeed(runRow({ workspaceId: "ws_1" })),
+          markRunFailed: (input) =>
+            Effect.sync(() => {
+              failed.push(input.errorMessage);
+              return null;
+            }),
+        }),
+      ),
       // The workspace was restarted after the API checked the user on `run_old`.
-      Layer.succeed(WorkspaceRepo, {
-        getWorkspaceById: () => Effect.succeed({ id: "ws_1", latestRunId: "run_new" }),
-      } as never),
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        getRuntimeInstanceByRunId: () =>
-          Effect.succeed({
-            runId: "run_new",
-            adapter: "docker",
-            resourceId: "container-new",
-            endpoint: null,
-            launchCredentialInjections: [],
-          }),
-      } as never),
-      Layer.succeed(WorkspaceAttemptRepo, {} as never),
-      Layer.succeed(ConnectedAccountRepo, {} as never),
-      Layer.succeed(SealantRuntime, {
-        connect: () => Effect.die("nothing may be started"),
-      } as never),
-      Layer.succeed(TelemetrySink, {} as never),
+      Layer.succeed(
+        WorkspaceRepo,
+        fakeService({
+          getWorkspaceById: () =>
+            Effect.succeed(workspaceRow({ id: "ws_1", latestRunId: "run_new" })),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService({
+          getRuntimeInstanceByRunId: () =>
+            Effect.succeed(
+              runtimeInstanceRow({
+                runId: "run_new",
+                adapter: "docker",
+                resourceId: "container-new",
+                endpoint: null,
+                launchCredentialInjections: [],
+              }),
+            ),
+        }),
+      ),
+      Layer.succeed(WorkspaceAttemptRepo, fakeService({})),
+      Layer.succeed(ConnectedAccountRepo, fakeService({})),
+      Layer.succeed(
+        SealantRuntime,
+        fakeService({ connect: () => Effect.die("nothing may be started") }),
+      ),
+      Layer.succeed(TelemetrySink, fakeService({})),
     );
     const run = () =>
       Effect.runPromise(
