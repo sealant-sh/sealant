@@ -64,24 +64,31 @@ class StoredAccountApi implements BoatApi {
   }
   /**
    * Calls Boat with the account's current key. Boat refusing the key (401, 403) may mean it was
-   * rotated a moment ago: the key is read again at once, and the call is made once more only if
-   * that opened another key. Every Boat call here is safe to repeat: a create carries its
-   * idempotency key, and a refused call changed nothing.
+   * rotated a moment ago; Boat not finding what was asked (404) may mean the account was pointed
+   * at another wallet a moment ago, by another process, and this one still names the old one. The
+   * key is read again at once, and the call is made once more only if that opened another client.
+   * Every Boat call here is safe to repeat: a create carries its idempotency key, and a refused or
+   * unfound call changed nothing.
    */
   async #with<A>(
     operation: string,
     call: (api: BoatApi) => Promise<BoatResult<A>>,
+    fresh = false,
   ): Promise<BoatResult<A>> {
-    const api = await this.#open(operation, false);
+    const api = await this.#open(operation, fresh);
     if (!api.ok) return { ok: false, error: api.error };
     const answered = await call(api.value);
-    if (answered.ok || (answered.error.status !== 401 && answered.error.status !== 403))
-      return answered;
+    const status = answered.ok ? undefined : answered.error.status;
+    if (status !== 401 && status !== 403 && status !== 404) return answered;
     const again = await this.#open(operation, true);
     return again.ok && again.value !== api.value ? call(again.value) : answered;
   }
+  /**
+   * A create, and a save, read the key's revision first, whenever it was last read: what they make
+   * belongs to the wallet the request names, so they never name one the account has left.
+   */
   create(...args: Parameters<BoatApi["create"]>) {
-    return this.#with("create", (api) => api.create(...args));
+    return this.#with("create", (api) => api.create(...args), true);
   }
   async discover(...args: Parameters<BoatApi["discover"]>) {
     const api = await this.#open("discover", false);
@@ -125,7 +132,7 @@ class StoredAccountApi implements BoatApi {
     return this.#with("getDeletion", (api) => api.getDeletion(...args));
   }
   saveSnapshot(...args: Parameters<BoatApi["saveSnapshot"]>) {
-    return this.#with("saveSnapshot", (api) => api.saveSnapshot(...args));
+    return this.#with("saveSnapshot", (api) => api.saveSnapshot(...args), true);
   }
   getSnapshot(...args: Parameters<BoatApi["getSnapshot"]>) {
     return this.#with("getSnapshot", (api) => api.getSnapshot(...args));
@@ -153,7 +160,8 @@ export interface BoatAccountDirectoryOptions {
 /**
  * The Boat accounts of an install, by id, each with one client. A stored account's provider is
  * made once per process and kept; its client opens the sealed key on first use, and opens it
- * again when the account's key revision changes (a rotation). No call here reaches Boat.
+ * again when the account's key revision changes (a rotation, or a change of the organization it
+ * bills). No call here reaches Boat.
  */
 export class BoatAccountDirectory {
   readonly #options: BoatAccountDirectoryOptions;
@@ -217,6 +225,24 @@ export class BoatAccountDirectory {
       this.#providers.delete(accountId);
       this.#clients.delete(accountId);
     }
+    return outcome;
+  }
+
+  /** The accounts with a change of the organization they bill under way. */
+  listChangingOrganization(): Promise<readonly BoatAccountRecord[]> {
+    return this.#run(Effect.flatMap(BoatAccountRepo, (repo) => repo.listChangingOrganization()));
+  }
+
+  /**
+   * A change of organization's end, once Boat holds nothing Core made under the account: from now
+   * on every request for it names the new one (the client is opened again). `held`: something is
+   * still there; nothing changed.
+   */
+  async finishOrganizationChange(accountId: string): Promise<"changed" | "held" | "none"> {
+    const outcome = await this.#run(
+      Effect.flatMap(BoatAccountRepo, (repo) => repo.finishOrganizationChange(accountId)),
+    );
+    if (outcome === "changed") this.#clients.delete(accountId);
     return outcome;
   }
 

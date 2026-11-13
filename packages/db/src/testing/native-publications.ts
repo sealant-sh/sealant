@@ -44,3 +44,14 @@ export const supersedeNativePublication = (db: DB, id: string) =>
     .update(nativePublications)
     .set({ state: "superseded", reason: "native-interrupted" })
     .where(eq(nativePublications.id, id));
+
+/** A seeded image whose removal is over: Boat holds nothing of it. */
+export const markNativePublicationRemoved = (db: DB, id: string) =>
+  db.update(nativePublications).set({ state: "removed" }).where(eq(nativePublications.id, id));
+
+/** A run's image pin released, as its settling does. */
+export const releaseNativeConsumers = (db: DB, runId: string) =>
+  db
+    .update(nativePublicationConsumers)
+    .set({ state: "released", releasedAt: sql`now()` })
+    .where(eq(nativePublicationConsumers.runId, runId));

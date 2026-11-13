@@ -180,6 +180,7 @@ export const refreshBoatKeyReports = async (
       if (!client.ok) return { account, outcome: "unavailable" };
       const observed = await observeBoatKey(client.value, {
         organization: opened.organization ?? null,
+        previous: reports.get(account)?.report,
         now,
       });
       if (observed.kind === "kept") return { account, outcome: "kept" };

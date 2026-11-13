@@ -203,4 +203,10 @@ export const requireBoatAccount = (
       return yield* new WorkspaceConflictError({
         message: `Boat account ${accountId} is being removed: no new workspace runs in it.`,
       });
+    // Its saved images are being deleted from the wallet it bills now; a launch would build them
+    // there again, and hold the change up until its workspace stopped.
+    if (account.organizationChange !== null)
+      return yield* new WorkspaceConflictError({
+        message: `Boat account ${accountId} is changing the Boat wallet it bills, and Core is deleting its saved images from the old one: no new workspace runs in it until that is done, usually within a few minutes. Try again then.`,
+      });
   });

@@ -44,7 +44,7 @@ The shipped resource groups and their operations:
 | Workspaces               | `POST /v1/workspaces`, `GET /v1/workspaces/runtimes`, `POST /v1/workspaces/image`, `POST /v1/workspaces/:workspaceId/exec`, `POST /v1/workspaces/:workspaceId/dotfiles`, `POST /v1/workspaces/:workspaceId/stop`, `POST /v1/workspaces/:workspaceId/restart`, `POST`, `DELETE` and `GET /v1/workspaces/:workspaceId/credentials`, `POST /v1/workspaces/:workspaceId/expire`, `PATCH /v1/workspaces/:workspaceId/name`, `DELETE /v1/workspaces/:workspaceId/ssh-user`, `GET /v1/workspaces`, `GET /v1/workspaces/:workspaceId`, `GET /v1/workspaces/:workspaceId/attempts`, `GET /v1/workspaces/:workspaceId/events`, `GET /v1/workspaces/:workspaceId/ssh-target`                                                                                                                                                             |
 | SSH keys                 | `POST /v1/ssh-keys`, `GET /v1/ssh-keys`, `DELETE /v1/ssh-keys/:sshKeyId`, `POST /v1/ssh-keys/resolve-principal`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Users                    | `POST /v1/users` (idempotent on email), `POST /v1/users/:userId/person`, `GET /v1/users/:userId` — identity rows for service principals acting on behalf of their own users                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Boat accounts            | `POST /v1/boat-accounts`, `GET /v1/boat-accounts`, `PUT /v1/boat-accounts/:boatAccountId/key`, `DELETE /v1/boat-accounts/:boatAccountId`, `POST /v1/boat-accounts/:boatAccountId/check`, `GET`/`POST /v1/boat-accounts/install-key` — the Boat keys an install keeps beside its default one, and their checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Boat accounts            | `POST /v1/boat-accounts`, `GET /v1/boat-accounts`, `PUT /v1/boat-accounts/:boatAccountId/key`, `DELETE /v1/boat-accounts/:boatAccountId`, `POST /v1/boat-accounts/:boatAccountId/check`, `PUT /v1/boat-accounts/:boatAccountId/organization`, `GET`/`POST /v1/boat-accounts/install-key` — the Boat keys an install keeps beside its default one, the wallet each bills, and their checks                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Resource domains         | `POST /v1/resource-domains` (idempotent on its `<application>:<name>` key), `GET /v1/resource-domains/:resourceDomainId`, `POST /v1/resource-domains/:resourceDomainId/members/:userId/grant` and `/revoke` (each at the application's own rising `version`; an older one gets `409`), `GET /v1/resource-domains/:resourceDomainId/members/:userId`, `GET /v1/resource-domains/:resourceDomainId/members` (paged by `limit` and `cursor`), `GET` and `PUT /v1/resource-domains/:resourceDomainId/budget` (CPU, memory and storage ceilings with what is used and reserved and a warning at 80% and 95%; a change names the `revision` it read, and a stale one gets `409`) — owners that are projects, not people. A service key only: any other bearer gets `401`, and a body field the contract does not declare gets `400` |
 | Connected accounts       | `POST /v1/connected-accounts`, `GET /v1/connected-accounts`, `PUT /v1/connected-accounts/defaults/:provider`, `DELETE /v1/connected-accounts/:connectedAccountId`, `POST /v1/connected-accounts/:connectedAccountId/mark-invalid`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Profiles                 | `GET /v1/profiles`, `GET /v1/profiles/:profileId/credential-bindings`, `PUT /v1/profiles/:profileId/credential-bindings`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -208,7 +208,8 @@ env key, both `install-key` routes answer `503` and say so.
   id or name): Core stores it and sends it as `X-Boat-Org` on every request for the account, so
   billing never follows the key's active wallet. The key is sealed with the install's credential key
   (`SEALANT_CREDENTIALS_KEY`) and is never returned by any route, logged or named in an error. The
-  answer is `{ boatAccountId, label, state, createdAt, keyRotatedAt, organization, report }`.
+  answer is
+  `{ boatAccountId, label, state, createdAt, keyRotatedAt, organization, organizationChange, report }`.
 - `GET /v1/boat-accounts` lists every stored account not removed. `state` is `active` or `removing`.
   Each carries its key's last `report`, null until it is checked.
 - `POST /v1/boat-accounts/:boatAccountId/check` checks a stored account's key again and stores and
@@ -237,11 +238,23 @@ empty one) or `unreadable`. Core never guesses a fact it did not observe.
 | `identity`            | Who the key is (`GET /me`): `accountId` (Boat's account id, not a person here), `login`, `displayName`, `serviceAccount`, `accountStatus` |
 | `keyKind`             | `personal` or `organization`                                                                                                              |
 | `wallet`              | Which wallet a VM bills (`GET /limits`): `personal`, or `organization` with its id and name                                               |
+| `wallets`             | The wallets the key's Boat account can bill (`GET /orgs`): `choices`, each `{ id, kind, name, role, active }`; `id` is what a pin names   |
+| `billing`             | `pinned` with its `organization`, `key-organization` (an organization's key), or `active-wallet` with `walletChanged` when it moved       |
 | `requiredPermissions` | The permissions Core needs, one per Boat call it makes (always present)                                                                   |
 | `permissions`         | The key's permissions (`GET /api-keys`), the required ones it lacks, whether it is limited to some VMs                                    |
 | `expiry`              | `expiresAt` (null: never), `expired`, `expiringSoon`                                                                                      |
 | `start`               | `canStart`, `blockedReason`, `billingStatus`, `runningVms`, `allowedVms`                                                                  |
 | `snapshots`           | Saved snapshot slots `used` and `included`                                                                                                |
+
+`wallets` and `billing` are absent from reports made before Core read them. `billing` is not a fact
+Boat reports but what the account does: `pinned` means every request for it names `organization` (an
+organization's id, or `personal`), so its bill never follows the key's active wallet.
+`key-organization` means the key is an organization's, which bills that organization and nothing
+else. `active-wallet` means a personal key with no pin, which bills whichever wallet its Boat
+account has active, and the person can change that in Boat at any time (`boat org switch`). When the
+wallet it bills is not the one an earlier report saw, `walletChanged` says so:
+`{ from, observedAt }`, where `from` is the wallet it billed before and `observedAt` is when Core
+first saw the change. It stays while the wallet stays.
 
 Core needs `exec`, `file.write`, `host`, `sandbox.create`, `sandbox.delete`, `sandbox.read`,
 `sandbox.resume`, `sandbox.stop`, `snapshot.read` and `snapshot.write`. `sandbox.delete-own` is not
@@ -274,6 +287,34 @@ enough: after a rotation the new key deletes VMs the old key created.
   message names the VM and the snapshot Boat may still hold. The owner can wait, or delete them in
   Boat. `GET /v1/boat-accounts` carries each account's last check as `lastProof` (null until it is
   proven). A check takes a minute or more.
+
+- `PUT /v1/boat-accounts/:boatAccountId/organization { organization }` points a stored account with
+  a personal key at the wallet it bills from now on, without its key. `organization` is an
+  organization's id or name from the report's `wallets`, `personal` for the key's own Boat account,
+  or null to name none. Core checks the key with Boat (read-only) under the new wallet and keeps
+  what Boat answered: the organization's id, or `personal`. A wallet the key's account cannot bill
+  is `400`. An organization's key is `409` `boat-key-organization`: it bills its own organization,
+  so there is nothing to choose. `default` is `409` `boat-account-environment`; the install's own
+  key bills what `SEALANT_BOAT_ORGANIZATION` names, and its report says so in `billing` too.
+
+  VMs and saved snapshots belong to the wallet that paid for them. Once the account's requests name
+  another wallet, they can neither see nor delete what the old one holds. So the change is refused
+  (`409` `boat-account-in-use`, with `liveRuns`, `unsettledRuns` and `buildsInFlight`, and a
+  sentence counting them) while the account has runs whose VMs Boat may hold, runs still being
+  settled, or image builds in flight or being cleaned up. It is refused `409` `boat-proof-running`
+  while a full check's leftovers may be there. Nothing changes.
+
+  An account that holds nothing in Boat switches at once. One that holds saved images answers with
+  `organizationChange: { organization, requestedAt, imagesLeft }` and still bills the old wallet. A
+  worker that builds Boat images deletes them there, with requests that still name that wallet,
+  through the same recorded removal that image retention and an account's removal use. It switches
+  once none is left. They are built again in the new wallet at the next launch. Meanwhile no new
+  workspace runs in the account (a create naming it is `409`). A deletion Boat does not answer, or a
+  worker that stops halfway, leaves the change pending and the account on the old wallet, and the
+  next pass goes on from the record. So the account is always on one wallet, with nothing of its own
+  left in the other. Naming the organization it bills calls an unfinished change off, and so does
+  removing the account. After the switch, every request for the account names the new wallet: the
+  check and its limits read, the worker's creates and image builds, its sweeps and deletes.
 
 - `DELETE /v1/boat-accounts/:boatAccountId` is refused while the account has runs whose VMs Boat may
   still hold, or an image build in flight (`409`, code `boat-account-in-use`, with `liveRuns` and

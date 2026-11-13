@@ -1176,6 +1176,18 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         console.warn("Boat full checks still hold something in Boat; the next tick tries again", {
           proofs: pending.map((each) => each.proofId),
         });
+      // A change of the organization an account bills: its images are deleted from the old
+      // wallet first; once it has switched, its key is checked under the new one.
+      const changes = await boatAssembly.reconcileOrganizationChanges?.();
+      const changed = (changes ?? [])
+        .filter((change) => change.outcome === "changed")
+        .map((change) => change.accountId);
+      if (changed.length > 0) {
+        console.log("Boat accounts bill another wallet now; their old images are deleted", {
+          accounts: changed,
+        });
+        await boatAssembly.refreshKeyReports({ force: changed }).catch(() => []);
+      }
       const removals = await boatAssembly.reconcileRemovals?.();
       for (const removal of removals ?? [])
         if (removal.outcome === "removed")

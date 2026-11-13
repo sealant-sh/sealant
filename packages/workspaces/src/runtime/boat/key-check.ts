@@ -10,7 +10,14 @@
  * their permissions stay not observed. (A live proof with a throwaway VM, SLNT-784, may fill that
  * in later; it is not made here.)
  */
-import type { BoatKeyNotObserved, BoatKeyReport } from "@sealant/api-contracts";
+import {
+  boatKeyReportSchema,
+  type BoatKeyBilling,
+  type BoatKeyNotObserved,
+  type BoatKeyReport,
+  type BoatWallet,
+} from "@sealant/api-contracts";
+import { Option, Schema } from "effect";
 
 import { BOAT_REQUIRED_PERMISSIONS, type HttpBoatApi } from "./api.js";
 import type { BoatApiError, BoatResult } from "./config.js";
@@ -101,9 +108,68 @@ const accountStatus = (user: {
         ? "suspended"
         : "unknown";
 
+/**
+ * What a check is told beside the key: the organization every request names (null: none), and
+ * the key's last report, if any, so a report can say that the wallet an unpinned key bills
+ * changed since then.
+ */
+export interface BoatKeyCheckOptions {
+  readonly organization: string | null;
+  readonly previous?: unknown;
+  readonly now?: () => Date;
+}
+
+const decodeReport = Schema.decodeUnknownOption(boatKeyReportSchema);
+/** A stored report, if it still reads as one. */
+export const readBoatKeyReport = (value: unknown): BoatKeyReport | undefined => {
+  const decoded = decodeReport(value);
+  return Option.isSome(decoded) ? decoded.value : undefined;
+};
+
+const sameWallet = (a: BoatWallet, b: BoatWallet) =>
+  a.kind === b.kind && (a.kind === "personal" || a.organizationId === b.organizationId);
+const walletOnly = (wallet: BoatWallet): BoatWallet => ({
+  kind: wallet.kind,
+  ...(wallet.organizationId === undefined ? {} : { organizationId: wallet.organizationId }),
+  ...(wallet.organizationName === undefined ? {} : { organizationName: wallet.organizationName }),
+  ...(wallet.role === undefined ? {} : { role: wallet.role }),
+});
+
+/**
+ * Whether the account names its wallet. Pinned when it names an organization; otherwise an
+ * organization's key bills its own organization, and a personal key (or one whose kind Boat did
+ * not show) follows its active wallet. For the last, a wallet unlike the one the previous report
+ * saw is said (`walletChanged`), and kept said while the wallet stays.
+ */
+export const boatKeyBilling = (
+  report: Pick<BoatKeyReport, "organization" | "keyKind" | "wallet" | "observedAt">,
+  previous: unknown,
+): BoatKeyBilling => {
+  if (report.organization !== null) return { mode: "pinned", organization: report.organization };
+  if (report.keyKind.observed && report.keyKind.kind === "organization")
+    return { mode: "key-organization" };
+  const last =
+    previous === undefined || previous === null ? undefined : readBoatKeyReport(previous);
+  // Only a report that also followed the active wallet is compared: a pin's change is no news.
+  const followed = last !== undefined && last.organization === null ? last : undefined;
+  const carried =
+    followed?.billing?.mode === "active-wallet" ? followed.billing.walletChanged : undefined;
+  const unchanged: BoatKeyBilling = {
+    mode: "active-wallet",
+    ...(carried === undefined ? {} : { walletChanged: carried }),
+  };
+  if (!report.wallet.observed || followed === undefined || !followed.wallet.observed)
+    return unchanged;
+  if (sameWallet(followed.wallet, report.wallet)) return unchanged;
+  return {
+    mode: "active-wallet",
+    walletChanged: { from: walletOnly(followed.wallet), observedAt: report.observedAt },
+  };
+};
+
 export const checkBoatKey = async (
   client: BoatKeyCheckClient,
-  options: { readonly organization: string | null; readonly now?: () => Date },
+  options: BoatKeyCheckOptions,
 ): Promise<BoatKeyCheck> => {
   const verified = await settle(() => client.verifyCredential());
   if (verified === undefined) return { kind: "unverified" };
@@ -213,6 +279,25 @@ export const checkBoatKey = async (
         };
 
   const organizations = orgs?.ok === true ? orgs.value : [];
+  const wallets: NonNullable<BoatKeyReport["wallets"]> =
+    orgs === undefined
+      ? noAnswer
+      : !orgs.ok
+        ? notObserved(orgs.error)
+        : {
+            observed: true,
+            choices: orgs.value.map((org) => {
+              const personal = org.type === "personal";
+              return {
+                // A pin names the account's own wallet as `personal`, as Boat takes it.
+                id: personal ? "personal" : org.id,
+                kind: personal ? ("personal" as const) : ("organization" as const),
+                ...(org.name === undefined ? {} : { name: org.name }),
+                ...(org.role === undefined ? {} : { role: org.role }),
+                active: org.active === true,
+              };
+            }),
+          };
   const wallet: BoatKeyReport["wallet"] =
     limits === undefined
       ? noAnswer
@@ -267,6 +352,11 @@ export const checkBoatKey = async (
       identity,
       keyKind,
       wallet,
+      wallets,
+      billing: boatKeyBilling(
+        { organization: options.organization, keyKind, wallet, observedAt: now.toISOString() },
+        options.previous,
+      ),
       requiredPermissions: [...BOAT_REQUIRED_PERMISSIONS],
       permissions,
       expiry,
@@ -282,15 +372,21 @@ export const checkBoatKey = async (
  */
 export const boatKeyRefusedReport = (
   failure: BoatFailure,
-  options: { readonly organization: string | null; readonly now?: () => Date },
+  options: BoatKeyCheckOptions,
 ): BoatKeyReport => {
+  const observedAt = (options.now ?? (() => new Date()))().toISOString();
   const refused: BoatKeyNotObserved = { observed: false, reason: "refused", boat: failure };
   return {
-    observedAt: (options.now ?? (() => new Date()))().toISOString(),
+    observedAt,
     organization: options.organization,
     identity: refused,
     keyKind: refused,
     wallet: refused,
+    wallets: refused,
+    billing: boatKeyBilling(
+      { organization: options.organization, keyKind: refused, wallet: refused, observedAt },
+      options.previous,
+    ),
     requiredPermissions: [...BOAT_REQUIRED_PERMISSIONS],
     permissions: refused,
     expiry: refused,
@@ -311,7 +407,7 @@ export type BoatKeyObservation =
 
 export const observeBoatKey = async (
   client: BoatKeyCheckClient,
-  options: { readonly organization: string | null; readonly now?: () => Date },
+  options: BoatKeyCheckOptions,
 ): Promise<BoatKeyObservation> => {
   const check = await checkBoatKey(client, options).catch(
     (): BoatKeyCheck => ({ kind: "unverified" }),

@@ -46,6 +46,7 @@ import {
   markConnectedAccountInvalidOp,
   removeBoatAccountOp,
   rotateBoatAccountKeyOp,
+  setBoatAccountOrganizationOp,
   setConnectedAccountDefaultOp,
 } from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
@@ -114,6 +115,7 @@ const mapBoatAccount = (wire: BoatAccountWire): BoatAccount => ({
   organization: wire.organization ?? null,
   report: wire.report ?? null,
   lastProof: wire.lastProof ?? null,
+  organizationChange: wire.organizationChange ?? null,
 });
 
 const mapConnectedAccount = (wire: ConnectedAccountSummary): ConnectedAccount => ({
@@ -433,6 +435,10 @@ export class Sealant {
         ),
       ),
     list: async () => (await this.#runtime.run(listBoatAccountsOp())).items.map(mapBoatAccount),
+    setOrganization: async (boatAccountId, organization) =>
+      mapBoatAccount(
+        await this.#runtime.run(setBoatAccountOrganizationOp(boatAccountId, { organization })),
+      ),
     rotateKey: async (boatAccountId, apiKey) =>
       mapBoatAccount(await this.#runtime.run(rotateBoatAccountKeyOp(boatAccountId, { apiKey }))),
     check: async (boatAccountId) =>

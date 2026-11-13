@@ -39,11 +39,21 @@ export const boatAccounts = snakeCase.table(
     keyId: text(),
     keyRevision: integer().notNull().default(1),
     /**
-     * The Boat organization the account bills (its id or name), sent as `X-Boat-Org` on every
-     * request for it; null: none named, so a personal key bills its active wallet. Set when the
-     * account is stored and never changed.
+     * The Boat organization the account bills (its id or name, or `personal`), sent as
+     * `X-Boat-Org` on every request for it; null: none named, so a personal key bills its active
+     * wallet. Set when the account is stored, and changed only once the account holds nothing in
+     * the wallet it billed (see `organization_change_requested_at`); every change bumps
+     * `key_revision`, so every holder of a client opens one that names the new wallet.
      */
     boatOrganization: text(),
+    /**
+     * A change of `boat_organization` to `organization_change_target` (null: none named) was
+     * asked and is not finished: the worker is deleting the account's saved images from the wallet
+     * it bills now, with requests that still name it, and switches once none is left. Null: no
+     * change is under way.
+     */
+    organizationChangeRequestedAt: instant(),
+    organizationChangeTarget: text(),
     createdAt: instant().notNull().defaultNow(),
     keyRotatedAt: instant(),
     removalRequestedAt: instant(),
@@ -59,6 +69,10 @@ export const boatAccounts = snakeCase.table(
       sql`${table.removedAt} is null or ${table.removalRequestedAt} is not null`,
     ),
     check("boat_accounts_label", sql`length(${table.label}) between 1 and 200`),
+    check(
+      "boat_accounts_organization_change",
+      sql`${table.organizationChangeTarget} is null or ${table.organizationChangeRequestedAt} is not null`,
+    ),
   ],
 );
 

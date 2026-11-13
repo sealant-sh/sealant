@@ -41,6 +41,9 @@ export {
   type BoatKeyProofStep,
   type BoatKeyProofStepName,
   type BoatKeyReport,
+  type BoatKeyBilling,
+  type BoatKeyWalletChoice,
+  type BoatWallet,
   BOAT_KEY_PROOF_STEPS,
 } from "@sealant/api-contracts";
 export type {

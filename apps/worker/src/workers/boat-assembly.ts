@@ -652,6 +652,50 @@ export const assembleBoat = async (input: {
   };
 
   /**
+   * One pass of the changes of organization asked for (`PUT /v1/boat-accounts/:id/organization`):
+   * each such account's saved images are deleted from the wallet it bills now, through its catalog
+   * (the recorded removal that retention and an account's removal use), with requests that still
+   * name that wallet. Once it holds nothing there, it switches to the new organization; every
+   * process then opens a client that names it. A deletion Boat does not answer, or a crash, leaves
+   * the change pending and the account on the old wallet; the next pass goes on from the record.
+   */
+  const reconcileOrganizationChanges = async () => {
+    const report: { accountId: string; outcome: "changed" | "pending" }[] = [];
+    for (const account of await directory.listChangingOrganization()) {
+      const outcome = await (async () => {
+        const stack = await stackOf(account.id);
+        const service = await stack?.catalog();
+        if (stack === undefined || service === undefined) return "pending" as const;
+        const held = await runRepo(
+          Effect.flatMap(NativePublicationRepo, (catalog) =>
+            catalog.heldByDeployment({ deploymentId: account.deploymentId, limit: 50 }),
+          ),
+        );
+        let remaining = 0;
+        for (const record of held) {
+          // A build is never started under an account with a change under way (the API refuses
+          // its creates), and the change was refused while one was in flight; one queued before
+          // it is waited for.
+          if (record.state === "reserved" || record.state === "building") {
+            remaining += 1;
+            continue;
+          }
+          const withdrawn = await Effect.runPromise(
+            Effect.result(service.withdraw(record.ownership)),
+          );
+          if (Result.isFailure(withdrawn)) remaining += 1;
+        }
+        if (remaining > 0 || held.length === 50) return "pending" as const;
+        return (await directory.finishOrganizationChange(account.id)) === "changed"
+          ? ("changed" as const)
+          : ("pending" as const);
+      })().catch(() => "pending" as const);
+      report.push({ accountId: account.id, outcome });
+    }
+    return report;
+  };
+
+  /**
    * One Boat image retention pass: in the install's own account and every stored account not
    * being removed (a removal deletes every image of its account itself), each saved image no
    * workspace can use any more is removed. Per account: what it removed, kept, or could not
@@ -757,6 +801,9 @@ export const assembleBoat = async (input: {
           return stack?.applyLink === undefined ? ("pending" as const) : stack.applyLink(runId);
         },
     reconcileRemovals: registration === undefined ? undefined : reconcileRemovals,
+    /** One pass of the changes of organization (`reconcileOrganizationChanges` above). */
+    reconcileOrganizationChanges:
+      registration === undefined ? undefined : reconcileOrganizationChanges,
     /** One image retention pass (`reapImages` above); only a worker that builds images has one. */
     reapImages: registration === undefined ? undefined : reapImages,
     /**

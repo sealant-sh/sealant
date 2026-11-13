@@ -549,6 +549,7 @@ export {
   boatAccountBuilderOwner,
   boatAccountDeploymentId,
   type BoatAccountRecord,
+  type BoatAccountOrganizationChange,
   type BoatAccountRemovalRequest,
   type BoatAccountRepoService,
   type BoatAccountSealedKey,

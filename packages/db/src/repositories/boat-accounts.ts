@@ -58,6 +58,14 @@ export interface BoatAccountRecord {
   readonly keyRevision: number;
   /** The Boat organization the account bills (`X-Boat-Org`); null: none named. */
   readonly organization: string | null;
+  /**
+   * A change of `organization` that was asked and is not finished (`organization`: the one to
+   * bill once it is, null: none); null when none is under way.
+   */
+  readonly organizationChange: {
+    readonly organization: string | null;
+    readonly requestedAt: Date;
+  } | null;
   readonly createdAt: Date;
   readonly keyRotatedAt: Date | null;
   readonly removalRequestedAt: Date | null;
@@ -103,6 +111,26 @@ export type BoatAccountRemovalRequest =
       readonly liveRuns: number;
       /** Saved images Core is building in the account right now. */
       readonly buildsInFlight: number;
+    };
+
+/**
+ * What a request to change the organization an account bills found. `unchanged`: it already bills
+ * that one (an unfinished change to another was called off). `changed`: it held nothing in Boat,
+ * and bills the new one from now on. `pending`: it holds saved images in the wallet it bills now
+ * (`imagesLeft`), which the worker deletes before it switches. `in-use`: it has runs whose VM Boat
+ * may hold, image builds in flight or being cleaned up, or a full check that Boat may hold
+ * something of; nothing was changed.
+ */
+export type BoatAccountOrganizationChange =
+  | { readonly kind: "unchanged" | "changed"; readonly account: BoatAccountRecord }
+  | { readonly kind: "pending"; readonly account: BoatAccountRecord; readonly imagesLeft: number }
+  | {
+      readonly kind: "in-use";
+      readonly liveRuns: number;
+      /** Runs whose VM is gone and whose settling (tunnels, pins, stops, captures) is not done. */
+      readonly unsettledRuns: number;
+      readonly buildsInFlight: number;
+      readonly proofs: number;
     };
 
 /** The deployment label every VM and image of the account carries, from its id alone. */
@@ -212,6 +240,41 @@ export interface BoatAccountRepoService {
   readonly requestRemoval: (id: string) => Failing<BoatAccountRemovalRequest>;
   /** The accounts a removal was asked for and not finished. */
   readonly listRemoving: () => Failing<readonly BoatAccountRecord[]>;
+  /**
+   * Asks that the account bill `organization` (null: none named) from now on, as one statement
+   * under the account's row, guarded on the organization the caller checked against (`expected`).
+   * Refused while anything of the account may live in Boat outside its saved images; switched at
+   * once when it holds nothing; otherwise left for the worker, which deletes its saved images
+   * from the wallet it bills now and then finishes (`finishOrganizationChange`). Asking for the
+   * organization it bills already calls off an unfinished change.
+   */
+  readonly requestOrganizationChange: (
+    id: string,
+    input: {
+      readonly organization: string | null;
+      readonly expected: string | null;
+      /**
+       * The account's runs not settled yet, as `BoatRunRepo.listUnsettled` reads them: the ones
+       * whose VM's absence is committed are counted as runs still being settled.
+       */
+      readonly unsettled: readonly string[];
+      /**
+       * `organization` names the wallet the account bills already, by another name (Boat's id for
+       * an organization stored by its name): it is relabelled at once, nothing held is in the way.
+       */
+      readonly sameWallet?: boolean;
+    },
+  ) => Failing<BoatAccountOrganizationChange>;
+  /**
+   * The change's end: the account bills the new organization, and its key revision grows, so every
+   * process opens a client that names it. Only once Boat holds nothing Core made under the account,
+   * read under its row as `finishRemoval` reads it. `held`: something is still there.
+   */
+  readonly finishOrganizationChange: (id: string) => Failing<"changed" | "held" | "none">;
+  /** The accounts with a change of organization under way. */
+  readonly listChangingOrganization: () => Failing<readonly BoatAccountRecord[]>;
+  /** How many saved images the account may hold in Boat: the ones `heldImages` names. */
+  readonly heldImageCount: (id: string) => Failing<number>;
   /** The accounts not removed that have ever had a run: the ones Boat's sweeps visit. */
   readonly listWithRuns: () => Failing<readonly BoatAccountRecord[]>;
   /**
@@ -234,6 +297,13 @@ const record = (row: BoatAccountRow): BoatAccountRecord => ({
   builderOwner: row.builderOwner,
   keyRevision: row.keyRevision,
   organization: row.boatOrganization,
+  organizationChange:
+    row.organizationChangeRequestedAt === null
+      ? null
+      : {
+          organization: row.organizationChangeTarget,
+          requestedAt: row.organizationChangeRequestedAt,
+        },
   createdAt: row.createdAt,
   keyRotatedAt: row.keyRotatedAt,
   removalRequestedAt: row.removalRequestedAt,
@@ -246,6 +316,11 @@ const record = (row: BoatAccountRow): BoatAccountRecord => ({
  */
 const proofOutstanding = (id: string) =>
   sql`select 1 from ${boatKeyProofs} where ${boatKeyProofs.account} = ${id} and (${boatKeyProofs.finishedAt} is null or ${boatKeyProofs.cleanupPending})`;
+
+/** Saved images Boat may hold of a deployment: in use, retiring, or their removal pending. */
+const heldImage = sql`(${nativePublications.state} in ('ready','retiring') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} = 'native-removal-pending'))`;
+/** Image builds Boat may hold a VM or a save of: queued, building, or their cleanup pending. */
+const imageBuildInFlight = sql`(${nativePublications.state} in ('reserved','building') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} like 'native-cleanup-pending-%'))`;
 
 const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen(function* () {
   const db = yield* SealantDB;
@@ -438,9 +513,15 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           return { kind: "in-use", liveRuns, buildsInFlight } as const;
         if (row.removalRequestedAt !== null)
           return { kind: "requested", account: record(row) } as const;
+        // An unfinished change of organization is called off: the account still names the wallet
+        // its images are in, and its removal deletes them there.
         const [updated] = yield* db
           .update(boatAccounts)
-          .set({ removalRequestedAt: sql`now()` })
+          .set({
+            removalRequestedAt: sql`now()`,
+            organizationChangeRequestedAt: null,
+            organizationChangeTarget: null,
+          })
           .where(eq(boatAccounts.id, id))
           .returning();
         if (updated === undefined)
@@ -448,6 +529,177 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         return { kind: "requested", account: record(updated) } as const;
       }),
     );
+  });
+  /** What of the account Boat may hold, read under its row: runs, builds, images, full checks. */
+  const holdings = Effect.fn("BoatAccountRepo.holdings")(function* (row: BoatAccountRow) {
+    const [runs] = yield* db
+      .select({ value: count() })
+      .from(boatRuns)
+      .where(and(eq(boatRuns.accountId, row.id), isNull(boatRuns.absentAt)));
+    const [builds] = yield* db
+      .select({ value: count() })
+      .from(nativePublications)
+      .where(and(eq(nativePublications.deploymentId, row.deploymentId), imageBuildInFlight));
+    const [images] = yield* db
+      .select({ value: count() })
+      .from(nativePublications)
+      .where(and(eq(nativePublications.deploymentId, row.deploymentId), heldImage));
+    const [proofs] = yield* db
+      .select({ value: count() })
+      .from(boatKeyProofs)
+      .where(
+        and(
+          eq(boatKeyProofs.account, row.id),
+          or(isNull(boatKeyProofs.finishedAt), eq(boatKeyProofs.cleanupPending, true)),
+        ),
+      );
+    return {
+      liveRuns: runs?.value ?? 0,
+      buildsInFlight: builds?.value ?? 0,
+      images: images?.value ?? 0,
+      proofs: proofs?.value ?? 0,
+    };
+  });
+  /** Switches the account to its new organization: the change is over. */
+  const switchOrganization = (id: string, organization: string | null) =>
+    db
+      .update(boatAccounts)
+      .set({
+        boatOrganization: organization,
+        organizationChangeRequestedAt: null,
+        organizationChangeTarget: null,
+        keyRevision: sql`${boatAccounts.keyRevision} + 1`,
+      })
+      .where(eq(boatAccounts.id, id))
+      .returning();
+  const requestOrganizationChange = Effect.fn("BoatAccountRepo.requestOrganizationChange")(
+    function* (
+      id: string,
+      input: Parameters<BoatAccountRepoService["requestOrganizationChange"]>[1],
+    ) {
+      return yield* db.transaction(() =>
+        Effect.gen(function* () {
+          // The row a run's or an image's reservation reads `for share`.
+          const [row] = yield* db
+            .select()
+            .from(boatAccounts)
+            .where(eq(boatAccounts.id, id))
+            .for("update");
+          if (row === undefined || row.removedAt !== null)
+            return yield* Effect.fail(new BoatAccountStoreError("not-found"));
+          if (row.removalRequestedAt !== null)
+            return yield* Effect.fail(new BoatAccountStoreError("removing"));
+          if (row.boatOrganization !== input.expected)
+            return yield* Effect.fail(new BoatAccountStoreError("stale-revision"));
+          if (row.boatOrganization === input.organization) {
+            if (row.organizationChangeRequestedAt === null)
+              return { kind: "unchanged", account: record(row) } as const;
+            const [updated] = yield* db
+              .update(boatAccounts)
+              .set({ organizationChangeRequestedAt: null, organizationChangeTarget: null })
+              .where(eq(boatAccounts.id, id))
+              .returning();
+            if (updated === undefined)
+              return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+            return { kind: "unchanged", account: record(updated) } as const;
+          }
+          if (input.sameWallet === true) {
+            const [updated] = yield* switchOrganization(id, input.organization);
+            if (updated === undefined)
+              return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+            return { kind: "changed", account: record(updated) } as const;
+          }
+          const held = yield* holdings(row);
+          const live =
+            input.unsettled.length === 0
+              ? []
+              : yield* db
+                  .select({ runId: boatRuns.runId })
+                  .from(boatRuns)
+                  .where(
+                    and(
+                      eq(boatRuns.accountId, id),
+                      isNull(boatRuns.absentAt),
+                      inArray(boatRuns.runId, [...input.unsettled]),
+                    ),
+                  );
+          const unsettledRuns = input.unsettled.length - live.length;
+          if (held.liveRuns > 0 || unsettledRuns > 0 || held.buildsInFlight > 0 || held.proofs > 0)
+            return {
+              kind: "in-use",
+              liveRuns: held.liveRuns,
+              unsettledRuns,
+              buildsInFlight: held.buildsInFlight,
+              proofs: held.proofs,
+            } as const;
+          if (held.images === 0) {
+            const [updated] = yield* switchOrganization(id, input.organization);
+            if (updated === undefined)
+              return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+            return { kind: "changed", account: record(updated) } as const;
+          }
+          const [updated] = yield* db
+            .update(boatAccounts)
+            .set({
+              organizationChangeTarget: input.organization,
+              // A change under way that is pointed elsewhere keeps when it was first asked.
+              organizationChangeRequestedAt: sql`coalesce(${boatAccounts.organizationChangeRequestedAt}, now())`,
+            })
+            .where(eq(boatAccounts.id, id))
+            .returning();
+          if (updated === undefined)
+            return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+          return { kind: "pending", account: record(updated), imagesLeft: held.images } as const;
+        }),
+      );
+    },
+  );
+  const finishOrganizationChange = Effect.fn("BoatAccountRepo.finishOrganizationChange")(function* (
+    id: string,
+  ) {
+    return yield* db.transaction(() =>
+      Effect.gen(function* () {
+        const [row] = yield* db
+          .select()
+          .from(boatAccounts)
+          .where(eq(boatAccounts.id, id))
+          .for("update");
+        if (
+          row === undefined ||
+          row.removedAt !== null ||
+          row.organizationChangeRequestedAt === null
+        )
+          return "none" as const;
+        const held = yield* holdings(row);
+        if (held.liveRuns > 0 || held.buildsInFlight > 0 || held.images > 0 || held.proofs > 0)
+          return "held" as const;
+        yield* switchOrganization(id, row.organizationChangeTarget);
+        return "changed" as const;
+      }),
+    );
+  });
+  const listChangingOrganization = Effect.fn("BoatAccountRepo.listChangingOrganization")(
+    function* () {
+      const rows = yield* db
+        .select()
+        .from(boatAccounts)
+        .where(
+          and(
+            isNotNull(boatAccounts.organizationChangeRequestedAt),
+            isNull(boatAccounts.removedAt),
+          ),
+        )
+        .orderBy(asc(boatAccounts.id));
+      return rows.map(record);
+    },
+  );
+  const heldImageCount = Effect.fn("BoatAccountRepo.heldImageCount")(function* (id: string) {
+    const [row] = yield* db
+      .select({ value: count() })
+      .from(nativePublications)
+      .innerJoin(boatAccounts, eq(boatAccounts.deploymentId, nativePublications.deploymentId))
+      .where(and(eq(boatAccounts.id, id), heldImage));
+    return row?.value ?? 0;
   });
   const listRemoving = Effect.fn("BoatAccountRepo.listRemoving")(function* () {
     const rows = yield* db
@@ -650,6 +902,10 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     unresolvedCreates: (id) => boundary(unresolvedCreates(id)),
     requestRemoval: (id) => boundary(requestRemoval(id)),
     listRemoving: () => boundary(listRemoving()),
+    requestOrganizationChange: (id, input) => boundary(requestOrganizationChange(id, input)),
+    finishOrganizationChange: (id) => boundary(finishOrganizationChange(id)),
+    listChangingOrganization: () => boundary(listChangingOrganization()),
+    heldImageCount: (id) => boundary(heldImageCount(id)),
     listWithRuns: () => boundary(listWithRuns()),
     finishRemoval: (id) => boundary(finishRemoval(id)),
   });

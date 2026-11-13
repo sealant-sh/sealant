@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { BOAT_REQUIRED_PERMISSIONS, HttpBoatApi } from "../src/runtime/boat/api.js";
 import { BoatSecret } from "../src/runtime/boat/config.js";
-import { checkBoatKey } from "../src/runtime/boat/key-check.js";
+import { checkBoatKey, observeBoatKey } from "../src/runtime/boat/key-check.js";
 import type { DockerResult } from "./docker.js";
 import { FakeBoat, type FakeBoatAccount } from "./fake-boat.js";
 import { BOAT_REFUSALS } from "./refusals.js";
@@ -16,6 +16,7 @@ import { BOAT_REFUSALS } from "./refusals.js";
 const ok = (stdout = ""): DockerResult => ({ code: 0, stdout, stderr: "", timedOut: false });
 const credential = "boat_live_fixture_key_0123456789abcd";
 const now = () => new Date("2026-11-13T12:00:00.000Z");
+const nextDay = () => new Date("2026-11-14T12:00:00.000Z");
 
 let boat: FakeBoat | undefined;
 afterEach(async () => {
@@ -80,6 +81,14 @@ describe("a Boat key's check", () => {
         },
         keyKind: { observed: true, kind: "personal" },
         wallet: { observed: true, kind: "personal" },
+        wallets: {
+          observed: true,
+          choices: [
+            { id: "personal", kind: "personal", name: "personal", role: "owner", active: true },
+            { id: "team_acme", kind: "organization", name: "acme", role: "admin", active: false },
+          ],
+        },
+        billing: { mode: "active-wallet" },
         requiredPermissions: [...BOAT_REQUIRED_PERMISSIONS],
         permissions: { observed: true, held: ["*"], missing: [], limitedToSandboxes: false },
         expiry: { observed: true, expiresAt: null, expired: false, expiringSoon: false },
@@ -316,5 +325,146 @@ describe("a Boat key's check", () => {
     expect(
       HttpBoatApi.create({ credential: secret.value, organization: "acme\r\nX-Other: 1" }).ok,
     ).toBe(false);
+  });
+
+  describe("which wallet it bills", () => {
+    const twoOrganizations: FakeBoatAccount["orgs"] = [
+      { id: "usr_fake", name: "fake-owner", type: "personal", role: "owner", active: false },
+      { id: "team_acme", name: "acme", type: "org", role: "admin", active: true },
+      { id: "team_zeta", name: "zeta", type: "org", role: "member", active: false },
+    ];
+
+    it("lists the wallets of a personal key in two organizations, the active one marked, and says it is not pinned", async () => {
+      const { api } = await start({ orgs: twoOrganizations, activeWallet: "team_acme" });
+      const check = await checkBoatKey(api, { organization: null, now });
+      expect(check).toMatchObject({
+        kind: "checked",
+        report: {
+          organization: null,
+          keyKind: { observed: true, kind: "personal" },
+          wallet: { observed: true, kind: "organization", organizationId: "team_acme" },
+          wallets: {
+            observed: true,
+            choices: [
+              {
+                id: "personal",
+                kind: "personal",
+                name: "fake-owner",
+                role: "owner",
+                active: false,
+              },
+              { id: "team_acme", kind: "organization", name: "acme", role: "admin", active: true },
+              {
+                id: "team_zeta",
+                kind: "organization",
+                name: "zeta",
+                role: "member",
+                active: false,
+              },
+            ],
+          },
+          billing: { mode: "active-wallet" },
+        },
+      });
+    });
+
+    it("says an unpinned key's wallet changed after its active wallet is switched, and keeps saying it", async () => {
+      const { fake, api } = await start({ orgs: twoOrganizations, activeWallet: "team_acme" });
+      const first = await observeBoatKey(api, { organization: null, now });
+      if (first.kind !== "report") throw new Error("not reported");
+      fake.account = { ...fake.account, activeWallet: "personal" };
+      const second = await observeBoatKey(api, {
+        organization: null,
+        previous: first.report,
+        now: nextDay,
+      });
+      if (second.kind !== "report") throw new Error("not reported");
+      expect(second.report.wallet).toEqual({ observed: true, kind: "personal" });
+      expect(second.report.billing).toEqual({
+        mode: "active-wallet",
+        walletChanged: {
+          from: {
+            kind: "organization",
+            organizationId: "team_acme",
+            organizationName: "acme",
+            role: "admin",
+          },
+          observedAt: "2026-11-14T12:00:00.000Z",
+        },
+      });
+      // The next report, on the same wallet, still says when it moved and from where.
+      const third = await observeBoatKey(api, {
+        organization: null,
+        previous: second.report,
+        now: () => new Date("2026-11-15T12:00:00.000Z"),
+      });
+      if (third.kind !== "report") throw new Error("not reported");
+      expect(third.report.billing).toEqual(second.report.billing);
+      // A pinned report is never compared: its wallet is the pin's.
+      const pinned = await observeBoatKey(api, {
+        organization: "personal",
+        previous: first.report,
+        now,
+      });
+      if (pinned.kind !== "report") throw new Error("not reported");
+      expect(pinned.report.billing).toEqual({ mode: "pinned", organization: "personal" });
+    });
+
+    it("keeps billing the personal wallet when pinned to it, after the active wallet is switched", async () => {
+      const { fake, api } = await start({ orgs: twoOrganizations }, "personal");
+      fake.account = { ...fake.account, activeWallet: "team_zeta" };
+      const check = await checkBoatKey(api, { organization: "personal", now });
+      expect(check).toMatchObject({
+        kind: "checked",
+        report: {
+          wallet: { observed: true, kind: "personal" },
+          billing: { mode: "pinned", organization: "personal" },
+        },
+      });
+      const created = await api.create({
+        idempotencyKey: randomUUID(),
+        marker: randomUUID(),
+        purpose: "native-build",
+        lifetime: { kind: "bounded" },
+        requestVersion: 2,
+      });
+      if (!created.ok) throw new Error("not created");
+      expect(fake.heldIn("personal").sandboxes).toHaveLength(1);
+      expect(fake.heldIn("team_zeta").sandboxes).toEqual([]);
+    });
+
+    it("says an organization's key bills its own organization, with nothing to choose", async () => {
+      const { api } = await start({ key: "organization", keyOrganization: "team_acme" });
+      const check = await checkBoatKey(api, { organization: null, now });
+      expect(check).toMatchObject({
+        kind: "checked",
+        report: {
+          keyKind: { observed: true, kind: "organization" },
+          wallet: { observed: true, kind: "organization", organizationId: "team_acme" },
+          billing: { mode: "key-organization" },
+        },
+      });
+    });
+  });
+
+  it("keeps each wallet's VMs and saved snapshots apart: another wallet's are not found", async () => {
+    const { fake, api } = await start({}, "team_acme");
+    const created = await api.create({
+      idempotencyKey: randomUUID(),
+      marker: randomUUID(),
+      purpose: "native-build",
+      lifetime: { kind: "bounded" },
+      requestVersion: 2,
+    });
+    if (!created.ok) throw new Error("not created");
+    const secret = BoatSecret.parse(credential);
+    if (!secret.ok) throw secret.error;
+    const personal = HttpBoatApi.create({ credential: secret.value, baseUrl: fake.baseUrl });
+    if (!personal.ok) throw personal.error;
+    const seen = await personal.value.get(created.value.id);
+    expect(seen.ok ? "seen" : seen.error.status).toBe(404);
+    const own = await api.get(created.value.id);
+    expect(own.ok ? "seen" : [own.error.status, own.error.code]).toBe("seen");
+    expect(fake.heldIn("team_acme").sandboxes).toEqual([created.value.id]);
   });
 });

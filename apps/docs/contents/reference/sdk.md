@@ -277,21 +277,30 @@ These call the live API and work end-to-end:
   and output. See
   [Workspace Images and People](/docs/reference/workspace-images#a-persons-dotfiles).
 - **Boat accounts:** `sealant.boatAccounts.create({ label, apiKey, organization? })`, `.list()`,
-  `.check(boatAccountId)`, `.rotateKey(boatAccountId, apiKey)` and `.remove(boatAccountId)` keep one
-  Boat key per account beside the control plane's default one, and
-  `create({ runtime: "boat", boatAccountId })` runs the workspace's VMs in that account, restarts
-  included. A key goes in and never comes out; Boat checks it before it is stored, and each account
-  carries its key's last `report` (`BoatKeyReport`: who the key is, which wallet it bills, its
-  permissions and the missing ones, its expiry, whether the wallet can start a VM and why not, and
-  its snapshot slots, each observed or not with Boat's reason). The control plane's own key is not
-  in `list()`: `.installKey()` reads its last report and `.checkInstallKey()` checks it now
-  (`BoatInstallKey`: `label`, `report`). A refused key rejects with `SealantApiError`, whose `boat`,
-  `missingPermissions` and `boatKeyReport` say why. `.prove(boatAccountId)` runs a full check with a
-  throwaway VM and answers a `BoatKeyProof` (`outcome`, `steps` each `passed`, `refused` with Boat's
-  reason, `no-answer` or `not-reached`, `starts`, `leftBehind` with `removalConfirmed`). While the
-  sweep still owns what a check left, `rotateKey` and `remove` reject with `boat-proof-running` and
-  name it. `list()` carries each account's `lastProof`. Needs a service key. See
-  [Boat accounts](/docs/reference/http-api#boat-accounts) for what each call refuses.
+  `.check(boatAccountId)`, `.setOrganization(boatAccountId, organization)`,
+  `.rotateKey(boatAccountId, apiKey)` and `.remove(boatAccountId)` keep one Boat key per account
+  beside the control plane's default one, and `create({ runtime: "boat", boatAccountId })` runs the
+  workspace's VMs in that account, restarts included. A key goes in and never comes out; Boat checks
+  it before it is stored, and each account carries its key's last `report` (`BoatKeyReport`: who the
+  key is, which wallet it bills, its permissions and the missing ones, its expiry, whether the
+  wallet can start a VM and why not, and its snapshot slots, each observed or not with Boat's
+  reason; `wallets`, the wallets a personal key can bill with the active one marked; and `billing`,
+  whether the account is `pinned`, an organization's key, or follows the key's `active-wallet`, with
+  `walletChanged` when that moved). `.setOrganization(boatAccountId, organization)` points an
+  account with a personal key at a wallet (an organization's id from `wallets`, or `personal`) or at
+  none (`null`), without its key. It rejects with `boat-account-in-use` while the account has VMs,
+  runs to settle or builds in Boat, and `boat-key-organization` for an organization's key. An
+  account with saved images answers `organizationChange` (`organization`, `requestedAt`,
+  `imagesLeft`): the control plane deletes them from the old wallet before it switches. The control
+  plane's own key is not in `list()`: `.installKey()` reads its last report and `.checkInstallKey()`
+  checks it now (`BoatInstallKey`: `label`, `report`). A refused key rejects with `SealantApiError`,
+  whose `boat`, `missingPermissions` and `boatKeyReport` say why. `.prove(boatAccountId)` runs a
+  full check with a throwaway VM and answers a `BoatKeyProof` (`outcome`, `steps` each `passed`,
+  `refused` with Boat's reason, `no-answer` or `not-reached`, `starts`, `leftBehind` with
+  `removalConfirmed`). While the sweep still owns what a check left, `rotateKey` and `remove` reject
+  with `boat-proof-running` and name it. `list()` carries each account's `lastProof`. Needs a
+  service key. See [Boat accounts](/docs/reference/http-api#boat-accounts) for what each call
+  refuses.
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside
