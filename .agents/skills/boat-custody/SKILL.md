@@ -96,10 +96,22 @@ script builds it with `nix` the first time. Without Nix, set `TLA2TOOLS_JAR` to 
 v1.7.4 (github.com/tlaplus/tlaplus/releases) and have Java 11 or later, or put a `tlc` on `PATH`.
 Node prints the counterexamples (`trace.mjs`).
 
+TLC is the reference: the run that goes with a change to a model, or to the code it models, is a TLC
+run. While iterating, `--engine tlx` (it composes with `--deep`, `--trace` and case names) runs the
+same cases with tlx, a Rust checker about ten times faster here: under 20 s for the fast cases,
+about 4 to 5 minutes with `--deep`. tlx is version 0.1, from github.com/tlaplus-x/tlx, measured at
+commit `8d5f082b0f`; it is not in the Nix flake or CI. The record's "TLC and tlx" says how to build
+it and has the measured table. `check.sh` takes it from `BOAT_CUSTODY_TLX`, else `tlx` on `PATH`,
+and exits 2 when there is none.
+
 Each file in `cases/` states its module, the verdict it must give (`expect: pass`, an invariant's
-name, or `temporal`) and its group. `ledger` and `proof` (`proof-live` for liveness) are main's code
-under main's own assumptions; `*-finding-*` reproduce the open findings; `*-broken-*` are broken
-variants that must fail; `*-fixes*` turn every schedule and the proposed fixes on.
+name, or `temporal`) and its group; a case that must pass also pins its distinct-state count
+(`states`), and ends `ok` only when the verdict and the count both match. A wrong count from either
+checker fails the case even when the verdict matches. Cases that must fail pin no count: they run on
+every core, and the count after a violation differs from run to run. `ledger` and `proof`
+(`proof-live` for liveness) are main's code under main's own assumptions; `*-finding-*` reproduce
+the open findings; `*-broken-*` are broken variants that must fail; `*-fixes*` turn every schedule
+and the proposed fixes on.
 
 ## 4. Read the result
 
@@ -126,9 +138,9 @@ schedule: find out why before you flip its expectation.
 ## 5. Record it
 
 Once the models describe the code at your commit and `check.sh` (and `--deep`) give their expected
-verdicts: update the coverage record below and the record's findings, then move the sync commit, in
-this file and in the record, to that commit. Move it only after reading every covered hunk since the
-old one.
+verdicts on TLC, update each `states` pin your change moved to the count TLC reached (never tlx's),
+the coverage record below and the record's findings. Then move the sync commit, in this file and in
+the record, to that commit. Move it only after reading every covered hunk since the old one.
 
 ## Coverage record
 
