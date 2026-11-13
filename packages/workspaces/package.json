@@ -40,6 +40,7 @@
     "@sealant/sdk": "workspace:*",
     "@sealant/typescript": "workspace:*",
     "@types/ws": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "yaml": "catalog:"
   }
 }

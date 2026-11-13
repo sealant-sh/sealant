@@ -5,7 +5,8 @@ except Boat's control plane. It is where Boat integration bugs get found. The li
 the acceptance check.
 
 ```sh
-pnpm boat:harness                                # every scenario
+pnpm boat:harness                                # every scenario, file by file
+pnpm boat:harness boat-harness/faults.harness.ts # one file: what one CI group runs
 pnpm boat:harness -t "happy path"                # one scenario
 pnpm --filter @sealant/workspaces exec tsx boat-harness/up.ts --launch   # keep one launch up to inspect
 ```
@@ -16,9 +17,10 @@ sealant's Boat rows (`core-rows.json`) and each live twin's `sealant*` journal.
 
 It needs Docker with privileged containers, cgroup v2, kernel WireGuard (`modprobe wireguard`; twins
 share the host's kernel and cannot load modules), `openssl`, and internet access for the native
-build (archive.ubuntu.com, nodejs.org, snapshot.ubuntu.com, ghcr.io). One pass takes about 25 to 40
-minutes. CI runs it on pull requests that touch Boat code, nightly, and on demand
-(`.github/workflows/boat-harness.yml`).
+build (archive.ubuntu.com, nodejs.org, snapshot.ubuntu.com, ghcr.io). A full pass on one host takes
+about an hour. CI runs it on pull requests that touch Boat code, nightly, and on demand
+(`.github/workflows/boat-harness.yml`), each harness file on its own runner, so a run takes about 20
+minutes. Its `boat checks` job passes only when every file passed.
 
 ## What is real
 
@@ -97,13 +99,28 @@ The networking follows what the guest enforces:
 
 ## Scenarios
 
-`lifecycle.harness.ts` runs the happy path, the Docker scenario (`docker-scenario.ts`: a Docker
-blueprint driven as the owner's person through `exec(argv, { user })`; hello-world, a build, compose
-to `db` through the tunnel, a container reaching the Internet, a two-stage `npm ci` build, the VM's
-and the session's cgroup peaks, and `boat-image/vm-probe.sh` in the twin; evidence in
-`BOAT_TWIN_PROOF_DIR` when set), then one fault per step. A scenario's own steps check that the
-runtime row carries the exact cause, and that Mend sees a terminal workspace (`stopped` or `failed`,
-never `retained`) within 60 s (`assertSettled`).
+The scenarios are split across four `*.harness.ts` files. Each file brings up its own stack and runs
+its scenarios on it, in order (`harness-file.ts`); `pnpm boat:harness` runs the files one after
+another on one host, and CI runs each on its own runner (one matrix group per file, checked by
+`harness-files.test.ts`).
+
+- `lifecycle.harness.ts`: the happy path, the Docker scenario (`docker-scenario.ts`: a Docker
+  blueprint driven as the owner's person through `exec(argv, { user })`; hello-world, a build,
+  compose to `db` through the tunnel, a container reaching the Internet, a two-stage `npm ci` build,
+  the VM's and the session's cgroup peaks, and `boat-image/vm-probe.sh` in the twin; evidence in
+  `BOAT_TWIN_PROOF_DIR` when set), then the shared stop's FINAL and deletion cases.
+- `faults.harness.ts`: one fault per step, then resource links on a live session. The links run
+  last, after the faults' allocation rows: more than one page of them for Boat's sweep.
+- `daemon.harness.ts`: a ready session's daemon, clean Stops across the sweep period, and lost
+  DELETE replies.
+- `no-resources.harness.ts`: workspaces without resources, then the shared stop's worker-killed
+  cases.
+
+The happy path's launch builds and publishes the native snapshot. A file that does not open with it
+publishes one first (a plain launch, clean Stop and release), so every scenario starts on a stack
+that has one. A scenario's own steps check that the runtime row carries the exact cause, and that
+Mend sees a terminal workspace (`stopped` or `failed`, never `retained`) within 60 s
+(`assertSettled`).
 
 Then, after every scenario and whatever it did, each launch it made must be released
 (`assertReleased`): the workspace terminal, and the tunnel slot, publication pin, VM and gateway
@@ -178,9 +195,11 @@ first, removes only with `--remove`, and never touches a live run: the one whose
 runs, including while it builds images. When a process-tree kill takes the reaper with the test
 process, the heartbeat stops within 120 s, and `cleanup.ts --remove` reaps the run and its lock.
 
-`markers.test.ts`, `invariants.test.ts`, `reap.test.ts`, `fake-boat.test.ts` and
-`docker-wrapper.test.ts` cover the markers, the invariants, the lock, the reaper, cleanup, the
-fake's API rules and the wrapper. They need no Docker and run with the package's unit tests.
+`markers.test.ts`, `invariants.test.ts`, `reap.test.ts`, `fake-boat.test.ts`,
+`docker-wrapper.test.ts` and `harness-files.test.ts` cover the markers, the invariants, the lock,
+the reaper, cleanup, the fake's API rules, the wrapper, and that every scenario runs in exactly one
+file and every file in exactly one CI group. They need no Docker and run with the package's unit
+tests.
 
 ## When the Ubuntu archive is unreachable
 

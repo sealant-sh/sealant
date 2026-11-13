@@ -2,36 +2,17 @@
  * The whole Boat session lifecycle with real code on both sides of every boundary: allocate, bind,
  * receiver, gateway, isolate, permit, ready, shell, `db:5432` through the tunnel, an edit, Stop,
  * FINAL capture, positive deletion, resume on a new VM, a byte comparison, a final Stop and empty
- * inventories. Then one fault per step, each ending with the same four checks: nothing left
- * behind, the tunnel slot and publication pin released, the exact cause on the runtime row, and a
- * terminal workspace for Mend within 60 s. Scenarios share one stack and one published snapshot.
+ * inventories. Then the workspace's own Docker, and the shared stop's FINAL and deletion cases.
+ * The happy path runs first: its launch builds and publishes the native snapshot the rest use.
  */
 import { randomBytes } from "node:crypto";
-import { copyFile, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 
-import { agentBrieflyUnreachable, daemonKilled } from "./daemon-scenario.js";
 import { DEFECTS } from "./defects.js";
-import { deleteReplyLost, deleteReplyLostWhileDeleting } from "./deletion-scenario.js";
 import { Transcript, dockerScenario, evidenceDir } from "./docker-scenario.js";
-import { docker } from "./docker.js";
-import { scenarios } from "./faults.js";
-import {
-  linkAfterReady,
-  linkJobDropped,
-  linkWhileStopping,
-  relinkRunning,
-  stopWhileConfiguring,
-} from "./link-scenario.js";
-import { runScenario, type Defect } from "./markers.js";
-import {
-  gatewaylessWorker,
-  noResourcesDeletionStuck,
-  noResourcesLifecycle,
-  noResourcesWorkerKilledDuringDelete,
-} from "./no-resources-scenario.js";
+import { harnessFile, step } from "./harness-file.js";
 import {
   assertReleased,
   assertSettled,
@@ -39,9 +20,7 @@ import {
   cleanStop,
   guestEvidence,
   launch,
-  openProject,
   runtimeView,
-  takeLaunched,
   until,
   type Launch,
   type Project,
@@ -52,44 +31,10 @@ import {
   finalUnconfirmedThenDiscard,
   launchNeverReachedGuest,
   operationOutlastsTheWait,
-  workerKilledAtDeleteNoResources,
-  workerKilledAtDeleteTunnel,
-  workerKilledDuringStuckDeletionTunnel,
 } from "./shared-stop-scenario.js";
-import { startStack, type HarnessStack } from "./stack.js";
-import { cleanStopsInOnePass, noResourcesStopsInOnePass } from "./stop-scenario.js";
+import type { HarnessStack } from "./stack.js";
 
-let stack: HarnessStack;
-let project: Project;
-
-beforeAll(async () => {
-  stack = await startStack();
-  project = await openProject(stack);
-});
-
-afterAll(async () => {
-  if (stack === undefined) return;
-  await stack.stop();
-  // Keep the run's logs beside the scenario evidence when a proof directory was given.
-  const proof = process.env.BOAT_TWIN_PROOF_DIR;
-  if (proof === undefined) return;
-  const logs = join(proof, "harness-logs");
-  await mkdir(logs, { recursive: true });
-  for (const name of await readdir(stack.scratch).catch(() => []))
-    if (/\.(log|json)$/.test(name))
-      await copyFile(join(stack.scratch, name), join(logs, name)).catch(() => undefined);
-});
-
-/** Prefixes a failure with the lifecycle step it happened in. */
-const step = async <T>(name: string, body: () => Promise<T>): Promise<T> => {
-  process.stderr.write(`[boat-harness] step ${name}\n`);
-  try {
-    return await body();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`step ${name}: ${message}`, { cause: error });
-  }
-};
+const { scenario } = harnessFile({ publishSnapshot: false });
 
 const sh = async (run: Launch, script: string) => {
   const result = await run.workspace.exec(["/bin/sh", "-c", script]);
@@ -98,7 +43,7 @@ const sh = async (run: Launch, script: string) => {
   return result.stdout;
 };
 
-const happyPath = async () => {
+const happyPath = async (stack: HarnessStack, project: Project) => {
   const marker = `boat-harness ${randomBytes(16).toString("hex")}\n`;
   const first = await step("launch", () => launch(stack, project));
   const outcome = await step("ready", () => awaitOutcome(stack, first, 30 * 60_000));
@@ -174,87 +119,6 @@ const happyPath = async () => {
   );
 };
 
-/** Live VMs and Boat gateway objects on this host, whatever run (or none) they are labelled with. */
-const isGateway = (name: string) => name.startsWith("boat-tunnel-");
-
-const inventory = async () => {
-  const owned = await stack.ownedObjects();
-  const gatewayContainers = owned.containers.filter(isGateway);
-  const gatewayNetworks = owned.networks.filter(isGateway);
-  return {
-    vms: stack.boat.liveSandboxes(),
-    gatewayContainers,
-    gatewayNetworks,
-    gateways: [...gatewayContainers, ...gatewayNetworks],
-  };
-};
-
-/**
- * Scenarios run one at a time, so after each the whole inventory must empty within 60 s: no live
- * VM and no gateway, including ones no tracked run is labelled with (a build VM, a VM a recover
- * path made under a new run, a changed label). A leftover fails the scenario; its VMs are then
- * removed outside Boat's API so the next scenario starts clean. Returns the leak, if any.
- */
-const emptyInventory = async (): Promise<string | undefined> => {
-  const empty = await until(
-    "an empty inventory",
-    async () => {
-      const now = await inventory();
-      return now.vms.length === 0 && now.gateways.length === 0 ? true : undefined;
-    },
-    60_000,
-    2000,
-  ).catch(() => false);
-  if (empty) return undefined;
-  const left = await inventory();
-  // After the leak is recorded: the VMs outside Boat's API, and this run's own (labelled) gateway
-  // objects, so one leak does not fail every later scenario's inventory too.
-  for (const vm of left.vms) await stack.boat.forceRemove(vm.id);
-  if (left.gatewayContainers.length > 0) await docker(["rm", "-f", ...left.gatewayContainers]);
-  for (const network of left.gatewayNetworks) await docker(["network", "rm", network]);
-  return `inventory not empty 60 s after the scenario (no marker excuses this): live VMs ${left.vms.map((vm) => `${vm.id}:${vm.state}:${vm.labels["sealant-run"] ?? "no run"}`).join(", ") || "none"}; gateway objects ${left.gateways.join(", ") || "none"}`;
-};
-
-/**
- * Runs a scenario as passing, or as an expected failure naming its defect. Either way, every
- * launch it made must then be released: a marker excuses its named step's failure, never a leak.
- */
-const scenario = (
-  name: string,
-  defect: Defect | undefined,
-  body: () => Promise<void>,
-  timeoutMs?: number,
-) =>
-  it(
-    defect === undefined
-      ? name
-      : `${name} [${defect.intermittent === true ? "intermittent" : "expected failure"} ${defect.id}: ${defect.title}]`,
-    async () => {
-      takeLaunched();
-      await runScenario(defect, body, async (outcome) => {
-        // A discard is cleanup after a real failure, or under a marker whose defect leaves the
-        // launch for the owner's discard; otherwise a launch that needed one leaked.
-        const cleanup =
-          outcome.bodyFailed &&
-          (outcome.excusedBy === undefined || outcome.excusedBy.releasedByDiscard === true);
-        const leaks: string[] = [];
-        for (const run of takeLaunched())
-          await assertReleased(stack, run, { bodyFailed: cleanup }).catch((error: unknown) => {
-            leaks.push(`${run.runId}: ${error instanceof Error ? error.message : String(error)}`);
-          });
-        const leftOver = await emptyInventory();
-        if (leftOver !== undefined) leaks.push(leftOver);
-        return leaks;
-      });
-    },
-    timeoutMs,
-  );
-
-const fault = (
-  key: keyof typeof DEFECTS.faults,
-  body: (s: HarnessStack, p: Project) => Promise<void>,
-) => scenario(key, DEFECTS.faults[key], () => body(stack, project));
-
 describe("Boat session lifecycle", () => {
   // The first launch also builds and publishes the native snapshot.
   scenario("happy path", DEFECTS.happyPath, happyPath, 40 * 60_000);
@@ -266,7 +130,7 @@ describe("Boat session lifecycle", () => {
  * VM's and the session's peak memory and tasks, and the image's VM probe. Its blueprint differs
  * from the happy path's (Docker on), so it builds and publishes its own snapshot first.
  */
-const dockerInTheWorkspace = async () => {
+const dockerInTheWorkspace = async (stack: HarnessStack, project: Project) => {
   const transcript = new Transcript(join(evidenceDir(stack), "docker-scenario.md"));
   const run = await step("launch (docker, person)", () =>
     launch(stack, project, { docker: true, person: true }),
@@ -292,132 +156,34 @@ describe("Docker in the workspace", () => {
   scenario("docker, as the owner's person", undefined, dockerInTheWorkspace, 60 * 60_000);
 });
 
-describe("one fault per step", () => {
-  fault("bind slower than one sweep period", scenarios.bindSlowerThanSweep);
-  fault("create reply lost", scenarios.createReplyLost);
-  fault("provisioning never finishes", scenarios.provisioningStuck);
-  fault("bind exits 1", scenarios.bindExits);
-  fault("bind times out", scenarios.bindTimesOut);
-  fault("bind start reply lost", scenarios.bindReplyDropped);
-  fault("agent stopped after bind", scenarios.agentAbsent);
-  fault("agent answers 400 on launch", scenarios.agentRefuses(400));
-  fault("agent answers 409 on launch", scenarios.agentRefuses(409));
-  fault("agent answers 503 on launch", scenarios.agentRefuses(503));
-  fault("gateway dnsmasq starts 8 s late", scenarios.gatewaySlow);
-  fault("gateway crashes before the guest joins", scenarios.gatewayCrashes);
-  fault("tunnel carrier refused", scenarios.carrierRefused);
-  fault("db stopped by a person", scenarios.resourceStopped);
-  fault("worker killed after bind", scenarios.workerKilled);
-  fault("Stop after the launch", scenarios.stopAfterLaunch);
-  fault("deletion stuck in processing", scenarios.deletionStuck);
-  fault("create refused: Boat key expired", scenarios.createRefused);
-});
-
-// Workspaces created without resources (#589): no gateway, tunnel or in-VM resolver.
-describe("workspaces without resources", () => {
-  scenario(
-    "no resources: launch, link refused, Stop, resume",
-    undefined,
-    () => noResourcesLifecycle(stack, project, step),
-    40 * 60_000,
-  );
-  scenario("no resources: deletion stuck in processing", undefined, () =>
-    noResourcesDeletionStuck(stack, project),
-  );
-  scenario("no resources: worker killed between DELETE and completed", undefined, () =>
-    noResourcesWorkerKilledDuringDelete(stack, project),
-  );
-  // Restarts the worker without its gateway, and with it again when it ends.
-  scenario("worker without a resource gateway", undefined, () => gatewaylessWorker(stack, project));
-});
-
-// A ready session's daemon watched through `inspect`, and a DELETE whose reply is lost (#598).
-describe("a ready session's daemon and its deletion", () => {
-  scenario("six clean Stops across the sweep period, each in one pass", undefined, () =>
-    cleanStopsInOnePass(stack, project),
-  );
-  scenario(
-    "no resources: six clean Stops across the sweep period, each in one pass",
-    undefined,
-    () => noResourcesStopsInOnePass(stack, project),
-  );
-  scenario("agent unreachable, then 503, for a few polls: the session goes on", undefined, () =>
-    agentBrieflyUnreachable(stack, project),
-  );
-  scenario(
-    "sealantd killed in a ready session: failed, FINAL, one DELETE, edit restored",
-    undefined,
-    () => daemonKilled(stack, project),
-    40 * 60_000,
-  );
-  scenario("DELETE reply lost while the deletion runs: one operation, confirmed", undefined, () =>
-    deleteReplyLostWhileDeleting(stack, project),
-  );
-  scenario("DELETE reply lost, VM gone by the next pass: one operation", undefined, () =>
-    deleteReplyLost(stack, project),
-  );
-});
-
-// Boat's stop on the shared stop path (#600): closers meeting, a FINAL not confirmed, a launch no
-// daemon ran on, and a worker killed mid-removal.
+// Boat's stop on the shared stop path (#600): closers meeting, a FINAL not confirmed, and a launch
+// no daemon ran on. Its worker-killed cases run in no-resources.harness.ts.
 describe("the shared stop", () => {
   scenario(
     "saved, then the owner's discard while Boat deletes: FINAL first, edit restored (sealant#622)",
     undefined,
-    () => discardWhileDeleting(stack, project),
+    discardWhileDeleting,
     20 * 60_000,
   );
-  scenario("FINAL not confirmed: kept and retained, then the owner's discard", undefined, () =>
-    finalUnconfirmedThenDiscard(stack, project),
+  scenario(
+    "FINAL not confirmed: kept and retained, then the owner's discard",
+    undefined,
+    finalUnconfirmedThenDiscard,
   );
   scenario(
     "FINAL not confirmed: kept, then completed on a later pass and deleted",
     undefined,
-    () => finalUnconfirmedThenCompletes(stack, project),
+    finalUnconfirmedThenCompletes,
     20 * 60_000,
   );
   scenario(
     "Boat's operation outlasts the removal's wait: the Stop ends on the 404",
     undefined,
-    () => operationOutlastsTheWait(stack, project),
-  );
-  scenario("launch never reached the guest: deleted without a discard", undefined, () =>
-    launchNeverReachedGuest(stack, project),
+    operationOutlastsTheWait,
   );
   scenario(
-    "worker killed at the DELETE (tunnel): terminal once its claim lapses (sealant#612)",
+    "launch never reached the guest: deleted without a discard",
     undefined,
-    () => workerKilledAtDeleteTunnel(stack, project),
-  );
-  scenario(
-    "worker killed at the DELETE (no resources): terminal once its claim lapses (sealant#612)",
-    undefined,
-    () => workerKilledAtDeleteNoResources(stack, project),
-  );
-  scenario(
-    "worker killed at the DELETE, deletion stuck (tunnel): terminal once both end (sealant#612)",
-    undefined,
-    () => workerKilledDuringStuckDeletionTunnel(stack, project),
-  );
-});
-
-// Last, after every other scenario's allocation rows: a link must reach a live session's gateway
-// when it is written, whatever the deployment's history (sealant#594).
-describe("resource links on a live session", () => {
-  scenario("linked right after ready, db within 10 s", undefined, () =>
-    linkAfterReady(stack, project),
-  );
-  scenario("re-linked with a changed map, served within 10 s", undefined, () =>
-    relinkRunning(stack, project),
-  );
-  scenario("linked while stopping, nothing changes", undefined, () =>
-    linkWhileStopping(stack, project),
-  );
-  scenario("stopped while a link is configuring, one close", undefined, () =>
-    stopWhileConfiguring(stack, project),
-  );
-  // Kills the worker for the link and starts it again.
-  scenario("link job lost, served within one tick", undefined, () =>
-    linkJobDropped(stack, project),
+    launchNeverReachedGuest,
   );
 });

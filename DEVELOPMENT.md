@@ -103,19 +103,20 @@ roll-ups exist because a required check that is skipped or renamed stays pending
 protection names them and never a job. A new job goes in its workflow's roll-up `needs`:
 `tooling/scripts/workflow-checks.test.mjs`, which Lint runs, fails until it does.
 
-The Version Packages pull request gets no `pull_request` runs. The Version workflow opens it with
-its own `GITHUB_TOKEN`, and GitHub starts no workflow for an event that token causes. Before merging
-it, the owner dispatches both workflows on its branch and waits for `checks` and `e2e checks` to
-pass on its head commit:
+The Version Packages pull request runs no jobs of its own. The Version workflow opens it as
+`github-actions[bot]`, so GitHub holds its `pull_request` runs for approval (`action_required`) and
+no job starts. Before merging it, the owner dispatches both workflows on its branch and waits for
+`checks` and `e2e checks` to pass on its head commit:
 
 ```bash
 gh workflow run ci.yml --ref changeset-release/main
 gh workflow run kubernetes-e2e.yml --ref changeset-release/main
 ```
 
-A dispatched run reports its checks on the head commit of the branch it ran on, which is the commit
-the pull request merges, so protection counts them. Every merge to `main` rewrites the branch; after
-it moves, dispatch again.
+A dispatched run reports its checks on the head commit of the branch it ran on, the commit the pull
+request merges. On #404 (2026-11-13) every check passed there and the pull request still showed none
+of them and stayed blocked, so whether protection counts dispatched runs is open (SLNT-950). Every
+merge to `main` rewrites the branch; after it moves, dispatch again.
 
 ## Releasing (packaged self-host)
 
