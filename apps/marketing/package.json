@@ -11,7 +11,7 @@
     "cf-typegen": "wrangler types",
     "deploy": "vite build && wrangler deploy",
     "dev": "vite dev --port 3002",
-    "lint": "oxlint .",
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "preview": "vite preview",
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },

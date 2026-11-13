@@ -9,7 +9,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite dev --port 3000",
-    "lint": "oxlint .",
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "preview": "vite preview",
     "start": "node server.mjs",
     "test": "vitest run",

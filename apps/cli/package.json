@@ -10,7 +10,7 @@
   "scripts": {
     "build": "BUNDLE_ENTRIES=src/main.ts node ../../tooling/scripts/bundle-app.mjs",
     "dev": "pnpm run build && node ./bin/sealant.mjs",
-    "lint": "oxlint .",
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "test": "vitest run",
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },

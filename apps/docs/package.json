@@ -11,7 +11,7 @@
     "deploy": "vite build && wrangler deploy",
     "dev": "vite dev --port 3000",
     "docs:generate": "fumadocs-mdx source.config.ts .source",
-    "lint": "oxlint .",
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "prebuild": "pnpm run docs:generate",
     "prelint": "pnpm run docs:generate",
     "pretypecheck": "pnpm run docs:generate",
