@@ -47,6 +47,8 @@ const docker = async (args: readonly string[]) => ({
 
 describe.skipIf(DATABASE_URL === undefined)(
   "Boat from stored keys alone (Postgres, fake Boat)",
+  // Each case makes and migrates a database of its own.
+  { timeout: 60_000 },
   () => {
     let db: DB;
     const boat = new FakeBoat({
@@ -228,7 +230,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         expect(proof).toMatchObject({
           outcome: "passed",
           starts: 1,
-          leftBehind: { vm: null, snapshot: null },
+          leftBehind: { vm: null, snapshot: null, removalConfirmed: true },
         });
         const listed = await run(routes.listBoatAccounts());
         expect(

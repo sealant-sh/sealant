@@ -71,6 +71,11 @@ export interface BoatKeyProofRepoService {
   /** Each account's last finished check, by account. */
   readonly latest: () => Failing<ReadonlyMap<string, BoatKeyProofRecord>>;
   readonly get: (id: string) => Failing<BoatKeyProofRecord | undefined>;
+  /**
+   * The account's checks Boat may still hold something of: unfinished, or finished with their
+   * cleanup pending. While there is one, the account keeps its key: no removal, no rotation.
+   */
+  readonly outstanding: (account: string) => Failing<readonly BoatKeyProofRecord[]>;
 }
 
 export class BoatKeyProofRepo extends Context.Service<BoatKeyProofRepo, BoatKeyProofRepoService>()(
@@ -145,6 +150,19 @@ const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.ge
           .where(and(isNotNull(boatKeyProofs.finishedAt), isNotNull(boatKeyProofs.result)))
           .orderBy(boatKeyProofs.account, desc(boatKeyProofs.finishedAt))
           .pipe(Effect.map((rows) => new Map(rows.map((row) => [row.account, row])))),
+      ),
+    outstanding: (account) =>
+      boundary(
+        db
+          .select()
+          .from(boatKeyProofs)
+          .where(
+            and(
+              eq(boatKeyProofs.account, account),
+              or(isNull(boatKeyProofs.finishedAt), eq(boatKeyProofs.cleanupPending, true)),
+            ),
+          )
+          .orderBy(boatKeyProofs.startedAt),
       ),
     get: (id) =>
       boundary(

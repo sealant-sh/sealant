@@ -1,13 +1,27 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { NATIVE_REOPEN_BOAT_FAILURES } from "@sealant/validators";
-import { and, asc, count, eq, exists, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  eq,
+  exists,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
 import {
   boatAccounts,
   boatInstall,
+  boatKeyProofs,
   boatKeyReports,
   boatLaunchReports,
   type BoatAccountRow,
@@ -19,7 +33,13 @@ import { nativePublications } from "../schema/native-publications.js";
 export class BoatAccountStoreError extends Error {
   readonly _tag = "BoatAccountStoreError";
   constructor(
-    readonly code: "unavailable" | "invalid-record" | "not-found" | "removing" | "stale-revision",
+    readonly code:
+      | "unavailable"
+      | "invalid-record"
+      | "not-found"
+      | "removing"
+      | "stale-revision"
+      | "proof-outstanding",
   ) {
     super(`Boat account store: ${code}`);
   }
@@ -220,6 +240,13 @@ const record = (row: BoatAccountRow): BoatAccountRecord => ({
   removedAt: row.removedAt,
 });
 
+/**
+ * The account's full checks of its key that Boat may still hold something of: unfinished, or
+ * finished with their cleanup pending (`boat_key_proofs`).
+ */
+const proofOutstanding = (id: string) =>
+  sql`select 1 from ${boatKeyProofs} where ${boatKeyProofs.account} = ${id} and (${boatKeyProofs.finishedAt} is null or ${boatKeyProofs.cleanupPending})`;
+
 const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen(function* () {
   const db = yield* SealantDB;
   const boundary = <A>(effect: Effect.Effect<A, unknown>): Failing<A> =>
@@ -312,6 +339,8 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           eq(boatAccounts.id, id),
           eq(boatAccounts.keyRevision, input.revision),
           isNull(boatAccounts.removalRequestedAt),
+          // A full check that Boat may still hold something of keeps the key that can clean it up.
+          sql`not exists (${proofOutstanding(id)})`,
         ),
       )
       .returning();
@@ -319,6 +348,17 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     const now = yield* get(id);
     if (now === undefined || now.removedAt !== null)
       return yield* Effect.fail(new BoatAccountStoreError("not-found"));
+    const [held] = yield* db
+      .select({ value: count() })
+      .from(boatKeyProofs)
+      .where(
+        and(
+          eq(boatKeyProofs.account, id),
+          or(isNull(boatKeyProofs.finishedAt), eq(boatKeyProofs.cleanupPending, true)),
+        ),
+      );
+    if ((held?.value ?? 0) > 0)
+      return yield* Effect.fail(new BoatAccountStoreError("proof-outstanding"));
     return yield* Effect.fail(
       new BoatAccountStoreError(now.removalRequestedAt === null ? "stale-revision" : "removing"),
     );
@@ -461,8 +501,18 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
               sql`(${nativePublications.state} in ('reserved','building','ready','retiring') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} = 'native-removal-pending'))`,
             ),
           );
+        const [proofs] = yield* db
+          .select({ value: count() })
+          .from(boatKeyProofs)
+          .where(
+            and(
+              eq(boatKeyProofs.account, id),
+              or(isNull(boatKeyProofs.finishedAt), eq(boatKeyProofs.cleanupPending, true)),
+            ),
+          );
         // Boat may still hold something under the key: it is not erased.
-        if ((runs?.value ?? 0) > 0 || (images?.value ?? 0) > 0) return "held" as const;
+        if ((runs?.value ?? 0) > 0 || (images?.value ?? 0) > 0 || (proofs?.value ?? 0) > 0)
+          return "held" as const;
         yield* db
           .update(boatAccounts)
           .set({ removedAt: sql`now()`, sealedKey: null, keyId: null })

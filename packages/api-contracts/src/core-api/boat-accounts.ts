@@ -138,8 +138,11 @@ export type BoatKeyProofStep = typeof boatKeyProofStepSchema.Type;
  * `passed` (every step), `refused` (Boat refused a step; the first refused or unanswered step
  * says why), or `interrupted` (the check stopped before it finished; what it made was removed by
  * the sweep). `starts`: how many VM starts it asked Boat for (0 or 1). `leftBehind`: what Boat
- * may still hold of it when the answer was given (a VM id, a snapshot name), each removed by the
- * worker's sweep shortly after; empty when nothing was left.
+ * may still hold of it when the answer was given. `removalConfirmed` true: Core saw Boat delete
+ * everything it made. False: the worker's sweep owns what is left and keeps deleting it, with
+ * `vm` (an id) and `snapshot` (a name) naming what is known; `vm` is null when a VM may exist
+ * whose id Boat never answered (the sweep finds it by its label). Until the sweep has finished,
+ * the account's key is neither rotated nor removed.
  */
 export const boatKeyProofSchema = Schema.Struct({
   proofId: Schema.String,
@@ -151,6 +154,7 @@ export const boatKeyProofSchema = Schema.Struct({
   leftBehind: Schema.Struct({
     vm: Schema.NullOr(Schema.String),
     snapshot: Schema.NullOr(Schema.String),
+    removalConfirmed: Schema.Boolean,
   }),
 });
 export type BoatKeyProof = typeof boatKeyProofSchema.Type;
@@ -252,7 +256,9 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * now (`unseen`), so it is most likely another Boat account's key. `boat-account-removing`: the
  * account's removal was asked. `boat-account-changed`: another rotation won; read and try again.
  * `boat-account-environment`: the install's own key (`default`) is set in its environment, not
- * through this API. `boat-proof-running`: a full check of the account is running; one at a time.
+ * through this API. `boat-proof-running`: a full check of the account is running, or Boat may
+ * still hold what one made (the message names the VM and the snapshot): a second check, a key
+ * rotation and a removal wait until Core has deleted it.
  */
 export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConflictError>()(
   "BoatAccountConflictError",

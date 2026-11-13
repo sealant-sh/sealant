@@ -11,8 +11,10 @@
  * - A check that stops where it cannot clean up (the process dies, Boat stops answering) leaves
  *   its row unfinished or `cleanup_pending`; the worker's sweep takes it over once its claim has
  *   passed, and deletes the VM (by id, or found by its label) and the snapshot (by name).
- * - The VM is created with a bounded lifetime (15 minutes), so even a sweep that cannot reach Boat
- *   does not leave it running for long.
+ * - The VM is created with Boat's `ttlSeconds` of 15 minutes, which is auto-stop: it bounds what a
+ *   VM the sweep cannot reach bills, not that it exists. Nothing but the sweep removes the saved
+ *   snapshot, so the account keeps the key that can until the sweep is done (no rotation, no
+ *   removal).
  * - One check of an account at a time (a unique index on unfinished rows).
  */
 import { randomUUID } from "node:crypto";
@@ -46,7 +48,7 @@ export type BoatKeyProofClient = Pick<
 
 /** How long a check holds its account before the sweep may take it over. */
 export const BOAT_KEY_PROOF_CLAIM_MS = 15 * 60_000;
-/** The throwaway VM's own lifetime in Boat: the backstop if nothing else reaches it. */
+/** The throwaway VM's auto-stop in Boat: bounds what it bills if nothing else reaches it. */
 const VM_TTL_SECONDS = 900;
 /**
  * How long after the create was issued an empty label search is trusted as "no VM": Boat's list
@@ -356,6 +358,8 @@ export const proveBoatKey = async (
       leftBehind: {
         vm: vmLeft === "unknown" ? null : vmLeft,
         snapshot: snapshotLeft ? snapshot : null,
+        // A VM whose id Boat never answered counts too: its removal is not confirmed.
+        removalConfirmed: !snapshotLeft && vmLeft === null,
       },
     };
     const cleanupPending = snapshotLeft || vmLeft !== null;
@@ -444,7 +448,7 @@ export const sweepBoatKeyProofs = async (options: {
                 : { step, outcome: "no-answer" },
         ),
         starts: record.createIssuedAt === null ? 0 : 1,
-        leftBehind: { vm: null, snapshot: null },
+        leftBehind: { vm: null, snapshot: null, removalConfirmed: true },
       };
       await store.do((repo) => repo.settle(record.id, { at: now(), result: interrupted }));
       return true;

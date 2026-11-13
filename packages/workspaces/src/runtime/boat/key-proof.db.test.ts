@@ -135,7 +135,7 @@ describe.skipIf(databaseUrl === undefined)(
         expect(proven.proof).toMatchObject({
           outcome: "passed",
           starts: 1,
-          leftBehind: { vm: null, snapshot: null },
+          leftBehind: { vm: null, snapshot: null, removalConfirmed: true },
         });
         expect(proven.proof.steps.map((step) => [step.step, step.outcome])).toEqual([
           ["start-vm", "passed"],
@@ -183,7 +183,11 @@ describe.skipIf(databaseUrl === undefined)(
           if (step === "start-vm") {
             expect(steps.get("delete-vm")?.outcome).toBe("not-reached");
           } else expect(steps.get("delete-vm")?.outcome).toBe("passed");
-          expect(proven.proof.leftBehind).toEqual({ vm: null, snapshot: null });
+          expect(proven.proof.leftBehind).toEqual({
+            vm: null,
+            snapshot: null,
+            removalConfirmed: true,
+          });
           expect(await held(c.boat)).toEqual({ vms: 0, snapshots: 0 });
           expect(await c.sweep()).toEqual([]);
         }));
@@ -265,7 +269,7 @@ describe.skipIf(databaseUrl === undefined)(
           expect(latest.get(c.account)?.result).toMatchObject({
             outcome: "interrupted",
             starts: 1,
-            leftBehind: { vm: null, snapshot: null },
+            leftBehind: { vm: null, snapshot: null, removalConfirmed: true },
           });
         }));
 
@@ -283,6 +287,33 @@ describe.skipIf(databaseUrl === undefined)(
         expect(proven.proof.steps.find((each) => each.step === "delete-vm")?.outcome).toBe(
           "passed",
         );
+        expect(await held(c.boat)).toEqual({ vms: 0, snapshots: 0 });
+      }));
+
+    it("a lost create reply and no list to find it by: the result says removal is not confirmed, and the sweep removes it", () =>
+      withProof(async (c) => {
+        const listing = call("GET", /^\/sandboxes$/);
+        c.boat.faults = {
+          create: () => "lose-reply",
+          refuse: (seen) =>
+            listing(seen) ? { status: 503, code: "service_unavailable" } : undefined,
+        };
+        const proven = await proveBoatKey({
+          proofs: c.proofs,
+          account: c.account,
+          client: c.client,
+          ...fast,
+        });
+        if (proven.kind !== "proven") throw new Error("not proven");
+        // The VM's id is unknown: it is not reported as nothing left.
+        expect(proven.proof.leftBehind).toEqual({
+          vm: null,
+          snapshot: null,
+          removalConfirmed: false,
+        });
+        expect(holding(c.boat).vms).toBe(1);
+        c.boat.faults = {};
+        expect(await c.sweep()).toEqual([{ proofId: proven.proof.proofId, outcome: "settled" }]);
         expect(await held(c.boat)).toEqual({ vms: 0, snapshots: 0 });
       }));
 

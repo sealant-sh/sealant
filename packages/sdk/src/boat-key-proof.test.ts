@@ -37,7 +37,7 @@ const proof: BoatKeyProof = {
     { step: "delete-vm", outcome: "passed" },
   ],
   starts: 1,
-  leftBehind: { vm: null, snapshot: null },
+  leftBehind: { vm: null, snapshot: null, removalConfirmed: true },
 };
 
 const answer = (status: number, body: unknown) =>
