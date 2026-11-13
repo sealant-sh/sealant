@@ -34,7 +34,7 @@ const harness = (
   status: Workspace["status"],
   options: {
     readonly observedEpoch?: number;
-    /** More of Core's last observation than its epoch (`last_status`), and when it was read. */
+    /** More of sealant's last observation than its epoch (`last_status`), and when it was read. */
     readonly observedStatus?: Record<string, unknown>;
     readonly observedAt?: Date;
     readonly retained?: boolean;
@@ -295,7 +295,7 @@ const position = (observation: number) => ({
 
 describe("stopWorkspace · completion attestation", () => {
   it("records an attestation that names the current executor, and enqueues the stop", async () => {
-    // Core last read the daemon mid-flush, before the seal by the executor's own order.
+    // sealant last read the daemon mid-flush, before the seal by the executor's own order.
     const h = harness("ready", {
       observedEpoch: 3,
       observedStatus: {
@@ -375,8 +375,8 @@ describe("stopWorkspace · completion attestation", () => {
     expect(stale.attestations).toEqual([]);
   });
 
-  it("ignores a seal that Core's own later observation contradicts (review 4 #1)", async () => {
-    // Capture 41 was sealed; then the disk changed and the FINAL could not snapshot it. Core
+  it("ignores a seal that sealant's own later observation contradicts (review 4 #1)", async () => {
+    // Capture 41 was sealed; then the disk changed and the FINAL could not snapshot it. sealant
     // read that failed answer after the seal: the older seal does not override it.
     const failed = {
       headN: 41,

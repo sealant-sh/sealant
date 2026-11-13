@@ -60,7 +60,7 @@ const rejectionOf = (opening: Promise<unknown>) =>
   );
 
 describe("openForwardV2", () => {
-  it("keeps a refusal reason this SDK does not know, with Core's status and message", async () => {
+  it("keeps a refusal reason this SDK does not know, with sealant's status and message", async () => {
     const baseUrl = await fakeCore({
       onSocket: (socket) =>
         socket.send(
@@ -123,7 +123,7 @@ describe("openForwardV2", () => {
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
-  it("gives up on a Core that accepts the socket and never answers, and closes it", async () => {
+  it("gives up on a sealant that accepts the socket and never answers, and closes it", async () => {
     let accepted: WebSocket | undefined;
     const baseUrl = await fakeCore({ onSocket: (socket) => (accepted = socket) });
     await expect(rejectionOf(open(baseUrl, { deadlineMs: 300 }))).resolves.toMatchObject({
@@ -194,7 +194,7 @@ describe("a bounded forward", () => {
     return { forward: await opening, ...recorded };
   };
 
-  it("opens Core's window with a progress of zero, and resolves only once Core opens its own", async () => {
+  it("opens sealant's window with a progress of zero, and resolves only once sealant opens its own", async () => {
     const { opening, core, texts, binary } = await recordingCoreOpening(false);
     let resolved = false;
     void opening.then(() => (resolved = true));
@@ -209,7 +209,7 @@ describe("a bounded forward", () => {
     expect(binary).toEqual([10]);
   });
 
-  it("splits a large write into frames and sends no more than Core granted", async () => {
+  it("splits a large write into frames and sends no more than sealant granted", async () => {
     const { forward, core, binary } = await recordingCore(true);
     const writer = forward.writable.getWriter();
     void writer.write(new Uint8Array(WINDOW_BYTES + FRAME + 1));
@@ -235,7 +235,7 @@ describe("a bounded forward", () => {
     expect(texts.at(-1)).toEqual({ t: "progress", bytes: String(2 * FRAME), frames: "2" });
   });
 
-  it("ends the readable after Core's fin, once the caller has read what came before it", async () => {
+  it("ends the readable after sealant's fin, once the caller has read what came before it", async () => {
     const { forward, core } = await recordingCore(true);
     core.send(new Uint8Array([1, 2, 3]));
     core.send(JSON.stringify({ t: "fin", bytes: "3", frames: "1" }));
@@ -253,7 +253,7 @@ describe("a bounded forward", () => {
     readonly sent?: object;
   }> = [
     {
-      name: "Core sends past the window",
+      name: "sealant sends past the window",
       core: (core) => {
         for (let frame = 0; frame <= WINDOW_BYTES / FRAME; frame++)
           core.send(new Uint8Array(FRAME));
@@ -262,13 +262,13 @@ describe("a bounded forward", () => {
       sent: { t: "reset", reason: "window-exceeded" },
     },
     {
-      name: "Core's fin does not match what arrived",
+      name: "sealant's fin does not match what arrived",
       core: (core) => core.send(JSON.stringify({ t: "fin", bytes: "1", frames: "1" })),
       reset: { reason: "protocol-violation" },
       sent: { t: "reset", reason: "protocol-violation" },
     },
     {
-      name: "Core resets with a reason this SDK does not know",
+      name: "sealant resets with a reason this SDK does not know",
       core: (core) => core.send(JSON.stringify({ t: "reset", reason: "quota-frozen" })),
       reset: { reason: "unrecognized-reset", wireReason: "quota-frozen" },
     },
@@ -295,7 +295,7 @@ describe("a bounded forward", () => {
 });
 
 describe("a bounded forward bound to a session", () => {
-  it("refuses binding-unsupported when Core opens it unbound, and closes the socket", async () => {
+  it("refuses binding-unsupported when sealant opens it unbound, and closes the socket", async () => {
     const closed = Promise.withResolvers<void>();
     const baseUrl = await fakeCore({
       onSocket: (socket) => {

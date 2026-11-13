@@ -6,7 +6,7 @@
  *    under `/workspace`, and its `auth.json` there is a link back to `~/.mend/opencode/auth.json`.
  *    The login lands at the end of the links, in the home, as the person, 0600; the link in saved
  *    state stays a link. pi's entry is merged beside a login the person already had.
- * 2. A release removes only Core's copies; the person's own logins stay.
+ * 2. A release removes only sealant's copies; the person's own logins stay.
  * 3. Where the file really is inside `/workspace` (a plain file in the saved directory), the put is
  *    refused and nothing is written there.
  * 4. While every login is put, again and again, root watching every process's argv and environment

@@ -1,6 +1,6 @@
 // release.yml's publishing steps, run as written against stand-in docker and gh commands, a stub
 // npm registry and a stub GitHub API; and the job graph they sit in. Ported from sealant-sh/mend
-// scripts/release-publication.test.mjs and scripts/release-manifest.test.mjs, for Core's four
+// scripts/release-publication.test.mjs and scripts/release-manifest.test.mjs, for sealant's four
 // images and two packages.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";

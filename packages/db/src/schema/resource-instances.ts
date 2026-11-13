@@ -27,7 +27,7 @@ export type ResourceInstanceDesired = (typeof resourceInstanceDesiredValues)[num
 
 /**
  * A long-running container a resource domain runs (`@sealant/api-contracts`
- * `resource-instances.ts`). `desired` is what was asked of it and `observed` what Core last saw.
+ * `resource-instances.ts`). `desired` is what was asked of it and `observed` what sealant last saw.
  * Archiving removes the container and retains every volume. Only an explicit caller-owned purge
  * deletes retained data.
  */
@@ -130,7 +130,7 @@ export const resourceNetworkKindValues = ["reach", "egress", "caller"] as const;
 export type ResourceNetworkKind = (typeof resourceNetworkKindValues)[number];
 
 /**
- * The subnets Core hands Docker for the networks it creates for instances, so they never draw on
+ * The subnets sealant hands Docker for the networks it creates for instances, so they never draw on
  * the daemon's default address pools. `reach`: one internal network per linked executor. `egress`:
  * one per instance.
  */

@@ -574,7 +574,7 @@ describe.runIf(databaseUrl !== undefined)(
         });
       }));
 
-    it("carries every VM state: create issued or not, held for an operator, and each way Boat or Core knows a VM is gone", () =>
+    it("carries every VM state: create issued or not, held for an operator, and each way Boat or sealant knows a VM is gone", () =>
       before(async ({ url, upgrade }, seed) => {
         const issuedAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
         const created = { presence: "present", basis: "read" } as const;

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Run + execution-record schemas — the web app's view of the core API run wire contract
+ * Run + execution-record schemas — the web app's view of the sealant API run wire contract
  * (packages/api-contracts/src/core-api/runs.ts). uint64 sequences and timestamps stay decimal
  * strings end-to-end; the UI converts to bigint only where it must compare or sort.
  */

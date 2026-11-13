@@ -1,7 +1,7 @@
 /**
  * Mend's capture session channel for one worktree, run in a container on the twins' network.
  * The guest dials it from inside its isolated workspace namespace, which on a firewalled host
- * cannot reach a listener on the host itself. It is Core's `capture-channel.fixture.ts` behind a
+ * cannot reach a listener on the host itself. It is sealant's `capture-channel.fixture.ts` behind a
  * thin proxy on port 9100 (the endpoint the guest is given), plus a read-only `/harness/state`
  * view on port 9000 for scenario assertions, and `POST /harness/register-fault` there to delay
  * every `capture.register` or refuse it with the channel's byte-quota answer. The proxy only observes: it records when each

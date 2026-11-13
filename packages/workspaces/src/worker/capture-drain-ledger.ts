@@ -351,7 +351,7 @@ export const captureDrainLedgerFromRepo = (
     ).pipe(
       Effect.catchCause((cause) =>
         Effect.logError(
-          `Capture drain: recording a status read from run ${runId}'s executor failed; its observation stays unresolved, so nothing Core holds of the executor counts as current until a later one is recorded.`,
+          `Capture drain: recording a status read from run ${runId}'s executor failed; its observation stays unresolved, so nothing sealant holds of the executor counts as current until a later one is recorded.`,
           cause,
         ).pipe(Effect.as(false)),
       ),

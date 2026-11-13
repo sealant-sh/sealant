@@ -100,8 +100,8 @@ export interface BoatNativeCatalogService {
   readonly withdraw: (ownership: NativeBuildOwnership) => Effect.Effect<void, NativeCatalogFailure>;
   /**
    * One page of this account's retention: each saved image no workspace can use any more is
-   * removed (`NativeRetentionPolicy`). The keys still wanted are what this Core plans, now, for the
-   * latest launch of every Boat workspace that can still start in the account (`startsOnBoat`):
+   * removed (`NativeRetentionPolicy`). The keys still wanted are what this sealant plans, now, for
+   * the latest launch of every Boat workspace that can still start in the account (`startsOnBoat`):
    * not archived, and live, or stopped or failed at or after `stoppedSince`. An image is also kept while a run holds it,
    * while a build of its scope is queued or running, and until nothing has used it since
    * `unusedSince`. If any of those specs cannot be planned, nothing is removed.

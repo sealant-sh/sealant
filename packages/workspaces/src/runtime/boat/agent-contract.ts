@@ -6,11 +6,11 @@
  * `/sealant/health`, `/sealant/control`, `/sealant/recover`) keep their shapes from
  * `../microvm/agent-contract.ts`. This file states what Boat adds:
  *
- *   - the bind exchange (`boat-bind.mjs`, run by Core over Boat exec), the same
- *     `sealant-bootstrap-v1` wire the Python guest answered: Core keeps parsing it unchanged;
+ *   - the bind exchange (`boat-bind.mjs`, run by sealant over Boat exec), the same
+ *     `sealant-bootstrap-v1` wire the Python guest answered: sealant keeps parsing it unchanged;
  *   - the typed recovery outcomes a durable launch record makes possible;
  *   - `POST|GET /sealant/network`: bring up the workspace's WireGuard interface to the gateway,
- *     carried over `GET /sealant/tunnel` (a WebSocket Core opens; the VM dials nothing).
+ *     carried over `GET /sealant/tunnel` (a WebSocket sealant opens; the VM dials nothing).
  */
 import { z } from "zod";
 
@@ -20,7 +20,7 @@ export type AgentHost = (typeof AGENT_HOSTS)[number];
 
 export const BOAT_AGENT_NETWORK_ROUTE = "/sealant/network";
 /**
- * The resource tunnel's WebSocket carrier, the tunnel's only transport: Core opens it through
+ * The resource tunnel's WebSocket carrier, the tunnel's only transport: sealant opens it through
  * Boat's hosted HTTPS with the control token, and each binary frame is one WireGuard datagram,
  * either way. The gateway's host needs no inbound port. An agent that does not list `websocket` in
  * `carriers` (an image older than the carrier) cannot be given a tunnel.
@@ -57,7 +57,9 @@ export const boatAgentIdentitySchema = z.strictObject({
   disk_lineage: name,
 });
 
-/** What Core sends the bind CLI (`node boat-bind.mjs '<json>'`), unchanged from the Python guest. */
+/**
+ * What sealant sends the bind CLI (`node boat-bind.mjs '<json>'`), unchanged from the Python guest.
+ */
 export const boatAgentBindRequestSchema = z.strictObject({
   format: z.literal("sealant-bootstrap-v1"),
   identity: boatAgentIdentitySchema,
@@ -151,7 +153,7 @@ export const boatAgentRefusalSchema = z.strictObject({ reason: boatAgentReasonSc
 
 /**
  * `503 {reason}` from a recovery that could not prove the workspace's processes gone: nothing is
- * started; Core retries the same operation. `daemon-stop-unverified`: a
+ * started; sealant retries the same operation. `daemon-stop-unverified`: a
  * `sealant-workspace-*` scope is still active and its cgroup not proved empty;
  * `docker-stop-unverified`: Docker's engine cgroup or its containers' slice is not proved empty.
  */
@@ -249,7 +251,7 @@ export const boatAgentNetworkStatusSchema = z.strictObject({
    * list `udp` (a gateway address the VM dialled, no longer offered), and the oldest list nothing.
    */
   carriers: z.array(z.enum(["udp", "websocket"])).optional(),
-  /** Whether Core's end of `/sealant/tunnel` is attached now. */
+  /** Whether sealant's end of `/sealant/tunnel` is attached now. */
   carrier_attached: z.boolean().optional(),
 });
 export type BoatAgentNetworkStatus = z.infer<typeof boatAgentNetworkStatusSchema>;

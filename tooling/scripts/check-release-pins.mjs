@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The first job of a stable release (.github/workflows/release.yml), before anything builds or
-// publishes. The tag must be a stable vX.Y.Z: prereleases publish from main (next.yml). And Core may
-// pin a sealantd prerelease on main (ADR 0015 in sealant-sh/mend), but never release with one. It
-// reads every place Core names sealantd:
+// publishes. The tag must be a stable vX.Y.Z: prereleases publish from main (next.yml). And sealant
+// may pin a sealantd prerelease on main (ADR 0015 in sealant-sh/mend), but never release with one.
+// It reads every place sealant names sealantd:
 //
 // - the image the worker bakes into workspace images (buildkit-builder.ts) and the cf-bridge image;
 // - the @sealant/runtime-* ranges in package.json files;

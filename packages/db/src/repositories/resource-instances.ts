@@ -139,7 +139,7 @@ export type ResourceWorkspaceLinkOutcome =
   | { readonly kind: "domain-not-active"; readonly state: Exclude<ResourceDomainState, "active"> }
   | { readonly kind: "no-such-domain" };
 
-/** An IPv4 range Core carves into equal subnets for its networks. */
+/** An IPv4 range sealant carves into equal subnets for its networks. */
 export interface SubnetPool {
   readonly base: number;
   readonly bits: number;

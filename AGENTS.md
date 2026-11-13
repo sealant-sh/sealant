@@ -18,7 +18,7 @@ spans repos.
 - For user-facing API design and UI copy, prefer these terms over implementation terms.
 - Treat `workspace build job` and `attempt` as internal orchestration vocabulary unless a task
   explicitly asks for internals.
-- When shaping core API surfaces for the web app, model around the workspace and run lifecycles
+- When shaping sealant API surfaces for the web app, model around the workspace and run lifecycles
   first.
 
 ## Agent Defaults

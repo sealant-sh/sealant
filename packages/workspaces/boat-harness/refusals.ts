@@ -7,7 +7,7 @@ import type { BoatFailureKind } from "@sealant/api-contracts";
 
 import type { FakeBoatRefusal } from "./fake-boat.js";
 
-/** One refusal per failure kind Core keeps (`no-answer` is a dropped connection instead). */
+/** One refusal per failure kind sealant keeps (`no-answer` is a dropped connection instead). */
 export const BOAT_REFUSALS = {
   "key-refused": { status: 401, code: "unauthorized", message: "Unauthorized" },
   "key-expired": { status: 403, code: "api_key_expired", message: "API key expired." },

@@ -39,7 +39,7 @@ import {
 } from "./docker-resource-argv.js";
 import type { ReachAttachment } from "./reach.js";
 
-/** Core's subnet pools (`ResourceInstanceRepo.allocateNetwork`), as the runtime needs them. */
+/** sealant's subnet pools (`ResourceInstanceRepo.allocateNetwork`), as the runtime needs them. */
 export interface ResourceSubnets {
   /** The network's subnet, the one it already holds or a new one. Throws when the pool is full. */
   readonly allocate: (input: {
@@ -129,8 +129,8 @@ export interface ResourceRuntime {
     stdin: AsyncIterable<Uint8Array> | null,
   ) => Promise<ResourceExecResult>;
   /**
-   * The executor's reach network, created on Core's subnet, holding exactly the executor and each
-   * instance it reaches: an instance the attachments leave out is disconnected.
+   * The executor's reach network, created on sealant's subnet, holding exactly the executor and
+   * each instance it reaches: an instance the attachments leave out is disconnected.
    */
   readonly attachExecutor: (
     executor: string,
@@ -275,7 +275,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
     }
   }
 
-  /** The network on Core's subnet: created when missing, its subnet held in Core's table. */
+  /** The network on sealant's subnet: created when missing, its subnet held in sealant's table. */
   private async ensureNetwork(name: string, kind: ResourceNetworkKind, owner: string) {
     if (await this.networkExists(name)) return;
     const subnet = await this.subnets.allocate({ name, kind, owner });

@@ -29,7 +29,7 @@ const world = (input: {
   readonly events?: readonly FakeBoatEvent[];
   readonly registers?: readonly CaptureRegister[];
   readonly row?: Record<string, unknown>;
-  /** Core's FINAL drain status: complete, at head 3, unless overridden. */
+  /** sealant's FINAL drain status: complete, at head 3, unless overridden. */
   readonly drain?: Record<string, unknown>;
 }) => {
   const vms = input.vms ?? ["bx_aaaaaaaa"];
@@ -75,14 +75,14 @@ describe("invariants checked after every scenario", () => {
     });
   });
 
-  it("fail when the delete came before the FINAL head, or Core's FINAL never completed", async () => {
+  it("fail when the delete came before the FINAL head, or sealant's FINAL never completed", async () => {
     for (const input of [
       { registers: [register(2500)] },
       { registers: [] },
       { registers: [register(1500, 2)] },
       { registers: [register(1500)], drain: { complete: "false" } },
       { registers: [register(1500)], drain: { complete: null, head_n: null } },
-      // Core learned the FINAL was complete only after it had asked Boat to delete.
+      // sealant learned the FINAL was complete only after it had asked Boat to delete.
       { registers: [register(1500)], drain: { last_status_at: new Date(2010).toISOString() } },
     ]) {
       const { stack, run } = world(input);

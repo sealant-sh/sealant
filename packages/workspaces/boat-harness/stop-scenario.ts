@@ -28,8 +28,8 @@ import {
 } from "./worker-log.js";
 
 /**
- * Stop to Core's discharge (Boat's absence committed, the tunnel slot and publication pin released,
- * the workspace `stopped`). On real Boat a
+ * Stop to sealant's discharge (Boat's absence committed, the tunnel slot and publication pin
+ * released, the workspace `stopped`). On real Boat a
  * clean Stop takes 7 to 17 s end to end; one that needed a second pass took 36 s.
  */
 export const ONE_PASS_BOUND_MS = 25_000;
@@ -43,14 +43,14 @@ const LATE_PASS_MS = 10_000;
 /** Boat's lifecycle sweep runs every 30 s (`apps/worker/src/workers/workspaces.ts`). */
 const SWEEP_PERIOD_MS = 30_000;
 
-/** How long a Stop took: to Mend's `stopped`, and to Core's discharge of the run. */
+/** How long a Stop took: to Mend's `stopped`, and to sealant's discharge of the run. */
 export interface StopTimes {
   readonly stopped: number;
   readonly discharged: number;
 }
 
 /**
- * The owner's Stop of a ready launch, closed in one pass: Core discharges it (allocation
+ * The owner's Stop of a ready launch, closed in one pass: sealant discharges it (allocation
  * `deleted`, workspace `stopped`) within `ONE_PASS_BOUND_MS`, and the worker logged no failed
  * close pass for the run while it closed or in the `LATE_PASS_MS` after.
  */
@@ -60,7 +60,7 @@ export const stopInOnePass = async (stack: HarnessStack, run: Launch): Promise<S
   await cleanStop(run);
   let stopped: number | undefined;
   await until(
-    "Core to discharge the Stop's run",
+    "sealant to discharge the Stop's run",
     async () => {
       if (stopped === undefined && (await run.workspace.status()) === "stopped")
         stopped = Date.now() - stoppedAt;

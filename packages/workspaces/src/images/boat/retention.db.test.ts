@@ -5,7 +5,7 @@
  * still needs is kept: a running one's, a stopped one's that can still be started, a standby's,
  * a build's in flight, a quarantine reopened for its next build. Another install's images,
  * another stored account's and a full check's snapshot in the same Boat account are not touched.
- * A lost reply to the delete and a crash between recording and issuing it both end with Core and
+ * A lost reply to the delete and a crash between recording and issuing it both end with sealant and
  * Boat agreeing, and an account being removed is left to its removal.
  */
 import { randomUUID } from "node:crypto";
@@ -414,7 +414,7 @@ describe.skipIf(databaseUrl === undefined || bundleDirectory === undefined)(
         expect(now.filter((entry) => entry.outcome === "updated")).toEqual([]);
         expect(await c.used()).toBe(3);
 
-        // Two days on: the two images nothing can start from are removed, in Boat and in Core.
+        // Two days on: the two images nothing can start from are removed, in Boat and in sealant.
         const oldName = await c.snapshotOf(old.publicationId);
         const replacedName = await c.snapshotOf(replaced.publicationId);
         const pass = await c.reap(later(2));
@@ -636,7 +636,7 @@ describe.skipIf(databaseUrl === undefined || bundleDirectory === undefined)(
         expect(await c.used()).toBe(3);
       }));
 
-    it("a lost reply to the delete, and a crash between recording and issuing it, end with Core and Boat agreeing", () =>
+    it("a lost reply to the delete, and a crash between recording and issuing it, end with sealant and Boat agreeing", () =>
       withRetention(async (c) => {
         const person = await c.person();
         const lost = await c.build(environment("lost"), person);
@@ -648,7 +648,7 @@ describe.skipIf(databaseUrl === undefined || bundleDirectory === undefined)(
         const policy = { wanted: [], unusedSince: new Date(at.getTime() - DAY) };
 
         // The crash: the removal is recorded (retiring) and claimed, and the process dies before
-        // it asks Boat for anything. Boat still holds the image; Core no longer launches on it.
+        // it asks Boat for anything. Boat still holds the image; sealant no longer launches on it.
         expect((await Effect.runPromise(c.repo.retire(crashed.publicationId, policy)))?.state).toBe(
           "retiring",
         );
@@ -669,7 +669,8 @@ describe.skipIf(databaseUrl === undefined || bundleDirectory === undefined)(
           ]),
         );
         c.boat.faults = {};
-        // Boat has deleted it; Core holds it as a removal still pending, never as an image to use.
+        // Boat has deleted it; sealant holds it as a removal still pending, never as an image to
+        // use.
         expect(c.boat.snapshots.has(lostName)).toBe(false);
         expect(await c.state(lost.publicationId)).toBe("quarantined");
         // A launch of that environment meanwhile waits, as for a build in progress: its build job

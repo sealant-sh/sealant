@@ -1,10 +1,10 @@
 /**
- * Review 5 #3 against a REAL Postgres: every capture status Core relays from an executor through
- * the public flush and status routes is evidence about that executor's disk. Core had observed a
+ * Review 5 #3 against a REAL Postgres: every capture status sealant relays from an executor through
+ * the public flush and status routes is evidence about that executor's disk. sealant had observed a
  * complete final flush (and the control plane holds a seal of it); new work arrives; a FINAL or
  * a status read through the API says `snapshot-failed`. That answer is recorded against the run's
  * executor before it is returned, so the older seal is no longer accepted at stop and the older
- * complete no longer lets the ended executor's disk go. Ordered by when Core read it: a delayed
+ * complete no longer lets the ended executor's disk go. Ordered by when sealant read it: a delayed
  * older complete (a drain's slow write, a late relayed answer) never rolls the record back.
  * Gated on SEALANT_TEST_DATABASE_URL (a disposable, migrated database).
  */
@@ -197,7 +197,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       return { runId, workspaceId: workspace.id, run, drains, calls };
     };
 
-    /** Core earlier read the final flush complete from this executor (a drain, at `atMs`). */
+    /** sealant earlier read the final flush complete from this executor (a drain, at `atMs`). */
     const seedSaved = (
       drains: Awaited<ReturnType<typeof setup>>["drains"],
       runId: string,
@@ -431,7 +431,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(await deletionAfterExit(runId)).toMatchObject({ delete: false });
     });
 
-    // Review 6 #5: a received answer whose recording fails fences the executor: nothing Core
+    // Review 6 #5: a received answer whose recording fails fences the executor: nothing sealant
     // holds of it counts as current, so the older complete no longer lets its disk go — not now,
     // and not after the fault is gone, until a later observation is recorded.
     it("keeps the executor unknown when recording a received answer fails", async () => {

@@ -1143,7 +1143,7 @@ describe("watchRuntimeExits", () => {
       detail: "sealantd in the Boat VM exited before the workspace stopped (code 75, signal null).",
     };
 
-    it("removes a Boat executor whose daemon exited after a final flush Core observed complete, under its ticket, as any runtime's", async () => {
+    it("removes a Boat executor whose daemon exited after a final flush sealant observed complete, under its ticket, as any runtime's", async () => {
       const harness = makeHarness({ instances: [boatRow()] });
       const { adapter, stop } = stubAdapter({
         id: "boat",

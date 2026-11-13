@@ -374,7 +374,7 @@ describe.skipIf(!hasSealantd || process.platform !== "linux")(
       }
     });
 
-    it("resets with owner-exited at once, ahead of what Core holds that the client has not read", async () => {
+    it("resets with owner-exited at once, ahead of what sealant holds that the client has not read", async () => {
       const a = await control.serve({ mode: "burst", bytes: (3 * SDK_WINDOW) / 2, detached: true });
       try {
         register("ses_a", a.sessionId);

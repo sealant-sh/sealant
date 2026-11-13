@@ -41,10 +41,10 @@ them closed when there is no tunnel reservation or its release is complete, rath
 configure the retired guest. Unreleased tunnel cleanup remains held. Real Postgres regressions cover
 both cases, including Run 7/8's no-tunnel case.
 
-The checker accepts Core's canonical `runtime.closed` observation during FINAL cleanup, even if Mend
-still reports `stopping`. The separate Mend state issue should not block that cleanup check; the
-normal idle-stop flow also checks captured worktree data and is not proven by this run.
+The checker accepts sealant's canonical `runtime.closed` observation during FINAL cleanup, even if
+Mend still reports `stopping`. The separate Mend state issue should not block that cleanup check;
+the normal idle-stop flow also checks captured worktree data and is not proven by this run.
 
-Deploy with a new Mend preview carrying this Core worker. No migration or publication rebuild is
+Deploy with a new Mend preview carrying this sealant worker. No migration or publication rebuild is
 required. The next authorized box run must still prove live readiness and capture the new safe HTTP
 diagnostic if the failure recurs.

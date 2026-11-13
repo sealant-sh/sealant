@@ -4,8 +4,8 @@
  * starts the process as exactly that passwd entry (uid, primary and supplementary groups, `HOME`,
  * `USER`, `LOGNAME`, `SHELL`, umask 0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`), applies the
  * image's `/etc/sealant/person-env`, withholds the daemon's logins and `SEALANT_*` keys, and gives
- * it `CAP_FOWNER` only where no-new-privileges is unset. Core decides only WHETHER a process may be
- * started as the user, before anything starts:
+ * it `CAP_FOWNER` only where no-new-privileges is unset. sealant decides only WHETHER a process may
+ * be started as the user, before anything starts:
  *
  * 1. **The name** (`processUserProblem`, no I/O): a login name or a decimal uid, never root, and a
  *    uid outside Mend's range is refused before the executor is asked.
@@ -14,7 +14,7 @@
  * 3. **The passwd entry** (the same connection, one exec as root, `buildProcessUserCheckScript`):
  *    the user exists, their uid is in 40001–49999 and their primary group is `mend` (40000). So a
  *    process is never started as root, as an image's own user, or as anyone outside the people Mend
- *    made. Which person is which is Mend's to name; Core keeps every person inside the range.
+ *    made. Which person is which is Mend's to name; sealant keeps every person inside the range.
  *
  * A request without `user` takes none of these steps.
  */
@@ -63,7 +63,7 @@ export const PROCESS_USER_CHECK_EXIT = {
 
 /** Why a process is not started as the user. */
 export type ProcessUserRefusalReason =
-  /** The workspace's runtime has no daemon Core can ask (Cloudflare's sandboxes). */
+  /** The workspace's runtime has no daemon sealant can ask (Cloudflare's sandboxes). */
   | "runtime-unsupported"
   /** The daemon does not report `exec.user`. */
   | "sealantd-unsupported"
@@ -179,7 +179,7 @@ export const processUserCheckOutcome = (
     case PROCESS_USER_CHECK_EXIT.noGetent:
       return {
         reason: "check-unavailable",
-        detail: "its image has no getent, so Core cannot read the user's passwd entry",
+        detail: "its image has no getent, so sealant cannot read the user's passwd entry",
       };
     default:
       return "unanswered";

@@ -4,7 +4,7 @@
  *
  *  - A Pod whose row is `stopped` or `failed` is torn down through the adapter's idempotent stop
  *    ONLY when the one preservation policy lets it go (`decideExecutorDeletion`): the run is not
- *    capture-sourced, or Core observed its final flush complete, the control plane attested a
+ *    capture-sourced, or sealant observed its final flush complete, the control plane attested a
  *    sealed final capture of it, or the owner discarded it. A capture Pod the exit reconciler
  *    kept (`failed`, `runtime-exited`: its emptyDir holds the staged captures) — or whose source,
  *    state or drain record cannot be read — is kept and recorded retained.
@@ -53,7 +53,7 @@ export interface ReapOrphanedKubernetesResourcesOptions {
   readonly adapter: KubernetesRuntimeAdapter;
   readonly maxReapsPerTick?: number;
   /**
-   * The drain ledger: what Core observed of each run's capture drain (a complete final flush,
+   * The drain ledger: what sealant observed of each run's capture drain (a complete final flush,
    * an attestation, a discard). Absent = nothing is known, so no capture Pod is removed.
    */
   readonly ledger?: CaptureDrainLedger;

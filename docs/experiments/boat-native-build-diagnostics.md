@@ -1,10 +1,10 @@
 # Native Boat build failure, 2026-11-08
 
-The single authorized live reproduction failed during project package installation because Core's
-native Ubuntu root enabled only `main`. The shared Ubuntu catalog needs `universe`. This is Core's
-native bootstrap configuration, before sealantd launches a workspace. Enabling `main,universe` in
-the emitted debootstrap command fixes package resolution. No daemon or project configuration change
-is involved.
+The single authorized live reproduction failed during project package installation because sealant's
+native Ubuntu root enabled only `main`. The shared Ubuntu catalog needs `universe`. This is
+sealant's native bootstrap configuration, before sealantd launches a workspace. Enabling
+`main,universe` in the emitted debootstrap command fixes package resolution. No daemon or project
+configuration change is involved.
 
 ## Live result
 
@@ -79,7 +79,7 @@ relying on the positive result.
 This verifies apt package resolution, not downloads from the later release/npm installers or a
 complete successful native build. The one authorized Boat build was used for the reproduction; there
 was no second provider build after the fix. Full launch acceptance remains pending the
-orchestrator's next session proof. A new Mend preview with the fixed Core worker is required.
+orchestrator's next session proof. A new Mend preview with the fixed sealant worker is required.
 
 ## Exact cleanup
 

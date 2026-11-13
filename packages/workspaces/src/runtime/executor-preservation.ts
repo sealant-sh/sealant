@@ -8,12 +8,12 @@
  * It fails closed. An executor that is capture-sourced — or whose source nothing records, which
  * the callers resolve to capture-sourced — may be deleted only on one of:
  *
- *  - **observed complete**: Core itself read `complete: true` from THIS executor's daemon (the
+ *  - **observed complete**: sealant itself read `complete: true` from THIS executor's daemon (the
  *    drain ledger's last status: the daemon quiesced every writer, snapshotted both classes and
  *    registered everything);
  *  - **attested complete**: the control plane that owns the store attested, on the stop request,
  *    a sealed FINAL of THIS executor (`completion: { executorId, epoch, captureN, sealedAt }`,
- *    the id matching the run's executor, and nothing Core observed from it since contradicting
+ *    the id matching the run's executor, and nothing sealant observed from it since contradicting
  *    it: `attestationCoversExecutor`). Evidence for an executor that ENDED: a running one is
  *    drained first, whatever is on record;
  *  - **discarded**: the owner's explicit, audited discard (`stop({ discardUnsaved: true })`);
@@ -40,13 +40,13 @@ export interface ExecutorDeletionEvidence {
   readonly captureSourced: boolean;
   readonly runtime: ExecutorRuntimeState;
   /**
-   * Core read `complete: true` from this executor's daemon (the drain record). Counts only for
+   * sealant read `complete: true` from this executor's daemon (the drain record). Counts only for
    * an executor that ENDED: a running one may have written since.
    */
   readonly observedComplete?: boolean;
   /**
    * The control plane attested a sealed FINAL of this executor (already matched to it and
-   * weighed against Core's own observations). Counts only for an executor that ENDED.
+   * weighed against sealant's own observations). Counts only for an executor that ENDED.
    */
   readonly attestedComplete?: boolean;
   /**
@@ -142,7 +142,9 @@ export interface CompletionAttestation {
   readonly executorId: string;
   readonly epoch: number;
   readonly captureN: number;
-  /** When the store recorded the seal (Unix ms): display only, never compared with Core's clock. */
+  /**
+   * When the store recorded the seal (Unix ms): display only, never compared with sealant's clock.
+   */
   readonly sealedAtMs?: number | undefined;
   /**
    * Where in the executor's own history the seal was made (sealantd stamps it; decision 17): the
@@ -159,7 +161,7 @@ export interface ExecutorIdentity {
 }
 
 /**
- * Core's own latest observation of the executor's daemon (the drain ledger's last status): its
+ * sealant's own latest observation of the executor's daemon (the drain ledger's last status): its
  * lease epoch, the chain position of its newest capture, whether it was a complete final flush,
  * and where in the executor's history it was made (`origin`). `unreadable`: a status is stored
  * but cannot be read.
@@ -173,7 +175,7 @@ export type ObservedCapture =
       readonly complete: boolean;
       /** Why it is not complete, as the daemon said (for the reason a stale attestation gets). */
       readonly incompleteReason?: string | undefined;
-      /** When Core read it (Unix ms, the reader's clock): display only, it orders nothing. */
+      /** When sealant read it (Unix ms, the reader's clock): display only, it orders nothing. */
       readonly atMs?: number | undefined;
       /** Where in the executor's own history it was made, when the daemon stamped it. */
       readonly origin?: ExecutorOrigin | undefined;
@@ -181,9 +183,9 @@ export type ObservedCapture =
   | { readonly readable: false };
 
 /**
- * Core's observation from a stored drain status (`workspace_capture_drains.last_status`) and when
- * it was read. `undefined` when none is stored; `{ readable: false }` when one is stored but has
- * no numeric epoch (it cannot be compared with anything, so nothing may override it).
+ * sealant's observation from a stored drain status (`workspace_capture_drains.last_status`) and
+ * when it was read. `undefined` when none is stored; `{ readable: false }` when one is stored but
+ * has no numeric epoch (it cannot be compared with anything, so nothing may override it).
  */
 export const observedCaptureFromStored = (
   stored: Readonly<Record<string, unknown>> | null | undefined,
@@ -210,20 +212,20 @@ export const observedCaptureFromStored = (
 };
 
 /**
- * Whether an attestation is about THIS executor AND is not older than what Core itself last
+ * Whether an attestation is about THIS executor AND is not older than what sealant itself last
  * observed of it (review 4 #1: received evidence beats stored evidence).
  *
  *  - Identity: its `executorId` is the run id, the runtime resource id or the runtime reference
  *    of the executor (`workspace.details().runtime.resourceId` is the one a client sees).
- *  - Epoch: not older than the last epoch Core observed from the executor's daemon (a seal from
+ *  - Epoch: not older than the last epoch sealant observed from the executor's daemon (a seal from
  *    an earlier lease does not cover later work).
- *  - Freshness, in the same epoch: Core's latest observation that is NOT a complete final flush
+ *  - Freshness, in the same epoch: sealant's latest observation that is NOT a complete final flush
  *    (pending work, `changed`, `unreadable`, `snapshot-failed`, anything but `complete`) revokes
  *    the seal unless it provably came before it, by the executor's own history: its head was
  *    still short of the sealed capture (`headN < captureN`), or its executor-origin position is
  *    before the seal's (decision 17). An observation whose head is past the sealed capture revokes
  *    it whatever it says. Clocks order nothing (review 6 #6): an observation and a seal that no
- *    position orders are contradictory, and the seal does not stand. A stored observation Core
+ *    position orders are contradictory, and the seal does not stand. A stored observation sealant
  *    cannot read revokes it too (fail closed).
  *
  * A seal stands in for a LOST answer, never for a received one that said the work is not saved.
@@ -249,7 +251,7 @@ export const attestationCoversExecutor = (
     return {
       covers: false,
       reason:
-        "Core's last observation of the executor's daemon cannot be read, so the attestation cannot be shown to follow it",
+        "sealant's last observation of the executor's daemon cannot be read, so the attestation cannot be shown to follow it",
     };
   }
   if (attestation.epoch < observed.epoch) {
@@ -272,7 +274,7 @@ export const attestationCoversExecutor = (
     return { covers: true };
   }
   if (observed.headN !== undefined && observed.headN < attestation.captureN) {
-    // Core's incomplete observation was made while the head was still short of the sealed
+    // sealant's incomplete observation was made while the head was still short of the sealed
     // capture: the seal came after it.
     return { covers: true };
   }
@@ -294,7 +296,7 @@ export const attestationCoversExecutor = (
 };
 
 /**
- * `attestationCoversExecutor` over Core's latest observation AND every unsaved answer on record
+ * `attestationCoversExecutor` over sealant's latest observation AND every unsaved answer on record
  * that no later one covers (review 9 #4, decision 25): a seal stands only when it covers all of
  * them. The first one it does not cover answers.
  */

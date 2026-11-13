@@ -139,7 +139,7 @@ describe("MicroVM agent contract", () => {
       services: { docker: { status: "failed", reason: "directory-preparation-failed" } },
     });
     // A failure may say what the engine is made of and the failing command's last output, bounded
-    // (Core redacts it before it enters a diagnostic); never an unbounded daemon log.
+    // (sealant redacts it before it enters a diagnostic); never an unbounded daemon log.
     const failedWith = (output: string) => ({
       ...base,
       services: {

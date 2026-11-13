@@ -42,7 +42,7 @@ tunnel slot is released. There is deliberately no reset, replacement or delete o
 The sweep (`BoatVm.reconcile`) resolves what a launch left unresolved and nothing more: an issued
 create with no VM on record, and a run that stopped before its create. It issues no first create,
 reads no boot, binds nothing and exchanges nothing. A VM its launch never bound stays unbound and is
-removed on Core's own record that nothing ran on it.
+removed on sealant's own record that nothing ran on it.
 
 Before bootstrap, the launch verifies provider ownership and reads the current boot UUID. It
 persists the complete target on the run's row before calling `BoatExecution.exchange`. Retries use

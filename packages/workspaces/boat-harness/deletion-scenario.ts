@@ -1,8 +1,9 @@
 /**
- * A DELETE Boat accepted whose reply never reached Core (sealant#598). The removal sends DELETE only
- * to the exact owned VM Boat just returned, records the operation before waiting, and never takes
- * an error for absence. These close a ready session with the owner's Stop, so the release checks'
- * FINAL-before-delete and one-VM invariants and the empty inventory hold for them as for any Stop.
+ * A DELETE Boat accepted whose reply never reached sealant (sealant#598). The removal sends DELETE
+ * only to the exact owned VM Boat just returned, records the operation before waiting, and never
+ * takes an error for absence. These close a ready session with the owner's Stop, so the release
+ * checks' FINAL-before-delete and one-VM invariants and the empty inventory hold for them as for
+ * any Stop.
  */
 import { expect } from "vitest";
 import { z } from "zod";
@@ -34,7 +35,7 @@ const ready = async (stack: HarnessStack, run: Launch) => {
 };
 
 /**
- * The removal Core recorded on the run's row, if any: `issued` (the first DELETE is claimed),
+ * The removal sealant recorded on the run's row, if any: `issued` (the first DELETE is claimed),
  * `operation` (Boat's deletion operation, with whether it completed), `absent` (Boat's 404 was
  * committed before its operation read complete) or `never-created`.
  */
@@ -88,9 +89,9 @@ const describeEvents = (events: readonly FakeBoatEvent[], since: number) =>
  * Boat accepts the Stop's DELETE and the reply is lost, and the deletion stays `processing` for
  * two sweep periods with the VM still readable (a `stuck` deletion is never withdrawn: the window
  * before real Boat withdraws a VM, held open). The next pass reads Boat, finds the exact VM still there, and asks again: Boat
- * answers the operation already under way, which Core records and then only polls. While Boat says
- * the VM is not gone nothing is released; once the deletion completes the VM is confirmed deleted,
- * with one operation for it from start to end.
+ * answers the operation already under way, which sealant records and then only polls. While Boat
+ * says the VM is not gone nothing is released; once the deletion completes the VM is confirmed
+ * deleted, with one operation for it from start to end.
  */
 export const deleteReplyLostWhileDeleting = async (stack: HarnessStack, project: Project) => {
   let lost: { readonly sandbox: string; readonly at: number } | undefined;
@@ -118,7 +119,7 @@ export const deleteReplyLostWhileDeleting = async (stack: HarnessStack, project:
       const [operation] = operationsFor(stack, sandbox);
       if (operation === undefined) throw new Error(`Boat holds no deletion of ${sandbox}`);
       const recordedAt = await until(
-        "Core to record Boat's deletion operation after the lost reply",
+        "sealant to record Boat's deletion operation after the lost reply",
         async () =>
           (await recordedRemoval(stack, run.runId)).id === operation ? Date.now() : undefined,
         3 * 60_000,

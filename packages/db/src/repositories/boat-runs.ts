@@ -260,7 +260,9 @@ export class BoatRunRepo extends Context.Service<BoatRunRepo, BoatRunRepoService
 ) {}
 
 const stale = () => new BoatRunStoreError("stale-transition");
-/** What an absence writes: when and how Core knows, and it clears the hold and the sealed launch. */
+/**
+ * What an absence writes: when and how sealant knows, and it clears the hold and the sealed launch.
+ */
 const absent = (basis: NonNullable<BoatRun["absentBasis"]>) => ({
   absentAt: sql`now()`,
   absentBasis: basis,

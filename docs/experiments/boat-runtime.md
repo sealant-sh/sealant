@@ -1,8 +1,8 @@
 # Native control transport on boat
 
-This experiment tests whether Core can reach native sealantd in a boat VM through a narrow WebSocket
-relay. It does not enable a workspace runtime. Mend, capture storage, resources, and screen sessions
-are outside this transport experiment.
+This experiment tests whether sealant can reach native sealantd in a boat VM through a narrow
+WebSocket relay. It does not enable a workspace runtime. Mend, capture storage, resources, and
+screen sessions are outside this transport experiment.
 
 ## Findings from the trial account
 
@@ -22,8 +22,8 @@ with `localhost: false`.
 
 Boat's HTTP query token redirects to establish its `_port_auth` cookie. A backend can send
 `Cookie: _port_auth=<token>` directly. The relay requires a separate bearer on every HTTP request
-and WebSocket upgrade. Core's connection helper returns a clean endpoint and prepares both headers
-for the connection, so the secret hosted URL is never retained as the endpoint.
+and WebSocket upgrade. sealant's connection helper returns a clean endpoint and prepares both
+headers for the connection, so the secret hosted URL is never retained as the endpoint.
 
 The hosted origin and proxy token stayed the same across the observed stop and resume. That resume
 happened within Boat's live-machine grace period. It provides reconnect evidence, not evidence of a
@@ -35,7 +35,7 @@ The VM reported Ubuntu 24.04.4 LTS, x86_64, and Node v24.22.1 at
 and the relay ran as systemd services.
 
 The daemon came from an image labelled `0.21.0-next.177`, revision
-`0a46de1ec57064b39e9dcff5ba75724a8ecc3021`. Its binary reported `0.0.0`. Core's runtime client is
+`0a46de1ec57064b39e9dcff5ba75724a8ecc3021`. Its binary reported `0.0.0`. sealant's runtime client is
 pinned to `0.21.0-next.180`. Real `SealantClient.health()` and `getCapabilities()` passed with that
 client and the older artifact. This proves the measured control exchange only. Production daemon
 compatibility, capture, execution, screens, and process containment need their own checks against
@@ -59,10 +59,10 @@ gate independently of Boat's proxy.
 ## Cold saved-snapshot launch on the paid account
 
 The paid-account test on 2026-11-05 bundled the relay from this checkout and used the same native
-daemon artifact and pinned Core runtime client. Saving the snapshot returned HTTP 202. Boat finished
-saving immutable artifact `cf4d5ffe-648b-46a7-8100-fc33ebe4471d` from source `bx_yt9umdv5`. The
-source finished deletion before a new sandbox was created from the saved handle. This establishes a
-new VM launch from saved disk, independently of Boat's live-machine grace period.
+daemon artifact and pinned sealant runtime client. Saving the snapshot returned HTTP 202. Boat
+finished saving immutable artifact `cf4d5ffe-648b-46a7-8100-fc33ebe4471d` from source `bx_yt9umdv5`.
+The source finished deletion before a new sandbox was created from the saved handle. This
+establishes a new VM launch from saved disk, independently of Boat's live-machine grace period.
 
 One cold launch reached provider-ready in 2.085 seconds and returned a real native health reply in
 3.366 seconds from the start of create. The latter includes provider polling and delivery of the new
@@ -111,7 +111,7 @@ The provider client owns JSON parsing, provider IDs and states, safe URL policy,
 translation. Unknown provider states fail closed. Archive remains a provider state with potentially
 live writers. A completed deletion operation is distinct from an accepted deletion request.
 
-The opt-in runner accepts these forms from the Core repository root:
+The opt-in runner accepts these forms from the sealant repository root:
 
 ```sh
 BOAT_API_KEY="$(cat ~/.config/sealant-dev/boat-api-key)" pnpm exec tsx \

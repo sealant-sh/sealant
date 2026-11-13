@@ -214,7 +214,7 @@ export const targetFor = (workspaceId: string, instance: WorkspaceRuntimeInstanc
     return yield* target === undefined
       ? Effect.fail(
           new WorkspaceServiceUnavailableError({
-            message: `Core has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime).`,
+            message: `sealant has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime).`,
           }),
         )
       : Effect.succeed(target);
@@ -247,7 +247,7 @@ const pathsOverlap = (a: string, b: string): boolean =>
 /**
  * Why a Claude key cannot be placed in `home`, or `undefined` when it can: never in the launch
  * home, whose `.claude` the shared layout links into saved state, and never where the run saves
- * state (its working directory, a capture's harness home). A run whose spec Core cannot read is
+ * state (its working directory, a capture's harness home). A run whose spec sealant cannot read is
  * refused: nothing says where it saves.
  */
 const claudeKeyHomeProblem = (runId: string, home: string) =>
@@ -266,7 +266,7 @@ const claudeKeyHomeProblem = (runId: string, home: string) =>
         "Failed to load the latest workspace build job.",
       ))?.requestPayload;
     if (spec === undefined) {
-      return `Core has no recorded spec for run ${runId}, so it cannot tell where the run saves state; a Claude API key is placed only where nothing saves it.`;
+      return `sealant has no recorded spec for run ${runId}, so it cannot tell where the run saves state; a Claude API key is placed only where nothing saves it.`;
     }
     const source = spec.sources.workspace;
     const keys = `${home}/${CLAUDE_KEY_DIR}`;
@@ -626,7 +626,7 @@ export const putWorkspaceCredentials = (input: {
               const markerReleased = taking && (yield* releaseMarker(generation));
               return putFailed(
                 new WorkspaceBadGatewayError({
-                  message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. Core removes whatever of it landed; put again${taking ? "" : ", or release the home"}.`,
+                  message: `The workspace's executor did not confirm the write into ${payload.home}: ${ran.message}. sealant removes whatever of it landed; put again${taking ? "" : ", or release the home"}.`,
                 }),
                 markerReleased ? "release" : "keep",
               );
@@ -813,7 +813,7 @@ export const releaseWorkspaceCredentials = (input: {
                 message:
                   held === undefined
                     ? `The workspace's executor did not confirm the removal from ${home}: ${ran.message}. Release it again.`
-                    : `The workspace's executor did not confirm the removal from ${home}: ${ran.message}. Core finishes the release once the executor answers; nothing is written into the home until then.`,
+                    : `The workspace's executor did not confirm the removal from ${home}: ${ran.message}. sealant finishes the release once the executor answers; nothing is written into the home until then.`,
               });
             }
           }
@@ -907,7 +907,7 @@ export const pruneWorkspaceCredentials = (input: {
             Effect.catchTag("HomeRemovalUnconfirmedError", (error) =>
               Effect.fail(
                 new WorkspaceBadGatewayError({
-                  message: `${error.message} Core removes them once the executor answers.`,
+                  message: `${error.message} sealant removes them once the executor answers.`,
                 }),
               ),
             ),

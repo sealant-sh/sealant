@@ -61,7 +61,7 @@ const vmLive = (stack: HarnessStack, sandbox: string) =>
   stack.boat.liveSandboxes().some((vm) => vm.id === sandbox);
 
 /**
- * Core has discharged the run: Boat's VM is gone by its word, what it held is released, and the
+ * sealant has discharged the run: Boat's VM is gone by its word, what it held is released, and the
  * runtime row is no longer live. (`allocation` "deleted" alone is only the committed absence since
  * #607, which comes before the tunnel slot and publication pin are released.)
  */
@@ -84,7 +84,7 @@ interface Sample {
 }
 
 /**
- * Samples what Mend, Core and Boat say of one run every second until stopped: the public status,
+ * Samples what Mend, sealant and Boat say of one run every second until stopped: the public status,
  * the runtime view, whether the VM is live and its deletion's status.
  */
 const sampleRun = (stack: HarnessStack, run: Launch, sandbox: string) => {
@@ -218,7 +218,7 @@ const workerKilledAtDelete = async (
           1000,
         );
         const dischargedAt = await until(
-          "Core to discharge the run",
+          "sealant to discharge the run",
           async () => (discharged(await runtimeView(stack, run.runId)) ? Date.now() : undefined),
           10 * 60_000,
           1000,
@@ -405,7 +405,7 @@ export const finalUnconfirmedThenCompletes = async (stack: HarnessStack, project
 
 /**
  * The launch push never reaches the guest: Boat's hosted proxy answers it 502 without forwarding.
- * No daemon ran on the VM, so Core deletes it on its own record without an owner's discard, ends
+ * No daemon ran on the VM, so sealant deletes it on its own record without an owner's discard, ends
  * the drain `stopped` (not `gone`), registers nothing, and Mend reads it terminal.
  */
 export const launchNeverReachedGuest = async (stack: HarnessStack, project: Project) => {
@@ -521,7 +521,7 @@ export const discardWhileDeleting = async (stack: HarnessStack, project: Project
       await cleanStop(first);
       await until("Boat to hold the VM's deletion", async () => stuck, 3 * 60_000, 500);
       expect(stuck).toBe(sandbox);
-      // The deletion is in flight: Boat says `processing`, Core has not seen the VM gone.
+      // The deletion is in flight: Boat says `processing`, sealant has not seen the VM gone.
       await sleep(5000);
       const before = await runtimeView(stack, first.runId);
       expect(before.allocation, JSON.stringify(before)).not.toBe("deleted");

@@ -1,6 +1,6 @@
 /**
  * Every way Boat refuses a call reaches a caller as its kind, with Boat's code and request id:
- * the fake Boat answers with Boat's error envelope, Core's HTTP client classifies it, and the
+ * the fake Boat answers with Boat's error envelope, sealant's HTTP client classifies it, and the
  * launch diagnostic (a Boat launch) or the provider failure (an image build) carries it into the
  * workspace's error, where the API reads it back for the SDK. No key reaches any of them.
  */
@@ -59,7 +59,7 @@ const create = (api: HttpBoatApi) =>
     requestVersion: 2,
   });
 
-/** Arms one refusal on one call, makes the call, and returns Boat's error as Core holds it. */
+/** Arms one refusal on one call, makes the call, and returns Boat's error as sealant holds it. */
 const refused = async (
   kind: BoatFailureKind,
   refusal: FakeBoatRefusal | "no-answer",

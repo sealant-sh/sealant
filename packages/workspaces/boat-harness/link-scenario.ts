@@ -185,7 +185,7 @@ export const relinkRunning = async (stack: HarnessStack, project: Project) => {
     async () =>
       `link answered after ${(restoreAnswered / 1000).toFixed(1)} s; gateway since the link: ${await gatewayTimeline(gateway, restoredAt)}`,
   );
-  // The carrier stayed attached throughout: no re-link made Core open the tunnel again.
+  // The carrier stayed attached throughout: no re-link made sealant open the tunnel again.
   expect(
     stack.boat.events.filter(
       (event) =>

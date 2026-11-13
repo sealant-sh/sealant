@@ -108,7 +108,7 @@ export type BoatPresence =
  * the same idempotency key while Boat still holds the key. Past that window nothing is replayed:
  * discovery keeps looking and the run is held as `create-unresolved`.
  *
- * Absence comes from Boat alone: a typed 404 for a VM Boat had reported past creation, or Core's
+ * Absence comes from Boat alone: a typed 404 for a VM Boat had reported past creation, or sealant's
  * own record that create was never issued or was refused under the run's key. Never elapsed time,
  * a launch error or a lease.
  */
@@ -123,7 +123,7 @@ export interface BoatVmService {
    * issued and has no VM on record is discovered by label, or replayed under its key inside the
    * window, and the VM found is adopted; a run that stopped before create was issued is held as
    * `run-stopped`. It issues no first create, binds nothing and exchanges nothing: a VM nothing
-   * launched on stays unbound, and is removed on Core's own record that nothing ran on it. So it
+   * launched on stays unbound, and is removed on sealant's own record that nothing ran on it. So it
    * reads only the runs with no VM on record and no absence committed; a run with a VM, and one
    * Boat no longer has, is never in its page.
    */
@@ -159,7 +159,7 @@ const CREATING: ReadonlySet<BoatSandbox["state"]> = new Set([
   "cloning",
 ]);
 
-/** A create whose outcome Core could not read at all. */
+/** A create whose outcome sealant could not read at all. */
 const uncertainCreate: BoatLaunchDiagnostic = {
   step: "create",
   errorClass: "BoatAllocationError",
@@ -422,7 +422,7 @@ const make: Effect.Effect<
       }
       // No VM carries this launch's labels: its create reply was lost, Boat has not listed it
       // yet, or create was never sent. Replay create under the same idempotency key. Boat answers
-      // with the VM it already accepted for that key, or creates it now; either way Core ends
+      // with the VM it already accepted for that key, or creates it now; either way sealant ends
       // with a positive identity, never an inference from an empty list or elapsed time.
       const replay = yield* Effect.tryPromise(create).pipe(Effect.orElseSucceed(() => undefined));
       if (

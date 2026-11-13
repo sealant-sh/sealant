@@ -47,7 +47,10 @@ export class RecordedBoat {
   readonly vms = new Map<string, RecordedVm>();
   readonly deletions = new Map<string, Deletion>();
   readonly requests: string[] = [];
-  /** The bearer each request carried, in order: which key Core called Boat with. Fixture keys only. */
+  /**
+   * The bearer each request carried, in order: which key sealant called Boat with. Fixture keys
+   * only.
+   */
   readonly bearers: string[] = [];
   /** Saved snapshots by name, as `GET /saved-snapshots/:name` returns them. */
   readonly savedSnapshots = new Map<

@@ -11,7 +11,7 @@ export const setupStateQueryOptions = (trpc: AppTrpc) => {
 };
 
 /**
- * Fail-open needsSetup check for route gating: if the core API is unreachable, pretend setup is
+ * Fail-open needsSetup check for route gating: if the sealant API is unreachable, pretend setup is
  * done so /login still renders instead of redirect-looping into a broken wizard.
  */
 export const resolveNeedsSetup = async (context: {

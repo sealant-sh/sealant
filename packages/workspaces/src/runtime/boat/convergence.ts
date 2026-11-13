@@ -93,7 +93,7 @@ export type BoatSharedStop = (run: {
  *    absence is committed, in this visit or before it, the shared stop reads it (`inspect`
  *    answers `missing` from the run's row) and records the run stopped without a drain.
  *
- * One VM is deleted from here, on Core's own record that nothing ran on it: a VM adopted by its
+ * One VM is deleted from here, on sealant's own record that nothing ran on it: a VM adopted by its
  * labels after its run was already recorded stopped (a create whose reply was lost, found later),
  * which was never bound and which no stop will ever visit again.
  *
@@ -275,9 +275,9 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
         }
         let ended = run;
         if (run.absentAt === null) {
-          // Stopped before create was ever issued: Boat was never asked for a VM, which is Core's
-          // own record. Anything else without a VM is a launch still resolving its create, which
-          // the VM sweep owns.
+          // Stopped before create was ever issued: Boat was never asked for a VM, which is
+          // sealant's own record. Anything else without a VM is a launch still resolving its
+          // create, which the VM sweep owns.
           if (run.heldReason !== "run-stopped") return "skipped" as const;
           ended = yield* runs.recordNeverCreated(runId);
         }

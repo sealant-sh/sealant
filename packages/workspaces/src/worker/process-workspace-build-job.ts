@@ -492,9 +492,9 @@ export const ownerMapLaunchRefusal = (
   if (applies === "yes") return undefined;
   const why =
     probe === undefined
-      ? "its image records no probe, so Core cannot tell whether its sealantd applies one"
+      ? "its image records no probe, so sealant cannot tell whether its sealantd applies one"
       : applies === "unknown"
-        ? "its image's sealantd answered the probe with something Core cannot read"
+        ? "its image's sealantd answered the probe with something sealant cannot read"
         : "its image's sealantd does not report restore.owner_map";
   return new OwnerMapRefusedError(
     `The workspace was not launched: its capture source names an owner map, and ${why}. A daemon without it would restore every file as root's and keep no-new-privileges, so nobody could edit them or use sudo. Nothing ran; launch it on an image whose personLayout reports the sealantd capabilities, or without an owner map.`,

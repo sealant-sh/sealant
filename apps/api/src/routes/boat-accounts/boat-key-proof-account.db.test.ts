@@ -216,7 +216,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         const refused = await refusal(routes.removeBoatAccount(created.boatAccountId));
         expect(refused).toMatchObject({ code: "boat-proof-running" });
         expect(refused.message).toMatch(/VM bx_[a-z0-9]+/);
-        expect(refused.message).toContain("Core takes it over from");
+        expect(refused.message).toContain("sealant takes it over from");
         // Even a removal asked for without the API's check is not finished while the check holds.
         await run(
           Effect.flatMap(BoatAccountRepo, (repo) => repo.requestRemoval(created.boatAccountId)),

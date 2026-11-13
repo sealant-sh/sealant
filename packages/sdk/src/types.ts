@@ -302,7 +302,7 @@ export interface WorkspaceCaptureSource {
    * Cloudflare, and on Kubernetes under gVisor (`ociRuntime: "runsc"`); under runc a per-person Pod
    * may escalate, so each person's `sudo` works. Refused at launch, with nothing started, on an
    * image whose sealantd does not report `restore.owner_map` (`owner-map-unsupported`) and on one
-   * with no probe Core can read (`owner-map-unverified`). The workspace creator's choice of
+   * with no probe sealant can read (`owner-map-unverified`). The workspace creator's choice of
    * privilege; only this field sets it.
    */
   readonly ownerMap?: WorkspaceCaptureOwnerMap;
@@ -1205,8 +1205,8 @@ export interface Workspace {
    * otherwise (with the control plane's reason; a runtime's `unsupported-runtime-requirement`
    * refusal is one). A per-person launch the worker refused for its owner map rejects with the
    * refusal's own code: `owner-map-unsupported` when the image cannot apply the owner map,
-   * `owner-map-unverified` when Core cannot tell whether it does. A Boat workspace created without
-   * `resources: "none"` on a deployment that has no resource gateway rejects with
+   * `owner-map-unverified` when sealant cannot tell whether it does. A Boat workspace created
+   * without `resources: "none"` on a deployment that has no resource gateway rejects with
    * `gateway-unavailable`: nothing was built and no VM was created.
    * When the handle came from `workspaces.create()` and `ready()` gives up on a bound, a stop is
    * requested before the error is thrown, so an abandoned launch does not keep running to its cap;
@@ -1300,7 +1300,7 @@ export interface Workspace {
    *
    * With `flow: "bounded"`, a TCP forward whose two directions are bounded: the workspace's
    * producer is held back while `readable` is not read, and `writable` holds back its writer while
-   * the workspace does not take the bytes. It resolves once Core and the workspace runtime have
+   * the workspace does not take the bytes. It resolves once sealant and the workspace runtime have
    * opened it, and rejects with a {@link ForwardDialError} that says why when they did not.
    */
   forward(port: number, options: BoundedWorkspaceForwardOptions): Promise<BoundedWorkspaceForward>;
@@ -1311,7 +1311,7 @@ export interface Workspace {
  * One person's logins in the homes of a running workspace (see {@link Workspace.credentials}). A
  * home holds one person's logins while it is held: the first `put` names its person and a `put` for
  * anyone else is refused (`WorkspaceConflictError`, code `home-held`) until the home is released.
- * Core writes a copy of each account (no refresh token, as at launch) owned by the home's owner,
+ * sealant writes a copy of each account (no refresh token, as at launch) owned by the home's owner,
  * mode 0600, and keeps it refreshed there; GitHub is written as `<home>/.config/gh/hosts.yml`.
  */
 export interface WorkspaceCredentials {
@@ -1335,7 +1335,7 @@ export interface WorkspaceCredentials {
    * again. Idempotent: `released` is `false` when it held nothing.
    */
   release(home: string): Promise<{ readonly released: boolean }>;
-  /** The homes of the running executor and the logins Core keeps in each, oldest first. */
+  /** The homes of the running executor and the logins sealant keeps in each, oldest first. */
   list(): Promise<readonly WorkspaceCredentialHome[]>;
   /**
    * Remove every login of `home` that is neither in `live` (the placements running processes hold)
@@ -1449,7 +1449,7 @@ export interface WorkspaceCredentialsPutOptions {
    * opencode's ChatGPT login, made the same way, as the `openai` entry of opencode's `auth.json`
    * (`<home>/.local/share/opencode/auth.json`, followed through links to where it really is,
    * which must be inside the home). A login the person made in opencode is never replaced, and a
-   * release removes only Core's copy.
+   * release removes only sealant's copy.
    */
   readonly opencode?: WorkspaceCredentialsAccountChoice;
   /**
@@ -1521,7 +1521,7 @@ export interface WorkspaceCredentialHomeAccount {
   readonly name: string;
 }
 
-/** One home of a running workspace and the logins Core keeps in it. */
+/** One home of a running workspace and the logins sealant keeps in it. */
 export interface WorkspaceCredentialHome {
   /** One receipt per login written there. Absent from a control plane without placements. */
   readonly placements?: readonly WorkspaceCredentialPlacementReceipt[];
@@ -1798,10 +1798,10 @@ export type BoundedWorkspaceForwardOptions = BoundedForwardTarget & {
 
 /**
  * Why a bounded forward was reset: a reason either side sent, `connection-lost` when the socket
- * closed with neither a `fin` nor a reset, `unrecognized-reset` when Core sent a reason newer than
- * this SDK (kept in `wireReason`), or `workspace-ended` when the workspace ended the forward before
- * it took everything written to it. A write after the workspace ended fails with `workspace-ended`
- * too.
+ * closed with neither a `fin` nor a reset, `unrecognized-reset` when sealant sent a reason newer
+ * than this SDK (kept in `wireReason`), or `workspace-ended` when the workspace ended the forward
+ * before it took everything written to it. A write after the workspace ended fails with
+ * `workspace-ended` too.
  */
 export type ForwardResetCause =
   | ForwardResetReason
@@ -2597,7 +2597,7 @@ export interface BoatAccountsNamespace {
   /**
    * Stores a Boat account. The key (whitespace around it trimmed) is checked with Boat by
    * read-only calls first: a key Boat refuses rejects with a `SealantApiError` (422, `reason`
-   * `boat-key-refused`, Boat's reason in `boat`), one that lacks permissions Core needs with
+   * `boat-key-refused`, Boat's reason in `boat`), one that lacks permissions sealant needs with
    * `boat-key-missing-permissions` (`missingPermissions`, `boatKeyReport`), and
    * `boat-key-unverified` when Boat did not answer; nothing is stored. No error names the key.
    */
@@ -2605,7 +2605,7 @@ export interface BoatAccountsNamespace {
     readonly label: string;
     readonly apiKey: string;
     /**
-     * For a personal key: the Boat organization to bill (its id or name). Core stores it and
+     * For a personal key: the Boat organization to bill (its id or name). sealant stores it and
      * names it on every request for the account, so billing never follows the key's active wallet.
      */
     readonly organization?: string;

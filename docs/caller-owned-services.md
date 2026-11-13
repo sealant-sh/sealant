@@ -13,30 +13,31 @@ Give API and worker the same `SEALANT_RESOURCE_CALLERS` configuration:
 [{ "kind": "docker", "name": "mend", "container": "mend", "callbackPorts": [4401] }]
 ```
 
-`container` is the actual Docker container running Mend's server. In the packaged install, Core and
-Mend share this container. A service's `reach.caller` names this configured entry. It receives
+`container` is the actual Docker container running Mend's server. In the packaged install, sealant
+and Mend share this container. A service's `reach.caller` names this configured entry. It receives
 `endpoint.host` and `endpoint.port` in the SDK response. Reach this endpoint from Mend's server
 container, not from the Docker host. The callback URL uses `endpoint.callbackHost` and the requested
 callback port. Mend must bind that listener on its container interfaces, rather than loopback only.
 
-Core needs the Docker socket and permission to create bridge networks, named volumes and short-lived
-NET_ADMIN guard containers. The workload receives no NET_ADMIN or NET_RAW capability. There is no
-published host port. Core guards both the service's network namespace and Mend's callback port.
-Workspaces cannot link to these scopes or join their caller networks. The service can access public
-IPv4 integration endpoints, DNS and its one private callback port. Other private destinations and
-IPv6 are denied.
+sealant needs the Docker socket and permission to create bridge networks, named volumes and
+short-lived NET_ADMIN guard containers. The workload receives no NET_ADMIN or NET_RAW capability.
+There is no published host port. sealant guards both the service's network namespace and Mend's
+callback port. Workspaces cannot link to these scopes or join their caller networks. The service can
+access public IPv4 integration endpoints, DNS and its one private callback port. Other private
+destinations and IPv6 are denied.
 
 Docker DNS is allowed over UDP and TCP destination port 53 only to the instance's configured IPv4
-resolvers. Core reads the anchor's Docker-generated `/etc/resolv.conf`, including `ExtServers` for
-embedded DNS, so private LAN/VPC upstreams work without opening other private ports or other private
-DNS servers. Docker must expose this upstream metadata; missing, malformed or IPv6-only
-configuration refuses startup. Core does not substitute its own container's resolver or public
+resolvers. sealant reads the anchor's Docker-generated `/etc/resolv.conf`, including `ExtServers`
+for embedded DNS, so private LAN/VPC upstreams work without opening other private ports or other
+private DNS servers. Docker must expose this upstream metadata; missing, malformed or IPv6-only
+configuration refuses startup. sealant does not substitute its own container's resolver or public
 fallbacks. The workload gets this file read-only. On the next convergence, existing workloads
 without the read-only mount are replaced over their retained volumes.
 
-Core pins its guard/probe/backup helper by digest. `SEALANT_RESOURCE_CALLER_GUARD_IMAGE` optionally
-selects an operator-maintained equivalent containing `iptables`, `ip6tables`, `nc`, `tar`, `cat` and
-`sleep`. The normal resource subnet pools must have capacity for two /24 networks per instance.
+sealant pins its guard/probe/backup helper by digest. `SEALANT_RESOURCE_CALLER_GUARD_IMAGE`
+optionally selects an operator-maintained equivalent containing `iptables`, `ip6tables`, `nc`,
+`tar`, `cat` and `sleep`. The normal resource subnet pools must have capacity for two /24 networks
+per instance.
 
 Run the worker: it restarts failed workloads from durable desired state, independently of workspace
 sessions. The API performs each requested start synchronously and returns its health result. The
@@ -60,7 +61,7 @@ Set `DEFAULT_RUNTIME_ADAPTER=k8s` or `k3s`, and configure both API and worker:
 ```
 
 Create `SEALANT_RESOURCE_K8S_NAMESPACE`, default `sealant-services`, with a default StorageClass.
-Grant Core read/write access to StatefulSets, PVCs, Services, Secrets, Pods, pod exec and
+Grant sealant read/write access to StatefulSets, PVCs, Services, Secrets, Pods, pod exec and
 NetworkPolicies in that namespace. Purge also requires cluster-scoped `get`/`list` on
 PersistentVolumes to verify Delete reclaim policy and confirm storage reclaim, including after a
 retry where the PVC is already gone. No cluster-scoped writes are required. It reads its standard
@@ -68,7 +69,7 @@ Kubernetes configuration, or the explicit `SEALANT_RESOURCE_K8S_KUBECONFIG` path
 `SEALANT_RESOURCE_K8S_NETWORK_POLICY=true` only with a policy-enforcing CNI. The namespace must have
 no broader policy admitting workspace traffic.
 
-Core creates one replica, stops it before changing its template, retains individually named PVCs,
+sealant creates one replica, stops it before changing its template, retains individually named PVCs,
 and returns a stable ClusterIP DNS endpoint. Ingress admits only the configured caller pods on the
 service port. Egress permits their callback port, kube-dns and public IPv4 destinations. The
 callback host must route to those caller pods on the same port. Mend's deployment must keep the
@@ -108,7 +109,7 @@ until stop. These choices keep existing resource-domain admission conservative a
 
 ## Remove an organization's service
 
-`secretEnv: {}` clears only Core's env, and archive keeps the data volume. To remove Executor's
+`secretEnv: {}` clears only sealant's env, and archive keeps the data volume. To remove Executor's
 stored OAuth tokens too, stop or archive its caller-owned instance, then purge its observed id:
 
 ```ts
@@ -124,8 +125,8 @@ failed stop. The expected id prevents a delayed retry from purging a replacement
 key. An absent key reports already-purged after scope authorization; no tombstone is kept. An
 archived scope can still purge its instances. Reusing a purged key creates a new instance id.
 
-After the stopped provider check, Core fences the instance as archived and clears sealed env and its
-secret revision. Docker removes its workload, anchor, helpers, callback allow rule, dedicated
+After the stopped provider check, sealant fences the instance as archived and clears sealed env and
+its secret revision. Docker removes its workload, anchor, helpers, callback allow rule, dedicated
 networks and named volumes. Kubernetes removes its StatefulSet, pod, backup helper/policy, Service,
 Secret, NetworkPolicy and retained PVCs, waiting for object deletion and underlying Delete-policy
 volume reclamation. A bound Retain-policy PV refuses purge before deletion, because PVC deletion
@@ -136,6 +137,6 @@ retry the same purge. It retains an archived record and conservative charges, ca
 continues from missing resources without recreating them. Backup streams and other lifecycle
 operations share the purge lock; consume or cancel a backup before purging.
 
-Core retains no caller-volume backup files. It streams downloads directly and purge removes any
+sealant retains no caller-volume backup files. It streams downloads directly and purge removes any
 abandoned helper. Mend must delete backups it downloaded or stored elsewhere. External provider
 snapshots, database/WAL backups and physical media sanitization remain operator responsibilities.

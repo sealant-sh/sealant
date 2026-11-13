@@ -179,7 +179,7 @@ export interface CaptureDrainEntry {
   /** When `last` was read (this worker's clock; the database's once stored). */
   readonly lastAtMs?: number | undefined;
   /**
-   * A status is on record but cannot be read (`last` is then absent): Core observed something it
+   * A status is on record but cannot be read (`last` is then absent): sealant observed something it
    * cannot weigh, so no attestation may be taken over it.
    */
   readonly lastUnreadable?: boolean | undefined;
@@ -393,7 +393,7 @@ export interface CaptureDrainLedger {
   readonly endObservation: (runId: string, fence: CaptureObservationFence) => Effect.Effect<void>;
   /**
    * Record a capture status received from the run's executor — by a drain, a probe, a sampler:
-   * every status Core receives is evidence about its disk (review 5 #3) — resolving `fence`, the
+   * every status sealant receives is evidence about its disk (review 5 #3) — resolving `fence`, the
    * observation it answers. Ordered by the executor's own history, never by any clock
    * (`statusSupersedes`, review 6 #6). Answers whether it was recorded durably: `false` leaves
    * the fence open, and the executor reads unknown until a later observation is recorded.
@@ -1159,7 +1159,7 @@ export const reportsComplete = (status: CaptureFlushReport | undefined): boolean
   status?.complete === true && status.incompleteReason === undefined;
 
 /**
- * Whether Core itself read `complete: true` from the run's daemon (the drain's last status), and
+ * Whether sealant itself read `complete: true` from the run's daemon (the drain's last status), and
  * no unsaved answer on record is left that it does not cover (review 9 #4).
  */
 export const observedComplete = (entry: CaptureDrainEntry | undefined): boolean =>
@@ -1179,7 +1179,7 @@ export const unsavedOnRecord = (entry: CaptureDrainEntry | undefined): string | 
     : `an answer of the executor that no later one covers says its work is not saved (${describeCaptureStatus(first)})`;
 };
 
-/** Core's own latest observation of the run's daemon, as the preservation policy weighs it. */
+/** sealant's own latest observation of the run's daemon, as the preservation policy weighs it. */
 export const observedCaptureOf = (
   entry: CaptureDrainEntry | undefined,
 ): ObservedCapture | undefined => {
@@ -1206,7 +1206,7 @@ export const observedCaptureOfStatus = (
 
 /**
  * Whether the control plane's recorded attestation covers THIS executor, weighed at the moment
- * it is consumed: it names the run's executor, and nothing Core observed from it — before or
+ * it is consumed: it names the run's executor, and nothing sealant observed from it — before or
  * after the attestation was accepted — contradicts it (`attestationCoversExecutor`: an older
  * epoch, a later capture, or an observation that the work is not saved made after the seal).
  * No attestation, or one about another executor, is `false`.
@@ -1219,7 +1219,7 @@ export const attestedCompleteFor = (
   if (attested === undefined || entry?.unsavedUnreadable === true) {
     return false;
   }
-  // The seal must cover Core's latest observation AND every unsaved answer no later one covers
+  // The seal must cover sealant's latest observation AND every unsaved answer no later one covers
   // (review 9 #4): a failure no position orders against the seal is never erased by an answer
   // that arrived after it.
   return attestationCoversObservations(
@@ -1266,8 +1266,8 @@ export const recordedDeletionEvidence = (
  * What became of an executor's work once the runtime positively no longer has it, from the
  * evidence on record (the same evidence that authorizes removing one), never from the drain's
  * display state, which an earlier saved FINAL leaves behind after newer unsaved answers.
- * `stopped`: a complete FINAL Core observed, or a covering attestation of a sealed FINAL, with no
- * unsaved answer after it. `discarded`: its owner discarded the unsaved work. `gone`: anything
+ * `stopped`: a complete FINAL sealant observed, or a covering attestation of a sealed FINAL, with
+ * no unsaved answer after it. `discarded`: its owner discarded the unsaved work. `gone`: anything
  * else, reported as lost. All three end the retention.
  */
 export const terminalCaptureState = (
@@ -2333,7 +2333,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
       if (outcome.kind !== "drained") {
         return outcome;
       }
-      // Saved by this drain's reading — unless Core received a newer one from the same executor
+      // Saved by this drain's reading — unless sealant received a newer one from the same executor
       // meanwhile (the public status or flush route, another path) that says its work is not
       // saved: every observation of the executor counts, whoever asked (review 5 #3). The record
       // keeps the newest reading, so it is read back before anything is removed on this one.

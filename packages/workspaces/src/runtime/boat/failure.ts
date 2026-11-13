@@ -1,5 +1,5 @@
 /**
- * Boat's answer to a refused call, as Core keeps it: a kind from the closed set in
+ * Boat's answer to a refused call, as sealant keeps it: a kind from the closed set in
  * `@sealant/api-contracts` (`BOAT_FAILURE_KINDS`) and the few fields of Boat's own that a caller
  * may read: its code, its message (bounded and redacted), its request id, when to retry, its
  * billing link, and the permission the call needs. Nothing else of the body is kept, and no part
@@ -181,7 +181,7 @@ const first = <T>(schema: z.ZodType<T>, ...values: unknown[]): T | undefined => 
   return undefined;
 };
 
-/** The failure for a call Boat did not answer, or answered with nothing Core can read. */
+/** The failure for a call Boat did not answer, or answered with nothing sealant can read. */
 export const boatNoAnswer = (operation: string, status: number | null): BoatFailure => ({
   kind: "no-answer",
   retryable: true,
@@ -190,7 +190,7 @@ export const boatNoAnswer = (operation: string, status: number | null): BoatFail
 });
 
 /**
- * Classifies Boat's error answer. `permission`: the permission Core's call needs, named when
+ * Classifies Boat's error answer. `permission`: the permission sealant's call needs, named when
  * Boat's own answer names none. `secrets`: values removed from Boat's message (the request's key).
  */
 export const classifyBoatRefusal = (input: {
@@ -302,7 +302,7 @@ const carrierSchema = z.object({
 /**
  * The Boat failure a launch or image-build error message carries. A Boat launch's message ends in
  * its allowlisted diagnostic (`; diagnostic {…}`) and a native build's in its provider failure
- * (`; provider {…}`); both are Core's own serialization of {@link boatFailureSchema}, read back
+ * (`; provider {…}`); both are sealant's own serialization of {@link boatFailureSchema}, read back
  * through the same schema. The last one in the message wins.
  */
 export const boatFailureInMessage = (message: unknown): BoatFailure | undefined => {

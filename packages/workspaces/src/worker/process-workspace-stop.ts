@@ -219,7 +219,7 @@ const isCaptureSourcedRun = (runId: string, sourceKind: string | null | undefine
  * read) goes through the one preservation policy (`decideExecutorDeletion`): a live one is
  * drained first (`capture-drain.ts`) and removed once the daemon confirms its final flush
  * complete, or once its daemon is silent AND nothing of the executor is left; an ENDED one keeps
- * its disk, and is removed only when Core observed its final flush complete, the control plane
+ * its disk, and is removed only when sealant observed its final flush complete, the control plane
  * attested a sealed final capture of it (`completion` on the stop request), or the owner
  * discarded it — otherwise it is retained (recorded, and recovery is attempted). Otherwise the
  * call returns `draining` / `kept` and writes nothing — the reaper's next tick (a stored

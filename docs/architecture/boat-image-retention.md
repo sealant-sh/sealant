@@ -1,15 +1,15 @@
 # Boat image retention
 
-Core builds each Boat environment once per Boat account and keeps it as a Boat saved snapshot
+sealant builds each Boat environment once per Boat account and keeps it as a Boat saved snapshot
 (`native_publications`, state `ready`). Boat includes ten per account and bills each extra one by
-the day. Every environment change, every Core upgrade that changes the build recipe and every purge
-used to leave one behind. The worker now removes, per account, the ones no workspace can use any
-more (`BoatNativeCatalogService.reap`, scheduled in `apps/worker/src/workers/workspaces.ts`).
+the day. Every environment change, every sealant upgrade that changes the build recipe and every
+purge used to leave one behind. The worker now removes, per account, the ones no workspace can use
+any more (`BoatNativeCatalogService.reap`, scheduled in `apps/worker/src/workers/workspaces.ts`).
 
 ## What "can still be used" means
 
 A launch finds its image by exact key: the account's deployment, the image scope (owner or resource
-domain), and the plan (`recipeHash`, `assetsHash`, `runtime`, `platform`) that this Core computes
+domain), and the plan (`recipeHash`, `assetsHash`, `runtime`, `platform`) that this sealant computes
 from the workspace's spec. A stopped Boat workspace has no VM; starting it again (a restart, or
 Mend's resume, which creates a workspace from the captured files with the same environment) plans
 its spec again. So an image is kept when any of these holds, checked in
@@ -17,18 +17,18 @@ its spec again. So an image is kept when any of these holds, checked in
 
 1. **A run holds it.** Any consumer pin not released: a build in flight (the pin is taken at
    reserve), a launch, a running workspace or standby, a stop, a retained or unknown executor.
-2. **It is wanted.** Its key is one this Core plans, now, for the latest launch of a workspace that
-   can still start in this account (`NativePublicationRepo.startable`): not archived, and queued,
-   running, ready, or stopped or failed within `SEALANT_BOAT_IMAGE_RESUME_DAYS` (14). After a Core
-   upgrade that changes the recipe, a stopped workspace wants the new key, so the old image is no
-   longer wanted. Only Boat workspaces count: every create has an image scope whatever its runtime,
-   so a workspace counts only when its latest launch resolved to Boat (or has not resolved yet and
-   asks for `boat` or `auto`) and Boat can launch its spec. A Docker workspace, or one Boat refuses
-   (a custom base image, host directories, Arch, Fedora), is never planned here.
+2. **It is wanted.** Its key is one this sealant plans, now, for the latest launch of a workspace
+   that can still start in this account (`NativePublicationRepo.startable`): not archived, and
+   queued, running, ready, or stopped or failed within `SEALANT_BOAT_IMAGE_RESUME_DAYS` (14). After
+   a sealant upgrade that changes the recipe, a stopped workspace wants the new key, so the old
+   image is no longer wanted. Only Boat workspaces count: every create has an image scope whatever
+   its runtime, so a workspace counts only when its latest launch resolved to Boat (or has not
+   resolved yet and asks for `boat` or `auto`) and Boat can launch its spec. A Docker workspace, or
+   one Boat refuses (a custom base image, host directories, Arch, Fedora), is never planned here.
 3. **A build of its scope is queued or running.** That job's spec was not read when the wanted keys
    were, so nothing of its scope is removed meanwhile.
 4. **Something used it recently.** It became ready, or a run was pinned to it or released it, within
-   `SEALANT_BOAT_IMAGE_MIN_AGE_HOURS` (24): a rolled-back Core still finds its images.
+   `SEALANT_BOAT_IMAGE_MIN_AGE_HOURS` (24): a rolled-back sealant still finds its images.
 
 If any counted workspace's spec cannot be planned, or there are more than 20,000 of them, the pass
 removes nothing. A spec that no longer parses cannot launch and is ignored.
@@ -67,4 +67,4 @@ recorded, then builds the image again. It waits as long as the removal takes: se
 until the next journal sweep after a failed delete, up to the 30-minute claim after a worker died
 mid-removal.
 
-Schema: none changed. A rolled-back Core reads every row this one writes.
+Schema: none changed. A rolled-back sealant reads every row this one writes.

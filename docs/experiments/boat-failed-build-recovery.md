@@ -26,7 +26,7 @@ publication with any saved artifact is never replaced by this path.
 The migration gives existing reservations attempt one and no predecessor. Run 4's unpublished
 `34aa66fd` with `native-provider-transport_error` is eligible on a new session acquire, without a
 manual database reset. Its old session and job remain failed. No VM 131 access or writes were used.
-A new Mend preview must bundle the changed Core worker and apply
+A new Mend preview must bundle the changed sealant worker and apply
 `20261108191021_boat_failed_build_replacement` before session 5.
 
 Real Postgres and HTTP tests cover the original failure, immutable redelivery, one fresh build,

@@ -12,7 +12,7 @@ the host Docker Engine, and neither the compose stack nor `install.sh` runs a br
 
 ## Context
 
-Goal: a user with **only Docker** (daemon + compose v2) installs the full Sealant Core stack with
+Goal: a user with **only Docker** (daemon + compose v2) installs the full sealant stack with
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sealant-sh/sealant/main/install.sh | sh
@@ -36,7 +36,7 @@ What blocks that today:
 
 Facts that make this easy (verified in code):
 
-- **The browser never calls the core API** — only server-side tRPC context does, and
+- **The browser never calls the sealant API** — only server-side tRPC context does, and
   `getCoreApiBaseUrl` falls back to `process.env` at runtime
   (`apps/web/src/lib/api/core-api-client.ts:72`). Prebuilt web images work; no VITE build-time
   baking problem as long as CI never sets `VITE_API_URL`.

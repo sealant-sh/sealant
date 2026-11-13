@@ -1048,7 +1048,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
 
   it("keeps an exited capture executor that no drain ever reached (sealantd exited 75 on its own)", async () => {
     // Review 2 #2: a plain `docker stop`, or sealantd's own shutdown FINAL failing its uploads,
-    // exits 75 with the only copy of the staged captures on the container's disk. No Core drain
+    // exits 75 with the only copy of the staged captures on the container's disk. No sealant drain
     // ran, so the ledger is empty: nothing proves the work saved, and the executor is kept.
     const daemon = fakeCaptureDaemon(["unreachable"]);
     const harness = makeHarness({
@@ -1103,7 +1103,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
   };
 
   it("removes an exited capture executor the control plane attested complete for THIS executor", async () => {
-    // Core's last observation was made while the head was still short of the sealed capture:
+    // sealant's last observation was made while the head was still short of the sealed capture:
     // the seal came after it (a FINAL whose answer was lost).
     const ledger = withEntry({
       last: captureStatus({ epoch: 3, headN: 40, pending: 1, complete: false }),
@@ -1124,9 +1124,9 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
     });
   });
 
-  it("keeps an exited executor whose seal Core's own later observation contradicts (review 4 #1)", async () => {
+  it("keeps an exited executor whose seal sealant's own later observation contradicts (review 4 #1)", async () => {
     // Capture 41 was sealed; later the disk changed and the FINAL could not snapshot it
-    // (`snapshot-failed`, no newer capture registered: the head is still 41). Core read that
+    // (`snapshot-failed`, no newer capture registered: the head is still 41). sealant read that
     // failed answer after the seal: a received failure is not overridden by an older seal.
     const sealedAtMs = Date.now() - 120_000;
     for (const variant of [
@@ -1175,7 +1175,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
     }
   });
 
-  it("removes an exited capture executor whose final flush Core itself observed complete", async () => {
+  it("removes an exited capture executor whose final flush sealant itself observed complete", async () => {
     const { outcome, stop } = await exitedStop(withEntry({ last: savedStatus() }));
     expect(outcome).toBe("stopped");
     expect(stop).toHaveBeenCalledTimes(2);
@@ -1430,7 +1430,7 @@ describe("an ended executor's removal is decided on current evidence (review 6 #
         stopReason: "user",
         runtimeAdapters: [
           stubAdapter(stop, async () => {
-            // Received by another Core path while the stop waits on the runtime.
+            // Received by another sealant path while the stop waits on the runtime.
             await Effect.runPromise(
               ledger.recordStatus(
                 "run_old",

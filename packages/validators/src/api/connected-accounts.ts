@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /*
-Browser-safe zod mirrors of the connected-accounts core API contract (packages/api-contracts).
+Browser-safe zod mirrors of the connected-accounts sealant API contract (packages/api-contracts).
 Used by the web tRPC router + settings UI. Secret material only ever flows INTO the API via
 `createConnectedAccountRequestSchema.secret`; no response schema ever includes it.
 */

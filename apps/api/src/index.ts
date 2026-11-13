@@ -204,7 +204,7 @@ export const requestDependenciesLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(databaseLayer));
 
 /**
- * Core API layer:
+ * sealant API layer:
  *
  * `makeControlPlaneHttpApiLayer()` returns the `HttpApiBuilder.layer(...)` layer for our
  * contract-first control-plane API implementation, registered against the request

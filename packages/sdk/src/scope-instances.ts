@@ -134,7 +134,7 @@ export type ScopeInstancePurgeResult = ResourceInstancePurgeResult;
 export interface ScopeInstances {
   /**
    * Irreversibly delete a stopped or archived caller-owned instance, including retained volumes
-   * and sealed env. Pass its observed id to protect a replacement using the same key. No Core
+   * and sealed env. Pass its observed id to protect a replacement using the same key. No sealant
    * backup is retained; previously downloaded copies belong to their recipient.
    */
   purge(
@@ -152,7 +152,10 @@ export interface ScopeInstances {
     spec: ScopeInstanceSpec,
     options: {
       readonly cause: "use" | "person";
-      /** Omission retains secrets; an explicit map replaces them. Requires Core's credentials key. */
+      /**
+       * Omission retains secrets; an explicit map replaces them. Requires sealant's credentials
+       * key.
+       */
       readonly secretEnv?: Readonly<Record<string, string>>;
     },
   ): Promise<ScopeInstance>;

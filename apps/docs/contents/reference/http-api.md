@@ -67,7 +67,7 @@ token) as one entry of each tool's own `auth.json`: `openai-codex` in `<home>/.p
 `openai` in `<home>/.local/share/opencode/auth.json`. The file is merged in place, followed through
 links to where it really is (which must be inside the home and outside `/workspace`), and its other
 entries stay; a login the person made inside pi or opencode is never replaced, and `null` or a
-release removes only Core's copy. A Codex account that is not a ChatGPT login answers `409`
+release removes only sealant's copy. A Codex account that is not a ChatGPT login answers `409`
 `connected-account-unsupported`. A refresh of the Codex login rewrites these entries too. Without
 `node` on the image's system PATH such a put, and a release or put that would remove a pi or
 opencode login whose file exists, answer `409` `home-unusable` and change nothing (a release leaves
@@ -84,8 +84,8 @@ an absolute path, never under `/workspace`, reached without a symbolic link (`40
 otherwise); `/root` takes only the workspace owner's logins. A login file that is not a regular
 file, or that has another hard link (a name elsewhere, which could be saved state), is refused `409`
 `home-unusable`, naming it, and nothing is written into it. A login is never in any process's
-arguments or environment: Core sends it on the exec's standard input, and the executor passes it on
-the same way. Another write into the same home, or too many into the workspace at once, answers
+arguments or environment: sealant sends it on the exec's standard input, and the executor passes it
+on the same way. Another write into the same home, or too many into the workspace at once, answers
 `409` `home-busy`: nothing was done, try again. Only a service key may call them. A workspace with
 no running executor answers `409` `workspace-not-running`. An account the person cannot name answers
 `404` with `code` `connected-account-missing`, and one marked invalid or holding an unusable
@@ -112,7 +112,7 @@ person's `sudo` works. It is checked at create (`400` with the reason): `gid` 40
 Cloudflare, and in `runtime.env`, whose names must be environment variable names. Kubernetes takes
 it under runc and refuses it under gVisor (`ociRuntime: "runsc"`). The launch refuses it, with
 nothing started, on an image whose sealantd does not report `restore.owner_map`
-(`owner-map-unsupported`) and on one whose probe Core could not read (`owner-map-unverified`).
+(`owner-map-unsupported`) and on one whose probe sealant could not read (`owner-map-unverified`).
 `GET /` reports `features.kubernetesPersonLayout: true` from a control plane that takes it on
 Kubernetes. `POST /v1/workspaces/:id/capture/replan` takes `expectedOwnerMap` (`null` for none) and
 answers `409` `owner-map-mismatch` on an executor launched with another map; the capture status
@@ -193,19 +193,19 @@ the API, and the worker still refuses gVisor where the cluster has no runtime cl
 An install's default Boat account is its env key (`SEALANT_BOAT_API_KEY` or
 `SEALANT_BOAT_API_KEY_FILE`), and it is optional: an install can run Boat from the accounts it
 stores alone. A product that serves several organizations stores one Boat account per organization,
-so each organization's Boat VMs run in, and are billed to, its own Boat account. Core has no notion
-of organizations: it knows each account by id, and the caller keeps the mapping. These routes need a
-service key, and the install's credential key (`SEALANT_CREDENTIALS_KEY`; `503` otherwise). With no
-env key, both `install-key` routes answer `503` and say so.
+so each organization's Boat VMs run in, and are billed to, its own Boat account. sealant has no
+notion of organizations: it knows each account by id, and the caller keeps the mapping. These routes
+need a service key, and the install's credential key (`SEALANT_CREDENTIALS_KEY`; `503` otherwise).
+With no env key, both `install-key` routes answer `503` and say so.
 
 - `POST /v1/boat-accounts { label, apiKey, organization? }` checks the key with Boat by read-only
   calls before it stores anything (whitespace around a pasted key is trimmed). A key Boat refuses
   (unknown, revoked, expired, another organization's) answers `422` with code `boat-key-refused` and
   Boat's reason in `boat` (see the workspace's `error.boat` below); a key that provably lacks a
-  permission Core needs answers `422` with code `boat-key-missing-permissions`, the permissions
+  permission sealant needs answers `422` with code `boat-key-missing-permissions`, the permissions
   named in `missingPermissions` and the check in `report`; one Boat did not answer for
   `boat-key-unverified`. For a personal key, `organization` names the Boat organization to bill (its
-  id or name): Core stores it and sends it as `X-Boat-Org` on every request for the account, so
+  id or name): sealant stores it and sends it as `X-Boat-Org` on every request for the account, so
   billing never follows the key's active wallet. The key is sealed with the install's credential key
   (`SEALANT_CREDENTIALS_KEY`) and is never returned by any route, logged or named in an error. The
   answer is `{ boatAccountId, label, state, createdAt, keyRotatedAt, organization, report }`.
@@ -226,30 +226,30 @@ env key, both `install-key` routes answer `503` and say so.
   in the account and use the new key from then on. Rotating or removing `default`, the install's own
   key, is refused (`409`, code `boat-account-environment`): it is set in the install's environment.
 
-A key's `report` says what Core observed of it, from Boat's own answers, and when (`observedAt`).
+A key's `report` says what sealant observed of it, from Boat's own answers, and when (`observedAt`).
 Each fact is `{ observed: true, … }` or `{ observed: false, reason, boat? }`, where `reason` is
 `refused` (Boat refused the read; `boat` says how), `no-answer`, `not-listed` (Boat's key list did
 not include the key: an organization key is refused the list, a key limited to some VMs gets an
-empty one) or `unreadable`. Core never guesses a fact it did not observe.
+empty one) or `unreadable`. sealant never guesses a fact it did not observe.
 
 | Field                 | What it is, when observed                                                                                                                 |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `identity`            | Who the key is (`GET /me`): `accountId` (Boat's account id, not a person here), `login`, `displayName`, `serviceAccount`, `accountStatus` |
 | `keyKind`             | `personal` or `organization`                                                                                                              |
 | `wallet`              | Which wallet a VM bills (`GET /limits`): `personal`, or `organization` with its id and name                                               |
-| `requiredPermissions` | The permissions Core needs, one per Boat call it makes (always present)                                                                   |
+| `requiredPermissions` | The permissions sealant needs, one per Boat call it makes (always present)                                                                |
 | `permissions`         | The key's permissions (`GET /api-keys`), the required ones it lacks, whether it is limited to some VMs                                    |
 | `expiry`              | `expiresAt` (null: never), `expired`, `expiringSoon`                                                                                      |
 | `start`               | `canStart`, `blockedReason`, `billingStatus`, `runningVms`, `allowedVms`                                                                  |
 | `snapshots`           | Saved snapshot slots `used` and `included`                                                                                                |
 
-Core needs `exec`, `file.write`, `host`, `sandbox.create`, `sandbox.delete`, `sandbox.read`,
+sealant needs `exec`, `file.write`, `host`, `sandbox.create`, `sandbox.delete`, `sandbox.read`,
 `sandbox.resume`, `sandbox.stop`, `snapshot.read` and `snapshot.write`. `sandbox.delete-own` is not
 enough: after a rotation the new key deletes VMs the old key created.
 
 - `POST /v1/boat-accounts/:boatAccountId/prove` runs a full check of a stored account's key, since
-  Boat lets no key read all of its own permissions and has no dry run. Core starts the smallest VM
-  in the account, runs a command in it, publishes a port and saves a snapshot, then deletes the
+  Boat lets no key read all of its own permissions and has no dry run. sealant starts the smallest
+  VM in the account, runs a command in it, publishes a port and saves a snapshot, then deletes the
   snapshot and the VM. It answers
   `{ proofId, startedAt, finishedAt, outcome, steps, starts, leftBehind: { vm, snapshot, removalConfirmed } }`.
   - `outcome` is `passed`, `refused` or `interrupted`.
@@ -257,10 +257,10 @@ enough: after a rotation the new key deletes VMs the old key created.
     `delete-snapshot`, `delete-vm`) is `passed`, `refused` (with Boat's reason in `boat`),
     `no-answer` or `not-reached`.
   - `starts` is how many VM starts it asked Boat for (0 or 1).
-  - `leftBehind.removalConfirmed` is true when Core saw Boat delete everything it made. When it is
-    false, the worker's sweep owns what is left and keeps deleting it. `vm` (an id) and `snapshot`
-    (a name) name what is known; `vm` is null when a VM may exist whose id Boat never answered, and
-    the sweep finds it by its `sealant-key-proof` label.
+  - `leftBehind.removalConfirmed` is true when sealant saw Boat delete everything it made. When it
+    is false, the worker's sweep owns what is left and keeps deleting it. `vm` (an id) and
+    `snapshot` (a name) name what is known; `vm` is null when a VM may exist whose id Boat never
+    answered, and the sweep finds it by its `sealant-key-proof` label.
 
   Leaving nothing behind is how the check is built. It is recorded before anything is created, with
   what may be created, and whatever was issued is deleted when the check ends. A check that stops
@@ -278,11 +278,11 @@ enough: after a rotation the new key deletes VMs the old key created.
 - `DELETE /v1/boat-accounts/:boatAccountId` is refused while the account has runs whose VMs Boat may
   still hold, or an image build in flight (`409`, code `boat-account-in-use`, with `liveRuns` and
   `buildsInFlight`). Otherwise the account answers `state: "removing"`: no new workspace runs in it,
-  and a worker that builds Boat images deletes the saved images Core built in the account, then
+  and a worker that builds Boat images deletes the saved images sealant built in the account, then
   erases its key. It leaves the list once that is done.
 
 A Boat workspace whose launch or image build failed because Boat refused, or did not answer, a call
-Core made reads `error.boat` beside `error.message` and `error.code` on `GET /v1/workspaces/:id`:
+sealant made reads `error.boat` beside `error.message` and `error.code` on `GET /v1/workspaces/:id`:
 `{ kind, retryable, operation?, status?, code?, message?, requestId?, permission?, retryAfterSeconds?, retryAt?, billingUrl? }`.
 `kind` is one of `key-refused`, `key-expired`, `permission-missing`, `sandbox-outside-key`,
 `organization-mismatch`, `account-suspended`, `billing-required`, `running-limit`, `member-cap`,
@@ -297,8 +297,8 @@ An image build Boat refused for a reason a person fixes in Boat (`key-refused`, 
 `billing-required`, `member-cap`, `trial-restricted`, `snapshot-allowance-full`) stays quarantined,
 and every launch on it reads the kind back, until its own cause may have cleared: the account's key
 is rotated, or a check of it (`check`, `install-key`, or the worker's daily refresh) observes that
-this cause is gone: Boat accepts the key again, every permission Core needs is held, the account is
-active, the wallet can start a VM, or a saved snapshot slot is free. A check that clears another
+this cause is gone: Boat accepts the key again, every permission sealant needs is held, the account
+is active, the wallet can start a VM, or a saved snapshot slot is free. A check that clears another
 cause leaves it quarantined. The next launch then builds it once more; a fresh refusal quarantines
 the new build with the fresh reason until the next such event.
 
@@ -328,12 +328,12 @@ account: the tunnel is carried over the VM's hosted HTTPS route, which the run's
 opens.
 
 A workspace's SSH sessions (an `ssh` shell or command, VS Code Remote-SSH) run as root unless its
-create asks for its owner's own Linux user: `sshAsOwner: true` on `POST /v1/workspaces`. Core takes
-the person the owner is bound to and checks the create against it: the create must carry a capture
-owner map that gives that person their bound uid, and `runtime.credentialsHome` must be their bound
-uid and home. Otherwise it answers `403` (`WorkspaceSshOwnerRefusedError`, code `ssh-owner-unbound`,
-`ssh-owner-needs-owner-map` or `ssh-owner-mismatch`; no path is named). No caller names the user, so
-no create can pick another person's identity.
+create asks for its owner's own Linux user: `sshAsOwner: true` on `POST /v1/workspaces`. sealant
+takes the person the owner is bound to and checks the create against it: the create must carry a
+capture owner map that gives that person their bound uid, and `runtime.credentialsHome` must be
+their bound uid and home. Otherwise it answers `403` (`WorkspaceSshOwnerRefusedError`, code
+`ssh-owner-unbound`, `ssh-owner-needs-owner-map` or `ssh-owner-mismatch`; no path is named). No
+caller names the user, so no create can pick another person's identity.
 `DELETE /v1/workspaces/:workspaceId/ssh-user?ownerUserId=` sets it back to root; nothing else
 changes it. The user need not exist yet. The SSH gateway starts every shell and command of the
 workspace's sessions as that user, with `HOME` and the rest from passwd, only on a `sealantd` that

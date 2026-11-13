@@ -17,11 +17,11 @@ ValueError: outer-owner-required
 
 The public bind command omitted `sudo`. Boat executes it as its default user, but bootstrap requires
 root in the outer user namespace. Construction already invokes privileged helpers through sudo. The
-fix prefixes bind and snapshot-resume commands with `/usr/bin/sudo -n --`. It changes Core's command
-wrapper, so the existing publication can be reused without rebuilding its snapshot. The local Docker
-regression runs the real bundled Python and guest code as a non-root default user. The old command
-hits the owner refusal; the fixed command reaches request validation past that gate. This is not
-live readiness acceptance after the fix. No second launch was run.
+fix prefixes bind and snapshot-resume commands with `/usr/bin/sudo -n --`. It changes sealant's
+command wrapper, so the existing publication can be reused without rebuilding its snapshot. The
+local Docker regression runs the real bundled Python and guest code as a non-root default user. The
+old command hits the owner refusal; the fixed command reaches request validation past that gate.
+This is not live readiness acceptance after the fix. No second launch was run.
 
 The reproduction created only `bx_ebvepd9p`, with `sealant-dev=boat-stream` and exact run labels.
 The new canonical close path fenced its exchange, requested deletion, then confirmed its exact 404
@@ -46,6 +46,6 @@ through the real worker, the full worker/publication/readiness/shell/FINAL/fresh
 the non-root bootstrap regression in CI. Failure tails are limited to 4096 UTF-8 bytes per stream
 and use the native-build redactor. Successful bootstrap output is not logged.
 
-Deployment requires a new Mend preview with this Core worker pin. No migration is required; the new
-states are in the existing versioned JSON records and old rows continue to parse. No VM 131 writes,
-Boat contact, merge, tag or release was made.
+Deployment requires a new Mend preview with this sealant worker pin. No migration is required; the
+new states are in the existing versioned JSON records and old rows continue to parse. No VM 131
+writes, Boat contact, merge, tag or release was made.

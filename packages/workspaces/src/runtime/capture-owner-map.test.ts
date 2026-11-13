@@ -383,7 +383,7 @@ describe("the launch's image check", () => {
       [
         probe("unreadable"),
         "owner-map-unverified",
-        /answered the probe with something Core cannot read/,
+        /answered the probe with something sealant cannot read/,
       ],
       [undefined, "owner-map-unverified", /records no probe/],
     ] as const) {

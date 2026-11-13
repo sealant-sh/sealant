@@ -102,8 +102,8 @@ const refusedWords = (failure: BoatFailure) =>
         : "Boat refused the key";
 
 /**
- * A pasted key as Core keeps it: whitespace around it trimmed, then refused by its shape alone if
- * it is not a Boat key. The key's value never reaches an error.
+ * A pasted key as sealant keeps it: whitespace around it trimmed, then refused by its shape alone
+ * if it is not a Boat key. The key's value never reaches an error.
  */
 const parseKey = (apiKey: string) => {
   const credential = BoatSecret.parse(apiKey.trim());
@@ -146,7 +146,7 @@ const unverified = (failure: BoatFailure | undefined, outcome: string) =>
 
 /**
  * Checks a key with Boat by read-only calls before it is stored: refused when Boat refuses the key
- * itself, when it provably lacks a permission Core needs (named), or when Boat does not answer.
+ * itself, when it provably lacks a permission sealant needs (named), or when Boat does not answer.
  * Otherwise answers the client and the key's report.
  */
 const acceptedKey = (credential: BoatSecret, organization: string | null, outcome: string) =>
@@ -163,7 +163,7 @@ const acceptedKey = (credential: BoatSecret, organization: string | null, outcom
     if (check.missingPermissions.length > 0)
       return yield* new BoatAccountKeyRefusedError({
         code: "boat-key-missing-permissions",
-        message: `The key lacks Boat permissions Core needs: ${check.missingPermissions.join(", ")}; ${outcome}`,
+        message: `The key lacks Boat permissions sealant needs: ${check.missingPermissions.join(", ")}; ${outcome}`,
         missingPermissions: check.missingPermissions,
         report: check.report,
       });
@@ -339,7 +339,7 @@ const decodeProof = Schema.decodeUnknownOption(boatKeyProofSchema);
 /**
  * What the account's full checks may still hold in Boat, as a sentence naming each thing and
  * where; `undefined` when none may. An account with one keeps the key that can clean it up: it is
- * not rotated or removed until Core has deleted them (or the owner has, in Boat).
+ * not rotated or removed until sealant has deleted them (or the owner has, in Boat).
  */
 const proofLeftovers = (boatAccountId: string) =>
   Effect.gen(function* () {
@@ -362,11 +362,11 @@ const proofLeftovers = (boatAccountId: string) =>
       ];
       const when =
         row.finishedAt === null
-          ? ` (the check is running, or stopped halfway; Core takes it over from ${row.claimedUntil.toISOString()})`
+          ? ` (the check is running, or stopped halfway; sealant takes it over from ${row.claimedUntil.toISOString()})`
           : "";
       return `full check ${row.id}: ${things.length === 0 ? "nothing created yet" : things.join(" and ")}${when}`;
     });
-    return `Boat may still hold what a full check of this account made: ${parts.join("; ")}. Core keeps deleting it with this account's key. Try again once it is gone, or delete it in Boat yourself; nothing was changed.`;
+    return `Boat may still hold what a full check of this account made: ${parts.join("; ")}. sealant keeps deleting it with this account's key. Try again once it is gone, or delete it in Boat yourself; nothing was changed.`;
   });
 
 /**
@@ -479,7 +479,7 @@ const unseenBy = (
 
 /**
  * `PUT /v1/boat-accounts/:id/key`: replaces the account's key with one Boat accepts and that sees
- * everything the account has in Boat now: every VM of its live runs and every saved image Core
+ * everything the account has in Boat now: every VM of its live runs and every saved image sealant
  * built there that is not deleted yet. Refused while a launch's create is unresolved. Every later Boat call for the account's runs uses the new key; each run stays in
  * the account it was created in.
  */
@@ -575,7 +575,7 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
 /**
  * `DELETE /v1/boat-accounts/:id`: refused while the account has runs whose VMs Boat may still hold
  * or an image build in flight. Otherwise no new workspace runs in it from now on, and the worker
- * deletes the saved images Core built in it before the account, and its key, are gone.
+ * deletes the saved images sealant built in it before the account, and its key, are gone.
  */
 export const removeBoatAccount = (boatAccountId: string) =>
   Effect.gen(function* () {

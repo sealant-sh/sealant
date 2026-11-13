@@ -46,7 +46,7 @@ const start = async (account: FakeBoatAccount = {}, organization?: string) => {
 };
 
 describe("a Boat key's check", () => {
-  it("derives the permissions Core needs from its own calls, delete included", () => {
+  it("derives the permissions sealant needs from its own calls, delete included", () => {
     expect(BOAT_REQUIRED_PERMISSIONS).toEqual([
       "exec",
       "file.write",

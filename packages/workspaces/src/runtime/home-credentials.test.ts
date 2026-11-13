@@ -861,7 +861,7 @@ forEachShell("pi's and opencode's ChatGPT logins", () => {
       "openai-codex": JSON.parse(entry("at-pi")),
     });
     expect(json(join(home, ".local/share/opencode/auth.json"))).toEqual({ openai: own });
-    // A release removes only Core's copies: the person's own login stays.
+    // A release removes only sealant's copies: the person's own login stays.
     expect(
       w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })
         .status,
@@ -972,7 +972,7 @@ forEachShell("pi's and opencode's ChatGPT logins", () => {
       removes: [],
     });
     expect(put.status).toBe(HOME_SCRIPT_EXIT.piLoginUnusable);
-    // The take's own release (what the API runs next) finds nothing of Core's there and clears
+    // The take's own release (what the API runs next) finds nothing of sealant's there and clears
     // the marker, so the next take is not answered as another person's hold.
     expect(
       w.run({ home, fence: { kind: "release", generation: GEN_A }, writes: [], removes: [] })

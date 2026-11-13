@@ -1,5 +1,5 @@
 /**
- * Core's real Boat execution owner and guest transport (`execution.ts`) against the real guest
+ * sealant's real Boat execution owner and guest transport (`execution.ts`) against the real guest
  * agent (`microvm-image/agent.mjs`, `SEALANT_AGENT_HOST=boat`) and the real bind CLI, on a fake VM:
  * a boot-id file the test can "reboot", a fake `sealantd` that answers on its control socket or
  * exits 75/76, fake `ip`/`wg`/`iptables`/`unshare`/`sync`, a fake gateway resolver. Only the
@@ -328,7 +328,7 @@ const startFakeDns = async (): Promise<{ port: number; close: () => Promise<void
   };
 };
 
-// ---- Core's side ---------------------------------------------------------------------------
+// ---- sealant's side ------------------------------------------------------------------------
 
 const SOURCE_ID = "22222222-2222-4222-8222-222222222222";
 const DISK_LINEAGE = "33333333-3333-4333-8333-333333333333";
@@ -609,7 +609,7 @@ afterEach(async () => {
   dns = undefined;
 });
 
-/** Bind, seal, isolate and launch through Core's owner against the real agent. */
+/** Bind, seal, isolate and launch through sealant's owner against the real agent. */
 const launched = async (extraEnv: Record<string, string> = {}) => {
   dns = await startFakeDns();
   const vm = await createVm(dns.port);
@@ -639,7 +639,7 @@ const launched = async (extraEnv: Record<string, string> = {}) => {
   return { vm, agent, t, c, gatewayKey };
 };
 
-describe("Core's Boat execution owner against the real guest agent", () => {
+describe("sealant's Boat execution owner against the real guest agent", () => {
   it("binds through the bind CLI, proves the bearer on health, configures the tunnel, launches and reads readiness", async () => {
     const { vm, t, c } = await launched();
     // The bind left its public record and nothing else on the disk.
@@ -661,7 +661,7 @@ describe("Core's Boat execution owner against the real guest agent", () => {
         /^wg set sealant-wg listen-port 51820 private-key \/[^ ]+\/agent\/sealant-wg\.key peer \S+ endpoint 127\.0\.0\.1:\d+ allowed-ips /,
       ),
     );
-    // Nothing is launched before Core pushes it: readiness says so.
+    // Nothing is launched before sealant pushes it: readiness says so.
     await expect(execute(c.executor.readiness(t))).rejects.toThrow("invocation-held");
     expect(await execute(c.executor.launch(t.runtimeInstanceId))).toBe("running");
     const launch = boatAgentLaunchRecordSchema.parse(

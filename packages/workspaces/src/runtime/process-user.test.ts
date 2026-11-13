@@ -120,7 +120,7 @@ describe("the check script", () => {
       processUserCheckOutcome({ supported: true, exitCode: PROCESS_USER_CHECK_EXIT.noGetent }),
     ).toEqual({
       reason: "check-unavailable",
-      detail: "its image has no getent, so Core cannot read the user's passwd entry",
+      detail: "its image has no getent, so sealant cannot read the user's passwd entry",
     });
   });
 
@@ -179,7 +179,7 @@ const probe = (sealantd: WorkspaceImageProbe["sealantd"]): WorkspaceImageProbe =
 });
 
 describe("processUserCapability (the workspace read)", () => {
-  it("follows the image's sealantd on every runtime Core reaches it on", () => {
+  it("follows the image's sealantd on every runtime sealant reaches it on", () => {
     const yes = probe({ supports: ["dotfiles.user", "exec.user", "restore.owner_map"] });
     for (const runtime of ["docker", "microvm", "k8s", "k3s"] as const) {
       expect(processUserCapability(yes, runtime)).toBe("supported");

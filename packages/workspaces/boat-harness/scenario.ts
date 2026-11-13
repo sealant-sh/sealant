@@ -1,6 +1,6 @@
 /**
  * Scenario vocabulary for the local Boat harness: a project with a `db` resource, a launch driven
- * through `@sealant/sdk` exactly as Mend drives it, observation of Core's durable rows, and the
+ * through `@sealant/sdk` exactly as Mend drives it, observation of sealant's durable rows, and the
  * four checks every scenario ends with.
  */
 import { randomBytes } from "node:crypto";
@@ -144,7 +144,10 @@ export const launch = async (
   return run;
 };
 
-/** Rows that say where Core thinks a launch is. Every field is nullable: absent rows read as null. */
+/**
+ * Rows that say where sealant thinks a launch is. Every field is nullable: absent rows read as
+ * null.
+ */
 export const runtimeSchema = z.object({
   status: z.string().nullable(),
   error_code: z.string().nullable(),
@@ -241,7 +244,7 @@ export const until = async <T>(
 const LIVE_STATUSES: ReadonlySet<WorkspaceStatus> = new Set(["queued", "running", "ready"]);
 
 /**
- * Waits for a launch to stop moving: ready, or Core has recorded a terminal runtime or attempt.
+ * Waits for a launch to stop moving: ready, or sealant has recorded a terminal runtime or attempt.
  * Returns which, with the runtime view at that moment.
  */
 export const awaitOutcome = async (
@@ -270,7 +273,7 @@ export const awaitOutcome = async (
   );
 
 export interface SettleExpectation {
-  /** The cause Core must record on the runtime row (error code or message). */
+  /** The cause sealant must record on the runtime row (error code or message). */
   readonly cause?: RegExp;
   /** The public statuses that count as terminal for this scenario. */
   readonly terminal?: readonly WorkspaceStatus[];
@@ -337,7 +340,7 @@ const TERMINAL: ReadonlySet<WorkspaceStatus> = new Set(["stopped", "failed"]);
 
 /**
  * Nothing is left behind, eventually: the workspace is terminal, and the tunnel slot, publication pin,
- * VM and gateway are released. A launch Core keeps (`retained`) gets the owner's discard after a
+ * VM and gateway are released. A launch sealant keeps (`retained`) gets the owner's discard after a
  * minute, as Mend would give it, and must then release too. No marker excuses a failure here.
  */
 /** What the release checks read of the stack: its database, Docker objects and the fake Boat. */
@@ -452,7 +455,7 @@ type InvariantRun = Pick<Launch, "runId" | "startedAt"> & {
  * them):
  * 1. never two VMs for one run, whatever failed or was retried;
  * 2. a Stop that ended cleanly (the owner's Stop, no error, no discard) captured its FINAL before
- *    the fake Boat was asked to delete the VM: Core recorded the FINAL drain complete before the
+ *    the fake Boat was asked to delete the VM: sealant recorded the FINAL drain complete before the
  *    delete, and the capture channel answered that FINAL's head (if it names one) before it too.
  */
 export const assertInvariants = async (
@@ -490,7 +493,7 @@ export const assertInvariants = async (
 };
 
 /**
- * A run's FINAL was captured before the fake Boat was first asked to delete one of its VMs: Core
+ * A run's FINAL was captured before the fake Boat was first asked to delete one of its VMs: sealant
  * recorded the FINAL drain complete before the delete, and the capture channel answered that
  * FINAL's head (if it names one) before it too. `no-delete` if Boat was never asked; throws, naming
  * `how` the run ended, otherwise.
@@ -509,8 +512,8 @@ export const assertFinalBeforeDelete = async (
     (event) => event.kind === "delete" && ids.has(event.sandboxId ?? ""),
   )?.at;
   if (deletedAt === undefined) return "no-delete";
-  // Core recorded the FINAL drain complete before it asked Boat to delete; when that FINAL names a
-  // head, the channel answered that register before the delete too. Heads only grow on a session,
+  // sealant recorded the FINAL drain complete before it asked Boat to delete; when that FINAL names
+  // a head, the channel answered that register before the delete too. Heads only grow on a session,
   // so the number also covers a head a resumed run restored and left unchanged (no new register).
   // The harness channel names no executor, so the daemon sends no `final_seal` to match instead.
   const [drain] = await stack.query(
@@ -534,7 +537,7 @@ export const assertFinalBeforeDelete = async (
     registers.some((register) => register.n === status?.head_n && register.at <= deletedAt);
   if (!completeBeforeDelete || !headBeforeDelete)
     throw new Error(
-      `invariant broken (no marker excuses this): run ${run.runId} ${how}, but no FINAL was captured before Boat was asked to delete ${[...ids].join(", ")} at ${new Date(deletedAt).toISOString()}; Core's drain ${JSON.stringify(status ?? null)}; registers ${JSON.stringify(registers.filter((register) => register.at >= run.startedAt))}`,
+      `invariant broken (no marker excuses this): run ${run.runId} ${how}, but no FINAL was captured before Boat was asked to delete ${[...ids].join(", ")} at ${new Date(deletedAt).toISOString()}; sealant's drain ${JSON.stringify(status ?? null)}; registers ${JSON.stringify(registers.filter((register) => register.at >= run.startedAt))}`,
     );
   return "checked";
 };
@@ -555,8 +558,8 @@ export const proxyEvidence = (stack: HarnessStack, runId: string): string => {
     : [...new Set(notable)].slice(-6).join(" | ");
 };
 
-/** Core's name for a run's gateway container and networks, once the run has a bound target. */
-/** The name Core gives a run's gateway container (and the prefix of its networks). */
+/** sealant's name for a run's gateway container and networks, once the run has a bound target. */
+/** The name sealant gives a run's gateway container (and the prefix of its networks). */
 export const gatewayName = async (
   stack: Pick<HarnessStack, "query">,
   runId: string,
@@ -582,7 +585,7 @@ export const leftovers = async (
     .liveSandboxes()
     .filter((sandbox) => sandbox.labels["sealant-run"] === run.runId);
   if (vms.length > 0) problems.push(`live VM ${vms.map((vm) => `${vm.id}:${vm.state}`).join(",")}`);
-  // Only this run's gateway: another launch Core rightly retains keeps its own.
+  // Only this run's gateway: another launch sealant rightly retains keeps its own.
   const gateway = await gatewayName(stack, run.runId);
   if (gateway !== undefined) {
     const owned = await stack.ownedObjects();
@@ -594,7 +597,7 @@ export const leftovers = async (
   return problems;
 };
 
-/** Guest log lines that name a cause Core's runtime row may have erased. */
+/** Guest log lines that name a cause sealant's runtime row may have erased. */
 const GUEST_SIGNALS =
   /plan\.get failed|boot preparation failed|Refusal|refused|not closed|exited|failed|bind-[a-z-]+|recover-[a-z-]+|docker policy|Traceback|ERROR|error/;
 

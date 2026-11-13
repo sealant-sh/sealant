@@ -81,7 +81,7 @@ export const boatProviderFailureSchema = z.object({
 });
 export type BoatProviderFailure = z.infer<typeof boatProviderFailureSchema>;
 
-/** Codes for a call Boat did not answer, or answered with a reply Core cannot read. */
+/** Codes for a call Boat did not answer, or answered with a reply sealant cannot read. */
 const NO_ANSWER_CODES = new Set(["transport_error", "invalid_response"]);
 
 export class BoatApiError extends Error {
@@ -89,7 +89,7 @@ export class BoatApiError extends Error {
   readonly causeClass;
   /**
    * Boat's reason, when the call reached Boat (or tried to): set for every refusal Boat answered
-   * and for a call it did not answer. Absent for a request Core refused itself before sending.
+   * and for a call it did not answer. Absent for a request sealant refused itself before sending.
    */
   readonly boat: BoatFailure | undefined;
 

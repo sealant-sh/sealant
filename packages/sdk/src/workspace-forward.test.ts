@@ -54,7 +54,7 @@ describe("workspace.forward", () => {
 });
 
 describe("a bounded forward bound to a session", () => {
-  it("asks Core for the session on the workspace's loopback", () => {
+  it("asks sealant for the session on the workspace's loopback", () => {
     vi.stubGlobal("WebSocket", RecordingWebSocket);
     const workspace = makeWorkspace(ctx, { id: "ws_1", name: "t", status: "ready" });
 

@@ -1,6 +1,6 @@
 # Boat custody: model-checked
 
-Two TLA+ models of how Core keeps track of what it makes in a Boat account, checked with TLC. The
+Two TLA+ models of how sealant keeps track of what it makes in a Boat account, checked with TLC. The
 `boat-custody` skill (`.agents/skills/boat-custody/SKILL.md`) says how to run them, read a result
 and keep them in step with the code. This file is the record: what is verified, under which bounds
 and assumptions, and what the check found.
@@ -10,10 +10,10 @@ from the nixpkgs this repository's `flake.lock` pins).
 
 ## The two promises
 
-**The run ledger** (`BoatRunLedger.tla`). Core never records a Boat run as absent (`never-created`,
-`not-found`, `deletion-completed`), and so never stops tracking it, while Boat may hold a VM for it.
-The harm: a session VM has no auto-stop, so it bills by the second with nothing in Core that will
-ever delete it. Invariant `NoForgottenVM`.
+**The run ledger** (`BoatRunLedger.tla`). sealant never records a Boat run as absent
+(`never-created`, `not-found`, `deletion-completed`), and so never stops tracking it, while Boat may
+hold a VM for it. The harm: a session VM has no auto-stop, so it bills by the second with nothing in
+sealant that will ever delete it. Invariant `NoForgottenVM`.
 
 **The full check's ledger** (`BoatKeyProof.tla`). Whatever a full check of a Boat key made (a
 throwaway VM and a saved snapshot) is eventually deleted, on every path, and the account's key is
@@ -61,8 +61,8 @@ How likely: rare, but its trigger is ordinary: a stop in the second or so a firs
 Beyond it, a sweep must load the run in that window (one runs every 30 s), the refusal must be one
 whose cause can clear in seconds (a running limit or billing, not the key, which the model's
 adversary also allows), and the replay must land after Boat released the key and before anything
-else takes the slot. Cost: one VM billing without end. Nothing in Core finds Boat VMs it has no row
-for.
+else takes the slot. Cost: one VM billing without end. Nothing in sealant finds Boat VMs it has no
+row for.
 
 Proposed fix (`MarkReplayBeforeSend`): one guarded statement marks the row (`replay_issued_at`,
 `WHERE absent_at IS NULL`) before any replay is sent, and the first create's `recordNeverCreated`
@@ -101,7 +101,7 @@ the same account, key and request body returns that same sandbox" arguably rules
 1. The first create makes the VM but answers 5xx ("a `5xx` after boat accepted the sandbox").
 2. The launch retries: the label listing has not caught up, so it replays.
 3. The source snapshot is deleted meanwhile, by Boat removing an unpaid extra or by a person.
-   (Core's own image retention, sealant#639, keeps any image a run still pins.)
+   (sealant's own image retention, sealant#639, keeps any image a run still pins.)
 4. Boat answers the replay `snapshot_not_found`. `replayRejected` holds, and the launch commits
    `recordNeverCreated`.
 
@@ -165,9 +165,9 @@ Proposed fix (`FenceCheckOnRow` with `SnapshotLag`): the check's `createIssued` 
 `UPDATE`s require `finished_at IS NULL` and stop the check when they hit no row; `settle` requires
 `create_issued_at` and `save_issued_at` to be what the pass read; and see P2-C.
 
-### P2-C: a save Core gave up on lands after the check's delete answered 404
+### P2-C: a save sealant gave up on lands after the check's delete answered 404
 
-Case `proof-finding-late-save`. Needs Boat to commit a save after Core's call ended without an
+Case `proof-finding-late-save`. Needs Boat to commit a save after sealant's call ended without an
 answer, and after a later `DELETE` of the name was answered 404. The docs say a save answers `202`
 at once with the snapshot `saving`, and a `DELETE` while saving answers 409, so this needs Boat to
 be slow to register a request it already received, or a connection reset with the request handled
@@ -237,9 +237,9 @@ faults in all (refusals or lost replies), one crash of the check, two sweep pass
 
 ## Assumptions
 
-- Boat never makes a second VM under an idempotency key it linked to one, and Core sends no replay
-  once its 23-hour window has closed (Boat keeps keys 24 hours). The model does not let Boat forget
-  a key.
+- Boat never makes a second VM under an idempotency key it linked to one, and sealant sends no
+  replay once its 23-hour window has closed (Boat keeps keys 24 hours). The model does not let Boat
+  forget a key.
 - A refusal Boat answers with its own code means it made nothing ("Create that failed before the
   sandbox existed"). A 5xx Boat sent no code with is `no-answer`: it may have made the VM.
 - Boat's `GET` 404 for a VM it reported past creation means the VM is gone, and a `DELETE` Boat

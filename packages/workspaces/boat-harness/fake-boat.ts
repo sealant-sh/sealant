@@ -16,7 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process";
  * - the hosted port proxy for `*.on.boat.dev` checks `_port_auth`, answers 403 without it and 302 for
  *   `_token` (both recorded in boat-runtime.md), and forwards HTTP and WebSocket to the guest's 8080.
  *
- * Faults are injected through `faults`, never by changing Core.
+ * Faults are injected through `faults`, never by changing sealant.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import http from "node:http";
@@ -105,7 +105,7 @@ export interface FakeBoatFaults {
   command?: (command: string, sandbox: FakeSandbox) => CommandFault | undefined;
   /** Runs before a command reaches the guest, e.g. to change the guest just before bind. */
   beforeCommand?: (command: string, sandbox: FakeSandbox) => Promise<void>;
-  /** Runs after a command finished in the guest and before Core can observe that it finished. */
+  /** Runs after a command finished in the guest and before sealant can observe that it finished. */
   afterCommand?: (command: string, sandbox: FakeSandbox) => Promise<void>;
   proxy?: (path: string, method: string, sandbox: FakeSandbox) => ProxyFault | undefined;
   /** Runs before the hosted proxy forwards a request, e.g. to break the host side first. */
@@ -117,7 +117,7 @@ export interface FakeBoatFaults {
   deletion?: (sandbox: FakeSandbox) => "stuck" | undefined;
   /**
    * `lose`: Boat accepts this DELETE (the deletion starts, or the one under way goes on), then the
-   * HTTP reply is dropped, so Core never learns the operation from it.
+   * HTTP reply is dropped, so sealant never learns the operation from it.
    */
   deleteReply?: (sandbox: FakeSandbox) => "lose" | undefined;
   snapshot?: (name: string) => "failed" | undefined;
@@ -637,7 +637,7 @@ export class FakeBoat {
         if (body.detached === true) {
           const { reply, dropAfterMs } = this.#startDetached(sandbox, body);
           if (dropAfterMs !== undefined) {
-            // A lost start reply: the process runs, but Core never learns its handle.
+            // A lost start reply: the process runs, but sealant never learns its handle.
             this.#record(
               "fault:detached-start-reply-dropped",
               sandbox.id,
@@ -1281,7 +1281,7 @@ export class FakeBoat {
     const snapshot = [...this.snapshots.values()].find((entry) => entry.snapshotId === snapshotId);
     if (snapshot === undefined || snapshot.status !== "ready")
       throw new HttpError(404, "snapshot_not_found");
-    // The one file Core reads back from a saved snapshot: the agent's park receipt.
+    // The one file sealant reads back from a saved snapshot: the agent's park receipt.
     if (!/^\/var\/lib\/sealant\/agent\/park-[a-f0-9-]{36}\.json$/.test(path))
       throw new HttpError(400, "invalid_path");
     const child = spawn("docker", [
@@ -1603,7 +1603,8 @@ export class FakeBoat {
     const { sandbox, port } = route;
     if (!this.#authorized(request, sandbox)) return refuse(403, "Forbidden");
     const path = new URL(request.url ?? "/", "https://proxy.invalid").pathname;
-    // The same faults as plain requests: Core's tunnel carrier is a WebSocket through this proxy.
+    // The same faults as plain requests: sealant's tunnel carrier is a WebSocket through this
+    // proxy.
     const fault = this.faults.proxy?.(path, "GET", sandbox);
     if (fault !== undefined) {
       this.#record(`fault:proxy-${fault.kind}`, sandbox.id, `upgrade ${path}`);

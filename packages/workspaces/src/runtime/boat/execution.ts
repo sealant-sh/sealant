@@ -115,8 +115,9 @@ const controlSchema = z.strictObject({
 const exchangeSchema = z.strictObject({ privateKey: z.string() });
 
 /**
- * The agent routes Core calls over the hosted proxy, each with the budget Core gives one request
- * and the statuses whose body the caller reads itself (every other status is a typed failure).
+ * The agent routes sealant calls over the hosted proxy, each with the budget sealant gives one
+ * request and the statuses whose body the caller reads itself (every other status is a typed
+ * failure).
  */
 export type BoatAgentRoute = "launch" | "health" | "network" | "network-status" | "recover";
 interface BoatAgentRouteSpec {
@@ -156,9 +157,9 @@ export interface BoatAgentReply {
 }
 
 /**
- * The agent's status decides, never its text: 400 is a request Core built wrong, 401 a bearer the
- * agent does not hold, 404 an agent without the route, 409 a refusal whose reason the body names.
- * 502/503/504 (the proxy's VM still booting, an agent not yet listening, or the agent's own
+ * The agent's status decides, never its text: 400 is a request sealant built wrong, 401 a bearer
+ * the agent does not hold, 404 an agent without the route, 409 a refusal whose reason the body
+ * names. 502/503/504 (the proxy's VM still booting, an agent not yet listening, or the agent's own
  * `503 {reason: daemon-stop-unverified | docker-stop-unverified}` on a recovery it could not
  * finish) and lost transport are the only retryable failures; their reason, when the body
  * names one, is kept.
@@ -351,7 +352,7 @@ export const boatControlFailure = (error: SealantError | Cause.TimeoutError) =>
   });
 
 /**
- * The one provider command Core runs in a workspace VM: the bind exchange, with its public JSON
+ * The one provider command sealant runs in a workspace VM: the bind exchange, with its public JSON
  * request as the only argument. Launch secrets never travel this way; they go over hosted HTTPS.
  */
 export const boatGuestPublicCommand = (request: BoatAgentBindRequest) => {
@@ -617,9 +618,9 @@ export interface BoatExecutionService {
     input: BoatGuestNetworkInput,
   ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
   /**
-   * Where Core's end of the tunnel's WebSocket carrier connects (`/sealant/tunnel` through Boat's
-   * hosted HTTPS, with a fresh hosted cookie and the control token), from network setup until the
-   * launch is held. Read again for every reconnect: the hosted cookie may expire.
+   * Where sealant's end of the tunnel's WebSocket carrier connects (`/sealant/tunnel` through
+   * Boat's hosted HTTPS, with a fresh hosted cookie and the control token), from network setup
+   * until the launch is held. Read again for every reconnect: the hosted cookie may expire.
    */
   readonly tunnel: (
     target: BoatExecutionTarget,
@@ -682,7 +683,9 @@ export interface BoatGuestNetworkReceipt {
   readonly handshake: "unverified";
   readonly admission: "held";
 }
-/** Core's end of the tunnel's WebSocket carrier: the URL and the headers that authenticate it. */
+/**
+ * sealant's end of the tunnel's WebSocket carrier: the URL and the headers that authenticate it.
+ */
 export interface BoatTunnelConnection {
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
@@ -1313,7 +1316,7 @@ const make: Effect.Effect<
     const run = yield* loadTarget(target);
     const phase = boatRunLaunchPhase(run);
     if (phase === "held") return;
-    // An issued launch whose reply never came is fenced too: Core never pushes it again, and the
+    // An issued launch whose reply never came is fenced too: sealant never pushes it again, and the
     // agent only ever adopts a launch it already recorded (audit S5).
     if (phase !== "running" && phase !== "issued")
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));

@@ -19,7 +19,7 @@ import { BoatAllocationProvider } from "./provider.js";
 /**
  * Why a Boat run's control connection was not opened. `refused`: the run is not this deployment's
  * Boat run on that sandbox (for `connectMaterial`, its current one: ready and not stopping), or
- * Boat reports a VM that is not the one Core launched.
+ * Boat reports a VM that is not the one sealant launched.
  * `unavailable`: the database, the sealed record or Boat's API failed. The message never carries
  * the provider key, the run's bearer or the hosted cookie.
  */

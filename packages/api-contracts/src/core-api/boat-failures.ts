@@ -1,8 +1,8 @@
 /**
- * Why Boat refused, or did not answer, a request Core made for a workspace: a launch's VM create, an
- * image build's VM or saved snapshot, a key check. One closed set of kinds, each with what a caller
- * can do about it, plus what Boat itself said: its error code, its own message, its request id (for
- * Boat's support), when to retry and its billing link.
+ * Why Boat refused, or did not answer, a request sealant made for a workspace: a launch's VM
+ * create, an image build's VM or saved snapshot, a key check. One closed set of kinds, each with
+ * what a caller can do about it, plus what Boat itself said: its error code, its own message, its
+ * request id (for Boat's support), when to retry and its billing link.
  *
  * Nothing else of Boat's answer is kept, and no part of a Boat key is ever in it.
  */
@@ -31,7 +31,8 @@ import { Schema } from "effect";
  * - `no-machine`: Boat has no machine of the size right now (`no_ready_machine`, `out_of_capacity`).
  * - `snapshot-allowance-full`: the wallet keeps all its included saved snapshots and cannot pay for
  *   another (`credit_required` on a save).
- * - `no-answer`: Boat did not answer, or answered with a server error or a reply Core cannot read.
+ * - `no-answer`: Boat did not answer, or answered with a server error or a reply sealant cannot
+ *   read.
  * - `refused`: Boat refused for another reason; `code` is Boat's own.
  */
 export const BOAT_FAILURE_KINDS = [
@@ -66,7 +67,7 @@ export const boatFailureSchema = Schema.Struct({
   kind: boatFailureKindSchema,
   /** Whether the same call may succeed later as it stands (see `BOAT_RETRYABLE_FAILURE_KINDS`). */
   retryable: Schema.Boolean,
-  /** Core's call that Boat refused (`create`, `saveSnapshot`, `verify`), when known. */
+  /** sealant's call that Boat refused (`create`, `saveSnapshot`, `verify`), when known. */
   operation: Schema.optional(Schema.String),
   /** Boat's error code (`api_key_expired`). Absent when Boat did not answer with one. */
   code: Schema.optional(Schema.String),
