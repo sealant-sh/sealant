@@ -192,16 +192,16 @@ Each fact is `{ observed: true, … }` or `{ observed: false, reason, boat? }`, 
 not include the key: an organization key is refused the list, a key limited to some VMs gets an
 empty one) or `unreadable`. Core never guesses a fact it did not observe.
 
-| Field                 | What it is, when observed                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------------------------ |
-| `identity`            | Who the key is (`GET /me`): `userId`, `login`, `displayName`, `serviceAccount`, `accountStatus`        |
-| `keyKind`             | `personal` or `organization`                                                                           |
-| `wallet`              | Which wallet a VM bills (`GET /limits`): `personal`, or `organization` with its id and name            |
-| `requiredPermissions` | The permissions Core needs, one per Boat call it makes (always present)                                |
-| `permissions`         | The key's permissions (`GET /api-keys`), the required ones it lacks, whether it is limited to some VMs |
-| `expiry`              | `expiresAt` (null: never), `expired`, `expiringSoon`                                                   |
-| `start`               | `canStart`, `blockedReason`, `billingStatus`, `runningVms`, `allowedVms`                               |
-| `snapshots`           | Saved snapshot slots `used` and `included`                                                             |
+| Field                 | What it is, when observed                                                                                                                 |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `identity`            | Who the key is (`GET /me`): `accountId` (Boat's account id, not a person here), `login`, `displayName`, `serviceAccount`, `accountStatus` |
+| `keyKind`             | `personal` or `organization`                                                                                                              |
+| `wallet`              | Which wallet a VM bills (`GET /limits`): `personal`, or `organization` with its id and name                                               |
+| `requiredPermissions` | The permissions Core needs, one per Boat call it makes (always present)                                                                   |
+| `permissions`         | The key's permissions (`GET /api-keys`), the required ones it lacks, whether it is limited to some VMs                                    |
+| `expiry`              | `expiresAt` (null: never), `expired`, `expiringSoon`                                                                                      |
+| `start`               | `canStart`, `blockedReason`, `billingStatus`, `runningVms`, `allowedVms`                                                                  |
+| `snapshots`           | Saved snapshot slots `used` and `included`                                                                                                |
 
 Core needs `exec`, `file.write`, `host`, `sandbox.create`, `sandbox.delete`, `sandbox.read`,
 `sandbox.resume`, `sandbox.stop`, `snapshot.read` and `snapshot.write`. `sandbox.delete-own` is not

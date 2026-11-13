@@ -134,7 +134,7 @@ export const checkBoatKey = async (
       : me.ok
         ? {
             observed: true,
-            ...(me.value.id === undefined ? {} : { userId: me.value.id }),
+            ...(me.value.id === undefined ? {} : { accountId: me.value.id }),
             ...(me.value.login === undefined ? {} : { login: me.value.login }),
             ...(me.value.displayName == null ? {} : { displayName: me.value.displayName }),
             ...(me.value.serviceAccount === undefined
