@@ -18,7 +18,6 @@ import {
   type ConnectedAccountRepoService,
   type Run,
   type RunRepoService,
-  type Workspace,
   type WorkspaceAttemptRepoService,
   type WorkspaceBuildJob,
   type WorkspaceBuildJobRepoService,
@@ -26,8 +25,22 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import {
+  attemptRow,
+  buildJobRow,
+  runRow,
+  runtimeInstanceRow,
+  sessionRow,
+  workspaceRow,
+} from "@sealant/db/testing/rows";
 import { TelemetryQuery } from "@sealant/telemetry";
-import { nativePublicationSchema, newWorkspaceSchema } from "@sealant/validators";
+import { capabilitiesReport } from "@sealant/telemetry/testing";
+import {
+  nativePublicationSchema,
+  newWorkspaceSchema,
+  type WorkspaceImageProbe,
+} from "@sealant/validators";
 import {
   BoatImageInspection,
   loadMicrovmContextFiles,
@@ -37,6 +50,7 @@ import {
   SealantRuntime,
   type ProcessUserChannel,
   type ProcessUserCheck,
+  type SealantSession,
 } from "@sealant/workspaces";
 import { Effect, Layer, Result } from "effect";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -58,7 +72,7 @@ beforeAll(async () => {
 });
 
 const OWNER = "usr_alice";
-const workspace = { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" } as Workspace;
+const workspace = workspaceRow({ id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" });
 
 const spec = {
   sources: { workspace: { url: "https://github.com/example/repo.git" } },
@@ -139,7 +153,7 @@ describe("a capture source's owner map at create", () => {
         await parseSpec({ ...spec, sources: { workspace: captureSource({ ownerMap: bad }) } }),
       );
       expect(refused).toMatchObject({ _tag: "WorkspaceBadRequestError" });
-      expect(String(refused.message)).toMatch(reason);
+      expect(refused.message).toMatch(reason);
     }
   });
 
@@ -171,7 +185,7 @@ describe("a capture source's owner map at create", () => {
       }),
     );
     expect(smuggled).toMatchObject({ _tag: "WorkspaceBadRequestError" });
-    expect(String(smuggled.message)).toContain("SEALANT_CAPTURE_OWNER_MAP");
+    expect(smuggled.message).toContain("SEALANT_CAPTURE_OWNER_MAP");
     // The review's payload: the name and an `=` inside the key, which Docker would split.
     const split = failureOf(
       await parseSpec({
@@ -185,7 +199,7 @@ describe("a capture source's owner map at create", () => {
       }),
     );
     expect(split).toMatchObject({ _tag: "WorkspaceBadRequestError" });
-    expect(String(split.message)).toMatch(/runtime\.env names must match/);
+    expect(split.message).toMatch(/runtime\.env names must match/);
     // Every other caller lane already refuses the platform prefix.
     const throughUserEnv = failureOf(
       await parseSpec({
@@ -193,48 +207,36 @@ describe("a capture source's owner map at create", () => {
         runtime: { userEnv: { SEALANT_CAPTURE_OWNER_MAP: "{}" } },
       }),
     );
-    expect(String(throughUserEnv.message)).toMatch(/reserved/);
+    expect(throughUserEnv.message).toMatch(/reserved/);
   });
 });
 
 describe("a process as a Linux user", () => {
-  const instance = {
+  const instance = runtimeInstanceRow({
     runId: "run_1",
     status: "ready",
     adapter: "docker",
     resourceId: "container-1",
     reference: "container-1",
     endpoint: null,
-  } as unknown as WorkspaceRuntimeInstance;
-
-  const runRow = (input: { id: string; processUser?: string }): Run => ({
-    id: input.id,
-    workspaceId: workspace.id,
-    attemptId: null,
-    ownerUserId: OWNER,
-    harnessId: "exec",
-    mode: "one-shot",
-    status: "queued",
-    prompt: null,
-    command: null,
-    metadata: null,
-    processUser: input.processUser ?? null,
-    exitCode: null,
-    errorMessage: null,
-    diff: null,
-    changedFiles: null,
-    changesReadFailedAt: null,
-    recordDeletedAt: null,
-    startedAt: null,
-    finishedAt: null,
-    createdAt: new Date(0),
-    updatedAt: new Date(0),
   });
+
+  const execRunRow = (input: { id: string; processUser?: string }): Run =>
+    runRow({
+      id: input.id,
+      workspaceId: workspace.id,
+      ownerUserId: OWNER,
+      harnessId: "exec",
+      processUser: input.processUser ?? null,
+    });
 
   /** A world with a ready executor, a channel that answers `answer`, and what was asked of it. */
   const world = (
     answer: ProcessUserCheck | "fails",
-    options: { readonly adapter?: string; readonly ready?: boolean } = {},
+    options: {
+      readonly adapter?: WorkspaceRuntimeInstance["adapter"];
+      readonly ready?: boolean;
+    } = {},
   ) => {
     const checked: string[] = [];
     const created: Array<{ processUser?: string }> = [];
@@ -249,24 +251,33 @@ describe("a process as a Linux user", () => {
       },
     };
     const layer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRepo, {
-        getWorkspaceById: (id: string) =>
-          Effect.succeed(id === workspace.id ? workspace : undefined),
-      } as unknown as WorkspaceRepoService),
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        getRuntimeInstanceByRunId: () =>
-          Effect.succeed(
-            options.ready === false
-              ? undefined
-              : { ...instance, adapter: options.adapter ?? instance.adapter },
-          ),
-      } as unknown as WorkspaceRuntimeInstanceRepoService),
-      Layer.succeed(RunRepo, {
-        createRun: (input: { id: string; processUser?: string }) => {
-          created.push(input.processUser === undefined ? {} : { processUser: input.processUser });
-          return Effect.succeed(runRow(input));
-        },
-      } as unknown as RunRepoService),
+      Layer.succeed(
+        WorkspaceRepo,
+        fakeService<WorkspaceRepoService>({
+          getWorkspaceById: (id: string) =>
+            Effect.succeed(id === workspace.id ? workspace : undefined),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService<WorkspaceRuntimeInstanceRepoService>({
+          getRuntimeInstanceByRunId: () =>
+            Effect.succeed(
+              options.ready === false
+                ? undefined
+                : { ...instance, adapter: options.adapter ?? instance.adapter },
+            ),
+        }),
+      ),
+      Layer.succeed(
+        RunRepo,
+        fakeService<RunRepoService>({
+          createRun: (input: { id: string; processUser?: string }) => {
+            created.push(input.processUser === undefined ? {} : { processUser: input.processUser });
+            return Effect.succeed(execRunRow(input));
+          },
+        }),
+      ),
       Layer.succeed(capabilities.RunExecPublisherService, {
         publishRequested: (input: { user?: string; checkedExecutorRunId?: string }) => {
           published.push(
@@ -277,21 +288,30 @@ describe("a process as a Linux user", () => {
           return Promise.resolve();
         },
       }),
-      Layer.succeed(ConnectedAccountRepo, {} as unknown as ConnectedAccountRepoService),
-      Layer.succeed(AccessTokenRepo, {} as never),
-      Layer.succeed(SealantRuntime, {
-        connect: () => Effect.die("only the channel reaches the daemon here"),
-      } as never),
-      Layer.succeed(TelemetryQuery, {} as never),
-      Layer.succeed(WorkspaceAttemptRepo, {
-        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-      } as never),
-      Layer.succeed(WorkspaceSessionRepo, {
-        createSession: (input: unknown) => {
-          opened.push(input);
-          return Effect.die("stop once the session row is made");
-        },
-      } as never),
+      Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
+      Layer.succeed(AccessTokenRepo, fakeService({})),
+      Layer.succeed(
+        SealantRuntime,
+        fakeService({
+          connect: () => Effect.die("only the channel reaches the daemon here"),
+        }),
+      ),
+      Layer.succeed(TelemetryQuery, fakeService({})),
+      Layer.succeed(
+        WorkspaceAttemptRepo,
+        fakeService({
+          getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceSessionRepo,
+        fakeService({
+          createSession: (input: unknown) => {
+            opened.push(input);
+            return Effect.die("stop once the session row is made");
+          },
+        }),
+      ),
     );
     const exec = (user: string | undefined, asUser = true) =>
       Effect.runPromise(
@@ -334,7 +354,7 @@ describe("a process as a Linux user", () => {
       const w = world(allowed);
       const refused = failureOf(await w.exec(user));
       expect(refused).toMatchObject({ _tag: "WorkspaceConflictError", code: "user-unsupported" });
-      expect(String(refused.message)).toContain(`User '${user}' is not in range`);
+      expect(refused.message).toContain(`User '${user}' is not in range`);
       expect(w.checked).toEqual([]);
       expect(w.created).toEqual([]);
     }
@@ -344,7 +364,7 @@ describe("a process as a Linux user", () => {
     const w = world(noCapability);
     const refused = failureOf(await w.exec("m4lice000"));
     expect(refused).toMatchObject({ _tag: "WorkspaceConflictError", code: "user-unsupported" });
-    expect(String(refused.message)).toBe(
+    expect(refused.message).toBe(
       "Workspace wks_1's sealantd doesn't run processes as another user (its sealantd does not report exec.user), so nothing was started as 'm4lice000'.",
     );
     expect(w.created).toEqual([]);
@@ -361,7 +381,7 @@ describe("a process as a Linux user", () => {
       const w = world({ supported: true, exitCode });
       const refused = failureOf(await w.exec("m4lice000"));
       expect(refused).toMatchObject({ _tag: "WorkspaceConflictError", code: "user-unsupported" });
-      expect(String(refused.message)).toContain(words);
+      expect(refused.message).toContain(words);
       expect(w.created).toEqual([]);
     }
   });
@@ -370,7 +390,7 @@ describe("a process as a Linux user", () => {
     const cloudflare = world(allowed, { adapter: "cloudflare" });
     const refused = failureOf(await cloudflare.exec("m4lice000"));
     expect(refused).toMatchObject({ code: "user-unsupported" });
-    expect(String(refused.message)).toContain("doesn't run processes as another user");
+    expect(refused.message).toContain("doesn't run processes as another user");
     expect(cloudflare.checked).toEqual([]);
 
     const stopped = world(allowed, { ready: false });
@@ -406,7 +426,7 @@ describe("a process as a Linux user", () => {
     const w = world(allowed);
     const refused = failureOf(await w.exec("m4lice000", false));
     expect(refused).toMatchObject({ _tag: "WorkspaceConflictError", code: "user-unsupported" });
-    expect(String(refused.message)).toContain("POST /v1/workspaces/wks_1/exec-as-user");
+    expect(refused.message).toContain("POST /v1/workspaces/wks_1/exec-as-user");
     const session = await w.session("m4lice000", false);
     expect(JSON.stringify(session)).toContain("POST /v1/sessions/as-user");
     expect(w.checked).toEqual([]);
@@ -449,51 +469,68 @@ describe("a session as a user, on the connection that opens it", () => {
     processUser.forgetProcessUserAnswers();
     const settled: string[] = [];
     let openCalls = 0;
-    const daemon = {
-      capabilities: Effect.succeed({ supports: ["restore.owner_map"] }),
+    const daemon = fakeService<SealantSession>({
+      capabilities: Effect.succeed(capabilitiesReport(["restore.owner_map"])),
       openSession: () => {
         openCalls += 1;
         return Effect.die("never opened");
       },
-    };
+    });
     const layer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRepo, {
-        getWorkspaceById: () => Effect.succeed(workspace),
-      } as unknown as WorkspaceRepoService),
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        getRuntimeInstanceByRunId: () =>
-          Effect.succeed({
-            runId: "run_1",
-            status: "ready",
-            adapter: "docker",
-            resourceId: "container-1",
-            reference: "container-1",
-            endpoint: null,
-          }),
-      } as unknown as WorkspaceRuntimeInstanceRepoService),
-      Layer.succeed(WorkspaceAttemptRepo, {
-        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-      } as never),
-      Layer.succeed(RunRepo, {
-        createRun: () => Effect.succeed({}),
-        markRunRunning: () => Effect.succeed({}),
-        markRunFailed: (input: { errorMessage: string }) =>
-          Effect.sync(() => {
-            settled.push(`run: ${input.errorMessage}`);
-            return null;
-          }),
-      } as unknown as RunRepoService),
-      Layer.succeed(WorkspaceSessionRepo, {
-        createSession: () => Effect.succeed({}),
-        markSessionEnded: (input: { status: string }) =>
-          Effect.sync(() => {
-            settled.push(`session: ${input.status}`);
-            return null;
-          }),
-      } as never),
-      Layer.succeed(TelemetryQuery, { hasEpoch: () => Effect.succeed(true) } as never),
-      Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(daemon) } as never),
-      Layer.succeed(AccessTokenRepo, {} as never),
+      Layer.succeed(
+        WorkspaceRepo,
+        fakeService<WorkspaceRepoService>({
+          getWorkspaceById: () => Effect.succeed(workspace),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService<WorkspaceRuntimeInstanceRepoService>({
+          getRuntimeInstanceByRunId: () =>
+            Effect.succeed(
+              runtimeInstanceRow({
+                runId: "run_1",
+                status: "ready",
+                adapter: "docker",
+                resourceId: "container-1",
+                reference: "container-1",
+                endpoint: null,
+              }),
+            ),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceAttemptRepo,
+        fakeService({
+          getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(
+        RunRepo,
+        fakeService<RunRepoService>({
+          createRun: () => Effect.succeed(runRow()),
+          markRunRunning: () => Effect.succeed(runRow()),
+          markRunFailed: (input) =>
+            Effect.sync(() => {
+              settled.push(`run: ${input.errorMessage}`);
+              return null;
+            }),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceSessionRepo,
+        fakeService({
+          createSession: () => Effect.succeed(sessionRow()),
+          markSessionEnded: (input) =>
+            Effect.sync(() => {
+              settled.push(`session: ${input.status}`);
+              return null;
+            }),
+        }),
+      ),
+      Layer.succeed(TelemetryQuery, fakeService({ hasEpoch: () => Effect.succeed(true) })),
+      Layer.succeed(SealantRuntime, fakeService({ connect: () => Effect.succeed(daemon) })),
+      Layer.succeed(AccessTokenRepo, fakeService({})),
     );
     // The check (or a kept yes) said the executor can; the daemon reached to open it cannot.
     const exit = await Effect.runPromiseExit(
@@ -589,8 +626,8 @@ describe("inspectWorkspaceImage", () => {
     blueprint: newWorkspaceSchema.parse(spec),
   }).planHash;
 
-  const job = (probe: unknown) =>
-    ({
+  const job = (probe: WorkspaceImageProbe | undefined) =>
+    buildJobRow({
       id: "job_1",
       publicationId: null,
       publication: null,
@@ -603,9 +640,19 @@ describe("inspectWorkspaceImage", () => {
       publishedDigestReference: "registry/sealant/workspaces/demo@sha256:abc",
       publishedDigest: "sha256:abc",
       resultPayload: {
-        metadata: { planHash, ...(probe === undefined ? {} : { imageProbe: probe }) },
+        builder: { id: "ubuntu", osFamily: "ubuntu" },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:plan-abc",
+            loader: "docker-load",
+          },
+        ],
+        metadata: { notes: [], planHash, ...(probe === undefined ? {} : { imageProbe: probe }) },
       },
-    }) as unknown as WorkspaceBuildJob;
+    });
 
   const inspect = (found: WorkspaceBuildJob | undefined, builtBy: string = OWNER) =>
     Effect.runPromise(
@@ -616,20 +663,26 @@ describe("inspectWorkspaceImage", () => {
         .pipe(
           Effect.provide(
             Layer.mergeAll(
-              Layer.succeed(WorkspaceBuildJobRepo, {
-                getLatestSucceededJobByPlanHash: (input: { planHash: string }) =>
-                  Effect.succeed(input.planHash === planHash ? found : undefined),
-              } as unknown as WorkspaceBuildJobRepoService),
-              Layer.succeed(WorkspaceAttemptRepo, {
-                getAttemptById: () => Effect.succeed({ ownerUserId: builtBy }),
-              } as unknown as WorkspaceAttemptRepoService),
+              Layer.succeed(
+                WorkspaceBuildJobRepo,
+                fakeService<WorkspaceBuildJobRepoService>({
+                  getLatestSucceededJobByPlanHash: (input: { planHash: string }) =>
+                    Effect.succeed(input.planHash === planHash ? found : undefined),
+                }),
+              ),
+              Layer.succeed(
+                WorkspaceAttemptRepo,
+                fakeService<WorkspaceAttemptRepoService>({
+                  getAttemptById: () => Effect.succeed(attemptRow({ ownerUserId: builtBy })),
+                }),
+              ),
             ),
           ),
         ),
     );
 
   // The image probe a managed image records (#327), able to run the layout.
-  const capable = {
+  const capable: WorkspaceImageProbe = {
     version: 1,
     tools: {
       sudo: true,

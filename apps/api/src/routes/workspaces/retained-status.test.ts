@@ -13,10 +13,8 @@ import {
   WorkspaceCaptureDrainRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
-  type Workspace,
   type WorkspaceAttempt,
   type WorkspaceAttemptRepoService,
-  type WorkspaceBuildJob,
   type WorkspaceBuildJobRepoService,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainRepoService,
@@ -24,6 +22,14 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import {
+  attemptRow,
+  buildJobRow,
+  captureDrainRow,
+  runtimeInstanceRow,
+  workspaceRow,
+} from "@sealant/db/testing/rows";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -39,7 +45,7 @@ const harness = (input: {
   readonly drainState?: WorkspaceCaptureDrain["state"];
   readonly drainDetail?: string;
 }) => {
-  const workspace = {
+  const workspace = workspaceRow({
     id: "ws_1",
     name: "retained",
     ownerUserId: "user_owner",
@@ -48,8 +54,8 @@ const harness = (input: {
     expiresAt: null,
     createdAt: now,
     updatedAt: now,
-  } as Workspace;
-  const attempt = {
+  });
+  const attempt = attemptRow({
     id: "run_1",
     status: input.attemptStatus ?? "succeeded",
     triggerType: "api",
@@ -61,8 +67,8 @@ const harness = (input: {
     startedAt: now,
     finishedAt: null,
     durationMs: null,
-  } as unknown as WorkspaceAttempt;
-  const job = {
+  });
+  const job = buildJobRow({
     publication: null,
     publicationId: null,
     imageScope: null,
@@ -77,13 +83,12 @@ const harness = (input: {
     publishedDigest: null,
     errorCode: null,
     errorMessage: null,
-    requestPayload: {},
     createdAt: now,
     updatedAt: now,
     startedAt: now,
     finishedAt: now,
-  } as unknown as WorkspaceBuildJob;
-  const runtime = {
+  });
+  const runtime = runtimeInstanceRow({
     runId: "run_1",
     status: "failed",
     adapter: "docker",
@@ -99,8 +104,8 @@ const harness = (input: {
     createdAt: now,
     updatedAt: now,
     ...input.runtime,
-  } as WorkspaceRuntimeInstance;
-  const drain = {
+  });
+  const drain = captureDrainRow({
     runId: "run_1",
     state: input.drainState === undefined ? "kept" : input.drainState,
     detail: input.drainDetail ?? "not saved · retained · executor exited",
@@ -118,32 +123,47 @@ const harness = (input: {
     completionCaptureN: null,
     completionAttestedAt: null,
     completionLaunchId: null,
-  } as unknown as WorkspaceCaptureDrain;
+  });
   return Layer.mergeAll(
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: () => Effect.succeed(workspace),
-      listWorkspaces: () => Effect.succeed([workspace]),
-      listWorkspaceAttemptLinks: () =>
-        Effect.succeed([
-          { workspaceId: "ws_1", runId: "run_1", relation: "launch", linkedAt: now },
-        ]),
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(WorkspaceAttemptRepo, {
-      getAttemptById: () => Effect.succeed(attempt),
-      getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-    } as unknown as WorkspaceAttemptRepoService),
-    Layer.succeed(WorkspaceBuildJobRepo, {
-      getLatestJobByRunId: () => Effect.succeed(job),
-      listLatestJobsByRunIds: () => Effect.succeed(new Map([["run_1", job]])),
-    } as unknown as WorkspaceBuildJobRepoService),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      getRuntimeInstanceByRunId: () => Effect.succeed(runtime),
-      listRuntimeInstancesByRunIds: () => Effect.succeed(new Map([["run_1", runtime]])),
-    } as unknown as WorkspaceRuntimeInstanceRepoService),
-    Layer.succeed(WorkspaceCaptureDrainRepo, {
-      getByRunId: () => Effect.succeed(drain),
-      listByRunIds: () => Effect.succeed(new Map([["run_1", drain]])),
-    } as unknown as WorkspaceCaptureDrainRepoService),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService<WorkspaceRepoService>({
+        getWorkspaceById: () => Effect.succeed(workspace),
+        listWorkspaces: () => Effect.succeed([workspace]),
+        listWorkspaceAttemptLinks: () =>
+          Effect.succeed([
+            { workspaceId: "ws_1", runId: "run_1", relation: "launch", linkedAt: now },
+          ]),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceAttemptRepo,
+      fakeService<WorkspaceAttemptRepoService>({
+        getAttemptById: () => Effect.succeed(attempt),
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceBuildJobRepo,
+      fakeService<WorkspaceBuildJobRepoService>({
+        getLatestJobByRunId: () => Effect.succeed(job),
+        listLatestJobsByRunIds: () => Effect.succeed(new Map([["run_1", job]])),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepoService>({
+        getRuntimeInstanceByRunId: () => Effect.succeed(runtime),
+        listRuntimeInstancesByRunIds: () => Effect.succeed(new Map([["run_1", runtime]])),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceCaptureDrainRepo,
+      fakeService<WorkspaceCaptureDrainRepoService>({
+        getByRunId: () => Effect.succeed(drain),
+        listByRunIds: () => Effect.succeed(new Map([["run_1", drain]])),
+      }),
+    ),
   );
 };
 

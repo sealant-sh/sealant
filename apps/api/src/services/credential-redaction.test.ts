@@ -20,6 +20,8 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceSessionRepo,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runtimeInstanceRow, sessionRow, workspaceRow } from "@sealant/db/testing/rows";
 import { TelemetryQuery } from "@sealant/telemetry";
 import { SealantRuntime } from "@sealant/workspaces";
 import {
@@ -30,6 +32,7 @@ import {
   Exit,
   Layer,
   Logger,
+  Predicate,
   References,
   Scope,
   Tracer,
@@ -66,40 +69,55 @@ const OWNER = "usr_1";
 
 /** A running session on a ready executor: the attach route reaches its socket upgrade. */
 const present = Layer.mergeAll(
-  Layer.succeed(WorkspaceSessionRepo, {
-    getSessionById: (id: string) =>
-      Effect.succeed(
-        id === "sess_live"
-          ? {
-              id,
-              workspaceId: "wks_1",
-              runId: "run_2",
-              ownerUserId: OWNER,
-              status: "running",
-              daemonSessionId: "dsess_1",
-              daemonProcessId: "proc_1",
-            }
-          : undefined,
-      ),
-  } as never),
-  Layer.succeed(WorkspaceRepo, {
-    getWorkspaceById: (id: string) =>
-      Effect.succeed(id === "wks_1" ? { id, ownerUserId: OWNER, latestRunId: "run_1" } : undefined),
-  } as never),
-  Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-    getRuntimeInstanceByRunId: () =>
-      Effect.succeed({
-        runId: "run_1",
-        status: "ready",
-        adapter: "docker",
-        resourceId: "container-1",
-        reference: "container-1",
-        endpoint: null,
-      }),
-  } as never),
-  Layer.succeed(TelemetryQuery, {} as never),
-  Layer.succeed(SealantRuntime, {} as never),
-  Layer.succeed(AccessTokenRepo, {} as never),
+  Layer.succeed(
+    WorkspaceSessionRepo,
+    fakeService({
+      getSessionById: (id: string) =>
+        Effect.succeed(
+          id === "sess_live"
+            ? sessionRow({
+                id,
+                workspaceId: "wks_1",
+                runId: "run_2",
+                ownerUserId: OWNER,
+                status: "running",
+                daemonSessionId: "dsess_1",
+                daemonProcessId: "proc_1",
+              })
+            : undefined,
+        ),
+    }),
+  ),
+  Layer.succeed(
+    WorkspaceRepo,
+    fakeService({
+      getWorkspaceById: (id: string) =>
+        Effect.succeed(
+          id === "wks_1"
+            ? workspaceRow({ id, ownerUserId: OWNER, latestRunId: "run_1" })
+            : undefined,
+        ),
+    }),
+  ),
+  Layer.succeed(
+    WorkspaceRuntimeInstanceRepo,
+    fakeService({
+      getRuntimeInstanceByRunId: () =>
+        Effect.succeed(
+          runtimeInstanceRow({
+            runId: "run_1",
+            status: "ready",
+            adapter: "docker",
+            resourceId: "container-1",
+            reference: "container-1",
+            endpoint: null,
+          }),
+        ),
+    }),
+  ),
+  Layer.succeed(TelemetryQuery, fakeService({})),
+  Layer.succeed(SealantRuntime, fakeService({})),
+  Layer.succeed(AccessTokenRepo, fakeService({})),
 );
 
 type ControlPlaneGroups =
@@ -114,6 +132,7 @@ beforeAll(async () => {
   ]);
   requestBudget = await import("../routes/request-budget.js");
   redaction = await import("./credential-redaction.js");
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- drops the routes' Request<"Error", …> markers, which HttpRouter.serve answers (as index.ts does); the routes are built after the dynamic imports, so their type is written by hand.
   browserRoutes = Layer.mergeAll(
     ws.SessionAttachRoute,
     sse.SessionOutputStreamRoute,
@@ -125,10 +144,13 @@ beforeAll(async () => {
     .map(([name, group]) =>
       HttpApiBuilder.group(
         ControlPlaneAPI,
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Object.entries names each group as a string; HttpApiBuilder.group takes the literal name, and this visits every group.
         name as never,
         (handlers) =>
+          // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the handler builder is typed per endpoint name; this stubs every endpoint of the group by name at runtime.
           Object.keys(group.endpoints).reduce(
             (acc, endpoint) =>
+              // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the handler builder is typed per endpoint name; this stubs every endpoint of the group by name at runtime.
               (acc as { handle: (n: string, h: unknown) => unknown }).handle(endpoint, () =>
                 Effect.die("not under test"),
               ),
@@ -136,12 +158,16 @@ beforeAll(async () => {
           ) as never,
       ),
     );
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the stub groups are built untyped (above); this names them as every group the API requires.
   sshKeysHandlers = Layer.mergeAll(
     sshKeys.SshKeysHandlersLive.pipe(
       Layer.provide(
-        Layer.succeed(SshKeyRepo, {
-          findActiveSshKeyByFingerprint: () => Effect.succeed(undefined),
-        } as never),
+        Layer.succeed(
+          SshKeyRepo,
+          fakeService({
+            findActiveSshKeyByFingerprint: () => Effect.succeed(undefined),
+          }),
+        ),
       ),
     ),
     ...others,
@@ -253,6 +279,7 @@ const serve = (
 const sshApi = () =>
   HttpApiBuilder.layer(ControlPlaneAPI).pipe(
     Layer.provide(
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the stub groups are built untyped (above); this names them as every group the API requires.
       sshKeysHandlers as unknown as Layer.Layer<
         HttpApiGroup.ToService<"sealantControlPlaneApi", ControlPlaneGroups>
       >,
@@ -396,8 +423,7 @@ describe("what the API process prints", () => {
       Effect.as(HttpServerResponse.text("ok")),
     ),
   );
-  const app = () =>
-    Layer.mergeAll(browserRoutes, probe) as Layer.Layer<never, never, HttpRouter.HttpRouter>;
+  const app = () => Layer.mergeAll(browserRoutes, probe);
   const requests = [
     [`/v1/no-such/${key}?q=${key}`, 404],
     [`/v1/workspaces/${key}?ownerUserId=${OWNER}&q=${key}`, 404],
@@ -1409,7 +1435,7 @@ describe("round 1 of the review of #351", () => {
     const input: unknown = JSON.parse(`{"__proto__": {"token": "${SECRET}"}, "ok": 1}`);
     const observed = redaction.observe(input);
     expect(Object.getPrototypeOf(observed)).toBe(Object.prototype);
-    expect(Object.hasOwn(observed as object, "__proto__")).toBe(true);
+    expect(Predicate.isObject(observed) && Object.hasOwn(observed, "__proto__")).toBe(true);
     expect(leaks(observed)).toBe(false);
   });
 });

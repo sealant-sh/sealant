@@ -53,15 +53,19 @@ type ControlPlaneGroups =
 // Every endpoint of every group, a stub: the handler builder is typed per endpoint name, and this
 // test wants all of them without naming each, so the builder is driven untyped and the merged
 // layer is typed as the groups the API requires.
+// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the stub groups are built untyped (above); this names them as every group the API requires.
 const stubs = Layer.mergeAll(
   Layer.empty,
   ...Object.entries(ControlPlaneAPI.groups).map(([name, group]) =>
     HttpApiBuilder.group(
       ControlPlaneAPI,
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Object.entries names each group as a string; HttpApiBuilder.group takes the literal name, and this visits every group.
       name as never,
       (handlers) =>
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the handler builder is typed per endpoint name; this stubs every endpoint of the group by name at runtime.
         Object.keys(group.endpoints).reduce(
           (acc, endpoint) =>
+            // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the handler builder is typed per endpoint name; this stubs every endpoint of the group by name at runtime.
             (acc as { handle: (n: string, h: unknown) => unknown }).handle(
               endpoint,
               endpoint === "createSession" || endpoint === "createSessionAsUser"
@@ -140,7 +144,7 @@ const brokenJson = `{"ownerUserId":"usr_1","note":"${MARKER}"`;
 const wrapped = (body: object) => JSON.stringify([body]);
 
 /** [route, method, path, body, a fragment of the reason]: each carries the marker somewhere. */
-const cases: ReadonlyArray<readonly [string, string, string, string, string]> = [
+const cases: ReadonlyArray<readonly [string, string, string, string | undefined, string]> = [
   ...["/v1/sessions", "/v1/sessions/as-user"].flatMap(
     (path) =>
       [
@@ -283,7 +287,7 @@ const cases: ReadonlyArray<readonly [string, string, string, string, string]> = 
     "GET",
     // No marker: the request's span records the URL, query included, for every request.
     "/v1/sessions?workspaceId=wks_1&status=sleeping",
-    undefined as never,
+    undefined,
     "ownerUserId is required",
   ],
 ];

@@ -4,6 +4,8 @@ import {
   type RunRepoService,
   type WorkspaceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runRow, workspaceRow } from "@sealant/db/testing/rows";
 import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -143,24 +145,28 @@ describe("ceilings and words", () => {
 /** Repositories that answer `live` workspaces and `active` runs for any owner. */
 const counted = (live: number, active: number) =>
   Layer.mergeAll(
-    Layer.succeed(WorkspaceRepo, {
-      listWorkspaces: (input: { readonly ownerUserId?: string; readonly limit?: number }) =>
-        Effect.succeed(
-          Array.from({ length: Math.min(live, input.limit ?? live) }, (_, index) => ({
-            id: `ws_${index}`,
-            ownerUserId: input.ownerUserId,
-          })),
-        ),
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(RunRepo, {
-      listRuns: (input: { readonly ownerUserId?: string; readonly limit?: number }) =>
-        Effect.succeed(
-          Array.from({ length: Math.min(active, input.limit ?? active) }, (_, index) => ({
-            id: `run_${index}`,
-            ownerUserId: input.ownerUserId,
-          })),
-        ),
-    } as unknown as RunRepoService),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService<WorkspaceRepoService>({
+        listWorkspaces: (input) =>
+          Effect.succeed(
+            Array.from({ length: Math.min(live, input?.limit ?? live) }, (_, index) =>
+              workspaceRow({ id: `ws_${index}`, ownerUserId: input?.ownerUserId ?? "user_1" }),
+            ),
+          ),
+      }),
+    ),
+    Layer.succeed(
+      RunRepo,
+      fakeService<RunRepoService>({
+        listRuns: (input) =>
+          Effect.succeed(
+            Array.from({ length: Math.min(active, input?.limit ?? active) }, (_, index) =>
+              runRow({ id: `run_${index}`, ownerUserId: input?.ownerUserId ?? "user_1" }),
+            ),
+          ),
+      }),
+    ),
   );
 const outcome = <A, E>(
   effect: Effect.Effect<A, E, WorkspaceRepo | RunRepo>,

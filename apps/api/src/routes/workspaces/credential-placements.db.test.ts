@@ -39,6 +39,9 @@ import {
 import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+/** The order `sort()` gives strings by default, as a comparator. */
+const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 let CurrentPrincipal: (typeof import("../../services/service-principals.js"))["CurrentPrincipal"];
 
 process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
@@ -592,8 +595,8 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     ]);
     expect(
       keyFiles(ex, f.home)
-        .map((path) => ex.files.get(path))
-        .toSorted(),
+        .map((path) => ex.files.get(path) ?? "")
+        .toSorted(byCodeUnit),
     ).toEqual([CLAUDE_KEY, CLAUDE_KEY_2].toSorted());
     expect((await run(put(f, ex.channel, { claude: key.id, live }))).home.placements).toEqual(
       after,
@@ -821,8 +824,8 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     expect(
       listed.homes
         .flatMap((home) => home.placements ?? [])
-        .map((row) => (row.login.kind === "api-key" ? row.login.baseUrl : ""))
-        .toSorted(),
+        .map((row) => (row.login.kind === "api-key" ? (row.login.baseUrl ?? "") : ""))
+        .toSorted(byCodeUnit),
     ).toEqual([claudeUrl, codexUrl]);
 
     const { rows: stored } = Schema.decodeUnknownSync(
@@ -917,7 +920,9 @@ describe.skipIf(DATABASE_URL === undefined)("credential placements (Postgres)", 
     }
     expect(ex.files).toEqual(before);
     expect(
-      (await rows(f)).map((row) => [row.provider, row.revision, row.login.kind]).toSorted(),
+      (await rows(f))
+        .map((row) => [row.provider, row.revision, row.login.kind])
+        .toSorted((a, b) => byCodeUnit(a.join(), b.join())),
     ).toEqual([
       ["claude", 1, "api-key"],
       ["codex", 1, "api-key"],

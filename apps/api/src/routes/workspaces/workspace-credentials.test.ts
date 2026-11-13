@@ -18,7 +18,6 @@ import {
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccount,
   type ConnectedAccountRepoService,
-  type Workspace,
   type WorkspaceLaunchCredentialInjection,
   type WorkspaceAttemptRepoService,
   type WorkspaceBuildJobRepoService,
@@ -30,6 +29,14 @@ import {
   makeInMemoryCredentialHomes,
   type InMemoryCredentialHomes,
 } from "@sealant/db/testing/credential-homes";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import {
+  attemptSnapshotRow,
+  connectedAccountRow,
+  runtimeInstanceRow,
+  workspaceRow,
+} from "@sealant/db/testing/rows";
+import { newWorkspaceSchema } from "@sealant/validators";
 import { sweepCredentialPlacements, type HomeCredentialChannel } from "@sealant/workspaces";
 import { Effect, Fiber, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -63,7 +70,7 @@ const claudeFile = (accessToken: string) =>
   });
 
 const account = (overrides: Partial<ConnectedAccount>): ConnectedAccount =>
-  ({
+  connectedAccountRow({
     id: "cacc_x",
     ownerUserId: ALICE,
     provider: "claude",
@@ -72,7 +79,6 @@ const account = (overrides: Partial<ConnectedAccount>): ConnectedAccount =>
     status: "active",
     encryptedPayload: `sealed:${JSON.stringify({ credentialsJson: claudeFile("at-alice") })}`,
     encryptionKeyId: "k-test",
-    payloadSha256: "sha",
     credentialRevision: 1,
     metadata: {},
     createdAt: new Date("2026-10-01T00:00:00.000Z"),
@@ -82,7 +88,7 @@ const account = (overrides: Partial<ConnectedAccount>): ConnectedAccount =>
     invalidAt: null,
     archivedAt: null,
     ...overrides,
-  }) as ConnectedAccount;
+  });
 
 const aliceClaude = account({ id: "cacc_alice_claude" });
 const aliceWork = account({
@@ -215,7 +221,7 @@ const instanceRow = (
   status: WorkspaceRuntimeInstance["status"] = "ready",
   injections: readonly WorkspaceLaunchCredentialInjection[] | null = [],
 ): WorkspaceRuntimeInstance =>
-  ({
+  runtimeInstanceRow({
     runId: "run_1",
     status,
     adapter: "docker",
@@ -223,24 +229,30 @@ const instanceRow = (
     reference: "container-run_1",
     endpoint: "unix:///run/sealant/run_1.sock",
     launchCredentialInjections: injections,
-  }) as WorkspaceRuntimeInstance;
+  });
 
-const workspace = { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" } as Workspace;
+const workspace = workspaceRow({ id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" });
 
 /** The parts of a recorded spec a Claude key put reads: where the run saves state. */
 interface SavedRoots {
   readonly workingDirectory: string;
   readonly harnessHome?: string;
 }
-const recordedSpec = (roots: SavedRoots) => ({
-  runtime: { workingDirectory: roots.workingDirectory },
-  sources: {
-    workspace:
-      roots.harnessHome === undefined
-        ? { kind: "git" }
-        : { kind: "capture", harnessHome: roots.harnessHome },
-  },
-});
+const recordedSpec = (roots: SavedRoots) =>
+  newWorkspaceSchema.parse({
+    harness: { id: "claude-code" },
+    runtime: { workingDirectory: roots.workingDirectory },
+    sources: {
+      workspace:
+        roots.harnessHome === undefined
+          ? { kind: "git", url: "https://github.com/example/repo.git" }
+          : {
+              kind: "capture",
+              endpoint: "https://mend.example.com/session/s1",
+              harnessHome: roots.harnessHome,
+            },
+    },
+  });
 
 interface Ran {
   readonly script: string;
@@ -301,45 +313,69 @@ const newWorld = (
     Layer.succeed(CredentialCipher, fakeCipher),
     Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
     Layer.succeed(CredentialPlacementRepo, placements),
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: (id: string) => Effect.succeed(id === workspace.id ? workspace : undefined),
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(ConnectedAccountRepo, {
-      getById: (id: string) =>
-        Effect.succeed(currentAccounts.find((candidate) => candidate.id === id)),
-      getByOwnerProviderName: (input: { ownerUserId: string; provider: string; name: string }) =>
-        Effect.succeed(
-          currentAccounts.find(
-            (candidate) =>
-              candidate.ownerUserId === input.ownerUserId &&
-              candidate.provider === input.provider &&
-              candidate.name === input.name &&
-              candidate.archivedAt === null,
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService<WorkspaceRepoService>({
+        getWorkspaceById: (id: string) =>
+          Effect.succeed(id === workspace.id ? workspace : undefined),
+      }),
+    ),
+    Layer.succeed(
+      ConnectedAccountRepo,
+      fakeService<ConnectedAccountRepoService>({
+        getById: (id: string) =>
+          Effect.succeed(
+            currentAccounts
+              .filter((candidate) => candidate.id === id)
+              .map((found) => ({
+                ...found,
+                isDefault: defaults.get(`${found.ownerUserId} ${found.provider}`) === found.id,
+              }))[0],
           ),
-        ),
-      getDefault: (input: { ownerUserId: string; provider: string }) =>
-        Effect.succeed(
-          currentAccounts.find(
-            (candidate) => candidate.id === defaults.get(`${input.ownerUserId} ${input.provider}`),
+        getByOwnerProviderName: (input: { ownerUserId: string; provider: string; name: string }) =>
+          Effect.succeed(
+            currentAccounts.find(
+              (candidate) =>
+                candidate.ownerUserId === input.ownerUserId &&
+                candidate.provider === input.provider &&
+                candidate.name === input.name &&
+                candidate.archivedAt === null,
+            ),
           ),
-        ),
-    } as unknown as ConnectedAccountRepoService),
-    Layer.succeed(WorkspaceAttemptRepo, {
-      getAttemptSnapshotByRunId: (runId: string) =>
-        Effect.succeed(
-          runId === state.instance.runId && state.saved !== undefined
-            ? { resolvedSpecPayload: recordedSpec(state.saved) }
-            : undefined,
-        ),
-    } as unknown as WorkspaceAttemptRepoService),
-    Layer.succeed(WorkspaceBuildJobRepo, {
-      getLatestJobByRunId: () => Effect.succeed(undefined),
-    } as unknown as WorkspaceBuildJobRepoService),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      listRunningInstances: () => Effect.succeed([state.instance]),
-      getRuntimeInstanceByRunId: (runId: string) =>
-        Effect.succeed(state.instance.runId === runId ? state.instance : undefined),
-    } as unknown as WorkspaceRuntimeInstanceRepoService),
+        getDefault: (input: { ownerUserId: string; provider: string }) =>
+          Effect.succeed(
+            currentAccounts.find(
+              (candidate) =>
+                candidate.id === defaults.get(`${input.ownerUserId} ${input.provider}`),
+            ),
+          ),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceAttemptRepo,
+      fakeService<WorkspaceAttemptRepoService>({
+        getAttemptSnapshotByRunId: (runId: string) =>
+          Effect.succeed(
+            runId === state.instance.runId && state.saved !== undefined
+              ? attemptSnapshotRow({ runId, resolvedSpecPayload: recordedSpec(state.saved) })
+              : undefined,
+          ),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceBuildJobRepo,
+      fakeService<WorkspaceBuildJobRepoService>({
+        getLatestJobByRunId: () => Effect.succeed(undefined),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepoService>({
+        listRunningInstances: () => Effect.succeed([state.instance]),
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(state.instance.runId === runId ? state.instance : undefined),
+      }),
+    ),
   );
 
   const run = <A, E>(
