@@ -40,18 +40,29 @@ export const recordedWallet = (wallet: {
 }) => ({ boatWallet: wallet.wallet, boatWalletState: "known" }) as const;
 
 /**
- * The install's own key's wallet. No `boat_install` row at all: a database no Boat install ever
- * started on (tests, an install without Boat), where nothing names a wallet.
+ * The install's own key's wallet, for `deploymentId` (absent: the install's own, whatever its name).
+ * It is the install's only for the install's own deployment (`boat_install.deployment_id`). No
+ * `boat_install` row at all, one that names no deployment yet, or another deployment that no stored
+ * account has: nothing a Boat install of this database names, so nothing is named (tests, an
+ * install without Boat).
  */
-export const installCreateWallet = (db: DB) =>
+export const installCreateWallet = (db: DB, deploymentId?: string) =>
   Effect.gen(function* () {
     const [row] = yield* db
-      .select({ organization: boatInstall.organization, keyKind: boatInstall.keyKind })
+      .select({
+        organization: boatInstall.organization,
+        keyKind: boatInstall.keyKind,
+        deploymentId: boatInstall.deploymentId,
+      })
       .from(boatInstall)
       .where(eq(boatInstall.id, "install"));
-    return row === undefined
-      ? ({ kind: "known", wallet: null } as const)
-      : createWalletOf(row.organization, row.keyKind);
+    if (
+      row === undefined ||
+      (deploymentId !== undefined &&
+        (row.deploymentId === null || row.deploymentId !== deploymentId))
+    )
+      return { kind: "known", wallet: null } as const satisfies BoatCreateWallet;
+    return createWalletOf(row.organization, row.keyKind);
   });
 
 /**
@@ -70,7 +81,8 @@ export const deploymentCreateWallet = (db: DB, deploymentId: string) =>
       .from(boatAccounts)
       .where(eq(boatAccounts.deploymentId, deploymentId))
       .for("share");
-    if (account === undefined) return { removing: false, wallet: yield* installCreateWallet(db) };
+    if (account === undefined)
+      return { removing: false, wallet: yield* installCreateWallet(db, deploymentId) };
     return {
       removing: account.removalRequestedAt !== null,
       wallet: createWalletOf(account.organization, account.keyKind),

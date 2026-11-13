@@ -177,7 +177,8 @@ export interface BoatWalletResolution {
    */
   readonly pin?: {
     readonly organization: string | null;
-    readonly keyKind: "personal" | "organization";
+    /** What the key is; null: Boat did not show it (the pin stands for either). */
+    readonly keyKind: "personal" | "organization" | null;
   };
 }
 
@@ -1020,14 +1021,17 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             .update(boatAccounts)
             .set({
               boatOrganization: pin.organization,
-              keyKind: pin.keyKind,
+              ...(pin.keyKind === null ? {} : { keyKind: pin.keyKind }),
               keyRevision: sql`${boatAccounts.keyRevision} + 1`,
             })
             .where(eq(boatAccounts.id, owner.accountId));
         else
           yield* db
             .update(boatInstall)
-            .set({ organization: pin.organization, keyKind: pin.keyKind })
+            .set({
+              organization: pin.organization,
+              ...(pin.keyKind === null ? {} : { keyKind: pin.keyKind }),
+            })
             .where(eq(boatInstall.id, "install"));
         return "pinned" as const;
       }),

@@ -944,6 +944,20 @@ const walletBuilders =
     reconcileBuild: unused,
   });
 
+/** Boat refuses the account reads: the key lacks `account.read`. */
+const noAccountRead = (fake: FakeBoat) => {
+  fake.faults = {
+    refuse: ({ method, path }) =>
+      method === "GET" && (path === "/limits" || path === "/orgs" || path === "/me")
+        ? {
+            status: 403,
+            code: "api_key_action_forbidden",
+            message: "The action is not on the key.",
+          }
+        : undefined,
+  };
+};
+
 describe.skipIf(DATABASE_URL === undefined)(
   "Boat wallets on the worker: every object recorded where it was made (Postgres, fake Boat)",
   { timeout: 90_000 },
@@ -961,7 +975,8 @@ describe.skipIf(DATABASE_URL === undefined)(
           organization: string | null,
           keyKind: "personal" | "organization" | null,
         ) => Promise<{ readonly id: string; readonly deploymentId: string }>;
-        readonly launchImage: (accountId: string) => Promise<NativePublication>;
+        readonly launchImage: (accountId: string | undefined) => Promise<NativePublication>;
+        readonly installWallet: () => Promise<unknown>;
         readonly account: (id: string) => Promise<{
           readonly organization: string | null;
           readonly keyRevision: number;
@@ -974,6 +989,11 @@ describe.skipIf(DATABASE_URL === undefined)(
         readonly mark: () => { readonly sent: number; readonly named: number };
         readonly namedSince: (from: { readonly sent: number; readonly named: number }) => string[];
       }) => Promise<void>,
+      /** The worker's Boat settings beside the state directory, and the fake before it starts. */
+      setup: {
+        readonly settings?: Readonly<Record<string, string>>;
+        readonly prepare?: (fake: FakeBoat) => void;
+      } = {},
     ) =>
       withWorkspaceJobTestDatabase(DATABASE_URL ?? "", async (url) => {
         const scope = await Effect.runPromise(Scope.make());
@@ -990,6 +1010,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           }),
         });
         fake.account = { activeWallet: "personal" };
+        setup.prepare?.(fake);
         await fake.start();
         const state = await mkdtemp(join(tmpdir(), "boat-wallet-"));
         let worker: NonNullable<Awaited<ReturnType<typeof assembleBoat>>> | undefined;
@@ -1024,6 +1045,7 @@ describe.skipIf(DATABASE_URL === undefined)(
               SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
               SEALANT_BOAT_STATE_DIRECTORY: state,
               DOCKER_RUNTIME_ENABLED: "false",
+              ...setup.settings,
             }),
             db,
             credentialCipher: cipher,
@@ -1109,6 +1131,8 @@ describe.skipIf(DATABASE_URL === undefined)(
               );
               return changed.kind;
             },
+            installWallet: () =>
+              repo(Effect.flatMap(BoatAccountRepo, (accounts) => accounts.installWallet())),
             walletOf: (publicationId) =>
               repo(
                 Effect.flatMap(NativePublicationRepo, (catalog) => catalog.wallet(publicationId)),
@@ -1262,5 +1286,50 @@ describe.skipIf(DATABASE_URL === undefined)(
         expect(await c.stateOf(image.publicationId)).toBe("removed");
         expect(c.fake.heldIn("personal").snapshots).toEqual([]);
       }));
+
+    it("pins the install's own key to its setting when Boat hides which wallet it bills, and launches there", () =>
+      withWallets(
+        async (c) => {
+          expect(await c.installWallet()).toMatchObject({ organization: "personal" });
+          const image = await c.launchImage(undefined);
+          expect(await c.walletOf(image.publicationId)).toEqual({
+            state: "known",
+            wallet: "personal",
+          });
+          expect(c.fake.heldIn("personal").snapshots).toEqual([image.snapshot.identity.name]);
+        },
+        {
+          settings: {
+            SEALANT_BOAT_API_KEY: KEY,
+            SEALANT_BOAT_ORGANIZATION: "personal",
+            SEALANT_BOAT_BUILDER_OWNER: "11111111-2222-4333-8444-555555555555",
+          },
+          prepare: noAccountRead,
+        },
+      ));
+
+    it("launches nothing in the install's own account while Core cannot see which wallet its key bills", () =>
+      withWallets(
+        async (c) => {
+          expect(await c.installWallet()).toMatchObject({ organization: null });
+          await expect(c.launchImage(undefined)).rejects.toThrow();
+          expect(c.fake.heldIn("personal")).toEqual({ sandboxes: [], snapshots: [] });
+          expect(c.fake.organizationHeaders.map((each) => each.path)).not.toContain("/sandboxes");
+          // Once Boat shows it (the key gained account.read), the next pass pins it, and it launches.
+          c.fake.faults = {};
+          expect(await c.worker.resolveWallets()).toEqual([
+            { accountId: "default", outcome: "pinned" },
+          ]);
+          const image = await c.launchImage(undefined);
+          expect(c.fake.heldIn("personal").snapshots).toEqual([image.snapshot.identity.name]);
+        },
+        {
+          settings: {
+            SEALANT_BOAT_API_KEY: KEY,
+            SEALANT_BOAT_BUILDER_OWNER: "11111111-2222-4333-8444-555555555555",
+          },
+          prepare: noAccountRead,
+        },
+      ));
   },
 );

@@ -281,7 +281,7 @@ export const createBoatAccount = (payload: CreateBoatAccountRequest) =>
       return yield* new BoatAccountKeyRefusedError({
         code: "boat-key-unverified",
         message:
-          "Boat did not show which wallet the key bills, so Core cannot pin the account to it; nothing was stored. Try again.",
+          "Boat did not show which wallet the key bills, so Core cannot pin the account to it (Core reads it with the key's account.read permission); nothing was stored. Give the key account.read, or try again.",
         ...(!report.wallet.observed && report.wallet.boat !== undefined
           ? { boat: report.wallet.boat }
           : {}),

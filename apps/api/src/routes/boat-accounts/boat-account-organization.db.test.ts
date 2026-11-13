@@ -29,6 +29,7 @@ import {
   releaseNativeConsumers,
   supersedeNativePublication,
 } from "@sealant/db/testing/native-publications";
+import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import { BoatSecret, HttpBoatApi } from "@sealant/workspaces";
 import { FakeBoat } from "@sealant/workspaces/testing/fake-boat";
 import { Effect, Exit, Layer, Schema } from "effect";
@@ -277,6 +278,81 @@ describe.skipIf(DATABASE_URL === undefined)(
         report: { billing: { mode: "key-organization" } },
       });
     });
+
+    it("refuses to connect a key without account.read, naming it: Core could not see which wallet it bills", async () => {
+      boat.account = {
+        ...boat.account,
+        key: {
+          actions: [
+            "sandbox.create",
+            "sandbox.read",
+            "sandbox.stop",
+            "sandbox.resume",
+            "sandbox.delete",
+            "exec",
+            "file.write",
+            "host",
+            "snapshot.read",
+            "snapshot.write",
+          ],
+        },
+      };
+      const refused = await refusal(
+        routes.createBoatAccount({ label: "No account.read", apiKey: ACCOUNT_KEY }),
+      );
+      expect(refused).toMatchObject({
+        _tag: "BoatAccountKeyRefusedError",
+        code: "boat-key-missing-permissions",
+        missingPermissions: ["account.read"],
+      });
+      expect(refused.message).toContain("account.read");
+      const label = `No account.read`;
+      expect((await run(routes.listBoatAccounts())).items.map((item) => item.label)).not.toContain(
+        label,
+      );
+    });
+
+    it("refuses a workspace in the install's own account while Core has not seen which wallet its key bills, and starts it once it has", () =>
+      withWorkspaceJobTestDatabase(DATABASE_URL ?? "", async (url) => {
+        const own = await createSealantDB(url);
+        const inOwn = <A, E>(effect: Effect.Effect<A, E, BoatAccountRepo | SealantDB>) =>
+          Effect.runPromise(
+            effect.pipe(
+              Effect.provide(
+                BoatAccountRepoLive.pipe(Layer.provideMerge(Layer.succeed(SealantDB, own))),
+              ),
+              Effect.provideService(availability.BoatConfigured, true),
+            ),
+          );
+        // A fresh install: its names made, its key not checked yet.
+        await inOwn(
+          Effect.flatMap(BoatAccountRepo, (repo) => repo.installDeployment("install-fresh")),
+        );
+        await inOwn(
+          Effect.flatMap(BoatAccountRepo, (repo) =>
+            repo.reportLaunch({
+              worker: `worker-${randomUUID()}`,
+              launches: true,
+              defaultAccount: true,
+              resourceGateway: true,
+              observedAt: new Date(),
+            }),
+          ),
+        );
+        const refused = await inOwn(
+          Effect.flip(availability.requireBoatAccount({ runtime: {} }, "boat")),
+        );
+        expect(refused).toMatchObject({
+          _tag: "WorkspaceConflictError",
+          code: "boat-account-wallet-unresolved",
+        });
+        expect(refused.message).toContain("account.read");
+        // The worker's check saw an organization's key (one wallet): it starts.
+        await inOwn(
+          Effect.flatMap(BoatAccountRepo, (repo) => repo.setKeyKind("default", "organization")),
+        );
+        await inOwn(availability.requireBoatAccount({ runtime: {} }, "boat"));
+      }));
 
     it("points the account at another wallet at once: images stay recorded where they were made, none deleted first, no workspace refused", async () => {
       const created = await connect("Moves");

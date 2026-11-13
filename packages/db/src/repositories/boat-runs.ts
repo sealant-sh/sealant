@@ -547,7 +547,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
         // key's from `boat_install`). An account whose wallet Core has not resolved creates nothing.
         const wallet =
           input.accountId === undefined
-            ? yield* installCreateWallet(db)
+            ? yield* installCreateWallet(db, input.deploymentId)
             : yield* Effect.map(
                 db
                   .select({

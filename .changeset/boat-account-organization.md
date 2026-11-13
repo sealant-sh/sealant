@@ -15,4 +15,7 @@ report gains `wallets` (the wallets a personal key can bill, the active one mark
 `BoatAccount.unreachable` names saved images Boat has in none of the key's wallets. New conflict
 codes on the new route: `boat-key-organization`, `boat-account-wallet-unresolved`; a workspace
 create refused for an account Core has not pinned yet carries `code`
-`boat-account-wallet-unresolved`. New optional field `unsettledRuns` on a conflict.
+`boat-account-wallet-unresolved`. New optional field `unsettledRuns` on a conflict. Core now
+requires the key permission `account.read` (Boat's `/me`, limits and organization discovery):
+without it Core cannot see which wallet a key bills, and refuses to connect it
+(`boat-key-missing-permissions`).

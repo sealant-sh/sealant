@@ -49,6 +49,8 @@ const start = async (account: FakeBoatAccount = {}, organization?: string) => {
 describe("a Boat key's check", () => {
   it("derives the permissions Core needs from its own calls, delete included", () => {
     expect(BOAT_REQUIRED_PERMISSIONS).toEqual([
+      // `/me`, limits, organization discovery and the key list: which wallet a key bills.
+      "account.read",
       "exec",
       "file.write",
       "host",
@@ -119,6 +121,7 @@ describe("a Boat key's check", () => {
           "host",
           "snapshot.read",
           "snapshot.write",
+          "account.read",
         ],
         expiresAt: "2027-02-11T00:00:00.000Z",
         expiringSoon: false,
@@ -132,6 +135,31 @@ describe("a Boat key's check", () => {
         permissions: { observed: true, missing: ["sandbox.delete"] },
         expiry: { observed: true, expiresAt: "2027-02-11T00:00:00.000Z", expired: false },
       },
+    });
+  });
+
+  it("names account.read for a key that holds every other permission Core needs: without it, Core cannot see which wallet the key bills", async () => {
+    const { api } = await start({
+      key: {
+        actions: [
+          "sandbox.create",
+          "sandbox.read",
+          "sandbox.stop",
+          "sandbox.resume",
+          "sandbox.delete",
+          "exec",
+          "file.write",
+          "host",
+          "snapshot.read",
+          "snapshot.write",
+        ],
+      },
+    });
+    const check = await checkBoatKey(api, { organization: null, now });
+    expect(check).toMatchObject({
+      kind: "checked",
+      missingPermissions: ["account.read"],
+      report: { permissions: { observed: true, missing: ["account.read"] } },
     });
   });
 

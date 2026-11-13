@@ -930,19 +930,27 @@ export const assembleBoat = async (input: {
           observed.wallets?.observed === true
             ? observed.wallets.choices.map((choice) => choice.id)
             : undefined;
-        const billed = !observed.wallet.observed
-          ? undefined
-          : observed.wallet.kind === "personal"
-            ? "personal"
-            : observed.wallet.organizationId;
-        if (wallets === undefined || billed === undefined) return "unavailable";
+        // The wallet it bills now, as Boat showed it; for the install's own key, its setting when
+        // Boat does not show it (every request named the setting since it was set).
+        const billed =
+          (!observed.wallet.observed
+            ? undefined
+            : observed.wallet.kind === "personal"
+              ? "personal"
+              : observed.wallet.organizationId) ?? target.desired;
+        // The wallet the key bills now is what a pin needs (`account.read`, which Core requires).
+        // The list of wallets it can bill is needed only to look for unknown objects: without it,
+        // Core looks in the wallet it bills and the person's own, and a miss there proves nothing.
+        if (billed === undefined) return "unavailable";
+        const complete = wallets !== undefined;
+        const searched = wallets ?? [...new Set([billed, "personal"])];
         const runs = await pooled(
           unknown.liveRuns.map((run) => async () => {
             if (run.sandboxId === null) return undefined;
             const id = boatSandboxIdSchema.safeParse(run.sandboxId);
             if (!id.success) return undefined;
             const found = await locate(
-              wallets,
+              searched,
               async (api) => {
                 const read = await api.get(id.data);
                 if (read.ok)
@@ -961,7 +969,7 @@ export const assembleBoat = async (input: {
             const name = boatSnapshotNameSchema.safeParse(image.name);
             if (!name.success) return undefined;
             const found = await locate(
-              wallets,
+              searched,
               async (api) => {
                 const read = await api.getSnapshot(name.data);
                 return read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered";
@@ -970,7 +978,7 @@ export const assembleBoat = async (input: {
             );
             return typeof found === "object"
               ? { publicationId: image.publicationId, wallet: found.in }
-              : found === "nowhere"
+              : found === "nowhere" && complete
                 ? { publicationId: image.publicationId, unreachable: true as const }
                 : undefined;
           }),
@@ -978,7 +986,7 @@ export const assembleBoat = async (input: {
         const proofs = await pooled(
           unknown.proofs.map((proof) => async () => {
             const found = await locate(
-              wallets,
+              searched,
               async (api): Promise<Seen> => {
                 const vm = boatSandboxIdSchema.safeParse(proof.sandboxId);
                 const snapshot = boatSnapshotNameSchema.safeParse(proof.snapshotName);
@@ -1005,7 +1013,7 @@ export const assembleBoat = async (input: {
             );
             return typeof found === "object"
               ? { id: proof.id, wallet: found.in }
-              : found === "nowhere"
+              : found === "nowhere" && complete
                 ? { id: proof.id, unreachable: true as const }
                 : undefined;
           }),
@@ -1022,7 +1030,14 @@ export const assembleBoat = async (input: {
               runs: located,
               images: images.filter((each) => each !== undefined),
               proofs: proofs.filter((each) => each !== undefined),
-              ...(pin === undefined ? {} : { pin: { organization: pin, keyKind: "personal" } }),
+              ...(pin === undefined
+                ? {}
+                : {
+                    pin: {
+                      organization: pin,
+                      keyKind: observed.keyKind.observed ? observed.keyKind.kind : null,
+                    },
+                  }),
             }),
           ),
         );

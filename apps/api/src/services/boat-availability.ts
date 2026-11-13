@@ -182,7 +182,23 @@ export const requireBoatAccount = (
           message: refusal,
         });
     }
-    if (accountId === undefined) return;
+    if (accountId === undefined) {
+      if (runtimeFamily !== BOAT_RUNTIME_ID) return;
+      // The install's own key, before Core has seen which wallet it bills: it creates nothing.
+      const install = yield* (yield* BoatAccountRepo)
+        .installWallet()
+        .pipe(Effect.mapError(storeFailed));
+      if (
+        install !== undefined &&
+        createBoatWalletOf(install.organization, install.keyKind).kind === "unresolved"
+      )
+        return yield* new WorkspaceConflictError({
+          code: "boat-account-wallet-unresolved",
+          message:
+            "This install's own Boat key is not pinned to a Boat wallet yet: Core has not seen which wallet it bills (its check needs the key's account.read permission, and Boat to answer). No workspace starts in it until a worker has; set SEALANT_BOAT_ORGANIZATION, or give the key account.read, and try again in a minute.",
+        });
+      return;
+    }
     if (runtimeFamily !== BOAT_RUNTIME_ID)
       return yield* new WorkspaceBadRequestError({
         message: `spec.runtime.boatAccountId names a Boat account, and this workspace runs on ${runtimeFamily}, not Boat. Name a Boat account only for a workspace on the Boat runtime.`,
@@ -209,6 +225,6 @@ export const requireBoatAccount = (
       return yield* new WorkspaceConflictError({
         code: "boat-account-wallet-unresolved",
         message:
-          "The Boat account this workspace names was connected before Core pinned accounts to a wallet, and Core is still finding which Boat wallet its VMs and saved images are in: no new workspace starts in it until it is pinned, usually within a minute of an upgrade. Try again then.",
+          "The Boat account this workspace names was connected before Core pinned accounts to a wallet, and Core is still finding which Boat wallet its VMs and saved images are in: no new workspace starts in it until it is pinned, usually within a minute of an upgrade. If its key lacks Boat's account.read permission, Core cannot see the wallet: rotate it to a key that has it.",
       });
   });

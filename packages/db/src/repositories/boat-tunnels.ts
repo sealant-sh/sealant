@@ -23,7 +23,9 @@ import { boatTunnels } from "../schema/boat-tunnels.js";
 /** Store errors never include SQL, ciphertext or serialized key material. */
 
 /** A run row as the run ledger's schema reads it: its recorded wallet is read apart. */
-const withoutWallet = <R extends { readonly boatWallet: unknown; readonly boatWalletState: unknown }>({
+const withoutWallet = <
+  R extends { readonly boatWallet: unknown; readonly boatWalletState: unknown },
+>({
   boatWallet: _wallet,
   boatWalletState: _state,
   ...row

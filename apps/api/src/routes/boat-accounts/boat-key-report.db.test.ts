@@ -144,6 +144,7 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
           "host",
           "snapshot.read",
           "snapshot.write",
+          "account.read",
         ],
       },
     };

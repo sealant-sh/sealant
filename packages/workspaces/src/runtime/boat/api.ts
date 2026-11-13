@@ -151,6 +151,13 @@ export const BOAT_OPERATION_PERMISSIONS = {
   saveSnapshot: "snapshot.write",
   getSnapshot: "snapshot.read",
   deleteSnapshot: "snapshot.write",
+  // The account reads (docs.boat.dev/api-keys/scopes: "`/me`, limits, organization discovery,
+  // list keys"): which wallet a key bills and which it can bill, which Core must observe to pin a
+  // personal key's account, and to find where an account's things are.
+  me: "account.read",
+  orgs: "account.read",
+  limits: "account.read",
+  apiKeys: "account.read",
 } as const satisfies Record<string, string>;
 export type BoatOperation = keyof typeof BOAT_OPERATION_PERMISSIONS;
 const permissionFor = (operation: string): string | undefined =>

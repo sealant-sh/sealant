@@ -209,8 +209,8 @@ env key, both `install-key` routes answer `503` and say so.
   Boat's id and sends it as `X-Boat-Org` on every request for the account, so billing never follows
   the key's active wallet. If Boat does not show which wallet the key bills, nothing is stored
   (`boat-key-unverified`). An organization's key has one wallet and no pin. The key is sealed with
-  the install's credential key (`SEALANT_CREDENTIALS_KEY`) and is never returned by any route, logged
-  or named in an error. The answer is
+  the install's credential key (`SEALANT_CREDENTIALS_KEY`) and is never returned by any route,
+  logged or named in an error. The answer is
   `{ boatAccountId, label, state, createdAt, keyRotatedAt, organization, unreachable, report }`.
 - `GET /v1/boat-accounts` lists every stored account not removed. `state` is `active` or `removing`.
   Each carries its key's last `report`, null until it is checked.
@@ -253,15 +253,19 @@ Boat reports but what the account does: `pinned` means every request for it name
 organization's id, or `personal`), so its bill never follows the key's active wallet.
 `key-organization` means the key is an organization's, which bills that organization and nothing
 else. `active-wallet` means a personal key with no pin, which bills whichever wallet its Boat
-account has active, and the person can change that in Boat at any time (`boat org switch`). A
-stored account is in that state only until Core pins it, right after an upgrade. When the
-wallet it bills is not the one an earlier report saw, `walletChanged` says so:
-`{ from, observedAt }`, where `from` is the wallet it billed before and `observedAt` is when Core
-first saw the change. It stays while the wallet stays.
+account has active, and the person can change that in Boat at any time (`boat org switch`). A stored
+account is in that state only until Core pins it, right after an upgrade. When the wallet it bills
+is not the one an earlier report saw, `walletChanged` says so: `{ from, observedAt }`, where `from`
+is the wallet it billed before and `observedAt` is when Core first saw the change. It stays while
+the wallet stays.
 
-Core needs `exec`, `file.write`, `host`, `sandbox.create`, `sandbox.delete`, `sandbox.read`,
-`sandbox.resume`, `sandbox.stop`, `snapshot.read` and `snapshot.write`. `sandbox.delete-own` is not
-enough: after a rotation the new key deletes VMs the old key created.
+Core needs `account.read`, `exec`, `file.write`, `host`, `sandbox.create`, `sandbox.delete`,
+`sandbox.read`, `sandbox.resume`, `sandbox.stop`, `snapshot.read` and `snapshot.write`.
+`sandbox.delete-own` is not enough: after a rotation the new key deletes VMs the old key created.
+`account.read` is how Core sees which wallet a key bills (`/me`, limits, organization discovery),
+which it must know to pin a personal key's account and to find where an account's things are.
+Without it a key is not connected, and an install's own key needs `SEALANT_BOAT_ORGANIZATION`
+instead.
 
 - `POST /v1/boat-accounts/:boatAccountId/prove` runs a full check of a stored account's key, since
   Boat lets no key read all of its own permissions and has no dry run. Core starts the smallest VM
@@ -291,12 +295,11 @@ enough: after a rotation the new key deletes VMs the old key created.
   Boat. `GET /v1/boat-accounts` carries each account's last check as `lastProof` (null until it is
   proven). A check takes a minute or more.
 
-- `PUT /v1/boat-accounts/:boatAccountId/organization { organization }` points a stored account with a
-  personal key at another wallet, without its key. `organization` is an organization's id or name
-  from the report's `wallets`, or `personal` for the key's own Boat account. Core checks the key with
-  Boat (read-only) under the wallet the account names now and under the new one, and keeps Boat's id.
-  The refusals:
-
+- `PUT /v1/boat-accounts/:boatAccountId/organization { organization }` points a stored account with
+  a personal key at another wallet, without its key. `organization` is an organization's id or name
+  from the report's `wallets`, or `personal` for the key's own Boat account. Core checks the key
+  with Boat (read-only) under the wallet the account names now and under the new one, and keeps
+  Boat's id. The refusals:
   - `null`: `400`. There is no unpin.
   - A wallet the key's account cannot bill: `400`.
   - An organization's key: `409` `boat-key-organization`. It has nothing to choose.
@@ -313,8 +316,8 @@ enough: after a rotation the new key deletes VMs the old key created.
   So a change is refused, with the counts, only while the account has something that lives in the
   wallet it names now and is reached through the account: runs whose VMs Boat may hold, runs still
   being settled, image builds in flight or being cleaned up, or a full check's leftovers. Those are
-  `409` `boat-account-in-use` (with `liveRuns`, `unsettledRuns`, `buildsInFlight`) and
-  `409` `boat-proof-running`. Nothing changes.
+  `409` `boat-account-in-use` (with `liveRuns`, `unsettledRuns`, `buildsInFlight`) and `409`
+  `boat-proof-running`. Nothing changes.
 
   Otherwise the account names the new wallet at once. Nothing is deleted first, and no workspace is
   refused. A launch builds its image in the new wallet, since it uses only an image recorded in the
@@ -327,8 +330,8 @@ enough: after a rotation the new key deletes VMs the old key created.
   account's live VMs and saved images under every wallet the key can bill (naming each, in parallel,
   bounded), and records each where it is found. It then pins the account where its VMs are, or, with
   none running, to the wallet the key bills now. A saved image Boat has in none of the key's wallets
-  is reported in `unreachable.savedImages`. It is never removed by Core and never used, and it blocks
-  nothing.
+  is reported in `unreachable.savedImages`. It is never removed by Core and never used, and it
+  blocks nothing.
 
 - `DELETE /v1/boat-accounts/:boatAccountId` is refused while the account has runs whose VMs Boat may
   still hold, or an image build in flight (`409`, code `boat-account-in-use`, with `liveRuns` and
