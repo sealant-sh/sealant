@@ -113,16 +113,21 @@ export const boatAccountControlMaterialLayer = (options: {
       const db = yield* SealantDB;
       const cipher = yield* CredentialCipher;
       const fallback = options.defaultAccount;
-      const defaultAccount =
+      const fallbackDeployment =
         fallback === undefined
+          ? undefined
+          : yield* Effect.promise(() => deploymentOf(db, fallback.deploymentId));
+      const defaultAccount =
+        fallback === undefined || fallbackDeployment === undefined
           ? undefined
           : {
               api: installBoatApi({
                 db,
                 credential: fallback.credential,
+                deploymentId: fallbackDeployment,
                 ...(options.clientFor === undefined ? {} : { clientFor: options.clientFor }),
               }),
-              deploymentId: yield* Effect.promise(() => deploymentOf(db, fallback.deploymentId)),
+              deploymentId: fallbackDeployment,
             };
       const directory = new BoatAccountDirectory({
         db,

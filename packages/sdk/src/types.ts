@@ -2569,12 +2569,8 @@ export interface BoatAccount {
    * says the same in words, and `report.wallets` lists what `setOrganization` can name.
    */
   readonly organization: string | null;
-  /**
-   * What the account made in Boat that the control plane cannot reach: Boat has it in none of the
-   * wallets the key can bill. It stays recorded and is never removed by the control plane; look
-   * for it under Saved snapshots in Boat. Null: nothing.
-   */
-  readonly unreachable: { readonly savedImages: readonly string[] } | null;
+  /** What the account made in Boat that the control plane cannot reach (`BoatUnreachable`). */
+  readonly unreachable: BoatUnreachable | null;
   /**
    * What the last check observed of the key, and when (`report.observedAt`); null until checked.
    * Each fact is `observed: true` with its value, or `observed: false` with Boat's reason.
@@ -2596,6 +2592,24 @@ export interface BoatInstallKey {
   readonly label: string;
   /** What the last check observed of the key, and when; null until it is checked. */
   readonly report: BoatKeyReport | null;
+  /** What the key made in Boat that the control plane cannot reach; absent or null: nothing. */
+  readonly unreachable?: BoatUnreachable | null | undefined;
+}
+
+/**
+ * What a key's account made in Boat before the control plane recorded wallets, that it cannot
+ * reach: Boat has it in none of the wallets the key can bill (for a key without `account.read`,
+ * which cannot list them: not in the one it bills). It stays recorded, is never used or removed by
+ * the control plane, and holds nothing up; look for it in Boat, in each organization the key's
+ * account has been in.
+ */
+export interface BoatUnreachable {
+  /** Saved images, by snapshot name (Saved snapshots in Boat). */
+  readonly savedImages: readonly string[];
+  /** Runs whose VM it was, by run id: each ended as gone. */
+  readonly runs?: readonly string[] | undefined;
+  /** Image builds, by publication id: abandoned, and built again where the key bills now. */
+  readonly builds?: readonly string[] | undefined;
 }
 
 /**
@@ -2630,14 +2644,10 @@ export interface BoatAccountsNamespace {
    * first.
    *
    * What the account made in Boat stays recorded in the wallet it was made in, and every request
-   * about it names that wallet. So the call rejects (409, `reason` `boat-account-in-use`, the message
-   * counting them) only while the account has workspaces whose VMs Boat may hold, runs still being
-   * settled, or image builds in flight, and `boat-proof-running` while a full check's leftovers may be
-   * there. Otherwise it names the new wallet at once: new workspaces are never refused for it, the
-   * next launch builds its image in the new wallet, and the images made in the old one are removed
-   * there by the control plane. An account connected before accounts were pinned rejects
-   * (`boat-account-wallet-unresolved`) until the control plane has pinned it, within a minute of an
-   * upgrade. An organization's Boat key rejects (409, `boat-key-organization`): it bills its own
+   * about it names that wallet. So the call waits for nothing: it names the new wallet at once,
+   * running workspaces, builds and checks go on in their own wallets, the next launch builds its
+   * image in the new wallet, and the images made in the old one are removed there by the control
+   * plane. An account connected before accounts were pinned is pinned by it too. An organization's Boat key rejects (409, `boat-key-organization`): it bills its own
    * organization only. A wallet the key cannot bill rejects (400). The control plane's own key is
    * set in its environment (`SEALANT_BOAT_ORGANIZATION`; 409, `boat-account-environment`).
    */

@@ -53,6 +53,7 @@ import {
   boatVmWorkerLayer,
   checkBoatKey,
   installBoatApi,
+  installBuildApi,
   installWalletApi,
   loadPackagedRuntime,
   makeBoatTunnelCarrierLayer,
@@ -225,6 +226,11 @@ export interface BoatWorkerStack extends BoatAccountStack {
    * account names now: what builds, verifies and removes the images recorded in that wallet.
    */
   readonly catalogIn: ((wallet: string | null) => Promise<BoatNativeCatalogService>) | undefined;
+  /**
+   * Reconciles one image build made before sealant recorded wallets, with a catalog of its own
+   * whose builder finds the wallet the build is in (and records it), or records it unreachable.
+   */
+  readonly reconcileBuild: ((publicationId: string) => Promise<void>) | undefined;
   /** Where each of the sweeps above stopped last; the next tick starts there. */
   readonly cursors: {
     vm?: string | undefined;
@@ -325,8 +331,8 @@ export const assembleBoat = async (input: {
           api: installBoatApi({
             db,
             credential: envAccount.credential,
+            deploymentId: names.deploymentId,
             ...(input.clientFor === undefined ? {} : { clientFor: input.clientFor }),
-            ...(input.revisionCheckMs === undefined ? {} : { checkMs: input.revisionCheckMs }),
           }),
           builderOwner: names.builderOwner,
         };
@@ -422,6 +428,7 @@ export const assembleBoat = async (input: {
         reconcileCatalog: undefined,
         reapImages: undefined,
         catalogIn: undefined,
+        reconcileBuild: undefined,
         reach: undefined,
         reopenCarriers: undefined,
         verifyBearers: undefined,
@@ -520,6 +527,38 @@ export const assembleBoat = async (input: {
       const wallet = await createWallet(accountId);
       return wallet.kind === "unresolved" ? undefined : catalogIn(wallet.wallet);
     };
+    const reconcileBuild = async (publicationId: string) => {
+      const owner = provider.builderOwner;
+      if (!launches || journals === undefined || owner === undefined) return;
+      const buildApi =
+        accountId !== null
+          ? directory.buildApi(accountId, publicationId)
+          : envAccount === undefined
+            ? undefined
+            : installBuildApi(
+                {
+                  db,
+                  credential: envAccount.credential,
+                  deploymentId,
+                  ...(input.clientFor === undefined ? {} : { clientFor: input.clientFor }),
+                },
+                publicationId,
+              );
+      if (buildApi === undefined) return;
+      const builder = await makeBuilder({ api: buildApi, journalDirectory: journals, owner });
+      const catalogRuntime = ManagedRuntime.make(
+        boatNativeCatalogLayer({ deploymentId, builder, wallet: { build: publicationId } }).pipe(
+          Layer.provide(Infra),
+        ),
+      );
+      try {
+        const service = await catalogRuntime.runPromise(BoatNativeCatalog);
+        if (service.reconcilePublication !== undefined)
+          await Effect.runPromise(service.reconcilePublication(publicationId));
+      } finally {
+        await catalogRuntime.dispose();
+      }
+    };
     /** Whether this account ever built here: its journals exist. */
     const hasJournals = async () =>
       journals !== undefined &&
@@ -534,6 +573,7 @@ export const assembleBoat = async (input: {
       control,
       catalog: catalogOf,
       catalogIn: launches && journals !== undefined ? catalogIn : undefined,
+      reconcileBuild: launches && journals !== undefined ? reconcileBuild : undefined,
       reconcileAllocations: (page) =>
         runtime.runPromise(Effect.flatMap(BoatVm, (vms) => vms.reconcile(page))),
       reconcileConvergence: (page) =>
@@ -829,6 +869,12 @@ export const assembleBoat = async (input: {
         ? HttpBoatApi.create({ credential, timeoutMs: 10_000 })
         : { ok: false, error: new BoatApiError("credential", null, "check_client_missing") };
   type Seen = "found" | "absent" | "unanswered";
+  /** A process given any client factory of its own (a test) never reaches Boat's real API. */
+  const faked =
+    input.clientFor !== undefined ||
+    input.keyClientFor !== undefined ||
+    input.proofClientFor !== undefined;
+  const missingClient = new BoatApiError("credential", null, "check_client_missing");
   /** Where something is: the one wallet that has it, nowhere (every wallet said so), or unknown. */
   const locate = async (
     wallets: readonly string[],
@@ -852,15 +898,16 @@ export const assembleBoat = async (input: {
   };
 
   /**
-   * One pass that resolves where things are, for every owner sealant has not pinned (accounts
-   * connected before sealant pinned them, the install's own key without a setting) and every object
-   * whose wallet sealant does not know. The key is checked (read-only); an organization's key has one
-   * wallet, so everything is in it. For a personal key, each unknown live VM, saved image and full
-   * check is looked for under every wallet the key can bill, naming each, in parallel and bounded;
-   * what is found is recorded there, an image Boat has in none is `unreachable`. The owner is pinned
-   * where its live VMs all are, or, with none, to the wallet the key bills now (or the setting).
-   * Until then it makes no Boat request and takes no new workspace. Then the install's setting is
-   * applied, once nothing of the install is in the wallet it named before.
+   * One pass over every owner sealant has not pinned (accounts connected before sealant pinned them,
+   * the install's own key without a setting) and every object whose wallet sealant does not know.
+   * An owner not pinned is pinned at once: to the install's setting, to an organization key's only
+   * wallet, or to the wallet a personal key bills now (which needs `account.read`). The pin is for
+   * what it makes from then on and waits for nothing it made before. Each object of unknown wallet
+   * is then looked for, one at a time, under every wallet the key can bill, naming each: found in
+   * one, that is recorded; found in none of a complete list, it is recorded unreachable (a run's VM
+   * is then absent on that basis); Boat not answering, or no list, leaves only that object for the
+   * next pass. An image build is reconciled by a catalog of its own whose builder does the same.
+   * Then the install's setting is applied, if it changed.
    */
   const resolveWallets = async () => {
     const report: { accountId: string; outcome: string }[] = [];
@@ -891,18 +938,39 @@ export const assembleBoat = async (input: {
         desired: undefined,
       })),
     ];
+    const resolve = (owner: BoatWalletOwner, resolution: BoatWalletResolution) =>
+      accountRepo(
+        Effect.flatMap(BoatAccountRepo, (repo) => repo.resolveWallets(owner, resolution)),
+      );
+    const nothing = { runs: [], images: [], proofs: [] } as const;
     for (const target of targets) {
       const outcome = await (async () => {
-        const current = await createWallet(target.accountId);
+        let current = await createWallet(target.accountId);
+        // The install's setting names its wallet whatever the key can show.
+        if (current.kind === "unresolved" && target.desired !== undefined) {
+          await resolve(target.owner, {
+            ...nothing,
+            pin: { organization: target.desired, keyKind: null },
+          });
+          current = { kind: "known", wallet: target.desired };
+        }
         const unknown = await accountRepo(
           Effect.flatMap(BoatAccountRepo, (repo) => repo.unknownObjects(target.owner)),
         );
-        const nothingUnknown =
+        if (
+          current.kind === "known" &&
           unknown.liveRuns.length === 0 &&
           unknown.images.length === 0 &&
-          unknown.buildsInFlight === 0 &&
-          unknown.proofs.length === 0;
-        if (current.kind === "known" && nothingUnknown) return "resolved";
+          unknown.builds.length === 0 &&
+          unknown.proofs.length === 0
+        )
+          return "resolved";
+        // Each build, by a catalog of its own; one failing leaves only that build for the next pass.
+        if (unknown.builds.length > 0) {
+          const stack = await stackOf(target.accountId).catch(() => undefined);
+          for (const publicationId of unknown.builds)
+            await stack?.reconcileBuild?.(publicationId).catch(() => undefined);
+        }
         const credential = await target.credential();
         if (credential === undefined) return "unavailable";
         const client = checkClient(credential);
@@ -912,8 +980,9 @@ export const assembleBoat = async (input: {
         );
         if (check?.kind !== "checked") return "unavailable";
         const observed = check.report;
-        if (observed.keyKind.observed && observed.keyKind.kind === "organization") {
-          const all: BoatWalletResolution = {
+        const keyKind = observed.keyKind.observed ? observed.keyKind.kind : null;
+        if (keyKind === "organization")
+          return resolve(target.owner, {
             runs: unknown.liveRuns.map((run) => ({ runId: run.runId, wallet: null })),
             images: unknown.images.map((image) => ({
               publicationId: image.publicationId,
@@ -921,31 +990,29 @@ export const assembleBoat = async (input: {
             })),
             proofs: unknown.proofs.map((proof) => ({ id: proof.id, wallet: null })),
             pin: { organization: null, keyKind: "organization" },
-          };
-          return accountRepo(
-            Effect.flatMap(BoatAccountRepo, (repo) => repo.resolveWallets(target.owner, all)),
-          );
+          });
+        const billed = !observed.wallet.observed
+          ? undefined
+          : observed.wallet.kind === "personal"
+            ? "personal"
+            : observed.wallet.organizationId;
+        // Pinned now, before anything is looked for: nothing it made before waits on the pin.
+        if (current.kind === "unresolved") {
+          if (billed === undefined) return "unavailable";
+          await resolve(target.owner, { ...nothing, pin: { organization: billed, keyKind } });
         }
         const wallets =
           observed.wallets?.observed === true
             ? observed.wallets.choices.map((choice) => choice.id)
             : undefined;
-        // The wallet it bills now, as Boat showed it; for the install's own key, its setting when
-        // Boat does not show it (every request named the setting since it was set).
-        const billed =
-          (!observed.wallet.observed
-            ? undefined
-            : observed.wallet.kind === "personal"
-              ? "personal"
-              : observed.wallet.organizationId) ?? target.desired;
-        // The wallet the key bills now is what a pin needs (`account.read`, which sealant requires).
-        // The list of wallets it can bill is needed only to look for unknown objects: without it,
-        // sealant looks in the wallet it bills and the person's own, and a miss there proves nothing.
-        if (billed === undefined) return "unavailable";
+        // Without the list, sealant looks where it can, and a miss there proves nothing.
         const complete = wallets !== undefined;
-        const searched = wallets ?? [...new Set([billed, "personal"])];
+        const searched = wallets ?? [
+          ...new Set([billed, target.desired, "personal"].filter((each) => each !== undefined)),
+        ];
         const runs = await pooled(
           unknown.liveRuns.map((run) => async () => {
+            // A create whose VM is not on record is found by its run's own convergence.
             if (run.sandboxId === null) return undefined;
             const id = boatSandboxIdSchema.safeParse(run.sandboxId);
             if (!id.success) return undefined;
@@ -961,7 +1028,11 @@ export const assembleBoat = async (input: {
               },
               credential,
             );
-            return typeof found === "object" ? { runId: run.runId, wallet: found.in } : undefined;
+            return typeof found === "object"
+              ? { runId: run.runId, wallet: found.in }
+              : found === "nowhere" && complete
+                ? { runId: run.runId, unreachable: true as const }
+                : undefined;
           }),
         );
         const images = await pooled(
@@ -1018,57 +1089,33 @@ export const assembleBoat = async (input: {
                 : undefined;
           }),
         );
-        const located = runs.filter((each) => each !== undefined);
-        const where = new Set(located.map((run) => run.wallet));
-        const pin =
-          located.length !== unknown.liveRuns.length || where.size > 1
-            ? undefined
-            : ([...where][0] ?? target.desired ?? billed);
-        return accountRepo(
-          Effect.flatMap(BoatAccountRepo, (repo) =>
-            repo.resolveWallets(target.owner, {
-              runs: located,
-              images: images.filter((each) => each !== undefined),
-              proofs: proofs.filter((each) => each !== undefined),
-              ...(pin === undefined
-                ? {}
-                : {
-                    pin: {
-                      organization: pin,
-                      keyKind: observed.keyKind.observed ? observed.keyKind.kind : null,
-                    },
-                  }),
-            }),
-          ),
-        );
+        await resolve(target.owner, {
+          runs: runs.filter((each) => each !== undefined),
+          images: images.filter((each) => each !== undefined),
+          proofs: proofs.filter((each) => each !== undefined),
+        });
+        return current.kind === "unresolved" ? "pinned" : "recorded";
       })().catch(() => "unavailable");
       if (outcome === "pinned" && target.accountId !== null) directory.forget(target.accountId);
       if (outcome !== "resolved")
         report.push({ accountId: target.accountId ?? "default", outcome });
     }
-    // The install's setting, once nothing of the install is in the wallet it names now.
+    // The install's setting, if it names another wallet than the one applied: what the install makes
+    // from then on is made there; nothing it made before waits.
     const desired = envAccount?.organization;
     if (desired !== undefined && fallback !== undefined) {
       const applied = await accountRepo(
         Effect.flatMap(BoatAccountRepo, (repo) => repo.installWallet()),
       );
       if (applied?.organization != null && applied.organization !== desired) {
-        const unsettled = await runRepo(
-          Effect.flatMap(BoatRunRepo, (runs) =>
-            runs.listUnsettled({ deploymentId: fallback.deploymentId, limit: 100 }),
+        const changed = await accountRepo(
+          Effect.flatMap(BoatAccountRepo, (repo) =>
+            repo.changeOrganization(
+              { install: { deploymentId: fallback.deploymentId } },
+              { organization: desired, expected: applied.organization },
+            ),
           ),
         ).catch(() => undefined);
-        const changed =
-          unsettled === undefined
-            ? undefined
-            : await accountRepo(
-                Effect.flatMap(BoatAccountRepo, (repo) =>
-                  repo.changeOrganization(
-                    { install: { deploymentId: fallback.deploymentId } },
-                    { organization: desired, expected: applied.organization, unsettled },
-                  ),
-                ),
-              ).catch(() => undefined);
         report.push({ accountId: "default", outcome: `setting-${changed?.kind ?? "unavailable"}` });
       }
     }
@@ -1112,17 +1159,15 @@ export const assembleBoat = async (input: {
     return report;
   };
 
-  // At start, where unpinned owners' things are: bounded, so a Boat that does not answer delays
-  // nothing for long; the sweep tick goes on from there.
-  let startTimer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    resolveWallets().catch(() => []),
-    new Promise((done) => {
-      startTimer = setTimeout(done, 30_000);
-    }),
-  ]);
-  clearTimeout(startTimer);
-  await fallback?.catalog();
+  // At start, where unpinned owners' things are, then the install's own catalog in the wallet it
+  // makes things in (none while its key is not pinned): in the background, so a Boat that does not
+  // answer delays nothing. The sweep tick goes on from there.
+  const startup = resolveWallets()
+    .then(() => fallback?.catalog())
+    .then(
+      () => undefined,
+      () => undefined,
+    );
 
   const launchReport = {
     launches: registration !== undefined,
@@ -1196,6 +1241,8 @@ export const assembleBoat = async (input: {
     /** One pass of the changes of organization (`reconcileOrganizationChanges` above). */
     /** One pass that finds where unknown objects are and pins the owners sealant has not pinned. */
     resolveWallets,
+    /** The pass above as the worker's start runs it, which nothing in the worker waits on. */
+    startup,
     /** One pass removing saved images recorded in another wallet than their account's now. */
     removeImagesElsewhere: registration === undefined ? undefined : removeImagesElsewhere,
     /** One image retention pass (`reapImages` above); only a worker that builds images has one. */
@@ -1215,18 +1262,24 @@ export const assembleBoat = async (input: {
           return yield* BoatKeyProofRepo;
         }).pipe(Effect.provide(BoatKeyProofRepoLive), Effect.provideService(SealantDB, db)),
       );
+      // Boat's real API only where no client factory is given at all (production).
       const open =
         input.proofClientFor ??
-        ((credential: BoatSecret, options?: { readonly organization?: string }) =>
-          HttpBoatApi.create({
-            credential,
-            ...(options?.organization === undefined ? {} : { organization: options.organization }),
-          }));
+        (faked
+          ? () => ({ ok: false, error: missingClient }) as const
+          : (credential: BoatSecret, options?: { readonly organization?: string }) =>
+              HttpBoatApi.create({
+                credential,
+                ...(options?.organization === undefined
+                  ? {}
+                  : { organization: options.organization }),
+              }));
       return sweepBoatKeyProofs({
         proofs,
         ...(now === undefined ? {} : { now: () => now }),
-        // The wallet each check was recorded in, never the account's current one.
-        clientFor: async (account, wallet) => {
+        // The wallet each check was recorded in, never the account's current one; for one made
+        // before sealant recorded wallets, the account's own client, which finds it.
+        clientFor: async (account, wallet): Promise<BoatKeyProofClient | undefined> => {
           const key =
             account === "default"
               ? defaultKey
@@ -1234,9 +1287,27 @@ export const assembleBoat = async (input: {
           if (key === undefined) return undefined;
           const client = open(
             key.credential,
-            wallet === null ? undefined : { organization: wallet },
+            wallet === null || wallet === undefined ? undefined : { organization: wallet },
           );
-          return client.ok ? client.value : undefined;
+          if (!client.ok) return undefined;
+          if (wallet !== undefined) return client.value;
+          const routed =
+            account === "default" ? defaultProvider?.api : (await directory.provider(account))?.api;
+          if (routed === undefined) return undefined;
+          // Every request about its VM or snapshot finds the wallet they are in; the listing of an
+          // unfinished check's create names none, as the released sealant did.
+          const released = client.value;
+          return {
+            create: (...args) => routed.create(...args),
+            get: (...args) => routed.get(...args),
+            execute: (...args) => routed.execute(...args),
+            hostControl: (...args) => routed.hostControl(...args),
+            saveSnapshot: (...args) => routed.saveSnapshot(...args),
+            getSnapshot: (...args) => routed.getSnapshot(...args),
+            deleteSnapshot: (...args) => routed.deleteSnapshot(...args),
+            deleteSandbox: (...args) => routed.deleteSandbox(...args),
+            findKeyProof: (...args) => released.findKeyProof(...args),
+          };
         },
       });
     },
@@ -1272,7 +1343,11 @@ export const assembleBoat = async (input: {
           db,
           cipher: credentialCipher,
           ...(defaultKey === undefined ? {} : { defaultKey }),
-          ...(input.keyClientFor === undefined ? {} : { clientFor: input.keyClientFor }),
+          ...(input.keyClientFor !== undefined
+            ? { clientFor: input.keyClientFor }
+            : faked
+              ? { clientFor: () => ({ ok: false, error: missingClient }) as const }
+              : {}),
           ...(pass?.now === undefined ? {} : { now: pass.now }),
           ...(pass?.everyMs === undefined ? {} : { everyMs: pass.everyMs }),
         },

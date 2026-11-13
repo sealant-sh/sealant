@@ -303,7 +303,6 @@ instead.
   - `null`: `400`. There is no unpin.
   - A wallet the key's account cannot bill: `400`.
   - An organization's key: `409` `boat-key-organization`. It has nothing to choose.
-  - An account sealant has not pinned yet: `409` `boat-account-wallet-unresolved`.
   - `default`: `409` `boat-account-environment`. The install's own key bills what
     `SEALANT_BOAT_ORGANIZATION` names, or what sealant observed at its first check, and its report
     says so in `billing`.
@@ -313,25 +312,35 @@ instead.
   Boat's "not found" counts as evidence that something is gone only when the request named the
   wallet it was made in.
 
-  So a change is refused, with the counts, only while the account has something that lives in the
-  wallet it names now and is reached through the account: runs whose VMs Boat may hold, runs still
-  being settled, image builds in flight or being cleaned up, or a full check's leftovers. Those are
-  `409` `boat-account-in-use` (with `liveRuns`, `unsettledRuns`, `buildsInFlight`) and `409`
-  `boat-proof-running`. Nothing changes.
+  So a change waits for nothing. The account names the new wallet at once: what it makes from then
+  on (a run's VM, an image build, a full check) is made there. What it made before stays recorded,
+  and is used, stopped and removed, in its own wallet: an account can have live runs in two wallets.
+  A launch builds its image in the new wallet, since it uses only an image recorded in the account's
+  wallet. The worker removes each image of the old wallet with requests that name that wallet, by
+  the recorded removal image retention uses.
 
-  Otherwise the account names the new wallet at once. Nothing is deleted first, and no workspace is
-  refused. A launch builds its image in the new wallet, since it uses only an image recorded in the
-  account's wallet. The images made in the old wallet stay recorded there. The worker removes each
-  one with requests that name its own wallet, by the recorded removal image retention uses.
+  An account connected before sealant pinned accounts is pinned by the worker, when it starts and on
+  each sweep tick, to the wallet its key bills now (an organization's key: its only wallet). That
+  needs Boat's `account.read` permission on the key. Until then, a workspace naming the account and
+  a full check are refused: the workspace with `409` code `boat-account-wallet-unresolved`, the
+  check with `409` `boat-account-in-use`, each with a sentence that says to give the key
+  `account.read` or rotate to a key that has it. Its running sessions are not touched: stop, capture
+  and resume go to Boat as before. A rotation (`PUT …/key`) is allowed and pins it from the new key.
 
-  An account connected before sealant pinned accounts makes no Boat request, and a workspace naming
-  it is `409` (code `boat-account-wallet-unresolved`), until the worker has resolved it. That
-  happens when the worker starts and on each sweep tick. The worker checks the key, looks for each
-  of the account's live VMs and saved images under every wallet the key can bill (naming each, in
-  parallel, bounded), and records each where it is found. It then pins the account where its VMs
-  are, or, with none running, to the wallet the key bills now. A saved image Boat has in none of the
-  key's wallets is reported in `unreachable.savedImages`. It is never removed by sealant and never
-  used, and it blocks nothing.
+  What an account made before sealant recorded wallets has no wallet on record. A request about one
+  of these objects names no wallet, as before. If Boat does not find it there, sealant looks for it
+  under every wallet the key can bill, naming each. The worker does the same in the background, one
+  object at a time.
+  - Found in one wallet: the wallet is recorded, and the request is made there.
+  - Found in none of them (for a key without `account.read`, which cannot list its wallets: not in
+    the one it bills): the object is recorded unreachable, never gone. A run's session ends, its VM
+    "could not be found in any wallet this key can bill". A build is abandoned and built again where
+    the account is pinned. A saved image is never used again.
+  - Boat not answering: only that object waits, and is looked for again.
+
+  Unreachable objects are reported in `unreachable` (`savedImages`, `runs`, `builds`), on each
+  account and on `GET /v1/boat-accounts/install-key` for the install's own key. sealant never
+  removes them, and they hold nothing up: not a change, a rotation or a removal.
 
 - `DELETE /v1/boat-accounts/:boatAccountId` is refused while the account has runs whose VMs Boat may
   still hold, or an image build in flight (`409`, code `boat-account-in-use`, with `liveRuns` and

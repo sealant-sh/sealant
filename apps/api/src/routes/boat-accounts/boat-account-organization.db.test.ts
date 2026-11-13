@@ -24,11 +24,8 @@ import {
   workspaceAttempts,
   type DB,
 } from "@sealant/db";
-import { corruptBoatRun, seedBoatRun } from "@sealant/db/testing/boat-runs";
-import {
-  releaseNativeConsumers,
-  supersedeNativePublication,
-} from "@sealant/db/testing/native-publications";
+import { seedBoatRun } from "@sealant/db/testing/boat-runs";
+import { supersedeNativePublication } from "@sealant/db/testing/native-publications";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import { BoatSecret, HttpBoatApi } from "@sealant/workspaces";
 import { FakeBoat } from "@sealant/workspaces/testing/fake-boat";
@@ -383,70 +380,41 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(await stored(id)).toMatchObject({ keyRevision: 3 });
     });
 
-    it("refuses a change while the account has a run, a run still settling, a build in flight or a full check's leftovers, with the counts, and changes nothing", async () => {
+    it("changes the wallet while the account has a run, a build in flight and a full check, each kept in the wallet it was made in", async () => {
       const created = await connect("Busy");
       const id = created.boatAccountId;
-      const change = () => refusal(routes.setBoatAccountOrganization(id, { organization: "zeta" }));
-
       const live = await liveRun(id);
-      const inUse = await change();
-      expect(inUse).toMatchObject({
-        _tag: "BoatAccountConflictError",
-        code: "boat-account-in-use",
-        liveRuns: 1,
-        unsettledRuns: 0,
-        buildsInFlight: 0,
-      });
-      expect(inUse.message).toContain("1 run whose VM Boat may still hold");
-      expect(inUse.message).toContain("nothing was changed");
-
-      // Its VM is gone, and its image pin is not released yet: still being settled.
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          yield* corruptBoatRun(db, live.runId, {
-            fencedAt: new Date(),
-            deletionClaimedAt: new Date(),
-            deletionOperationId: `bdop_${randomUUID().replaceAll("-", "")}`,
-            deletionCompletedAt: new Date(),
-            absentAt: new Date(),
-            absentBasis: "deletion-completed",
-          });
-          yield* db.insert(schema.nativePublicationConsumers).values({
-            runId: live.runId,
-            runtimeInstanceId: live.runId,
-            publicationId: live.publicationId,
-            state: "live",
-          });
-        }),
-      );
-      expect(await change()).toMatchObject({
-        code: "boat-account-in-use",
-        liveRuns: 0,
-        unsettledRuns: 1,
-      });
-      await Effect.runPromise(releaseNativeConsumers(db, live.runId));
-
       const building = await savedImage(id, "reserved");
-      const builds = await change();
-      expect(builds).toMatchObject({ code: "boat-account-in-use", buildsInFlight: 1 });
-      expect(builds.message).toContain("1 image build in flight or being cleaned up");
-      await Effect.runPromise(supersedeNativePublication(db, building));
-
-      // A full check that is still running.
+      const checkSnapshot = `sealant-key-proof-${randomUUID().slice(0, 8)}`;
       await Effect.runPromise(
         db.insert(schema.boatKeyProofs).values({
           id: randomUUID(),
           account: id,
           createKey: randomUUID(),
-          snapshotName: `sealant-key-proof-${randomUUID().slice(0, 8)}`,
+          snapshotName: checkSnapshot,
           startedAt: new Date(),
           claimedUntil: new Date(Date.now() + 60_000),
           boatWallet: "team_acme",
           boatWalletState: "known",
         }),
       );
-      expect(await change()).toMatchObject({ code: "boat-proof-running" });
-      expect(await stored(id)).toMatchObject({ organization: "team_acme", keyRevision: 1 });
+      // Nothing the account made waits on the change, and the change waits on nothing it made.
+      expect(
+        await run(routes.setBoatAccountOrganization(id, { organization: "zeta" })),
+      ).toMatchObject({ organization: "team_zeta" });
+      expect(await stored(id)).toMatchObject({ organization: "team_zeta", keyRevision: 2 });
+      const wallets = await run(
+        Effect.flatMap(BoatAccountRepo, (repo) =>
+          Effect.all([
+            repo.objectWallet({ accountId: id }, { run: live.runId }),
+            repo.objectWallet({ accountId: id }, { publication: building }),
+            repo.objectWallet({ accountId: id }, { snapshot: checkSnapshot }),
+          ]),
+        ),
+      );
+      const acme = { kind: "known", wallet: "team_acme" };
+      // The run as the released build left it (wallet not known) stays so, until it is found.
+      expect(wallets).toEqual([{ kind: "unknown" }, acme, acme]);
     });
 
     it("refuses no wallet, a wallet the key cannot bill, an organization's key and the install's own key", async () => {
@@ -479,7 +447,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(install.message).toContain("SEALANT_BOAT_ORGANIZATION");
     });
 
-    it("keeps an account connected before pins waiting for the worker, with codes released clients decode", async () => {
+    it("starts nothing new in an account connected before pins until it is pinned, with a sentence and codes released clients decode, and pins it on a rotation", async () => {
       const id = randomUUID();
       await run(
         Effect.flatMap(BoatAccountRepo, (repo) =>
@@ -492,17 +460,11 @@ describe.skipIf(DATABASE_URL === undefined)(
           }),
         ),
       );
-      await savedImage(id, "ready", "personal", "unknown");
-      const pin = await refusal(
-        routes.setBoatAccountOrganization(id, { organization: "personal" }),
-      );
-      expect(pin).toMatchObject({ code: "boat-account-wallet-unresolved" });
-      // Released routes answer a code a client on 0.40.0-next.874 decodes.
-      const rotation = await refusal(routes.rotateBoatAccountKey(id, { apiKey: ACCOUNT_KEY }));
-      expect(rotation).toMatchObject({ code: "boat-account-in-use" });
-      expect(rotation.message).toContain("still finding which Boat wallet");
+      const image = await savedImage(id, "ready", "personal", "unknown");
+      // A full check would make a VM: refused, with what to do, in a code released clients decode.
       const proof = await refusal(routes.proveBoatAccount(id));
       expect(proof).toMatchObject({ code: "boat-account-in-use" });
+      expect(proof.message).toContain("account.read");
       const released = Schema.Struct({
         _tag: Schema.Literal("BoatAccountConflictError"),
         message: Schema.String,
@@ -515,10 +477,9 @@ describe.skipIf(DATABASE_URL === undefined)(
           "boat-proof-running",
         ]),
       });
-      for (const error of [rotation, proof])
-        expect(
-          Exit.isSuccess(Schema.decodeUnknownExit(released)(JSON.parse(JSON.stringify(error)))),
-        ).toBe(true);
+      expect(
+        Exit.isSuccess(Schema.decodeUnknownExit(released)(JSON.parse(JSON.stringify(proof)))),
+      ).toBe(true);
       // A workspace naming it is refused with a code, and a sentence that names no id.
       await reportLaunch();
       const create = await refusal(
@@ -529,6 +490,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         code: "boat-account-wallet-unresolved",
         message: expect.not.stringContaining(id),
       });
+      expect(create.message).toContain("account.read");
       const releasedWorkspace = Schema.Struct({
         _tag: Schema.Literal("WorkspaceConflictError"),
         message: Schema.String,
@@ -539,6 +501,18 @@ describe.skipIf(DATABASE_URL === undefined)(
           Schema.decodeUnknownExit(releasedWorkspace)(JSON.parse(JSON.stringify(create))),
         ),
       ).toBe(true);
+      // A rotation to a key that shows its wallet pins it there, and finds the image on the way.
+      const rotated = await run(routes.rotateBoatAccountKey(id, { apiKey: ACCOUNT_KEY }));
+      expect(rotated).toMatchObject({ organization: "team_acme" });
+      expect(await stored(id)).toMatchObject({ organization: "team_acme", keyKind: "personal" });
+      expect(
+        await run(
+          Effect.flatMap(BoatAccountRepo, (repo) =>
+            repo.objectWallet({ accountId: id }, { publication: image }),
+          ),
+        ),
+      ).toEqual({ kind: "known", wallet: "personal" });
+      await run(availability.requireBoatAccount({ runtime: { boatAccountId: id } }, "boat"));
     });
 
     it("reports an image Boat has in none of the key's wallets, and lets it block nothing", async () => {
@@ -556,6 +530,11 @@ describe.skipIf(DATABASE_URL === undefined)(
       });
       await reportLaunch();
       await run(availability.requireBoatAccount({ runtime: { boatAccountId: id } }, "boat"));
+      // It gates no rotation: a rotation reads only what Boat may still hold.
+      expect(await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.heldImages(id)))).toEqual([]);
+      expect(await run(routes.rotateBoatAccountKey(id, { apiKey: ACCOUNT_KEY }))).toMatchObject({
+        unreachable: { savedImages: [imageName(lost)] },
+      });
       // Never something to remove: not elsewhere, and it does not hold the account's removal.
       expect(
         await run(

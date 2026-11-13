@@ -96,6 +96,7 @@ export {
   BoatAccountDirectory,
   httpBoatClientFactory,
   installBoatApi,
+  installBuildApi,
   installWalletApi,
   type BoatAccountDirectoryOptions,
   type BoatAccountId,

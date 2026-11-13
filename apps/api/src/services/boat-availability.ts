@@ -204,12 +204,13 @@ export const requireBoatAccount = (
       return yield* new WorkspaceConflictError({
         message: `Boat account ${accountId} is being removed: no new workspace runs in it.`,
       });
-    // Connected before sealant pinned accounts, and not pinned yet: it creates nothing until the
-    // worker has found where its things are (right after an upgrade).
+    // Connected before sealant pinned accounts, and not pinned yet: nothing new starts with its key
+    // until sealant has seen the wallet the key bills (the worker's next pass, or a rotation). Its
+    // workspaces already running are not touched.
     if (createBoatWalletOf(account.organization, account.keyKind).kind === "unresolved")
       return yield* new WorkspaceConflictError({
         code: "boat-account-wallet-unresolved",
         message:
-          "The Boat account this workspace names was connected before sealant pinned accounts to a wallet, and sealant is still finding which Boat wallet its VMs and saved images are in: no new workspace starts in it until it is pinned, usually within a minute of an upgrade. If its key lacks Boat's account.read permission, sealant cannot see the wallet: rotate it to a key that has it.",
+          "The Boat account this workspace names was connected before sealant pinned accounts to a Boat wallet, and sealant has not seen yet which wallet its key bills: no new workspace starts in it until then, usually within a minute of an upgrade. If the key lacks Boat's account.read permission, sealant cannot see it: give the key account.read in Boat, or rotate the account to a key that has it. Its workspaces already running are not affected.",
       });
   });

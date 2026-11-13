@@ -45,6 +45,8 @@ interface Deletion {
 
 export class RecordedBoat {
   readonly vms = new Map<string, RecordedVm>();
+  /** The Boat account every key here belongs to, as `/me` answers it (`user.id`). */
+  identity = "usr_recorded";
   readonly deletions = new Map<string, Deletion>();
   readonly requests: string[] = [];
   /**
@@ -178,7 +180,7 @@ export class RecordedBoat {
     if (request.method === "GET" && path === "/me")
       return send(200, {
         ok: true,
-        user: { id: "usr_recorded", login: "recorded", accountStatus: "active" },
+        user: { id: this.identity, login: "recorded", accountStatus: "active" },
       });
     if (request.method === "GET" && path === "/orgs")
       return send(200, {

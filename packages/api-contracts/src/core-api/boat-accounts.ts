@@ -211,6 +211,23 @@ export const boatKeyProofSchema = Schema.Struct({
 });
 export type BoatKeyProof = typeof boatKeyProofSchema.Type;
 
+/**
+ * What a key's account made in Boat before sealant recorded wallets, that sealant cannot reach: Boat
+ * has it in none of the wallets the key can bill (for a key without `account.read`, which cannot list
+ * them: not in the one it bills). It was since deleted in Boat, or is in an organization the key's
+ * account has left. sealant keeps it recorded, never uses or removes it, and waits on it for nothing;
+ * look for it in Boat, in each organization the key's account has been in.
+ */
+export const boatUnreachableSchema = Schema.Struct({
+  /** Saved images, by snapshot name (Saved snapshots in Boat). */
+  savedImages: Schema.Array(Schema.String),
+  /** Runs whose VM it was, by run id: each ended as gone, its VM in no wallet the key can bill. */
+  runs: Schema.optional(Schema.Array(Schema.String)),
+  /** Image builds, by publication id: abandoned, and built again in the wallet the key bills now. */
+  builds: Schema.optional(Schema.Array(Schema.String)),
+});
+export type BoatUnreachableWire = typeof boatUnreachableSchema.Type;
+
 export const boatAccountSchema = Schema.Struct({
   boatAccountId: BoatAccountId,
   label: NonEmptyString,
@@ -230,16 +247,8 @@ export const boatAccountSchema = Schema.Struct({
   report: Schema.optional(Schema.NullOr(boatKeyReportSchema)),
   /** The account's last full check (`prove`), kept beside its report; null until it is proven. */
   lastProof: Schema.optional(Schema.NullOr(boatKeyProofSchema)),
-  /**
-   * What the account made in Boat that sealant cannot reach: sealant looked under every wallet the key
-   * can bill and Boat has it in none (it was made before sealant recorded wallets, and since deleted
-   * in Boat, or left in an organization the key's account has left). sealant keeps it recorded and
-   * never removes it; look for it under Saved snapshots in Boat, in each organization the key's
-   * account has been in. Null or absent: nothing.
-   */
-  unreachable: Schema.optional(
-    Schema.NullOr(Schema.Struct({ savedImages: Schema.Array(Schema.String) })),
-  ),
+  /** What the account made in Boat that sealant cannot reach (`boatUnreachableSchema`). */
+  unreachable: Schema.optional(Schema.NullOr(boatUnreachableSchema)),
 });
 export type BoatAccountWire = typeof boatAccountSchema.Type;
 
@@ -252,6 +261,8 @@ export const boatInstallKeySchema = Schema.Struct({
   label: NonEmptyString,
   /** The key's last report, with when it was observed; null until it is checked. */
   report: Schema.NullOr(boatKeyReportSchema),
+  /** What the install's key made in Boat that sealant cannot reach (`boatUnreachableSchema`). */
+  unreachable: Schema.optional(Schema.NullOr(boatUnreachableSchema)),
 });
 export type BoatInstallKeyWire = typeof boatInstallKeySchema.Type;
 
@@ -337,13 +348,10 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * still hold what one made (the message names the VM and the snapshot): a second check, a key
  * rotation, a removal and a change of organization wait until sealant has deleted it.
  * `boat-key-organization`: a change of organization for an organization's Boat key, which bills
- * its own organization and nothing else. `boat-account-wallet-unresolved`: a change of organization
- * for an account connected before sealant pinned accounts, while sealant is still finding where its
- * VMs and images are (a key rotation or a full check then answers `boat-account-in-use`). A change
- * of organization is also refused
- * `boat-account-in-use` while the account has runs whose VMs Boat may hold (`liveRuns`), runs
- * still being settled (`unsettledRuns`) or image builds in flight or being cleaned up
- * (`buildsInFlight`).
+ * its own organization and nothing else. `boat-account-wallet-unresolved`: not answered any more
+ * (kept so a client that lists it still decodes): a change of organization, a rotation and a removal
+ * wait for nothing the account made, which each stay in their own wallet. A full check of an account
+ * sealant has not pinned yet (its key cannot show the wallet it bills) answers `boat-account-in-use`.
  */
 export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConflictError>()(
   "BoatAccountConflictError",

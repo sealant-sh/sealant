@@ -13,6 +13,11 @@ ALTER TABLE "native_publications" ADD CONSTRAINT "native_publications_wallet" CH
 ALTER TABLE "boat_accounts" ADD CONSTRAINT "boat_accounts_key_kind" CHECK ("key_kind" in ('personal','organization'));--> statement-breakpoint
 ALTER TABLE "boat_key_proofs" ADD CONSTRAINT "boat_key_proofs_wallet" CHECK ("boat_wallet_state" in ('known','unknown','unreachable') and ("boat_wallet_state" = 'known' or "boat_wallet" is null));--> statement-breakpoint
 ALTER TABLE "boat_runs" ADD CONSTRAINT "boat_runs_wallet" CHECK ("boat_wallet_state" in ('known','unknown','unreachable') and ("boat_wallet_state" = 'known' or "boat_wallet" is null));--> statement-breakpoint
+ALTER TABLE "boat_runs" DROP CONSTRAINT "boat_runs_absence", ADD CONSTRAINT "boat_runs_absence" CHECK (("absent_at" is null and "absent_basis" is null)
+        or ("absent_at" is not null and "absent_basis" = 'not-found' and "sandbox_id" is not null and "created_seen_at" is not null)
+        or ("absent_at" is not null and "absent_basis" = 'deletion-completed' and "sandbox_id" is not null)
+        or ("absent_at" is not null and "absent_basis" = 'never-created' and "sandbox_id" is null)
+        or ("absent_at" is not null and "absent_basis" = 'unreachable'));--> statement-breakpoint
 -- What each key is, from its last report.
 UPDATE "boat_accounts" a SET "key_kind" = r."report"->'keyKind'->>'kind'
   FROM "boat_key_reports" r

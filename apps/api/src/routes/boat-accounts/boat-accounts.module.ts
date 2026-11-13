@@ -29,9 +29,10 @@ import { CredentialCipher } from "@sealant/credentials";
 import {
   BoatAccountRepo,
   BoatKeyProofRepo,
-  BoatRunRepo,
   createBoatWalletOf,
   type BoatAccountRecord,
+  type BoatObjectRef,
+  type BoatUnreachableObjects,
 } from "@sealant/db";
 import type { NativeReopenReason } from "@sealant/validators";
 import {
@@ -56,10 +57,22 @@ import {
 } from "../../services/boat-availability.js";
 
 /** `unreachable`: the saved images Boat has in none of the key's wallets, by name. */
+const unreachableWire = (unreachable: BoatUnreachableObjects | undefined) =>
+  unreachable === undefined ||
+  (unreachable.savedImages.length === 0 &&
+    unreachable.runs.length === 0 &&
+    unreachable.builds.length === 0)
+    ? null
+    : {
+        savedImages: [...unreachable.savedImages],
+        ...(unreachable.runs.length === 0 ? {} : { runs: [...unreachable.runs] }),
+        ...(unreachable.builds.length === 0 ? {} : { builds: [...unreachable.builds] }),
+      };
+
 const toWire = (
   account: BoatAccountRecord,
   report: BoatKeyReport | null,
-  unreachable: readonly string[] = [],
+  unreachable?: BoatUnreachableObjects,
 ): BoatAccountWire => ({
   boatAccountId: account.id,
   label: account.label,
@@ -68,18 +81,35 @@ const toWire = (
   keyRotatedAt: account.keyRotatedAt?.toISOString() ?? null,
   organization: account.organization,
   report,
-  unreachable: unreachable.length === 0 ? null : { savedImages: [...unreachable] },
+  unreachable: unreachableWire(unreachable),
 });
 
-/** The account's saved images sealant cannot reach in any wallet its key can bill. */
+/** What the account made that sealant cannot reach in any wallet its key can bill. */
 const unreachableOf = (account: BoatAccountRecord) =>
-  Effect.flatMap(BoatAccountRepo, (repo) => repo.unreachableImages({ accountId: account.id })).pipe(
-    Effect.mapError(internal("Failed to read the Boat account's images.")),
+  Effect.flatMap(BoatAccountRepo, (repo) => repo.unreachable({ accountId: account.id })).pipe(
+    Effect.mapError(internal("Failed to read the Boat account's objects.")),
   );
 
 /** Whether sealant has not resolved the account's wallet yet (connected before accounts were pinned). */
 const walletUnresolved = (account: BoatAccountRecord) =>
   createBoatWalletOf(account.organization, account.keyKind).kind === "unresolved";
+
+/**
+ * The pin a checked key gives an account sealant has not pinned: an organization's key's only
+ * wallet, or the wallet a personal key bills now. Undefined: the report shows neither.
+ */
+const pinOf = (report: BoatKeyReport) =>
+  report.keyKind.observed && report.keyKind.kind === "organization"
+    ? { organization: null, keyKind: "organization" as const }
+    : (() => {
+        const wallet = walletId(report.wallet);
+        return wallet === undefined
+          ? undefined
+          : {
+              organization: wallet,
+              keyKind: report.keyKind.observed ? report.keyKind.kind : null,
+            };
+      })();
 
 /** The wallet an observed report's `wallet` is, as a pin names it: an organization's id, or `personal`. */
 const walletId = (wallet: BoatKeyReport["wallet"]) =>
@@ -95,9 +125,22 @@ const recordKeyKind = (account: string, report: BoatKeyReport) =>
     : Effect.void;
 
 /** The install's own key as `install-key` shows it: never listed, rotated or removed here. */
-const installKeyWire = (report: BoatKeyReport | null): BoatInstallKeyWire => ({
+const installKeyWire = (
+  report: BoatKeyReport | null,
+  unreachable?: BoatUnreachableObjects,
+): BoatInstallKeyWire => ({
   label: "This install's Boat key",
   report,
+  unreachable: unreachableWire(unreachable),
+});
+
+/** What the install's own key made that sealant cannot reach; nothing before it has a name. */
+const installUnreachable = Effect.gen(function* () {
+  const deploymentId = yield* installDeployment;
+  if (deploymentId === undefined) return undefined;
+  return yield* Effect.flatMap(BoatAccountRepo, (repo) =>
+    repo.unreachable({ install: { deploymentId } }),
+  ).pipe(Effect.orElseSucceed(() => undefined));
 });
 
 const decodeReport = Schema.decodeUnknownOption(boatKeyReportSchema);
@@ -353,17 +396,21 @@ export const getBoatInstallKey = () =>
     const reports = yield* (yield* BoatAccountRepo)
       .reports()
       .pipe(Effect.mapError(internal("Failed to read the Boat keys' reports.")));
-    return installKeyWire(storedReport(reports.get(BOAT_DEFAULT_ACCOUNT_ID)?.report));
+    return installKeyWire(
+      storedReport(reports.get(BOAT_DEFAULT_ACCOUNT_ID)?.report),
+      yield* installUnreachable,
+    );
   });
 
 /**
- * A call that waits until sealant has found where an account connected before accounts were pinned
- * keeps its VMs and images: a code every released client decodes.
+ * A full check, which makes a VM, of an account sealant has not pinned yet: one connected before
+ * sealant pinned accounts, whose key cannot show the wallet it bills (no `account.read`), or that
+ * the worker has not reached yet. A code every released client decodes.
  */
-const resolving = (boatAccountId: string, call: string) =>
+const unpinned = (boatAccountId: string) =>
   new BoatAccountConflictError({
     code: "boat-account-in-use",
-    message: `sealant is still finding which Boat wallet Boat account ${boatAccountId}'s VMs and saved images are in, to pin the account to it; nothing was changed. Try the ${call} again in a minute.`,
+    message: `sealant has not pinned Boat account ${boatAccountId} to a Boat wallet yet, so nothing new is started with its key; nothing was changed. Give the key the account.read permission in Boat (or rotate the account to a key that has it), and sealant pins it to the wallet the key bills within a minute.`,
   });
 
 const notFound = (boatAccountId: string) =>
@@ -463,7 +510,7 @@ export const proveBoatAccount = (boatAccountId: string) =>
     const { account, credential } = yield* openStoredAccount(boatAccountId);
     if (account.removalRequestedAt !== null) return yield* removing(boatAccountId);
     // What it would make belongs to the wallet the account is leaving: it waits for the change.
-    if (walletUnresolved(account)) return yield* resolving(boatAccountId, "full check");
+    if (walletUnresolved(account)) return yield* unpinned(boatAccountId);
     const client = yield* openClient(credential, account.organization);
     const proofs = yield* BoatKeyProofRepo;
     // Recorded in the wallet the client names, and started only if the account creates there now.
@@ -530,55 +577,107 @@ export const checkBoatInstallKey = () =>
     const report = yield* recheck(key.value, organization, BOAT_DEFAULT_ACCOUNT_ID);
     const cleared = boatReopenableReasons(report);
     if (cleared.length > 0) yield* reopenQuarantine(yield* installDeployment, cleared);
-    return installKeyWire(report);
+    return installKeyWire(report, yield* installUnreachable);
   });
 
 /**
- * How many of the VMs and saved images the account has now the new key cannot see. Only Boat's
- * own 404, or a VM that is not this account's, counts; Boat not answering is no answer.
+ * How many of the VMs and saved images the account has now the new key cannot see. Each is read in
+ * the wallet it was made in. One made before sealant recorded wallets is looked for under every
+ * wallet the new key can bill: found in one, that is recorded; found in none, it counts as unseen,
+ * unless both keys are the same Boat account's (`sameAccount`): then the old key could not reach it
+ * either, and it is recorded unreachable. Only Boat's own 404, or a VM that is not this account's,
+ * counts; Boat not answering is no answer.
  */
 const unseenBy = (
-  client: BoatKeyClient,
   account: BoatAccountRecord,
   holds: {
-    readonly sandboxes: readonly { readonly sandboxId: string }[];
+    readonly sandboxes: readonly {
+      readonly sandboxId: string;
+      readonly wallet: string | null | undefined;
+    }[];
     readonly images: readonly {
       readonly name: string;
       readonly wallet: string | null | undefined;
     }[];
   },
-  /** The new key's client naming `wallet` (null: none): what reads an image recorded there. */
+  /** The new key's client naming `wallet` (null: none). */
   clientIn: (wallet: string | null) => BoatKeyClient | undefined,
+  /** Every wallet the new key can bill, as its report lists them. */
+  wallets: readonly string[],
+  sameAccount: boolean,
 ) =>
   Effect.gen(function* () {
     let unseen = 0;
     let unanswered = 0;
-    for (const { sandboxId } of holds.sandboxes) {
+    type Seen = "found" | "absent" | "unanswered";
+    const where = (
+      wallet: string | null | undefined,
+      read: (client: BoatKeyClient) => Promise<Seen>,
+      ref: BoatObjectRef,
+    ) =>
+      Effect.gen(function* () {
+        const ask = (each: string | null) => {
+          const client = clientIn(each);
+          return client === undefined
+            ? Promise.resolve<Seen>("unanswered")
+            : read(client).catch((): Seen => "unanswered");
+        };
+        if (wallet !== undefined) return yield* Effect.promise(() => ask(wallet));
+        const seen = yield* Effect.promise(() =>
+          Promise.all(wallets.map(async (each) => [each, await ask(each)] as const)),
+        );
+        const found = seen.filter(([, answer]) => answer === "found");
+        const record = (located: { readonly wallet: string | null } | "unreachable") =>
+          Effect.flatMap(BoatAccountRepo, (repo) =>
+            repo.recordObjectWallet({ accountId: account.id }, ref, located),
+          ).pipe(Effect.orElseSucceed(() => undefined));
+        if (found.length === 1 && found[0] !== undefined) {
+          yield* record({ wallet: found[0][0] });
+          return "found" as const;
+        }
+        if (found.length > 1) return "found" as const;
+        if (seen.some(([, answer]) => answer === "unanswered")) return "unanswered" as const;
+        if (!sameAccount) return "absent" as const;
+        yield* record("unreachable");
+        return "found" as const;
+      });
+    for (const { sandboxId, wallet } of holds.sandboxes) {
       const id = boatSandboxIdSchema.safeParse(sandboxId);
-      const read = id.success
-        ? yield* Effect.promise(() => client.get(id.data).catch(() => undefined))
-        : undefined;
-      if (read === undefined) unanswered += 1;
-      else if (read.ok) {
-        if (read.value.labels?.["sealant-deployment"] !== account.deploymentId) unseen += 1;
-      } else if (read.error.status === 404) unseen += 1;
-      else unanswered += 1;
+      if (!id.success) {
+        unanswered += 1;
+        continue;
+      }
+      const seen = yield* where(
+        wallet,
+        async (client) => {
+          const read = await client.get(id.data);
+          if (read.ok)
+            return read.value.labels?.["sealant-deployment"] === account.deploymentId
+              ? "found"
+              : "absent";
+          return read.error.status === 404 ? "absent" : "unanswered";
+        },
+        { sandbox: sandboxId },
+      );
+      if (seen === "absent") unseen += 1;
+      else if (seen === "unanswered") unanswered += 1;
     }
-    // Each image is read where it was made: one recorded in another wallet than the account's now
-    // (still being removed there) under that wallet. One whose wallet is not known counts as
-    // unanswered: the key cannot be shown to see it.
     for (const { name, wallet } of holds.images) {
       const parsed = boatSnapshotNameSchema.safeParse(name);
-      const reader = wallet === undefined ? undefined : clientIn(wallet);
-      const read =
-        parsed.success && reader !== undefined
-          ? yield* Effect.promise(() => reader.getSnapshot(parsed.data).catch(() => undefined))
-          : undefined;
-      if (read === undefined) unanswered += 1;
-      else if (!read.ok) {
-        if (read.error.status === 404) unseen += 1;
-        else unanswered += 1;
+      if (!parsed.success) {
+        unanswered += 1;
+        continue;
       }
+      const seen = yield* where(
+        wallet,
+        async (client) => {
+          const read = await client.getSnapshot(parsed.data);
+          return read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered";
+        },
+        { snapshot: name },
+      );
+      if (seen === "absent") unseen += 1;
+      else if (seen === "unanswered") unanswered += 1;
     }
     return { unseen, unanswered };
   });
@@ -599,9 +698,6 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
       .pipe(Effect.mapError(internal("Failed to read the Boat account.")));
     if (account === undefined || account.removedAt !== null) return yield* notFound(boatAccountId);
     if (account.removalRequestedAt !== null) return yield* removing(boatAccountId);
-    // The new key would be checked under the wallet the account is leaving, not the one it moves
-    // to: the change finishes first.
-    if (walletUnresolved(account)) return yield* resolving(boatAccountId, "key rotation");
     // A key of another Boat wallet could not delete what a full check made with this one.
     const leftovers = yield* proofLeftovers(boatAccountId);
     if (leftovers !== undefined)
@@ -617,10 +713,21 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
       "nothing was changed.",
       yield* lastReport(account.id),
     );
-    // A create whose VM is not on record yet can be found only with the key it was made under.
-    const unresolved = yield* repo
-      .unresolvedCreates(boatAccountId)
-      .pipe(Effect.mapError(internal("Failed to read the Boat account's runs.")));
+    // Both keys the same Boat account's, as each key's `/me` showed it: the new one sees what the
+    // old one could. (An old key without `account.read` never showed it.)
+    const before = storedReport(yield* lastReport(account.id));
+    const sameAccount =
+      before?.identity.observed === true &&
+      report.identity.observed &&
+      before.identity.accountId !== undefined &&
+      before.identity.accountId === report.identity.accountId;
+    // A create whose VM is not on record yet can be found only with the key it was made under,
+    // unless the new key is the same Boat account's.
+    const unresolved = sameAccount
+      ? 0
+      : yield* repo
+          .unresolvedCreates(boatAccountId)
+          .pipe(Effect.mapError(internal("Failed to read the Boat account's runs.")));
     if (unresolved > 0)
       return yield* new BoatAccountConflictError({
         code: "boat-account-in-use",
@@ -635,13 +742,15 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
       .pipe(Effect.mapError(internal("Failed to read the Boat account's images.")));
     const clients = yield* BoatKeyClients;
     const { unseen, unanswered } = yield* unseenBy(
-      client,
       account,
       { sandboxes, images },
       (wallet) => {
+        if (wallet === account.organization) return client;
         const opened = clients(credential, wallet === null ? undefined : { organization: wallet });
         return opened.ok ? opened.value : undefined;
       },
+      report.wallets?.observed === true ? report.wallets.choices.map((each) => each.id) : [],
+      sameAccount,
     );
     if (unseen > 0)
       return yield* new BoatAccountConflictError({
@@ -685,10 +794,30 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
                       }),
         ),
       );
-    yield* saveReport(rotated.id, report);
+    // An account sealant had not pinned (its old key could not show the wallet it bills) is pinned
+    // with the new one, to the wallet it bills now. Nothing it made before waits for that.
+    const pin = walletUnresolved(rotated) ? pinOf(report) : undefined;
+    const pinned =
+      pin === undefined
+        ? rotated
+        : ((yield* repo
+            .resolveWallets({ accountId: rotated.id }, { runs: [], images: [], proofs: [], pin })
+            .pipe(
+              Effect.flatMap(() => repo.get(rotated.id)),
+              Effect.mapError(internal("Failed to pin the Boat account.")),
+            )) ?? rotated);
+    yield* saveReport(pinned.id, {
+      ...report,
+      ...(pin === undefined || pin.organization === null
+        ? {}
+        : {
+            organization: pin.organization,
+            billing: { mode: "pinned", organization: pin.organization },
+          }),
+    });
     // A new key may be what a quarantined build was waiting for.
     yield* reopenQuarantine(rotated.deploymentId);
-    return toWire(rotated, report, yield* unreachableOf(rotated));
+    return toWire(pinned, report, yield* unreachableOf(pinned));
   });
 
 /**
@@ -743,9 +872,6 @@ export const removeBoatAccount = (boatAccountId: string) =>
     return toWire(request.account, storedReport(reports.get(request.account.id)?.report));
   });
 
-/** `n thing` or `n things`. */
-const count = (n: number, one: string, many = `${one}s`) => `${String(n)} ${n === 1 ? one : many}`;
-
 /**
  * `PUT /v1/boat-accounts/:id/organization`: points a stored account with a personal key at another
  * wallet (an organization's id or name, or `personal`), without its key. The key is checked with
@@ -794,19 +920,9 @@ export const setBoatAccountOrganization = (
     });
     if (account.keyKind === "organization" && account.organization === null)
       return yield* organizationKey;
-    if (walletUnresolved(account))
-      return yield* new BoatAccountConflictError({
-        code: "boat-account-wallet-unresolved",
-        message: `Boat account ${boatAccountId} was connected before sealant pinned accounts, and sealant is still finding which Boat wallet its VMs and saved images are in, to pin it there; ${outcome} Try again in a minute.`,
-      });
-    // What a full check made is in the wallet the account names now, and is deleted there first.
-    const leftovers = yield* proofLeftovers(boatAccountId);
-    if (leftovers !== undefined)
-      return yield* new BoatAccountConflictError({
-        code: "boat-proof-running",
-        message: leftovers,
-      });
-
+    // An account connected before sealant pinned accounts is pinned here as well as by the worker;
+    // what it made before stays where it is, and nothing of it waits. A key that cannot list its
+    // wallets (no `account.read`) is refused below.
     const previous = yield* lastReport(account.id);
     /** A check under `organization`, refused as a pin is: an organization's key, a refused key. */
     const checked = (organization: string | null) =>
@@ -866,13 +982,10 @@ export const setBoatAccountOrganization = (
           : {}),
       });
 
-    const unsettled = yield* Effect.flatMap(BoatRunRepo, (runs) =>
-      runs.listUnsettled({ deploymentId: account.deploymentId, limit: 100 }),
-    ).pipe(Effect.mapError(internal("Failed to read the Boat account's runs.")));
     const change = yield* repo
       .changeOrganization(
         { accountId: boatAccountId },
-        { organization, expected: account.organization, unsettled },
+        { organization, expected: account.organization },
       )
       .pipe(
         Effect.mapError(
@@ -893,31 +1006,6 @@ export const setBoatAccountOrganization = (
                     }),
         ),
       );
-    if (change.kind === "in-use") {
-      const parts = [
-        ...(change.liveRuns === 0
-          ? []
-          : [
-              `${count(change.liveRuns, "run")} whose VM${change.liveRuns === 1 ? "" : "s"} Boat may still hold`,
-            ]),
-        ...(change.unsettledRuns === 0
-          ? []
-          : [`${count(change.unsettledRuns, "run")} still being settled`]),
-        ...(change.buildsInFlight === 0
-          ? []
-          : [`${count(change.buildsInFlight, "image build")} in flight or being cleaned up`]),
-        ...(change.proofs === 0
-          ? []
-          : [`${count(change.proofs, "full check")} whose leftovers Boat may still hold`]),
-      ];
-      return yield* new BoatAccountConflictError({
-        code: "boat-account-in-use",
-        liveRuns: change.liveRuns,
-        unsettledRuns: change.unsettledRuns,
-        buildsInFlight: change.buildsInFlight,
-        message: `Boat account ${boatAccountId} still has ${parts.join(", ")} in the wallet it names now; ${outcome} Stop its workspaces and try again.`,
-      });
-    }
     const changed = change.account ?? account;
     const kept: BoatKeyReport = {
       ...target,

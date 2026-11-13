@@ -397,11 +397,13 @@ export const sweepBoatKeyProofs = async (options: {
   readonly proofs: BoatKeyProofRepoService;
   /**
    * A client for the account's key that names `wallet` on every request (null: none): the wallet
-   * the check was recorded in, never the account's current one.
+   * the check was recorded in, never the account's current one. Undefined: the check was made
+   * before sealant recorded wallets, and the client finds where its VM and snapshot are, recording
+   * them unreachable if Boat has them in none of the key's wallets (`StoredAccountApi`).
    */
   readonly clientFor: (
     account: string,
-    wallet: string | null,
+    wallet: string | null | undefined,
   ) => Promise<BoatKeyProofClient | undefined>;
   readonly now?: () => Date;
   readonly pollMs?: number;
@@ -412,11 +414,7 @@ export const sweepBoatKeyProofs = async (options: {
   const outcomes: BoatKeyProofSweepOutcome[] = [];
   for (const record of await store.do((repo) => repo.toSweep(now()))) {
     const settled = await (async () => {
-      // A check whose wallet sealant does not know is looked for first (the worker's resolve pass);
-      // asked anywhere else, Boat's "not found" would prove nothing.
-      if (record.wallet === undefined) return false;
-      const wallet = record.wallet;
-      const client = await options.clientFor(record.account, wallet).catch(() => undefined);
+      const client = await options.clientFor(record.account, record.wallet).catch(() => undefined);
       if (client === undefined) return false;
       let snapshotGone = record.saveIssuedAt === null || record.snapshotDeletedAt !== null;
       if (!snapshotGone) {

@@ -33,6 +33,7 @@ import {
   nativePublicationSchema,
   nativeSnapshotArtifactSchema,
   newWorkspaceSchema,
+  type BoatRun,
   type NativeBuildOwnership,
   type NativePublication,
 } from "@sealant/validators";
@@ -344,6 +345,8 @@ const withAccounts = async (
           revisionCheckMs: 0,
         });
         if (assembled === undefined) throw new Error("Boat is not assembled");
+        // The start-time pass that pins the install's own key, which the worker runs unawaited.
+        await assembled.startup;
         return assembled;
       };
       boat = await assembleWith(settings);
@@ -941,8 +944,63 @@ const walletBuilders =
     },
     cleanup: unused,
     journals: async () => ({ ok: true, value: { entries: [], failures: [] } }),
-    reconcileBuild: unused,
+    // As the real builder does for an interrupted build, it looks for what the build saved.
+    reconcileBuild: async (ownership) => {
+      const image = builtImage(options.owner, ownership.buildId, ownership);
+      const read = await options.api.getSnapshot(
+        boatSnapshotNameSchema.parse(image.artifact.identity.name),
+      );
+      return read.ok
+        ? { ok: true, value: { kind: "published", ...image } }
+        : { ok: true, value: { kind: "abandoned", failureCode: read.error.code } };
+    },
   });
+
+/** What the acceptance tests below read of one worker on the fake Boat. */
+interface AfterUpgrade {
+  readonly fake: FakeBoat;
+  readonly worker: {
+    readonly lifecycle?:
+      | { readonly stop: (input: { readonly resourceId: string }) => Promise<unknown> }
+      | undefined;
+  };
+  readonly runOf: (runId: string) => Promise<BoatRun | undefined>;
+  readonly account: (id: string) => Promise<{ readonly organization: string | null }>;
+  readonly launchImage: (accountId: string | undefined) => Promise<NativePublication>;
+  readonly walletOf: (publicationId: string) => Promise<unknown>;
+}
+/** Stops a session as the shared stop does, tried again on the next tick when Boat did not answer. */
+const stopSession = async (c: AfterUpgrade, vm: string) => {
+  const lifecycle = c.worker.lifecycle;
+  if (lifecycle === undefined) throw new Error("no Boat lifecycle");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const stopped = await lifecycle.stop({ resourceId: vm }).catch(() => undefined);
+    if (stopped !== undefined) return stopped;
+  }
+  throw new Error(`the session on ${vm} could not be stopped`);
+};
+/** Boat holds no VM of a run sealant recorded gone. */
+const nothingStranded = async (c: AfterUpgrade, runs: readonly string[]) => {
+  const live = new Set(
+    ["personal", "team_acme"].flatMap((wallet) => c.fake.heldIn(wallet).sandboxes),
+  );
+  for (const runId of runs) {
+    const run = await c.runOf(runId);
+    if (
+      run?.sandboxId != null &&
+      (run.absentBasis === "not-found" || run.absentBasis === "deletion-completed")
+    )
+      expect(live.has(run.sandboxId)).toBe(false);
+  }
+};
+/** The account is pinned to `wallet`, and a new session's image is built there. */
+const startsPinned = async (c: AfterUpgrade, accountId: string, wallet: string) => {
+  expect(await c.account(accountId)).toMatchObject({ organization: wallet });
+  const image = await c.launchImage(accountId);
+  expect(await c.walletOf(image.publicationId)).toEqual({ state: "known", wallet });
+  expect(c.fake.heldIn(wallet).snapshots).toContain(image.snapshot.identity.name);
+  return image;
+};
 
 /** Boat refuses the account reads: the key lacks `account.read`. */
 const noAccountRead = (fake: FakeBoat) => {
@@ -989,6 +1047,19 @@ describe.skipIf(DATABASE_URL === undefined)(
         readonly sql: (statement: string) => Promise<void>;
         readonly building: (deploymentId: string) => Promise<boolean>;
         readonly mark: () => { readonly sent: number; readonly named: number };
+        /** The account as the released build and the migration leave one connected before pins. */
+        readonly legacy: (id: string) => Promise<void>;
+        /**
+         * A run as the released build left it (its wallet not known): a VM in `wallet` on the fake,
+         * none at all (`gone`), or a create issued whose VM is not on record (`issued`).
+         */
+        readonly seedRun: (input: {
+          readonly accountId: string;
+          readonly deploymentId: string;
+          readonly vm: { readonly wallet: string } | "gone" | "issued";
+        }) => Promise<{ readonly runId: string; readonly sandboxId: string }>;
+        readonly runOf: (runId: string) => Promise<BoatRun | undefined>;
+        readonly unreachable: (accountId: string) => Promise<unknown>;
         readonly namedSince: (from: { readonly sent: number; readonly named: number }) => string[];
       }) => Promise<void>,
       /** The worker's Boat settings beside the state directory, and the fake before it starts. */
@@ -1066,6 +1137,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           });
           if (worker === undefined) throw new Error("Boat is not assembled");
           const assembled = worker;
+          await assembled.startup;
           const owner = `usr_${randomUUID()}`;
           await Effect.runPromise(
             db
@@ -1127,7 +1199,7 @@ describe.skipIf(DATABASE_URL === undefined)(
                 Effect.flatMap(BoatAccountRepo, (accounts) =>
                   accounts.changeOrganization(
                     { accountId: id },
-                    { organization: to, expected: from, unsettled: [] },
+                    { organization: to, expected: from },
                   ),
                 ),
               );
@@ -1164,6 +1236,93 @@ describe.skipIf(DATABASE_URL === undefined)(
                   ),
                 )
               ).some((record) => record.state === "reserved" || record.state === "building"),
+            legacy: async (id) => {
+              await Effect.runPromise(
+                db.execute(
+                  `update boat_accounts set boat_organization = null, key_kind = null where id = '${id}'`,
+                ),
+              );
+              const account = await repo(
+                Effect.flatMap(BoatAccountRepo, (accounts) => accounts.get(id)),
+              );
+              await Effect.runPromise(
+                db.execute(
+                  `update native_publications set boat_wallet = null, boat_wallet_state = 'unknown' where deployment_id = '${account?.deploymentId ?? ""}'`,
+                ),
+              );
+            },
+            seedRun: async (input) => {
+              const runId = randomUUID();
+              const id = sandboxId();
+              const seeded = boatRunSeedRows({
+                runId,
+                sandboxId: id,
+                deploymentId: input.deploymentId,
+                accountId: input.accountId,
+              });
+              const image = builtImage(randomUUID(), randomUUID());
+              const publication = nativePublicationSchema.parse({
+                kind: "boat-native",
+                publicationId: seeded.publication.id,
+                snapshot: image.artifact,
+                evidence: image.evidence,
+              });
+              await Effect.runPromise(
+                Effect.gen(function* () {
+                  yield* db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner });
+                  yield* db
+                    .insert(schema.nativePublications)
+                    .values({ ...seeded.publication, state: "superseded" });
+                  // As the released build wrote it: no wallet columns, so the migration's default.
+                  yield* db.insert(schema.boatRuns).values({
+                    ...seeded.run,
+                    resources: "none",
+                    ...(input.vm === "issued"
+                      ? { sandboxId: null, createdSeenAt: null, target: null }
+                      : {}),
+                  });
+                  yield* db.insert(schema.nativePublicationConsumers).values({
+                    runId,
+                    runtimeInstanceId: runId,
+                    publicationId: publication.publicationId,
+                    state: "live",
+                  });
+                  yield* db.insert(schema.workspaceRuntimeInstances).values({
+                    runId,
+                    adapter: "boat",
+                    publication,
+                    // Its owner asked it to stop (a create not on record is still launching).
+                    status: input.vm === "issued" ? "running" : "ready",
+                    stopReason: input.vm === "issued" ? null : "user",
+                    resourceId: input.vm === "issued" ? null : id,
+                    publicationId: publication.publicationId,
+                  });
+                }),
+              );
+              // The image it launches from, where the released build made it.
+              if (input.vm === "issued")
+                fake.seedSnapshot({ name: seeded.run.snapshotName, wallet: "personal" });
+              if (typeof input.vm === "object")
+                fake.seedSandbox({
+                  id,
+                  wallet: input.vm.wallet,
+                  labels: {
+                    "sealant-runtime": "boat",
+                    "sealant-deployment": input.deploymentId,
+                    "sealant-workspace": seeded.run.workspaceId,
+                    "sealant-run": runId,
+                    "sealant-instance": runId,
+                    "sealant-attempt": seeded.run.launchAttemptId,
+                    "sealant-source": publication.publicationId,
+                  },
+                });
+              return { runId, sandboxId: id };
+            },
+            runOf: (runId) => repo(Effect.flatMap(BoatRunRepo, (runs) => runs.get(runId))),
+            unreachable: (accountId) =>
+              repo(
+                Effect.flatMap(BoatAccountRepo, (accounts) => accounts.unreachable({ accountId })),
+              ),
             mark: () => ({
               sent: fake.events.filter((event) => event.kind === "api").length,
               named: fake.organizationHeaders.length,
@@ -1186,6 +1345,161 @@ describe.skipIf(DATABASE_URL === undefined)(
 
     /** Retention as the hourly pass runs it, with every image unused since long ago. */
     const retention = { stoppedSince: new Date(0), unusedSince: new Date(Date.now() + 86_400_000) };
+
+    // After an upgrade: each state a released build can leave, from its rows as the migration
+    // leaves them, through the worker's own passes on the fake Boat. Each ends the same way: the old
+    // session stops, a new one starts in the wallet the account is pinned to, and Boat holds nothing
+    // sealant recorded gone. No row is edited after the setup.
+    it("after an upgrade: a create issued with no VM on record is replayed where it was made, stopped, and the account pinned", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        await c.legacy(account.id);
+        const issued = await c.seedRun({ ...account, accountId: account.id, vm: "issued" });
+        expect(await c.worker.resolveWallets()).toEqual([
+          { accountId: account.id, outcome: "pinned" },
+        ]);
+        // The VM sweep replays the create as the released build made it, naming no wallet.
+        for (const stack of await c.worker.sweptStacks())
+          await stack.reconcileAllocations({ limit: 20 });
+        const replayed = await c.runOf(issued.runId);
+        expect(replayed?.sandboxId).not.toBeNull();
+        expect(c.fake.heldIn("personal").sandboxes).toContain(replayed?.sandboxId);
+        // Its owner stops the session, as the stop route records it.
+        await c.sql(
+          `update workspace_runtime_instances set status = 'ready', stop_reason = 'user' where run_id = '${issued.runId}'`,
+        );
+        await stopSession(c, replayed?.sandboxId ?? "");
+        expect(c.fake.heldIn("personal").sandboxes).not.toContain(replayed?.sandboxId);
+        await startsPinned(c, account.id, "personal");
+        await nothingStranded(c, [issued.runId]);
+      }));
+
+    it("after an upgrade: a live run whose VM Boat has in no wallet is recorded unreachable when it is stopped, reported, and holds nothing up", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        await c.legacy(account.id);
+        const gone = await c.seedRun({ ...account, accountId: account.id, vm: "gone" });
+        // The stop finds it in none of the key's wallets: the session ends, the VM unreachable.
+        await stopSession(c, gone.sandboxId);
+        expect(await c.runOf(gone.runId)).toMatchObject({ absentBasis: "unreachable" });
+        expect(await c.unreachable(account.id)).toMatchObject({ runs: [gone.runId] });
+        await c.worker.resolveWallets();
+        await startsPinned(c, account.id, "personal");
+        await nothingStranded(c, [gone.runId]);
+      }));
+
+    it("after an upgrade: live runs in two wallets are each found, kept and stopped in their own, while the account is pinned to the one it bills", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        await c.legacy(account.id);
+        const inPersonal = await c.seedRun({
+          ...account,
+          accountId: account.id,
+          vm: { wallet: "personal" },
+        });
+        const inAcme = await c.seedRun({
+          ...account,
+          accountId: account.id,
+          vm: { wallet: "team_acme" },
+        });
+        c.fake.account = { ...c.fake.account, activeWallet: "team_acme" };
+        expect(await c.worker.resolveWallets()).toEqual([
+          { accountId: account.id, outcome: "pinned" },
+        ]);
+        expect(await c.account(account.id)).toMatchObject({ organization: "team_acme" });
+        await startsPinned(c, account.id, "team_acme");
+        for (const run of [inPersonal, inAcme]) await stopSession(c, run.sandboxId);
+        expect(c.fake.heldIn("personal").sandboxes).toEqual([]);
+        expect(c.fake.heldIn("team_acme").sandboxes).toEqual([]);
+        await nothingStranded(c, [inPersonal.runId, inAcme.runId]);
+      }));
+
+    it("after an upgrade: a build in flight is found in the wallet it was made in, finished there, and removed there", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        const built = await c.launchImage(account.id);
+        // As a released worker that stopped mid-build leaves it: reserved, its save done in Boat.
+        await c.sql(
+          `update native_publications set state = 'reserved', publication = null, ready_at = null where id = '${built.publicationId}'`,
+        );
+        await c.legacy(account.id);
+        c.fake.account = { ...c.fake.account, activeWallet: "team_acme" };
+        await c.worker.resolveWallets();
+        expect(await c.walletOf(built.publicationId)).toEqual({
+          state: "known",
+          wallet: "personal",
+        });
+        expect(await c.stateOf(built.publicationId)).toBe("ready");
+        await startsPinned(c, account.id, "team_acme");
+        await c.worker.removeImagesElsewhere?.();
+        expect(await c.stateOf(built.publicationId)).toBe("removed");
+        expect(c.fake.heldIn("personal").snapshots).toEqual([]);
+      }));
+
+    it("after an upgrade: a failed build awaiting cleanup that Boat has in no wallet is abandoned, reported, and built again where the account is pinned", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        const built = await c.launchImage(account.id);
+        await c.sql(
+          `update native_publications set state = 'quarantined', reason = 'native-cleanup-pending-sandbox-delete', publication = null, ready_at = null where id = '${built.publicationId}'`,
+        );
+        c.fake.snapshots.delete(built.snapshot.identity.name);
+        await c.legacy(account.id);
+        await c.worker.resolveWallets();
+        expect(await c.walletOf(built.publicationId)).toEqual({ state: "unreachable" });
+        expect(await c.unreachable(account.id)).toMatchObject({ builds: [built.publicationId] });
+        const again = await startsPinned(c, account.id, "personal");
+        expect(again.publicationId).not.toBe(built.publicationId);
+      }));
+
+    it("after an upgrade: a key without account.read starts nothing new, keeps its sessions stoppable, and is pinned once it can show its wallet", () =>
+      withWallets(
+        async (c) => {
+          const account = await c.store("personal", "personal");
+          await c.legacy(account.id);
+          const live = await c.seedRun({
+            ...account,
+            accountId: account.id,
+            vm: { wallet: "personal" },
+          });
+          const gone = await c.seedRun({ ...account, accountId: account.id, vm: "gone" });
+          expect(await c.worker.resolveWallets()).toEqual([
+            { accountId: account.id, outcome: "unavailable" },
+          ]);
+          await expect(c.launchImage(account.id)).rejects.toThrow();
+          // Its sessions stop as released: a VM in the wallet the key bills is deleted there; one
+          // Boat does not find is unreachable, never gone.
+          await stopSession(c, live.sandboxId);
+          expect(c.fake.heldIn("personal").sandboxes).toEqual([]);
+          await stopSession(c, gone.sandboxId);
+          expect(await c.runOf(gone.runId)).toMatchObject({ absentBasis: "unreachable" });
+          // The key gains account.read (or the account is rotated to one that has it).
+          c.fake.faults = {};
+          expect(await c.worker.resolveWallets()).toEqual([
+            { accountId: account.id, outcome: "pinned" },
+          ]);
+          await startsPinned(c, account.id, "personal");
+          await nothingStranded(c, [live.runId, gone.runId]);
+        },
+        { prepare: noAccountRead },
+      ));
+
+    it("after an upgrade: an image Boat has in no wallet is recorded unreachable, reported, used by nothing, and built again", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        const lost = await c.launchImage(account.id);
+        c.fake.snapshots.delete(lost.snapshot.identity.name);
+        await c.legacy(account.id);
+        await c.worker.resolveWallets();
+        expect(await c.walletOf(lost.publicationId)).toEqual({ state: "unreachable" });
+        expect(await c.unreachable(account.id)).toMatchObject({
+          savedImages: [lost.snapshot.identity.name],
+        });
+        const again = await startsPinned(c, account.id, "personal");
+        expect(again.publicationId).not.toBe(lost.publicationId);
+        await c.worker.reapImages?.(retention);
+        expect(await c.walletOf(lost.publicationId)).toEqual({ state: "unreachable" });
+      }));
 
     it("records a connect-pinned key's first image in its wallet, resolves a legacy account found after a wallet switch, and moves between wallets leaving nothing stranded", () =>
       withWallets(async (c) => {
@@ -1259,7 +1573,7 @@ describe.skipIf(DATABASE_URL === undefined)(
             expect(c.fake.snapshots.has(image.snapshot.identity.name)).toBe(false);
       }));
 
-    it("refuses a change while a build is in flight, records the image where it finished, and removes it there after the change", () =>
+    it("changes the wallet while a build is in flight, which finishes in its own wallet and is removed there", () =>
       withWallets(async (c) => {
         const account = await c.store("personal", "personal");
         const held = Promise.withResolvers<void>();
@@ -1268,14 +1582,15 @@ describe.skipIf(DATABASE_URL === undefined)(
         // The build is reserved, and held in the builder.
         for (let poll = 0; poll < 200 && !(await c.building(account.deploymentId)); poll++)
           await sleep(20);
-        expect(await c.change(account.id, "personal", "team_acme")).toBe("in-use");
+        // Nothing it made waits on the change, and the change waits on nothing it made.
+        expect(await c.change(account.id, "personal", "team_acme")).toBe("changed");
         held.resolve();
         const image = await launching;
         expect(await c.walletOf(image.publicationId)).toEqual({
           state: "known",
           wallet: "personal",
         });
-        expect(await c.change(account.id, "personal", "team_acme")).toBe("changed");
+        expect(c.fake.heldIn("personal").snapshots).toEqual([image.snapshot.identity.name]);
         delete c.faults.gate;
         const removal = c.mark();
         await c.worker.removeImagesElsewhere?.();

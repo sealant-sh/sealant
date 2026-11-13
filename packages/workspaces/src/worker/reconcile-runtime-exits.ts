@@ -146,7 +146,7 @@ type RuntimeEnd = Exclude<RuntimeAdapterInspectResult, { readonly state: "runnin
 const describeExit = (instance: WorkspaceRuntimeInstance, end: RuntimeEnd): string => {
   const name = instance.reference ?? instance.resourceId ?? instance.runId;
   if (end.state === "missing") {
-    return `Workspace runtime '${name}' is gone: the runtime no longer knows it, and no stop was requested.`;
+    return `Workspace runtime '${name}' is gone: ${end.detail ?? "the runtime no longer knows it"}, and no stop was requested.`;
   }
   const exitCode = end.exitCode === undefined ? "unknown" : String(end.exitCode);
   const detail = end.detail === undefined ? "" : ` ${end.detail}`;

@@ -121,17 +121,11 @@ export type BoatAccountRemovalRequest =
  * may hold, a run still being settled, an image build in flight or being cleaned up, or a full
  * check Boat may hold something of, each in the wallet it names now; nothing was changed.
  */
-export type BoatAccountOrganizationChange =
-  /** `account`: the stored account as it is now; absent for the install's own key. */
-  | { readonly kind: "unchanged" | "changed"; readonly account?: BoatAccountRecord }
-  | {
-      readonly kind: "in-use";
-      readonly liveRuns: number;
-      /** Runs whose VM is gone and whose settling (tunnels, pins, stops, captures) is not done. */
-      readonly unsettledRuns: number;
-      readonly buildsInFlight: number;
-      readonly proofs: number;
-    };
+/** `account`: the stored account as it is now; absent for the install's own key. */
+export type BoatAccountOrganizationChange = {
+  readonly kind: "unchanged" | "changed";
+  readonly account?: BoatAccountRecord;
+};
 
 /**
  * Whose objects: a stored account's, or the install's own key's (runs with no account, images of
@@ -141,14 +135,44 @@ export type BoatWalletOwner =
   | { readonly accountId: string }
   | { readonly install: { readonly deploymentId: string } };
 
+/**
+ * One thing sealant made in Boat, as a request about it names it: a VM, a saved image, a VM's
+ * deletion, a run (its create, before its VM is on record), or an image build.
+ */
+export type BoatObjectRef =
+  | { readonly sandbox: string }
+  | { readonly snapshot: string }
+  | { readonly deletion: string }
+  | { readonly run: string }
+  | { readonly publication: string };
+
+/**
+ * The wallet a request about an object names: the one recorded for it (`known`; null: none, the
+ * key's only wallet), not known yet (`unknown`: made before sealant recorded wallets), in none of
+ * the wallets the key can bill (`unreachable`: never asked about again), or nothing of the owner's
+ * names it (`unrecorded`: it is asked about in the wallet the owner creates in now).
+ */
+export type BoatObjectWallet =
+  | { readonly kind: "known"; readonly wallet: string | null }
+  | { readonly kind: "unknown" }
+  | { readonly kind: "unreachable" }
+  | { readonly kind: "unrecorded" };
+
+/** What an owner made in Boat that is in none of the wallets its key can bill. */
+export interface BoatUnreachableObjects {
+  readonly savedImages: readonly string[];
+  readonly runs: readonly string[];
+  readonly builds: readonly string[];
+}
+
 /** What an owner may hold in Boat whose wallet sealant does not know. */
 export interface BoatUnknownObjects {
   /** Runs Boat may hold a VM for; `sandboxId` null: a create whose VM is not on record yet. */
   readonly liveRuns: readonly { readonly runId: string; readonly sandboxId: string | null }[];
   /** Saved images, by snapshot name. */
   readonly images: readonly { readonly publicationId: string; readonly name: string }[];
-  /** Image builds in flight or being cleaned up. */
-  readonly buildsInFlight: number;
+  /** Image builds in flight or being cleaned up, by publication id. */
+  readonly builds: readonly string[];
   /** Full checks Boat may hold a VM (by id, when known) or a snapshot of. */
   readonly proofs: readonly {
     readonly id: string;
@@ -162,7 +186,10 @@ export interface BoatUnknownObjects {
  * only wallet. An image `unreachable`: Boat has it in none of the key's wallets.
  */
 export interface BoatWalletResolution {
-  readonly runs: readonly { readonly runId: string; readonly wallet: string | null }[];
+  readonly runs: readonly (
+    | { readonly runId: string; readonly wallet: string | null }
+    | { readonly runId: string; readonly unreachable: true }
+  )[];
   readonly images: readonly (
     | { readonly publicationId: string; readonly wallet: string | null }
     | { readonly publicationId: string; readonly unreachable: true }
@@ -272,10 +299,17 @@ export interface BoatAccountRepoService {
     id: string,
     input: { readonly sealedKey: string; readonly keyId: string; readonly revision: number },
   ) => Failing<BoatAccountRecord>;
-  /** The VMs of the account's runs that Boat may still have: no absence committed, a VM on record. */
-  readonly liveSandboxes: (
-    id: string,
-  ) => Failing<readonly { readonly runId: string; readonly sandboxId: string }[]>;
+  /**
+   * The VMs of the account's runs that Boat may still have: no absence committed, a VM on record,
+   * with the wallet each was made in (undefined: not known).
+   */
+  readonly liveSandboxes: (id: string) => Failing<
+    readonly {
+      readonly runId: string;
+      readonly sandboxId: string;
+      readonly wallet: string | null | undefined;
+    }[]
+  >;
   /**
    * The names of the saved images sealant built in the account that Boat may still hold: the ones
    * launches use, and the ones retiring or whose removal is pending.
@@ -304,21 +338,14 @@ export interface BoatAccountRepoService {
   readonly setKeyKind: (id: string, keyKind: "personal" | "organization") => Failing<void>;
   /**
    * Points the account at `organization`, as one statement under its row, guarded on the
-   * organization the caller checked against (`expected`). Refused while it has a run Boat may hold
-   * a VM for, a run still being settled, an image build in flight or being cleaned up, or a full
-   * check Boat may hold something of: each lives in the wallet it names now, and every request
-   * about it names that wallet. Otherwise it names the new wallet at once and its key revision
-   * grows. Its saved images stay recorded in the wallet they were made in, and are removed there.
-   * `install`: the same for the install's own key (`SEALANT_BOAT_ORGANIZATION` changed).
+   * organization the caller checked against (`expected`): what it makes from then on is made there,
+   * and its key revision grows. Nothing it made before moves or waits: each VM, image, build and
+   * full check stays recorded in the wallet it was made in, and every request about it names that
+   * wallet. `install`: the same for the install's own key (`SEALANT_BOAT_ORGANIZATION` changed).
    */
   readonly changeOrganization: (
     owner: BoatWalletOwner,
-    input: {
-      readonly organization: string;
-      readonly expected: string | null;
-      /** The owner's runs not settled yet, as `BoatRunRepo.listUnsettled` reads them. */
-      readonly unsettled: readonly string[];
-    },
+    input: { readonly organization: string; readonly expected: string | null },
   ) => Failing<BoatAccountOrganizationChange>;
   /**
    * Saved images recorded in a wallet other than the one the owner creates in now (ready,
@@ -331,8 +358,11 @@ export interface BoatAccountRepoService {
       readonly wallet: string | null;
     }[]
   >;
-  /** Saved images Boat has in none of the wallets the key can bill, by snapshot name. */
-  readonly unreachableImages: (owner: BoatWalletOwner) => Failing<readonly string[]>;
+  /**
+   * What Boat has in none of the wallets the key can bill: saved images by snapshot name, runs by id,
+   * image builds by publication id.
+   */
+  readonly unreachable: (owner: BoatWalletOwner) => Failing<BoatUnreachableObjects>;
   /** The install's own key's pin and kind; undefined before any process made its row. */
   readonly installWallet: () => Failing<
     { readonly organization: string | null; readonly keyKind: string | null } | undefined
@@ -344,16 +374,27 @@ export interface BoatAccountRepoService {
   readonly listUnresolved: () => Failing<readonly BoatAccountRecord[]>;
   /** What the owner may hold in Boat whose wallet sealant does not know. */
   readonly unknownObjects: (owner: BoatWalletOwner) => Failing<BoatUnknownObjects>;
+  /** The wallet a request about one of the owner's objects names (`BoatObjectWallet`). */
+  readonly objectWallet: (owner: BoatWalletOwner, ref: BoatObjectRef) => Failing<BoatObjectWallet>;
   /**
-   * Records where sealant found the owner's objects and, with `pin`, pins it, as one statement under
-   * its row. A pin holds only if every run Boat may hold a VM for is among `runs` in the pin's
-   * wallet, and no build or full check of unknown wallet is left; otherwise nothing is pinned
-   * (`stale`), and the wallets found are still recorded.
+   * Records where an object of unknown wallet was found, or that Boat has it in none of the wallets
+   * the key can bill (`unreachable`: a run's VM is then absent on that basis, and nothing waits on
+   * it). Only rows whose wallet is still unknown change.
+   */
+  readonly recordObjectWallet: (
+    owner: BoatWalletOwner,
+    ref: BoatObjectRef,
+    found: { readonly wallet: string | null } | "unreachable",
+  ) => Failing<void>;
+  /**
+   * Records where sealant found the owner's objects and, with `pin`, pins an owner not pinned yet,
+   * as one statement under its row. The pin is for what the owner makes from then on: it waits for
+   * nothing the owner made before, which keeps its own wallet, known or not.
    */
   readonly resolveWallets: (
     owner: BoatWalletOwner,
     resolution: BoatWalletResolution,
-  ) => Failing<"pinned" | "recorded" | "stale">;
+  ) => Failing<"pinned" | "recorded">;
   /** The accounts not removed that have ever had a run: the ones Boat's sweeps visit. */
   readonly listWithRuns: () => Failing<readonly BoatAccountRecord[]>;
   /**
@@ -388,12 +429,12 @@ const record = (row: BoatAccountRow): BoatAccountRecord => ({
  * finished with their cleanup pending (`boat_key_proofs`).
  */
 const proofOutstanding = (id: string) =>
-  sql`select 1 from ${boatKeyProofs} where ${boatKeyProofs.account} = ${id} and (${boatKeyProofs.finishedAt} is null or ${boatKeyProofs.cleanupPending})`;
+  sql`select 1 from ${boatKeyProofs} where ${boatKeyProofs.account} = ${id} and (${boatKeyProofs.finishedAt} is null or ${boatKeyProofs.cleanupPending}) and ${boatKeyProofs.boatWalletState} <> 'unreachable'`;
 
 /** Saved images Boat may hold of a deployment: in use, retiring, or their removal pending. */
 const heldImage = sql`(${nativePublications.state} in ('ready','retiring') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} = 'native-removal-pending'))`;
 /** Image builds Boat may hold a VM or a save of: queued, building, or their cleanup pending. */
-const imageBuildInFlight = sql`(${nativePublications.state} in ('reserved','building') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} like 'native-cleanup-pending-%'))`;
+const imageBuildInFlight = sql`(${nativePublications.state} in ('reserved','building') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} like 'native-cleanup-pending-%')) and ${nativePublications.boatWalletState} <> 'unreachable'`;
 
 /** The runs of an owner: a stored account's, or the install's own (no account). */
 const ownedRuns = (owner: BoatWalletOwner) =>
@@ -401,6 +442,21 @@ const ownedRuns = (owner: BoatWalletOwner) =>
 /** The account a full check of the owner's key is recorded under. */
 const proofAccount = (owner: BoatWalletOwner) =>
   "accountId" in owner ? owner.accountId : "default";
+/** A run whose VM Boat has in none of the key's wallets: absent on that basis, never asked again. */
+const unreachableRun = {
+  boatWallet: null,
+  boatWalletState: "unreachable",
+  absentAt: sql`now()`,
+  absentBasis: "unreachable",
+  heldReason: null,
+  conflictingSandboxes: [],
+  sealedLaunch: null,
+  sealedExchange: null,
+} as const;
+/** A saved image's snapshot name, as its publication records it. */
+const publicationName = sql<
+  string | null
+>`${nativePublications.publication}->'snapshot'->'identity'->>'name'`;
 
 const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen(function* () {
   const db = yield* SealantDB;
@@ -523,14 +579,27 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
   });
   const liveSandboxes = Effect.fn("BoatAccountRepo.liveSandboxes")(function* (id: string) {
     const rows = yield* db
-      .select({ runId: boatRuns.runId, sandboxId: boatRuns.sandboxId })
+      .select({
+        runId: boatRuns.runId,
+        sandboxId: boatRuns.sandboxId,
+        wallet: boatRuns.boatWallet,
+        walletState: boatRuns.boatWalletState,
+      })
       .from(boatRuns)
       .where(
         and(eq(boatRuns.accountId, id), isNull(boatRuns.absentAt), isNotNull(boatRuns.sandboxId)),
       )
       .orderBy(asc(boatRuns.runId));
     return rows.flatMap((row) =>
-      row.sandboxId === null ? [] : [{ runId: row.runId, sandboxId: row.sandboxId }],
+      row.sandboxId === null
+        ? []
+        : [
+            {
+              runId: row.runId,
+              sandboxId: row.sandboxId,
+              wallet: row.walletState === "known" ? row.wallet : undefined,
+            },
+          ],
     );
   });
   const heldImages = Effect.fn("BoatAccountRepo.heldImages")(function* (id: string) {
@@ -548,7 +617,9 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         and(
           eq(boatAccounts.id, id),
           isNotNull(nativePublications.publication),
-          sql`(${nativePublications.state} in ('ready','retiring') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} = 'native-removal-pending'))`,
+          heldImage,
+          // One Boat has in no wallet the key can bill gates nothing (it is reported).
+          sql`${nativePublications.boatWalletState} <> 'unreachable'`,
         ),
       )
       .orderBy(asc(nativePublications.id));
@@ -594,6 +665,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             and(
               eq(nativePublications.deploymentId, row.deploymentId),
               inArray(nativePublications.state, ["reserved", "building"]),
+              sql`${nativePublications.boatWalletState} <> 'unreachable'`,
             ),
           );
         const liveRuns = runs?.value ?? 0;
@@ -654,35 +726,6 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       return { row: undefined, organization: row.organization, keyKind: row.keyKind } as const;
     });
 
-  /** What of the owner Boat may hold that lives in the wallet it names: runs, builds, checks. */
-  const holdings = Effect.fn("BoatAccountRepo.holdings")(function* (owner: BoatWalletOwner) {
-    const deploymentId = yield* ownerDeployment(owner);
-    const [runs] = yield* db
-      .select({ value: count() })
-      .from(boatRuns)
-      .where(and(ownedRuns(owner), isNull(boatRuns.absentAt)));
-    const [builds] = yield* db
-      .select({ value: count() })
-      .from(nativePublications)
-      .where(and(eq(nativePublications.deploymentId, deploymentId), imageBuildInFlight));
-    const [proofs] = yield* db
-      .select({ value: count() })
-      .from(boatKeyProofs)
-      .where(
-        and(
-          eq(boatKeyProofs.account, proofAccount(owner)),
-          outstandingProof,
-          // One Boat has in no wallet the key can bill cannot be cleaned up by sealant: reported.
-          ne(boatKeyProofs.boatWalletState, "unreachable"),
-        ),
-      );
-    return {
-      liveRuns: runs?.value ?? 0,
-      buildsInFlight: builds?.value ?? 0,
-      proofs: proofs?.value ?? 0,
-    };
-  });
-
   const setKeyKind = Effect.fn("BoatAccountRepo.setKeyKind")(function* (
     id: string,
     keyKind: "personal" | "organization",
@@ -712,29 +755,6 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           return locked.row === undefined
             ? ({ kind: "unchanged" } as const)
             : ({ kind: "unchanged", account: record(locked.row) } as const);
-        const held = yield* holdings(owner);
-        const live =
-          input.unsettled.length === 0
-            ? []
-            : yield* db
-                .select({ runId: boatRuns.runId })
-                .from(boatRuns)
-                .where(
-                  and(
-                    ownedRuns(owner),
-                    isNull(boatRuns.absentAt),
-                    inArray(boatRuns.runId, [...input.unsettled]),
-                  ),
-                );
-        const unsettledRuns = input.unsettled.length - live.length;
-        if (held.liveRuns > 0 || unsettledRuns > 0 || held.buildsInFlight > 0 || held.proofs > 0)
-          return {
-            kind: "in-use",
-            liveRuns: held.liveRuns,
-            unsettledRuns,
-            buildsInFlight: held.buildsInFlight,
-            proofs: held.proofs,
-          } as const;
         if ("install" in owner) {
           yield* db
             .update(boatInstall)
@@ -804,16 +824,10 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     );
   });
 
-  const unreachableImages = Effect.fn("BoatAccountRepo.unreachableImages")(function* (
-    owner: BoatWalletOwner,
-  ) {
+  const unreachable = Effect.fn("BoatAccountRepo.unreachable")(function* (owner: BoatWalletOwner) {
     const deploymentId = yield* ownerDeployment(owner);
-    const rows = yield* db
-      .select({
-        name: sql<
-          string | null
-        >`${nativePublications.publication}->'snapshot'->'identity'->>'name'`,
-      })
+    const images = yield* db
+      .select({ id: nativePublications.id, name: publicationName })
       .from(nativePublications)
       .where(
         and(
@@ -823,7 +837,16 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         ),
       )
       .orderBy(asc(nativePublications.id));
-    return rows.flatMap((row) => (row.name === null ? [] : [row.name]));
+    const runs = yield* db
+      .select({ runId: boatRuns.runId })
+      .from(boatRuns)
+      .where(and(ownedRuns(owner), eq(boatRuns.absentBasis, "unreachable")))
+      .orderBy(asc(boatRuns.runId));
+    return {
+      savedImages: images.flatMap((row) => (row.name === null ? [] : [row.name])),
+      runs: runs.map((row) => row.runId),
+      builds: images.flatMap((row) => (row.name === null ? [row.id] : [])),
+    } satisfies BoatUnreachableObjects;
   });
 
   const installWallet = Effect.fn("BoatAccountRepo.installWallet")(function* () {
@@ -863,8 +886,8 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         ),
       )
       .orderBy(asc(nativePublications.id));
-    const [builds] = yield* db
-      .select({ value: count() })
+    const builds = yield* db
+      .select({ id: nativePublications.id })
       .from(nativePublications)
       .where(
         and(
@@ -896,7 +919,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       images: images.flatMap((row) =>
         row.name === null ? [] : [{ publicationId: row.publicationId, name: row.name }],
       ),
-      buildsInFlight: builds?.value ?? 0,
+      builds: builds.map((row) => row.id),
       proofs: proofs.map((row) => ({
         id: row.id,
         sandboxId: row.createIssuedAt !== null && row.vmDeletedAt === null ? row.sandboxId : null,
@@ -904,6 +927,115 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           row.saveIssuedAt !== null && row.snapshotDeletedAt === null ? row.snapshotName : null,
       })),
     } satisfies BoatUnknownObjects;
+  });
+
+  /** The rows of the owner's that name an object, per table. */
+  const objectRows = (owner: BoatWalletOwner, ref: BoatObjectRef) =>
+    Effect.gen(function* () {
+      const deploymentId = yield* ownerDeployment(owner);
+      const run =
+        "sandbox" in ref
+          ? eq(boatRuns.sandboxId, ref.sandbox)
+          : "deletion" in ref
+            ? eq(boatRuns.deletionOperationId, ref.deletion)
+            : "run" in ref
+              ? eq(boatRuns.runId, ref.run)
+              : undefined;
+      const proof =
+        "sandbox" in ref
+          ? eq(boatKeyProofs.sandboxId, ref.sandbox)
+          : "snapshot" in ref
+            ? eq(boatKeyProofs.snapshotName, ref.snapshot)
+            : undefined;
+      const image =
+        "snapshot" in ref
+          ? sql`${publicationName} = ${ref.snapshot}`
+          : "publication" in ref
+            ? eq(nativePublications.id, ref.publication)
+            : undefined;
+      return {
+        runs: run === undefined ? undefined : and(run, ownedRuns(owner)),
+        proofs:
+          proof === undefined
+            ? undefined
+            : and(proof, eq(boatKeyProofs.account, proofAccount(owner))),
+        images:
+          image === undefined
+            ? undefined
+            : and(image, eq(nativePublications.deploymentId, deploymentId)),
+      };
+    });
+  const objectWallet = Effect.fn("BoatAccountRepo.objectWallet")(function* (
+    owner: BoatWalletOwner,
+    ref: BoatObjectRef,
+  ) {
+    const where = yield* objectRows(owner, ref);
+    const states: { readonly wallet: string | null; readonly state: string }[] = [
+      ...(where.runs === undefined
+        ? []
+        : yield* db
+            .select({ wallet: boatRuns.boatWallet, state: boatRuns.boatWalletState })
+            .from(boatRuns)
+            .where(where.runs)),
+      ...(where.proofs === undefined
+        ? []
+        : yield* db
+            .select({ wallet: boatKeyProofs.boatWallet, state: boatKeyProofs.boatWalletState })
+            .from(boatKeyProofs)
+            .where(where.proofs)),
+      ...(where.images === undefined
+        ? []
+        : yield* db
+            .select({
+              wallet: nativePublications.boatWallet,
+              state: nativePublications.boatWalletState,
+            })
+            .from(nativePublications)
+            .where(where.images)),
+    ];
+    // One object, one wallet: the first row that knows it names it; else any row not knowing it.
+    const known = states.find((each) => each.state === "known");
+    if (known !== undefined) return { kind: "known", wallet: known.wallet } as const;
+    if (states.some((each) => each.state === "unknown")) return { kind: "unknown" } as const;
+    if (states.length > 0) return { kind: "unreachable" } as const;
+    return { kind: "unrecorded" } as const;
+  });
+  const recordObjectWallet = Effect.fn("BoatAccountRepo.recordObjectWallet")(function* (
+    owner: BoatWalletOwner,
+    ref: BoatObjectRef,
+    found: { readonly wallet: string | null } | "unreachable",
+  ) {
+    const where = yield* objectRows(owner, ref);
+    const known = found === "unreachable" ? undefined : found.wallet;
+    const set =
+      found === "unreachable"
+        ? ({ boatWallet: null, boatWalletState: "unreachable" } as const)
+        : ({ boatWallet: known ?? null, boatWalletState: "known" } as const);
+    yield* db.transaction(() =>
+      Effect.gen(function* () {
+        if (where.runs !== undefined)
+          yield* db
+            .update(boatRuns)
+            .set(found === "unreachable" ? unreachableRun : set)
+            .where(
+              and(
+                where.runs,
+                eq(boatRuns.boatWalletState, "unknown"),
+                ...(found === "unreachable" ? [isNull(boatRuns.absentAt)] : []),
+              ),
+            );
+        if (where.proofs !== undefined)
+          yield* db
+            .update(boatKeyProofs)
+            .set(set)
+            .where(and(where.proofs, eq(boatKeyProofs.boatWalletState, "unknown")));
+        if (where.images !== undefined)
+          yield* db
+            .update(nativePublications)
+            .set(set)
+            .where(and(where.images, eq(nativePublications.boatWalletState, "unknown")));
+      }),
+    );
   });
 
   const listUnresolved = Effect.fn("BoatAccountRepo.listUnresolved")(function* () {
@@ -927,6 +1059,16 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           sql`${nativePublications.state} not in ('removed','superseded')`,
         ),
       );
+    const unknownProof = db
+      .select({ one: sql`1` })
+      .from(boatKeyProofs)
+      .where(
+        and(
+          sql`${boatKeyProofs.account} = ${boatAccounts.id}::text`,
+          eq(boatKeyProofs.boatWalletState, "unknown"),
+          outstandingProof,
+        ),
+      );
     const rows = yield* db
       .select()
       .from(boatAccounts)
@@ -940,6 +1082,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             ),
             exists(unknownRun),
             exists(unknownImage),
+            exists(unknownProof),
           ),
         ),
       )
@@ -959,12 +1102,17 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         for (const run of resolution.runs)
           yield* db
             .update(boatRuns)
-            .set({ boatWallet: run.wallet, boatWalletState: "known" })
+            .set(
+              "unreachable" in run
+                ? unreachableRun
+                : { boatWallet: run.wallet, boatWalletState: "known" },
+            )
             .where(
               and(
                 eq(boatRuns.runId, run.runId),
                 ownedRuns(owner),
                 eq(boatRuns.boatWalletState, "unknown"),
+                isNull(boatRuns.absentAt),
               ),
             );
         for (const image of resolution.images)
@@ -1001,21 +1149,8 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         if (pin === undefined) return "recorded" as const;
         if (createWalletOf(locked.organization, locked.keyKind).kind === "known")
           return "recorded" as const;
-        // Every run Boat may hold a VM for is in the pin's wallet, and nothing of unknown wallet
-        // could be created meanwhile (an unresolved account creates nothing).
-        const live = yield* db
-          .select({ wallet: boatRuns.boatWallet, state: boatRuns.boatWalletState })
-          .from(boatRuns)
-          .where(and(ownedRuns(owner), isNull(boatRuns.absentAt)));
-        const unknown = yield* unknownObjects(owner);
-        if (
-          live.some((run) => run.state !== "known" || run.wallet !== pin.organization) ||
-          unknown.buildsInFlight > 0 ||
-          unknown.proofs.length > 0
-        )
-          return "stale" as const;
-        // Every build, image and full check made before the pin is in the pin's wallet too when
-        // its wallet was never asked of Boat: none can exist (none of unknown wallet is left).
+        // The pin is for what the account makes from now on. What it made before keeps its own
+        // wallet, known or not, and is found one object at a time.
         if ("accountId" in owner)
           yield* db
             .update(boatAccounts)
@@ -1099,6 +1234,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             and(
               eq(boatKeyProofs.account, id),
               or(isNull(boatKeyProofs.finishedAt), eq(boatKeyProofs.cleanupPending, true)),
+              ne(boatKeyProofs.boatWalletState, "unreachable"),
             ),
           );
         // Boat may still hold something under the key: it is not erased.
@@ -1244,10 +1380,12 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     setKeyKind: (id, keyKind) => boundary(setKeyKind(id, keyKind)),
     changeOrganization: (owner, input) => boundary(changeOrganization(owner, input)),
     imagesElsewhere: (owner) => boundary(imagesElsewhere(owner)),
-    unreachableImages: (owner) => boundary(unreachableImages(owner)),
+    unreachable: (owner) => boundary(unreachable(owner)),
     installWallet: () => boundary(installWallet()),
     listUnresolved: () => boundary(listUnresolved()),
     unknownObjects: (owner) => boundary(unknownObjects(owner)),
+    objectWallet: (owner, ref) => boundary(objectWallet(owner, ref)),
+    recordObjectWallet: (owner, ref, found) => boundary(recordObjectWallet(owner, ref, found)),
     resolveWallets: (owner, resolution) => boundary(resolveWallets(owner, resolution)),
     listWithRuns: () => boundary(listWithRuns()),
     finishRemoval: (id) => boundary(finishRemoval(id)),

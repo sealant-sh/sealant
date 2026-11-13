@@ -189,7 +189,6 @@ export interface BoatRunRepoService {
    * the run's key. Only for a run with no VM on record.
    */
   readonly recordNeverCreated: (runId: string) => Failing<BoatRun>;
-
   /** Binds the VM's current boot as the run's target. Refused once the run is fenced or deleting. */
   readonly bind: (runId: string, target: BoatExecutionTarget) => Failing<BoatRun>;
   /** Reserves the bind exchange. A replay returns the first reservation, never a second key. */

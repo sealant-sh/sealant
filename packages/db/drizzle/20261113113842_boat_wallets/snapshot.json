@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "7df3461a-e751-41ee-9f23-5f9e4925db5a",
+  "id": "2ecb68fb-0bc1-4fa8-bb78-ec0ffcbbe6ec",
   "prevIds": ["057c9038-c594-4925-9b44-237e0dd33e1b"],
   "ddl": [
     {
@@ -14544,7 +14544,7 @@
       "table": "boat_runs"
     },
     {
-      "value": "(\"absent_at\" is null and \"absent_basis\" is null)\n        or (\"absent_at\" is not null and \"absent_basis\" = 'not-found' and \"sandbox_id\" is not null and \"created_seen_at\" is not null)\n        or (\"absent_at\" is not null and \"absent_basis\" = 'deletion-completed' and \"sandbox_id\" is not null)\n        or (\"absent_at\" is not null and \"absent_basis\" = 'never-created' and \"sandbox_id\" is null)",
+      "value": "(\"absent_at\" is null and \"absent_basis\" is null)\n        or (\"absent_at\" is not null and \"absent_basis\" = 'not-found' and \"sandbox_id\" is not null and \"created_seen_at\" is not null)\n        or (\"absent_at\" is not null and \"absent_basis\" = 'deletion-completed' and \"sandbox_id\" is not null)\n        or (\"absent_at\" is not null and \"absent_basis\" = 'never-created' and \"sandbox_id\" is null)\n        or (\"absent_at\" is not null and \"absent_basis\" = 'unreachable')",
       "name": "boat_runs_absence",
       "entityType": "checks",
       "schema": "public",

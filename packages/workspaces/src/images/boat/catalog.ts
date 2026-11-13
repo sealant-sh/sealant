@@ -116,6 +116,10 @@ export interface BoatNativeCatalogService {
     readonly limit: number;
     readonly after?: string;
   }) => Effect.Effect<NativeCatalogSweep, NativeCatalogFailure>;
+  /** One publication's reconciliation, as `reconcile` does it for each journal it reads. */
+  readonly reconcilePublication?: (
+    publicationId: string,
+  ) => Effect.Effect<string | undefined, NativeCatalogFailure>;
 }
 
 /** Owns publication policy; the builder owns native mechanism and the repository owns transactions. */
@@ -133,8 +137,10 @@ export interface BoatNativeCatalogOptions {
    * key's only wallet). The catalog builds, verifies and removes only images recorded in it: Boat
    * not finding an image is evidence it is gone only when the request named the wallet the image
    * was made in. Absent: an install with no wallets to tell apart (tests); nothing is skipped.
+   * `build`: the one image build of that id whose wallet is not known yet, its builder's client
+   * finding it (`BoatAccountDirectory.buildApi`).
    */
-  readonly wallet?: string | null;
+  readonly wallet?: string | null | { readonly build: string };
 }
 
 const claimMs = 30 * 60 * 1000;
@@ -199,14 +205,17 @@ const make = (
     const repo = yield* NativePublicationRepo;
     const builder = options.builder;
     /** Whether the publication is recorded in the wallet this catalog's builder names. */
+    const wallet = options.wallet;
     const inThisWallet = (id: string) =>
-      options.wallet === undefined
+      wallet === undefined
         ? Effect.succeed(true)
         : repo
             .wallet(id)
             .pipe(
-              Effect.map(
-                (recorded) => recorded?.state === "known" && recorded.wallet === options.wallet,
+              Effect.map((recorded) =>
+                typeof wallet === "object" && wallet !== null
+                  ? id === wallet.build && recorded?.state === "unknown"
+                  : recorded?.state === "known" && recorded.wallet === wallet,
               ),
             );
     const acquire = Effect.fn("BoatNativeCatalog.acquire")(function* (input: NativeAcquireInput) {
@@ -592,7 +601,15 @@ const make = (
       }
       return { entries, ...(page.next === undefined ? {} : { next: page.next }) };
     });
+    const reconcilePublication = Effect.fn("BoatNativeCatalog.reconcilePublication")(function* (
+      publicationId: string,
+    ) {
+      const record = yield* repo.get(publicationId);
+      if (record === undefined) return undefined;
+      return yield* reconcileRecord(record.ownership);
+    });
     return BoatNativeCatalog.of({
+      reconcilePublication,
       acquire,
       markConsumer: repo.markConsumer,
       release: repo.release,

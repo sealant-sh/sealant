@@ -55,7 +55,9 @@ export const installCreateWallet = (db: DB, deploymentId?: string) =>
         deploymentId: boatInstall.deploymentId,
       })
       .from(boatInstall)
-      .where(eq(boatInstall.id, "install"));
+      .where(eq(boatInstall.id, "install"))
+      // The row the setting's application and a wallet change take `for update`.
+      .for("share");
     if (
       row === undefined ||
       (deploymentId !== undefined &&

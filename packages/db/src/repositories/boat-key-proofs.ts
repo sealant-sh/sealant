@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -163,9 +163,13 @@ const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.ge
           .select()
           .from(boatKeyProofs)
           .where(
-            or(
-              and(isNull(boatKeyProofs.finishedAt), lt(boatKeyProofs.claimedUntil, now)),
-              eq(boatKeyProofs.cleanupPending, true),
+            and(
+              or(
+                and(isNull(boatKeyProofs.finishedAt), lt(boatKeyProofs.claimedUntil, now)),
+                eq(boatKeyProofs.cleanupPending, true),
+              ),
+              // Boat has what it made in none of the key's wallets: nothing is left to delete.
+              ne(boatKeyProofs.boatWalletState, "unreachable"),
             ),
           )
           .orderBy(boatKeyProofs.startedAt)

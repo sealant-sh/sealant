@@ -290,13 +290,15 @@ These call the live API and work end-to-end:
   account with a personal key at another wallet (an organization's id from `wallets`, or `personal`)
   without its key. Every personal key is pinned at `create`, so `null` is refused. What the account
   made stays recorded in the wallet it was made in, and every request about it names that wallet. So
-  the change is immediate, deletes nothing first and refuses no workspace; it rejects with
-  `boat-account-in-use` only while the account has VMs, runs to settle or builds in Boat, and
+  the change is immediate and waits for nothing: running sessions, builds and checks go on in their
+  own wallets, and only what the account makes next is made in the new one. It rejects with
   `boat-key-organization` for an organization's key. Images made in the old wallet are removed there
-  by the control plane; `unreachable.savedImages` names any Boat has in none of the key's wallets.
-  The control plane's own key is not in `list()`: `.installKey()` reads its last report and
-  `.checkInstallKey()` checks it now (`BoatInstallKey`: `label`, `report`). A refused key rejects
-  with `SealantApiError`, whose `boat`, `missingPermissions` and `boatKeyReport` say why.
+  by the control plane. `unreachable` (`BoatUnreachable`) names what the account made before the
+  control plane recorded wallets and Boat has in none of the key's wallets: `savedImages`, `runs`
+  (each ended as gone) and `builds` (built again); none of it holds anything up. The control plane's
+  own key is not in `list()`: `.installKey()` reads its last report and `.checkInstallKey()` checks
+  it now (`BoatInstallKey`: `label`, `report`, `unreachable`). A refused key rejects with
+  `SealantApiError`, whose `boat`, `missingPermissions` and `boatKeyReport` say why.
   `.prove(boatAccountId)` runs a full check with a throwaway VM and answers a `BoatKeyProof`
   (`outcome`, `steps` each `passed`, `refused` with Boat's reason, `no-answer` or `not-reached`,
   `starts`, `leftBehind` with `removalConfirmed`). While the sweep still owns what a check left,

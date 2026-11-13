@@ -49,8 +49,9 @@ export const boatRuns = snakeCase.table(
     boatWallet: text(),
     /**
      * `known`: `boatWallet` is where it is. `unknown`: made before sealant recorded wallets, by an
-     * account with no pin; no request about it is made until sealant has found it. `unreachable`: sealant
-     * looked under every wallet the key can bill and Boat has it in none: never removed or used.
+     * account with no pin; requests about it name no wallet, as they did then, until sealant has
+     * found it. `unreachable`: Boat has it in none of the wallets the key can bill (or, for a key
+     * that cannot list them, not in the one it bills): the run is absent on that basis.
      */
     boatWalletState: text().notNull().default("unknown"),
     publicationId: uuid()
@@ -89,7 +90,9 @@ export const boatRuns = snakeCase.table(
     deletionOperationId: text(),
     deletionCompletedAt: instant(),
     absentAt: instant(),
-    absentBasis: text().$type<"not-found" | "deletion-completed" | "never-created">(),
+    absentBasis: text().$type<
+      "not-found" | "deletion-completed" | "never-created" | "unreachable"
+    >(),
     heldReason: text().$type<
       "allocation-conflict" | "lifetime-unverified" | "run-stopped" | "create-unresolved"
     >(),
@@ -139,7 +142,8 @@ export const boatRuns = snakeCase.table(
       sql`(${table.absentAt} is null and ${table.absentBasis} is null)
         or (${table.absentAt} is not null and ${table.absentBasis} = 'not-found' and ${table.sandboxId} is not null and ${table.createdSeenAt} is not null)
         or (${table.absentAt} is not null and ${table.absentBasis} = 'deletion-completed' and ${table.sandboxId} is not null)
-        or (${table.absentAt} is not null and ${table.absentBasis} = 'never-created' and ${table.sandboxId} is null)`,
+        or (${table.absentAt} is not null and ${table.absentBasis} = 'never-created' and ${table.sandboxId} is null)
+        or (${table.absentAt} is not null and ${table.absentBasis} = 'unreachable')`,
     ),
     check(
       "boat_runs_held",

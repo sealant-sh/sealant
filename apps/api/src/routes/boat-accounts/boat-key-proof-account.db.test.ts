@@ -135,7 +135,7 @@ describe.skipIf(DATABASE_URL === undefined)(
             credential: key.credential,
             baseUrl: boat.baseUrl,
             timeoutMs: 5_000,
-            ...(wallet === null ? {} : { organization: wallet }),
+            ...(wallet === null || wallet === undefined ? {} : { organization: wallet }),
           });
           return client.ok ? client.value : undefined;
         },

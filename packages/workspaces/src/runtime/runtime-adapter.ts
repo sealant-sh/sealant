@@ -247,6 +247,8 @@ const runtimeAdapterEndedSchema = z.discriminatedUnion("state", [
   }),
   z.strictObject({
     state: z.literal("missing"),
+    /** Why the runtime no longer knows it, where it can say. */
+    detail: z.string().trim().min(1).optional(),
   }),
 ]);
 
