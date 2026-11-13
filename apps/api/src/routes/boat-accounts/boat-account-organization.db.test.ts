@@ -312,7 +312,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       );
     });
 
-    it("refuses a workspace in the install's own account while Core has not seen which wallet its key bills, and starts it once it has", () =>
+    it("refuses a workspace in the install's own account while its worker reports it cannot launch there, naming account.read", () =>
       withWorkspaceJobTestDatabase(DATABASE_URL ?? "", async (url) => {
         const own = await createSealantDB(url);
         const inOwn = <A, E>(effect: Effect.Effect<A, E, BoatAccountRepo | SealantDB>) =>
@@ -324,34 +324,27 @@ describe.skipIf(DATABASE_URL === undefined)(
               Effect.provideService(availability.BoatConfigured, true),
             ),
           );
-        // A fresh install: its names made, its key not checked yet.
-        await inOwn(
-          Effect.flatMap(BoatAccountRepo, (repo) => repo.installDeployment("install-fresh")),
-        );
+        // What a worker with the install's key reports while Core has not seen its wallet.
         await inOwn(
           Effect.flatMap(BoatAccountRepo, (repo) =>
             repo.reportLaunch({
               worker: `worker-${randomUUID()}`,
               launches: true,
-              defaultAccount: true,
+              defaultAccount: false,
               resourceGateway: true,
               observedAt: new Date(),
             }),
           ),
         );
         const refused = await inOwn(
-          Effect.flip(availability.requireBoatAccount({ runtime: {} }, "boat")),
+          Effect.flip(availability.requireBoatAccount({ runtime: { resources: "none" } }, "boat")),
         );
         expect(refused).toMatchObject({
-          _tag: "WorkspaceConflictError",
-          code: "boat-account-wallet-unresolved",
+          _tag: "WorkspaceServiceUnavailableError",
+          code: "boat-account-required",
         });
         expect(refused.message).toContain("account.read");
-        // The worker's check saw an organization's key (one wallet): it starts.
-        await inOwn(
-          Effect.flatMap(BoatAccountRepo, (repo) => repo.setKeyKind("default", "organization")),
-        );
-        await inOwn(availability.requireBoatAccount({ runtime: {} }, "boat"));
+        expect(refused.message).toContain("SEALANT_BOAT_ORGANIZATION");
       }));
 
     it("points the account at another wallet at once: images stay recorded where they were made, none deleted first, no workspace refused", async () => {

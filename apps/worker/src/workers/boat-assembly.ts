@@ -1241,16 +1241,23 @@ export const assembleBoat = async (input: {
       });
     },
     /** Writes this worker's launch report (`launchReport`), stamped by the database's clock. */
-    reportLaunch: (worker: string, observedAt?: Date) =>
-      Effect.runPromise(
+    reportLaunch: async (worker: string, observedAt?: Date) => {
+      // The install's own account launches only once Core knows which wallet its key bills: until
+      // then this worker says it cannot, and the API refuses a create that would need it.
+      const installReady =
+        launchReport.defaultAccount &&
+        (await createWallet(null).catch(() => ({ kind: "unresolved" }) as const)).kind === "known";
+      await Effect.runPromise(
         Effect.flatMap(BoatAccountRepo, (repo) =>
           repo.reportLaunch({
             worker,
             ...launchReport,
+            defaultAccount: installReady,
             ...(observedAt === undefined ? {} : { observedAt }),
           }),
         ).pipe(Effect.provide(BoatAccountRepoLive), Effect.provideService(SealantDB, db)),
-      ),
+      );
+    },
     /**
      * One pass of the key reports: every key whose report is older than a day (or `force`d) is
      * checked against Boat again and its report replaced; Boat not answering keeps the last one.

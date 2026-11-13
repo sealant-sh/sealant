@@ -977,6 +977,8 @@ describe.skipIf(DATABASE_URL === undefined)(
         ) => Promise<{ readonly id: string; readonly deploymentId: string }>;
         readonly launchImage: (accountId: string | undefined) => Promise<NativePublication>;
         readonly installWallet: () => Promise<unknown>;
+        /** What this worker reports for Boat now, as the API reads it. */
+        readonly report: () => Promise<unknown>;
         readonly account: (id: string) => Promise<{
           readonly organization: string | null;
           readonly keyRevision: number;
@@ -1133,6 +1135,14 @@ describe.skipIf(DATABASE_URL === undefined)(
             },
             installWallet: () =>
               repo(Effect.flatMap(BoatAccountRepo, (accounts) => accounts.installWallet())),
+            report: async () => {
+              const worker = `worker-${randomUUID()}`;
+              await assembled.reportLaunch(worker);
+              const reports = await repo(
+                Effect.flatMap(BoatAccountRepo, (accounts) => accounts.launchReports(60_000)),
+              );
+              return reports.find((each) => each.worker === worker);
+            },
             walletOf: (publicationId) =>
               repo(
                 Effect.flatMap(NativePublicationRepo, (catalog) => catalog.wallet(publicationId)),
@@ -1312,6 +1322,8 @@ describe.skipIf(DATABASE_URL === undefined)(
       withWallets(
         async (c) => {
           expect(await c.installWallet()).toMatchObject({ organization: null });
+          // The worker says it cannot launch in the install's own account; the API refuses there.
+          expect(await c.report()).toMatchObject({ launches: true, defaultAccount: false });
           await expect(c.launchImage(undefined)).rejects.toThrow();
           expect(c.fake.heldIn("personal")).toEqual({ sandboxes: [], snapshots: [] });
           expect(c.fake.organizationHeaders.map((each) => each.path)).not.toContain("/sandboxes");
@@ -1320,6 +1332,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           expect(await c.worker.resolveWallets()).toEqual([
             { accountId: "default", outcome: "pinned" },
           ]);
+          expect(await c.report()).toMatchObject({ defaultAccount: true });
           const image = await c.launchImage(undefined);
           expect(c.fake.heldIn("personal").snapshots).toEqual([image.snapshot.identity.name]);
         },
