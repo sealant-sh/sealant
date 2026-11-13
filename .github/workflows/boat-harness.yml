@@ -2,7 +2,7 @@ name: Boat harness
 
 # The local Boat harness (packages/workspaces/boat-harness): sealant's real worker, API, Boat
 # adapter, guest units and gateway against a fake Boat provider and guest-twin containers. It runs
-# on pull requests that touch Boat code, nightly, and on demand.
+# on pull requests that touch Boat code, nightly, and on demand. Every run runs every group.
 on:
   pull_request:
     paths:
@@ -34,10 +34,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # One runner per group of harness files: a runner is its own Docker host, and each file brings
+  # up its own stack. `harness-files.test.ts` fails when a harness file is in no group or in two.
+  # Minutes are about twice a group's usual harness step, which leaves room to build the twin base
+  # image when its cache misses.
   harness:
-    name: Boat harness
+    name: Boat harness (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 100
+    timeout-minutes: ${{ matrix.job-minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Happy path, Docker, the shared stop's FINAL and deletion cases: about 15 minutes.
+          - group: lifecycle
+            files: boat-harness/lifecycle.harness.ts
+            step-minutes: 35
+            job-minutes: 50
+          # One fault per step, then resource links: about 19 minutes.
+          - group: faults
+            files: boat-harness/faults.harness.ts
+            step-minutes: 45
+            job-minutes: 60
+          # A ready session's daemon and its deletion: about 17 minutes.
+          - group: daemon
+            files: boat-harness/daemon.harness.ts
+            step-minutes: 40
+            job-minutes: 55
+          # Workspaces without resources, the shared stop's worker-killed cases: about 17 minutes.
+          - group: no-resources
+            files: boat-harness/no-resources.harness.ts
+            step-minutes: 40
+            job-minutes: 55
     steps:
       # The published snapshot image is about 6 GB and each twin adds a writable layer. Drop the
       # runner's preinstalled toolchains this job never uses (an ephemeral VM, not a shared host).
@@ -83,10 +111,10 @@ jobs:
 
       # A step timeout fails the step instead of cancelling the job, so the logs still upload.
       - name: Run the harness
-        timeout-minutes: 85
+        timeout-minutes: ${{ matrix.step-minutes }}
         env:
           BOAT_HARNESS_VERBOSE: "1"
-        run: pnpm boat:harness
+        run: pnpm boat:harness ${{ matrix.files }}
 
       - name: Export the twin base image
         id: twin-export
@@ -109,8 +137,23 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: boat-harness-logs
+          name: boat-harness-logs-${{ matrix.group }}
           path: |
             /tmp/boat-harness-*/*.log
             /tmp/boat-harness-*/*.json
           if-no-files-found: ignore
+
+  # The harness's one result: passes only when every group passed.
+  boat-checks:
+    name: boat checks
+    if: always()
+    needs: harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every harness group passed
+        env:
+          RESULT: ${{ needs.harness.result }}
+        run: |
+          echo "Boat harness groups: $RESULT"
+          test "$RESULT" = success
