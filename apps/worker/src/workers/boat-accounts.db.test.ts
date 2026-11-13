@@ -1005,6 +1005,28 @@ const startsPinned = async (c: AfterUpgrade, accountId: string, wallet: string) 
   return image;
 };
 
+/**
+ * The account's own client, as the worker's directory opens it, on the fake Boat: a test reads one
+ * object through it, request by request.
+ */
+const accountClient = async (db: DB, fake: FakeBoat, accountId: string) => {
+  const directory = new BoatAccountDirectory({
+    db,
+    cipher,
+    clientFor: (credential, options) =>
+      HttpBoatApi.create({
+        credential,
+        baseUrl: fake.baseUrl,
+        timeoutMs: 5_000,
+        ...(options?.organization === undefined ? {} : { organization: options.organization }),
+      }),
+    revisionCheckMs: 0,
+  });
+  const provider = await directory.provider(accountId);
+  if (provider === undefined) throw new Error("no account client");
+  return provider.api;
+};
+
 /** Boat refuses the account reads: the key lacks `account.read`. */
 const noAccountRead = (fake: FakeBoat) => {
   fake.faults = {
@@ -1507,6 +1529,34 @@ describe.skipIf(DATABASE_URL === undefined)(
         expect(c.fake.heldIn("personal").snapshots).toEqual([]);
         expect(await c.building(account.deploymentId)).toBe(false);
       }));
+
+    for (const canList of [true, false])
+      it(`review 4: a VM of unknown wallet that answered once, then misses after the owner switches the active wallet, is ${canList ? "located where it is" : "recorded unreachable"}, never read as gone`, () =>
+        withWallets(async (c) => {
+          const account = await c.store("personal", "personal");
+          await c.legacy(account.id);
+          const live = await c.seedRun({
+            ...account,
+            accountId: account.id,
+            vm: { wallet: "personal" },
+          });
+          if (!canList) noAccountRead(c.fake);
+          const api = await accountClient(c.db, c.fake, account.id);
+          const vm = boatSandboxIdSchema.parse(live.sandboxId);
+          // Before: a read with no wallet named answers; the VM is in the active wallet, personal.
+          expect((await api.get(vm)).ok).toBe(true);
+          // The owner switches the active wallet in Boat for their own use.
+          c.fake.account = { ...c.fake.account, activeWallet: "team_acme" };
+          // The step: the next read with no wallet named misses.
+          const read = await api.get(vm);
+          // Outcome: the miss is never handed on as Boat's word that the VM is gone.
+          expect(!read.ok && read.error.status === 404).toBe(false);
+          expect(await c.objectOf(account.id, { run: live.runId })).toEqual(
+            canList ? { kind: "known", wallet: "personal" } : { kind: "unreachable" },
+          );
+          if (canList) expect(read.ok).toBe(true);
+          expect(c.fake.heldIn("personal").sandboxes).toContain(live.sandboxId);
+        }));
 
     it("after an upgrade: a create issued with no VM on record is replayed where it was made, stopped, and the account pinned", () =>
       withWallets(async (c) => {

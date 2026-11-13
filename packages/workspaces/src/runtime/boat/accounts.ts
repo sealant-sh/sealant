@@ -130,8 +130,11 @@ export class StoredAccountApi implements BoatApi {
   readonly #router: BoatObjectRouter;
   /** Known and unreachable objects, which never move again. */
   readonly #settled = new Map<string, BoatObjectWallet>();
-  /** Objects of unknown wallet that Boat answered for with no wallet named. */
-  readonly #answered = new Set<string>();
+  /**
+   * Objects of unknown wallet whose delete, by sealant, Boat accepted with no wallet named: a
+   * later miss is that delete done, whichever wallet is active by then.
+   */
+  readonly #deletedUnnamed = new Set<string>();
   constructor(router: BoatObjectRouter) {
     this.#router = router;
   }
@@ -233,12 +236,13 @@ export class StoredAccountApi implements BoatApi {
     }
     const answered = await this.#in(operation, null, call);
     if (!missed(answered)) {
-      if (answered.ok) this.#answered.add(refKey(ref));
+      if (answered.ok && (operation === "deleteSandbox" || operation === "deleteSnapshot"))
+        this.#deletedUnnamed.add(refKey(ref));
       return answered;
     }
-    // A miss with no wallet named, for an object Boat answered for there before (sealant's own
-    // delete, then the read that confirms it): Boat's word about that wallet, not a lost object.
-    if (this.#answered.has(refKey(ref))) return answered;
+    // A miss after Boat accepted sealant's own delete of it (the read that confirms the delete):
+    // the delete is done. Any other answer proves nothing once the owner switches wallets.
+    if (this.#deletedUnnamed.has(refKey(ref))) return answered;
     const located = await this.#locate(operation, ref, probe, nowhere).catch(() =>
       objectUnlocated(operation),
     );
