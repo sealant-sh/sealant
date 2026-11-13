@@ -154,6 +154,12 @@ export const timelineEntrySchema = Schema.Struct({
   ref: Schema.optional(Schema.Unknown),
   /** Correlation id of the producing process (attribution key for record views). */
   processId: Schema.optional(NonEmptyString),
+  /**
+   * The execution the daemon stamped on the event: the run that started the process, when it was
+   * started as part of one. A record can hold events of processes this run did not start (an
+   * interactive run's record holds the workspace's untagged ones); the run's own carry its id.
+   */
+  executionId: Schema.optional(NonEmptyString),
   /** Numeric CaptureMethod / Confidence enums — how the fact was captured, per envelope. */
   captureMethod: Schema.Number,
   confidence: Schema.Number,

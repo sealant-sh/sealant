@@ -155,6 +155,7 @@ export const makeTelemetryQuery = (
             refJson: telemetryTimeline.refJson,
             // Correlation + provenance joined from the log (event_id is the PK on both sides).
             processId: telemetryEvents.processId,
+            executionId: telemetryEvents.executionId,
             captureMethod: telemetryEvents.captureMethod,
             confidence: telemetryEvents.confidence,
           })
@@ -187,6 +188,7 @@ export const makeTelemetryQuery = (
                     summary: row.summary,
                     ref: row.refJson,
                     processId: row.processId,
+                    executionId: row.executionId,
                     captureMethod: row.captureMethod,
                     confidence: row.confidence,
                   }),

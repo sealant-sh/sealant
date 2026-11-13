@@ -12,6 +12,7 @@ import {
   fakeExecWorld,
   type FakeExecWorldOptions,
   fakeWorkspaceRepos,
+  isChangesReading,
 } from "@sealant/telemetry/testing";
 import { Duration, Effect, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -65,10 +66,11 @@ describe("an exec run in its request", () => {
     if (!Result.isSuccess(answered)) throw new Error("expected the settled run");
     expect(answered.success).toMatchObject({ status: "completed", exitCode: 0 });
     const runId = answered.success.runId;
-    expect(w.sent.filter((exec) => exec.executionId === runId).map((exec) => exec.args)).toEqual([
-      ["3"],
-      ["0"],
-    ]);
+    expect(
+      w.sent
+        .filter((exec) => exec.executionId === runId && !isChangesReading(exec))
+        .map((exec) => exec.args),
+    ).toEqual([["3"], ["0"]]);
   });
 
   it("past its budget sends no further command, and answers with the failed run", async () => {

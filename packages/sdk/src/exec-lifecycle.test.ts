@@ -68,6 +68,10 @@ interface StubHandlers {
   readonly readRun?: () => Effect.Effect<WireRun, unknown>;
   readonly stdout?: string;
   readonly stderr?: string;
+  /** The run's `processStarted` entries, in place of one `pnpm` process. */
+  readonly timeline?: RunTimelineResponse;
+  /** Each process's output, by process id, in place of `stdout` and `stderr`. */
+  readonly output?: Record<string, { readonly stdout: string; readonly stderr: string }>;
 }
 
 const makeStub = (
@@ -84,15 +88,19 @@ const makeStub = (
     getRun: () =>
       handlers.readRun?.() ??
       Effect.sync(() => (handlers.getRun ?? (() => wireRun("completed")))()),
-    getRunTimeline: () => Effect.sync(() => timelineWith("pnpm", "proc_1")),
-    getRunScrollback: ({ query }: { query: { stream: "stdout" | "stderr" } }) =>
-      Effect.sync(() => ({
-        processId: "proc_1",
-        stream: query.stream,
-        ...scrollback(
-          query.stream === "stdout" ? (handlers.stdout ?? "") : (handlers.stderr ?? ""),
-        ),
-      })),
+    getRunTimeline: () => Effect.sync(() => handlers.timeline ?? timelineWith("pnpm", "proc_1")),
+    getRunScrollback: ({ query }: { query: { processId: string; stream: "stdout" | "stderr" } }) =>
+      Effect.sync(() => {
+        const output = handlers.output?.[query.processId] ?? {
+          stdout: handlers.stdout ?? "",
+          stderr: handlers.stderr ?? "",
+        };
+        return {
+          processId: query.processId,
+          stream: query.stream,
+          ...scrollback(output[query.stream]),
+        };
+      }),
     getRunChanges: () => Effect.sync(() => ({ files: [], diff: "" })),
   };
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
@@ -119,6 +127,24 @@ const settle = async <A>(promise: Promise<A>, ms: number) => {
   );
   await vi.advanceTimersByTimeAsync(ms);
   return outcome;
+};
+
+/** A `processStarted` entry: `sh -c …`, stamped with the execution that started it, if any. */
+const shStarted = (sequence: number, processId: string, executionId?: string) => ({
+  eventId: `evt_${String(sequence)}`,
+  sequence: String(sequence),
+  kind: "processStarted",
+  occurredAt: String(sequence),
+  summary: "$ sh -c …",
+  ref: { executable: "sh", argCount: 2 },
+  processId,
+  ...(executionId === undefined ? {} : { executionId }),
+  captureMethod: 1,
+  confidence: 1,
+});
+const OUTPUT = {
+  proc_reading: { stdout: "diff --git a/x b/x\n", stderr: "" },
+  proc_own: { stdout: "sealed record\n", stderr: "warning\n" },
 };
 
 describe("workspace.exec()", () => {
@@ -155,6 +181,34 @@ describe("workspace.exec()", () => {
     const result = await execWorkspace(makeCtx(client), WORKSPACE, ["pnpm", "test"]);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("1 failed\n");
+  });
+
+  describe("a record that holds a process the run did not start (SLNT-956)", () => {
+    it("returns the run's own output though another exec's sh comes first", async () => {
+      const { client } = makeStub({
+        getRun: () => wireRun("completed", { exitCode: 0 }),
+        // Another exec's changes reading, untagged as an older sealant ran it, then the command.
+        timeline: {
+          items: [shStarted(18, "proc_reading"), shStarted(21, "proc_own", "run_exec_1")],
+        },
+        output: OUTPUT,
+      });
+
+      const result = await execWorkspace(makeCtx(client), WORKSPACE, ["sh", "-c", "cat record"]);
+      expect(result).toMatchObject({ stdout: "sealed record\n", stderr: "warning\n" });
+    });
+
+    it("never takes a process stamped with another run, even with no process of its own tagged", async () => {
+      const { client } = makeStub({
+        getRun: () => wireRun("completed", { exitCode: 0 }),
+        // A daemon that ignores execution ids ran this command; another run's process is tagged.
+        timeline: { items: [shStarted(4, "proc_reading", "run_other"), shStarted(7, "proc_own")] },
+        output: OUTPUT,
+      });
+
+      const result = await execWorkspace(makeCtx(client), WORKSPACE, ["sh", "-c", "cat record"]);
+      expect(result).toMatchObject({ stdout: "sealed record\n", stderr: "warning\n" });
+    });
   });
 
   it("REJECTS when the run did not complete (machinery broke, exit code untrustworthy)", async () => {

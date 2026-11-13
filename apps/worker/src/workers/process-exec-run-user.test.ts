@@ -21,6 +21,7 @@ import {
   daemonEvent,
   execAccepted,
   healthReport,
+  isChangesReading,
 } from "@sealant/telemetry/testing";
 import {
   SealantRuntime,
@@ -71,7 +72,7 @@ const world = (supports: readonly string[] = ["exec.user"]) => {
       return Stream.make(
         exited(
           `proc_${String(execs.length)}`,
-          last?.executionId === RUN ? 0 : 1,
+          last === undefined || isChangesReading(last) ? 1 : 0,
           last?.executionId,
         ),
       );
@@ -125,14 +126,16 @@ describe("produceExecRun as a user", () => {
   it("starts every command as the user, and reads the changes as the workspace's user", async () => {
     const w = world();
     await w.run("m4lice000");
-    const commands = w.execs.filter((options) => options.executionId === RUN);
+    const commands = w.execs.filter((options) => !isChangesReading(options));
     expect(commands.map((options) => [options.executable, options.user])).toEqual([
       ["id", "m4lice000"],
       ["touch", "m4lice000"],
     ]);
-    const reading = w.execs.filter((options) => options.executionId !== RUN);
+    const reading = w.execs.filter(isChangesReading);
     expect(reading).toHaveLength(1);
     expect(reading[0]?.user).toBeUndefined();
+    // Read as part of the run, so no other run's record takes it for its own.
+    expect(reading[0]?.executionId).toBe(RUN);
     expect(w.outcomes).toMatchObject([{ status: "completed", id: RUN, exitCode: 0 }]);
   });
 
