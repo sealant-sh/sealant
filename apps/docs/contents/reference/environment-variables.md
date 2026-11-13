@@ -385,14 +385,30 @@ is set.
 Boat runs workspaces as VMs in a Boat account. Every setting is optional, and an install can run
 Boat from the Boat keys it stores (`POST /v1/boat-accounts`) with none of the key settings below.
 
-| Variable                       | Process     | Default            | What it does                                                                                                                                                        |
-| ------------------------------ | ----------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SEALANT_BOAT_STATE_DIRECTORY` | worker      | unset (Boat off)   | Where Boat's image-build journals live; it must outlive the worker. Set, the worker launches Boat workspaces. Needs `SEALANT_CREDENTIALS_KEY`.                      |
-| `SEALANT_BOAT_API_KEY`         | API, worker | unset              | The install's own Boat key, or `SEALANT_BOAT_API_KEY_FILE` (a root-owned 0400 file). A workspace that names no stored account runs with it.                         |
-| `SEALANT_BOAT_ORGANIZATION`    | API, worker | unset              | The Boat organization the install's own key bills (id or name), sent as `X-Boat-Org` on every request with that key. Unset, a personal key bills its active wallet. |
-| `SEALANT_BOAT_DEPLOYMENT_ID`   | API, worker | made once by Core  | The `sealant-deployment` label of what the install's own key makes. Unset, Core makes one and keeps it in its database; an install that set it keeps it.            |
-| `SEALANT_BOAT_BUILDER_OWNER`   | worker      | made once by Core  | The `sealant-owner` of the saved images built with the install's own key. Same rule as the deployment label.                                                        |
-| `SEALANT_BOAT_GATEWAY_HOST_ID` | worker      | unset (no gateway) | With `SEALANT_BOAT_GATEWAY_RELAY_HOST` and `SEALANT_BOAT_GATEWAY_IMAGE`, the resource gateway: Boat workspaces reach their project's resources.                     |
+| Variable                            | Process     | Default            | What it does                                                                                                                                                        |
+| ----------------------------------- | ----------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_BOAT_STATE_DIRECTORY`      | worker      | unset (Boat off)   | Where Boat's image-build journals live; it must outlive the worker. Set, the worker launches Boat workspaces. Needs `SEALANT_CREDENTIALS_KEY`.                      |
+| `SEALANT_BOAT_API_KEY`              | API, worker | unset              | The install's own Boat key, or `SEALANT_BOAT_API_KEY_FILE` (a root-owned 0400 file). A workspace that names no stored account runs with it.                         |
+| `SEALANT_BOAT_ORGANIZATION`         | API, worker | unset              | The Boat organization the install's own key bills (id or name), sent as `X-Boat-Org` on every request with that key. Unset, a personal key bills its active wallet. |
+| `SEALANT_BOAT_DEPLOYMENT_ID`        | API, worker | made once by Core  | The `sealant-deployment` label of what the install's own key makes. Unset, Core makes one and keeps it in its database; an install that set it keeps it.            |
+| `SEALANT_BOAT_BUILDER_OWNER`        | worker      | made once by Core  | The `sealant-owner` of the saved images built with the install's own key. Same rule as the deployment label.                                                        |
+| `SEALANT_BOAT_GATEWAY_HOST_ID`      | worker      | unset (no gateway) | With `SEALANT_BOAT_GATEWAY_RELAY_HOST` and `SEALANT_BOAT_GATEWAY_IMAGE`, the resource gateway: Boat workspaces reach their project's resources.                     |
+| `SEALANT_BOAT_IMAGE_GC_ENABLED`     | worker      | `true`             | Remove, per Boat account, the saved images Core built that no workspace can use any more (see below). `false` keeps every image.                                    |
+| `SEALANT_BOAT_IMAGE_GC_INTERVAL_MS` | worker      | `3600000`          | How often that pass runs; the first runs a minute after the worker starts. At least `60000`.                                                                        |
+| `SEALANT_BOAT_IMAGE_RESUME_DAYS`    | worker      | `14`               | How long a stopped or failed Boat workspace keeps the image it would start again from.                                                                              |
+| `SEALANT_BOAT_IMAGE_MIN_AGE_HOURS`  | worker      | `24`               | An image something used (it became ready, or a run started or ended on it) more recently than this is kept.                                                         |
+
+Boat includes ten saved images (snapshots) per account and bills each one beyond that by the day. A
+worker that launches Boat workspaces removes, once an hour, each image it built in an account that
+no workspace can use any more. An image is kept while any of these holds: a run uses it (a running
+workspace, a standby, a stop in progress, a build in flight); it is the image a Boat workspace that
+can still start would look up (not archived, and running, queued, or stopped or failed within
+`SEALANT_BOAT_IMAGE_RESUME_DAYS`, its latest launch's spec planned with the running Core); a build
+for its owner or resource domain is queued or running; or something used it within
+`SEALANT_BOAT_IMAGE_MIN_AGE_HOURS`. Images Core did not build, another install's, and a full check's
+are never touched, and an account being removed is left to its removal. The key report's `snapshots`
+count shows the effect. An image removed and wanted again is built again on its next launch, which
+takes a few minutes.
 
 The API refuses a Boat create that no worker could serve, from what the workers report (see the HTTP
 reference's Boat accounts section). Each Boat key's report is refreshed once a day by the worker,

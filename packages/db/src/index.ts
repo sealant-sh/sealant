@@ -538,6 +538,8 @@ export {
   NativePublicationRepoLive,
   NativeCatalogStoreError,
   type NativePublicationRepoService,
+  type NativeRetentionPolicy,
+  type NativeStartableWorkspace,
 } from "./repositories/native-publications.js";
 
 export {

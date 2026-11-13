@@ -1277,6 +1277,49 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     boatAssembly === undefined ? undefined : setInterval(() => void refreshBoatKeys(), 3_600_000);
   boatKeyRefreshTimer?.unref();
 
+  // Boat image retention: each Boat account's saved images that no workspace can use any more are
+  // removed (`reapImages`), hourly by default, the first pass a minute after start. One at a time.
+  let boatImageRetentionRunning = false;
+  const runBoatImageRetention = async () => {
+    const reap = boatAssembly?.reapImages;
+    if (reap === undefined || boatImageRetentionRunning) return;
+    boatImageRetentionRunning = true;
+    try {
+      const now = Date.now();
+      const accounts = await reap({
+        stoppedSince: new Date(now - env.SEALANT_BOAT_IMAGE_RESUME_DAYS * 86_400_000),
+        unusedSince: new Date(now - env.SEALANT_BOAT_IMAGE_MIN_AGE_HOURS * 3_600_000),
+      });
+      for (const account of accounts) {
+        if (account.removed > 0)
+          console.log("Boat images no workspace can use were removed", {
+            account: account.accountId,
+            removed: account.removed,
+            kept: account.kept,
+          });
+        if (account.obligations.length > 0)
+          console.warn("Boat image removals remain; the next pass tries again", {
+            account: account.accountId,
+            entries: account.obligations,
+          });
+      }
+    } catch {
+      console.error("Boat image retention pass failed; the next pass tries again");
+    } finally {
+      boatImageRetentionRunning = false;
+    }
+  };
+  const boatImageRetentionEnabled =
+    boatAssembly?.reapImages !== undefined && env.SEALANT_BOAT_IMAGE_GC_ENABLED;
+  const boatImageRetentionBootTimer = boatImageRetentionEnabled
+    ? setTimeout(() => void runBoatImageRetention(), 60_000)
+    : undefined;
+  boatImageRetentionBootTimer?.unref();
+  const boatImageRetentionTimer = boatImageRetentionEnabled
+    ? setInterval(() => void runBoatImageRetention(), env.SEALANT_BOAT_IMAGE_GC_INTERVAL_MS)
+    : undefined;
+  boatImageRetentionTimer?.unref();
+
   resourceTickTimer.unref();
 
   return {
@@ -1297,6 +1340,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       if (boatSweepTimer !== undefined) clearInterval(boatSweepTimer);
       if (boatLaunchReportTimer !== undefined) clearInterval(boatLaunchReportTimer);
       if (boatKeyRefreshTimer !== undefined) clearInterval(boatKeyRefreshTimer);
+      if (boatImageRetentionBootTimer !== undefined) clearTimeout(boatImageRetentionBootTimer);
+      if (boatImageRetentionTimer !== undefined) clearInterval(boatImageRetentionTimer);
       // Before the Boat runtime goes: a delivery in flight finishes its configuration on it.
       await boatLinkConsumer?.cancel();
       await boatAssembly?.dispose();

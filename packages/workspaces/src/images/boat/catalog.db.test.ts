@@ -106,13 +106,14 @@ const throughCatalog = <A, E>(
   db: DB,
   fixture: Pick<Awaited<ReturnType<typeof nativeBuilderFixture>>, "builder">,
   run: (catalog: BoatNativeCatalogService) => Effect.Effect<A, E>,
+  deploymentId = "local-stage2a",
 ) =>
   Effect.gen(function* () {
     const catalog = yield* BoatNativeCatalog;
     return yield* run(catalog);
   }).pipe(
     Effect.provide(
-      boatNativeCatalogLayer({ builder: fixture.builder, deploymentId: "local-stage2a" }).pipe(
+      boatNativeCatalogLayer({ builder: fixture.builder, deploymentId }).pipe(
         Layer.provide(Layer.succeed(SealantDB, db)),
       ),
     ),
@@ -728,7 +729,7 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
     ),
   );
   it.live(
-    "keeps ten recent plans and indefinite retained/unknown pins, then fences pin versus retirement",
+    "keeps wanted, recently used and pinned (retained/unknown too) images, then fences pin versus retirement",
     () =>
       test((repo, db) =>
         Effect.gen(function* () {
@@ -772,7 +773,22 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
           yield* ageNativePublication(db, oldest.id);
           yield* ageNativePublication(db, other.id);
           yield* ageNativePublication(db, newest.id);
+          const newestRecord = yield* repo.get(newest.id);
+          if (!newestRecord) throw new Error("missing publication");
+          // The worker's clock, injected: a day on, nothing has used any of these since.
+          const later = { wanted: [], unusedSince: new Date(Date.now() + 86_400_000) };
+          // Without a policy a ready image is never retired; a wanted one is kept whatever its age.
           expect(yield* repo.retire(newest.id)).toBeUndefined();
+          expect(
+            yield* repo.retire(newest.id, { ...later, wanted: [newestRecord.ownership.key] }),
+          ).toBeUndefined();
+          // Released a moment ago: used since an hour back, so kept.
+          expect(
+            yield* repo.retire(other.id, {
+              wanted: [],
+              unusedSince: new Date(Date.now() - 3_600_000),
+            }),
+          ).toBeUndefined();
           const record = yield* repo.get(oldest.id);
           if (!record) throw new Error("missing publication");
           const retained = yield* consumer(db, f.owner);
@@ -781,13 +797,16 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
           yield* repo.reserve(record.ownership.key, unresolved);
           yield* repo.markConsumer(retained, oldest.id, "retained");
           yield* repo.markConsumer(unresolved, oldest.id, "unknown");
-          expect(yield* repo.retire(oldest.id)).toBeUndefined();
+          expect(yield* repo.retire(oldest.id, later)).toBeUndefined();
           yield* repo.release(retained, oldest.id);
-          expect(yield* repo.retire(oldest.id)).toBeUndefined();
+          expect(yield* repo.retire(oldest.id, later)).toBeUndefined();
           yield* repo.release(unresolved, oldest.id);
           const racer = yield* consumer(db, f.owner);
           const [pinResult, retired] = yield* Effect.all(
-            [Effect.result(repo.reserve(record.ownership.key, racer)), repo.retire(oldest.id)],
+            [
+              Effect.result(repo.reserve(record.ownership.key, racer)),
+              repo.retire(oldest.id, later),
+            ],
             { concurrency: "unbounded" },
           );
           if (retired === undefined) {
@@ -797,11 +816,13 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
             expect(Result.isFailure(pinResult)).toBe(true);
             expect(retired.state).toBe("retiring");
           }
-          const retiring = yield* repo.retire(oldest.id);
+          const retiring = yield* repo.retire(oldest.id, later);
           expect(retiring?.state).toBe("retiring");
+          // A removal under way is resumed without a policy.
+          expect((yield* repo.retire(oldest.id))?.state).toBe("retiring");
           expect(
             yield* Effect.flip(repo.reserve(record.ownership.key, yield* consumer(db, f.owner))),
-          ).toMatchObject({ code: "consumer-conflict" });
+          ).toMatchObject({ code: "publication-removing" });
           const removal = yield* repo.claim(oldest.id, "remove", 60000);
           if (!removal || retiring?.publication === null || retiring?.publication === undefined)
             throw new Error("missing removal claim");
@@ -1055,90 +1076,106 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
     () =>
       test((repo, db) =>
         Effect.gen(function* () {
-          const f = yield* prepare(db);
-          yield* throughCatalog(db, f, (catalog) =>
-            Effect.gen(function* () {
-              const entries: Array<{ id: string }> = [];
-              for (let index = 0; index < 12; index++) {
-                const spec = {
-                  ...f.spec,
-                  lifecycle: {
-                    ...f.spec.lifecycle,
-                    setup: [{ run: `echo catalog-${index}`, shell: "bash" as const }],
-                  },
-                };
-                const pin = yield* consumer(db, f.owner);
-                const ready = yield* catalog.acquire({ scope: f.key.scope, spec, consumer: pin });
-                yield* catalog.release(pin, ready.publicationId);
-                entries.push({ id: ready.publicationId });
-              }
-              let after: string | undefined;
-              const visited: string[] = [];
-              do {
-                const page = yield* catalog.reap({
-                  scope: f.key.scope,
-                  limit: 5,
-                  ...(after === undefined ? {} : { after }),
+          // Its own deployment: a retention pass reads every image of its account.
+          const deploymentId = `local-reap-${randomUUID().slice(0, 8)}`;
+          const prepared = yield* prepare(db);
+          const f = { ...prepared, key: { ...prepared.key, deploymentId } };
+          // The worker's clock, injected: `kept` reads every image as used since; `unused`, a
+          // day on, reads none as used. No workspace starts here, so none is wanted.
+          const kept = { stoppedSince: new Date(0), unusedSince: new Date(0) };
+          const unused = {
+            stoppedSince: new Date(0),
+            unusedSince: new Date(Date.now() + 86_400_000),
+          };
+          yield* throughCatalog(
+            db,
+            f,
+            (catalog) =>
+              Effect.gen(function* () {
+                const entries: Array<{ id: string }> = [];
+                for (let index = 0; index < 12; index++) {
+                  const spec = {
+                    ...f.spec,
+                    lifecycle: {
+                      ...f.spec.lifecycle,
+                      setup: [{ run: `echo catalog-${index}`, shell: "bash" as const }],
+                    },
+                  };
+                  const pin = yield* consumer(db, f.owner);
+                  const ready = yield* catalog.acquire({ scope: f.key.scope, spec, consumer: pin });
+                  yield* catalog.release(pin, ready.publicationId);
+                  entries.push({ id: ready.publicationId });
+                }
+                let after: string | undefined;
+                const visited: string[] = [];
+                do {
+                  const page = yield* catalog.reap({
+                    ...kept,
+                    limit: 5,
+                    ...(after === undefined ? {} : { after }),
+                  });
+                  expect(page.entries.length).toBeLessThanOrEqual(5);
+                  visited.push(...page.entries.map((entry) => entry.id));
+                  after = page.next;
+                } while (after !== undefined);
+                expect(visited.toSorted()).toEqual(entries.map((entry) => entry.id).toSorted());
+                const oldest = entries[0],
+                  other = entries[1];
+                if (!oldest || !other) throw new Error("missing publications");
+                yield* ageNativePublication(db, oldest.id);
+                yield* ageNativePublication(db, other.id);
+                const record = yield* repo.get(oldest.id);
+                if (!record || record.publication === null) throw new Error("missing publication");
+                const artifact = record.publication.snapshot;
+                const recovery = yield* consumer(db, f.owner);
+                yield* repo.reserve(record.ownership.key, recovery);
+                yield* catalog.markConsumer(recovery, oldest.id, "retained");
+                expect((yield* catalog.reap({ ...unused, limit: 200 })).entries).toContainEqual({
+                  id: oldest.id,
+                  outcome: "skipped",
+                  code: "retained",
                 });
-                expect(page.entries.length).toBeLessThanOrEqual(5);
-                visited.push(...page.entries.map((entry) => entry.id));
-                after = page.next;
-              } while (after !== undefined);
-              expect(visited.toSorted()).toEqual(entries.map((entry) => entry.id).toSorted());
-              const oldest = entries[0],
-                other = entries[1];
-              if (!oldest || !other) throw new Error("missing publications");
-              yield* ageNativePublication(db, oldest.id);
-              yield* ageNativePublication(db, other.id);
-              const record = yield* repo.get(oldest.id);
-              if (!record || record.publication === null) throw new Error("missing publication");
-              const artifact = record.publication.snapshot;
-              const recovery = yield* consumer(db, f.owner);
-              yield* repo.reserve(record.ownership.key, recovery);
-              yield* catalog.markConsumer(recovery, oldest.id, "retained");
-              expect(
-                (yield* catalog.reap({ scope: f.key.scope, limit: 200 })).entries,
-              ).toContainEqual({ id: oldest.id, outcome: "skipped", code: "retained" });
-              yield* catalog.markConsumer(recovery, oldest.id, "unknown");
-              expect(yield* repo.retire(oldest.id)).toBeUndefined();
-              yield* catalog.release(recovery, oldest.id);
-              f.failSnapshotRemoval();
-              expect(
-                (yield* catalog.reap({ scope: f.key.scope, limit: 200 })).entries,
-              ).toContainEqual({
-                id: oldest.id,
-                outcome: "obligation",
-                // Boat answered 503: its kind, not a catch-all.
-                code: "native-boat-no-answer",
-              });
-              expect((yield* repo.get(oldest.id))?.state).toBe("quarantined");
-              expect(yield* repo.claim(oldest.id, "reconcile", 60000)).toBeUndefined();
-              expect(
-                yield* Effect.flip(
-                  repo.reserve(record.ownership.key, yield* consumer(db, f.owner)),
-                ),
-              ).toMatchObject({ code: "consumer-conflict" });
-              expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
-                id: record.ownership.buildId,
-                outcome: "updated",
-                code: "removed",
-              });
-              expect((yield* repo.get(oldest.id))?.state).toBe("removed");
-              f.replaceSnapshot(artifact.identity.name);
-              expect(yield* Effect.promise(() => f.builder.remove(artifact))).toEqual({
-                ok: true,
-                value: "absent",
-              });
-              const deletions = f.mutations.filter((entry) =>
-                entry.startsWith("DELETE /api/v1/saved-snapshots/"),
-              );
-              expect(
-                deletions.filter((entry) => entry.endsWith(artifact.identity.name)),
-              ).toHaveLength(2);
-              expect(
-                deletions.every((entry) => entry.startsWith("DELETE /api/v1/saved-snapshots/")),
-              ).toBe(true);
-            }),
+                yield* catalog.markConsumer(recovery, oldest.id, "unknown");
+                expect(
+                  yield* repo.retire(oldest.id, { wanted: [], unusedSince: unused.unusedSince }),
+                ).toBeUndefined();
+                yield* catalog.release(recovery, oldest.id);
+                f.failSnapshotRemoval();
+                expect((yield* catalog.reap({ ...unused, limit: 200 })).entries).toContainEqual({
+                  id: oldest.id,
+                  outcome: "obligation",
+                  // Boat answered 503: its kind, not a catch-all.
+                  code: "native-boat-no-answer",
+                });
+                expect((yield* repo.get(oldest.id))?.state).toBe("quarantined");
+                expect(yield* repo.claim(oldest.id, "reconcile", 60000)).toBeUndefined();
+                expect(
+                  yield* Effect.flip(
+                    repo.reserve(record.ownership.key, yield* consumer(db, f.owner)),
+                  ),
+                ).toMatchObject({ code: "publication-removing" });
+                expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
+                  id: record.ownership.buildId,
+                  outcome: "updated",
+                  code: "removed",
+                });
+                expect((yield* repo.get(oldest.id))?.state).toBe("removed");
+                f.replaceSnapshot(artifact.identity.name);
+                expect(yield* Effect.promise(() => f.builder.remove(artifact))).toEqual({
+                  ok: true,
+                  value: "absent",
+                });
+                const deletions = f.mutations.filter((entry) =>
+                  entry.startsWith("DELETE /api/v1/saved-snapshots/"),
+                );
+                expect(
+                  deletions.filter((entry) => entry.endsWith(artifact.identity.name)),
+                ).toHaveLength(2);
+                expect(
+                  deletions.every((entry) => entry.startsWith("DELETE /api/v1/saved-snapshots/")),
+                ).toBe(true);
+              }),
+            deploymentId,
           );
         }),
       ),
