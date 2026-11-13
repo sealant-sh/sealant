@@ -25,6 +25,20 @@ version Boat restores. It installs `curl`, `xz-utils`, `ca-certificates`, `procp
 directly on the VM's root as root, Nix bootstrap first for the nix family. The agent is enabled,
 never started, on the build VM.
 
+The agent starts sealantd with its own environment (the unit's FHS `PATH`,
+`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) under the boot env the launch pushes
+(`nativeLaunchBootEntries`), so that `PATH` is the one of sealantd and of every session and command
+it starts. On a Nix image the launch adds the image's own `PATH`, the one its project install ran
+with (`nativeImagePath`):
+`/usr/local/bin:/nix/var/nix/profiles/default/bin:/usr/sbin:/usr/bin:/sbin:/bin`. Without it the
+profile's tools were off sealantd's `PATH`, and a session whose argv is a bare `zsh` (Mend's
+interactive shell) failed to start (`zsh: No such file or directory`): Ubuntu has no zsh, the
+profile does (SLNT-786). The agent itself keeps the unit's `PATH`, so its own `ip` and `wg` stay
+Ubuntu's; the wrappers it starts sealantd in, which run with sealantd's environment, are named by
+absolute path (`/usr/bin/systemd-run`, `/usr/bin/unshare`). A Nix container gets the same from its
+image `PATH`. An Ubuntu launch names no `PATH`. `/etc/sealant/native-boot.json` still records the
+image's boot entries; nothing reads it.
+
 When the blueprint asks for the workspace's own Docker, the recipe runs `download-docker.sh` (the
 MicroVM image's installer, x86_64 here), the person layout makes the `docker` group, and a drop-in
 turns the agent's Docker service on (`SEALANT_MICROVM_DOCKER_CAPABLE=1`, a `198.18.1.1/24` bridge,

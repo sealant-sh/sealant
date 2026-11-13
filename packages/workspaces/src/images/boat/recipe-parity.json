@@ -1,0 +1,194 @@
+[
+  {
+    "name": "ubuntu/bash/plain/codex",
+    "sha256": "8285138b0430d4bc92d925389a629f0c55550cdb928e2caedd23a3a207f9cebd"
+  },
+  {
+    "name": "ubuntu/bash/plain/claude-code",
+    "sha256": "8285138b0430d4bc92d925389a629f0c55550cdb928e2caedd23a3a207f9cebd"
+  },
+  {
+    "name": "ubuntu/bash/plain/opencode",
+    "sha256": "8285138b0430d4bc92d925389a629f0c55550cdb928e2caedd23a3a207f9cebd"
+  },
+  {
+    "name": "ubuntu/bash/plain/pi",
+    "sha256": "8285138b0430d4bc92d925389a629f0c55550cdb928e2caedd23a3a207f9cebd"
+  },
+  {
+    "name": "ubuntu/bash/docker/codex",
+    "sha256": "141cadbed212a39ed89a87e9df2f964ce11d867332d2dddf8edd3164298a0a67"
+  },
+  {
+    "name": "ubuntu/bash/docker/claude-code",
+    "sha256": "141cadbed212a39ed89a87e9df2f964ce11d867332d2dddf8edd3164298a0a67"
+  },
+  {
+    "name": "ubuntu/bash/docker/opencode",
+    "sha256": "141cadbed212a39ed89a87e9df2f964ce11d867332d2dddf8edd3164298a0a67"
+  },
+  {
+    "name": "ubuntu/bash/docker/pi",
+    "sha256": "141cadbed212a39ed89a87e9df2f964ce11d867332d2dddf8edd3164298a0a67"
+  },
+  {
+    "name": "ubuntu/zsh/plain/codex",
+    "sha256": "2b71ec4cb03c0dfa9306672b89c7474cd1fa4da22f09a4c1c63e397dc033572c"
+  },
+  {
+    "name": "ubuntu/zsh/plain/claude-code",
+    "sha256": "2b71ec4cb03c0dfa9306672b89c7474cd1fa4da22f09a4c1c63e397dc033572c"
+  },
+  {
+    "name": "ubuntu/zsh/plain/opencode",
+    "sha256": "2b71ec4cb03c0dfa9306672b89c7474cd1fa4da22f09a4c1c63e397dc033572c"
+  },
+  {
+    "name": "ubuntu/zsh/plain/pi",
+    "sha256": "2b71ec4cb03c0dfa9306672b89c7474cd1fa4da22f09a4c1c63e397dc033572c"
+  },
+  {
+    "name": "ubuntu/zsh/docker/codex",
+    "sha256": "5e69f472ce5266667e1d2f54bb5ef0ccfc135ba38abbf949bc5aa4131a3da530"
+  },
+  {
+    "name": "ubuntu/zsh/docker/claude-code",
+    "sha256": "5e69f472ce5266667e1d2f54bb5ef0ccfc135ba38abbf949bc5aa4131a3da530"
+  },
+  {
+    "name": "ubuntu/zsh/docker/opencode",
+    "sha256": "5e69f472ce5266667e1d2f54bb5ef0ccfc135ba38abbf949bc5aa4131a3da530"
+  },
+  {
+    "name": "ubuntu/zsh/docker/pi",
+    "sha256": "5e69f472ce5266667e1d2f54bb5ef0ccfc135ba38abbf949bc5aa4131a3da530"
+  },
+  {
+    "name": "ubuntu/fish/plain/codex",
+    "sha256": "df20e412b36ac7f3b3f7efbe1d6131c9dd6a82f6da83322d4e32f76e9b11e40e"
+  },
+  {
+    "name": "ubuntu/fish/plain/claude-code",
+    "sha256": "df20e412b36ac7f3b3f7efbe1d6131c9dd6a82f6da83322d4e32f76e9b11e40e"
+  },
+  {
+    "name": "ubuntu/fish/plain/opencode",
+    "sha256": "df20e412b36ac7f3b3f7efbe1d6131c9dd6a82f6da83322d4e32f76e9b11e40e"
+  },
+  {
+    "name": "ubuntu/fish/plain/pi",
+    "sha256": "df20e412b36ac7f3b3f7efbe1d6131c9dd6a82f6da83322d4e32f76e9b11e40e"
+  },
+  {
+    "name": "ubuntu/fish/docker/codex",
+    "sha256": "0e0118baefdd00bc26ebcc69f4664bb692921a70c19fc11459902f6493885cec"
+  },
+  {
+    "name": "ubuntu/fish/docker/claude-code",
+    "sha256": "0e0118baefdd00bc26ebcc69f4664bb692921a70c19fc11459902f6493885cec"
+  },
+  {
+    "name": "ubuntu/fish/docker/opencode",
+    "sha256": "0e0118baefdd00bc26ebcc69f4664bb692921a70c19fc11459902f6493885cec"
+  },
+  {
+    "name": "ubuntu/fish/docker/pi",
+    "sha256": "0e0118baefdd00bc26ebcc69f4664bb692921a70c19fc11459902f6493885cec"
+  },
+  {
+    "name": "nix/bash/plain/codex",
+    "sha256": "f851eef162959d07edd914a982fabda5291334f5cbf8f2ba147b0c31d3534e6f"
+  },
+  {
+    "name": "nix/bash/plain/claude-code",
+    "sha256": "f851eef162959d07edd914a982fabda5291334f5cbf8f2ba147b0c31d3534e6f"
+  },
+  {
+    "name": "nix/bash/plain/opencode",
+    "sha256": "f851eef162959d07edd914a982fabda5291334f5cbf8f2ba147b0c31d3534e6f"
+  },
+  {
+    "name": "nix/bash/plain/pi",
+    "sha256": "f851eef162959d07edd914a982fabda5291334f5cbf8f2ba147b0c31d3534e6f"
+  },
+  {
+    "name": "nix/bash/docker/codex",
+    "sha256": "62d0a8557046fa9629b3d74718484b9e571c89a03d98c28b31d272d2d75b42f7"
+  },
+  {
+    "name": "nix/bash/docker/claude-code",
+    "sha256": "62d0a8557046fa9629b3d74718484b9e571c89a03d98c28b31d272d2d75b42f7"
+  },
+  {
+    "name": "nix/bash/docker/opencode",
+    "sha256": "62d0a8557046fa9629b3d74718484b9e571c89a03d98c28b31d272d2d75b42f7"
+  },
+  {
+    "name": "nix/bash/docker/pi",
+    "sha256": "62d0a8557046fa9629b3d74718484b9e571c89a03d98c28b31d272d2d75b42f7"
+  },
+  {
+    "name": "nix/zsh/plain/codex",
+    "sha256": "266745727dffeb3f4ad53dd9e03a81aee4682e4bb0a3b5143bf80799867c63c7"
+  },
+  {
+    "name": "nix/zsh/plain/claude-code",
+    "sha256": "266745727dffeb3f4ad53dd9e03a81aee4682e4bb0a3b5143bf80799867c63c7"
+  },
+  {
+    "name": "nix/zsh/plain/opencode",
+    "sha256": "266745727dffeb3f4ad53dd9e03a81aee4682e4bb0a3b5143bf80799867c63c7"
+  },
+  {
+    "name": "nix/zsh/plain/pi",
+    "sha256": "266745727dffeb3f4ad53dd9e03a81aee4682e4bb0a3b5143bf80799867c63c7"
+  },
+  {
+    "name": "nix/zsh/docker/codex",
+    "sha256": "e6495487dcdea4988687ce6aaa857e36ffb616033847f715437d0d35e562d9d3"
+  },
+  {
+    "name": "nix/zsh/docker/claude-code",
+    "sha256": "e6495487dcdea4988687ce6aaa857e36ffb616033847f715437d0d35e562d9d3"
+  },
+  {
+    "name": "nix/zsh/docker/opencode",
+    "sha256": "e6495487dcdea4988687ce6aaa857e36ffb616033847f715437d0d35e562d9d3"
+  },
+  {
+    "name": "nix/zsh/docker/pi",
+    "sha256": "e6495487dcdea4988687ce6aaa857e36ffb616033847f715437d0d35e562d9d3"
+  },
+  {
+    "name": "nix/fish/plain/codex",
+    "sha256": "00888d07f473d7e8d59ac7b824cebc1a9316448616dfa2adb4dcc06d6428844b"
+  },
+  {
+    "name": "nix/fish/plain/claude-code",
+    "sha256": "00888d07f473d7e8d59ac7b824cebc1a9316448616dfa2adb4dcc06d6428844b"
+  },
+  {
+    "name": "nix/fish/plain/opencode",
+    "sha256": "00888d07f473d7e8d59ac7b824cebc1a9316448616dfa2adb4dcc06d6428844b"
+  },
+  {
+    "name": "nix/fish/plain/pi",
+    "sha256": "00888d07f473d7e8d59ac7b824cebc1a9316448616dfa2adb4dcc06d6428844b"
+  },
+  {
+    "name": "nix/fish/docker/codex",
+    "sha256": "5d69d241565121892067bca1e3f2ea3923fed56e44c45473b9ccb29fcfbd398b"
+  },
+  {
+    "name": "nix/fish/docker/claude-code",
+    "sha256": "5d69d241565121892067bca1e3f2ea3923fed56e44c45473b9ccb29fcfbd398b"
+  },
+  {
+    "name": "nix/fish/docker/opencode",
+    "sha256": "5d69d241565121892067bca1e3f2ea3923fed56e44c45473b9ccb29fcfbd398b"
+  },
+  {
+    "name": "nix/fish/docker/pi",
+    "sha256": "5d69d241565121892067bca1e3f2ea3923fed56e44c45473b9ccb29fcfbd398b"
+  }
+]

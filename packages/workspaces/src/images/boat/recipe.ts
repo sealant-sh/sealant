@@ -36,6 +36,30 @@ export const BOAT_AGENT_UNIT_PATH = "/etc/systemd/system/sealant-agent.service";
 export const BOAT_AGENT_DOCKER_DROPIN_PATH =
   "/etc/systemd/system/sealant-agent.service.d/docker.conf";
 
+/**
+ * The `PATH` a native image declares: the one its project install runs with, the Nix profile
+ * first on a Nix image (Nix runs on Boat's Ubuntu base, whose own `PATH` does not name it). A Nix
+ * container gets the same from its image `PATH`.
+ */
+export const nativeImagePath = (family: "ubuntu" | "nix"): string =>
+  `/usr/local/bin:${family === "nix" ? `${NIX_PROFILE}/bin:` : ""}/usr/sbin:/usr/bin:/sbin:/bin`;
+
+/**
+ * The boot environment a launch pushes to the agent, which starts sealantd with it over its own
+ * environment: the shared installation's entries and, on a Nix image, the image's `PATH`. The
+ * agent unit's `PATH` is Ubuntu's, so without it sealantd and every session it starts would not
+ * find the profile's tools, and a session whose argv is a bare `zsh` (Mend's interactive shell)
+ * could not start. An Ubuntu launch keeps the unit's `PATH`, as it always has.
+ */
+export const nativeLaunchBootEntries = (
+  spec: WorkspaceBlueprint,
+): ReadonlyArray<readonly [string, string]> => {
+  const shared = nativeWorkspaceInstallation(spec);
+  return shared.family === "nix"
+    ? [...shared.bootEntries, ["PATH", nativeImagePath("nix")]]
+    : shared.bootEntries;
+};
+
 /** Installed files carry their own bytes and checksum; no execution depends on an untracked file. */
 export interface NativeRecipeFile {
   readonly path: string;
@@ -167,7 +191,7 @@ export const createNativeRecipe = async (
   try {
     const shared = nativeWorkspaceInstallation(spec);
     const dockerService = spec.tooling.services?.docker?.enabled === true;
-    const path = `/usr/local/bin:${shared.family === "nix" ? `${NIX_PROFILE}/bin:` : ""}/usr/sbin:/usr/bin:/sbin:/bin`;
+    const path = nativeImagePath(shared.family);
     const bootEntries = [...shared.bootEntries, ["PATH", path] as const];
     const loaded = await readNativeAssets(options.assetsDirectory);
     if (!loaded.ok) return loaded;
