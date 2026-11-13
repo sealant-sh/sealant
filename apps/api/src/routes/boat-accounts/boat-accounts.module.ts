@@ -19,12 +19,13 @@ import {
   type BoatInstallKeyWire,
   type BoatFailure,
   type BoatKeyReport,
+  boatKeyProofSchema,
   boatKeyReportSchema,
   type CreateBoatAccountRequest,
   type RotateBoatAccountKeyRequest,
 } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
-import { BoatAccountRepo, type BoatAccountRecord } from "@sealant/db";
+import { BoatAccountRepo, BoatKeyProofRepo, type BoatAccountRecord } from "@sealant/db";
 import {
   BoatSecret,
   boatOrganizationSchema,
@@ -33,6 +34,7 @@ import {
   checkBoatKey,
   boatReportCanStart,
   observeBoatKey,
+  proveBoatKey,
   type BoatKeyCheck,
 } from "@sealant/workspaces";
 import { Effect, Option, Schema } from "effect";
@@ -245,7 +247,20 @@ export const listBoatAccounts = () =>
       .reports()
       .pipe(Effect.mapError(internal("Failed to read the Boat keys' reports.")));
     const reportOf = (account: string) => storedReport(reports.get(account)?.report);
-    return { items: accounts.map((account) => toWire(account, reportOf(account.id))) };
+    // Each account's last full check, beside its report.
+    const proofs = yield* (yield* BoatKeyProofRepo)
+      .latest()
+      .pipe(Effect.mapError(internal("Failed to read the Boat accounts' full checks.")));
+    const proofOf = (account: string) => {
+      const decoded = decodeProof(proofs.get(account)?.result);
+      return Option.isSome(decoded) ? decoded.value : null;
+    };
+    return {
+      items: accounts.map((account) => ({
+        ...toWire(account, reportOf(account.id)),
+        lastProof: proofOf(account.id),
+      })),
+    };
   });
 
 /** An install that runs Boat from stored keys alone has no key of its own to show or check. */
@@ -288,6 +303,55 @@ const recheck = (credential: BoatSecret, organization: string | null, account: s
       return yield* unverified(observed.failure, "the last report was kept.");
     yield* saveReport(account, observed.report);
     return observed.report;
+  });
+
+/** A stored account not removed, and its key opened; never the key's value in an error. */
+const openStoredAccount = (boatAccountId: string) =>
+  Effect.gen(function* () {
+    const repo = yield* BoatAccountRepo;
+    const account = yield* repo
+      .get(boatAccountId)
+      .pipe(Effect.mapError(internal("Failed to read the Boat account.")));
+    if (account === undefined || account.removedAt !== null) return yield* notFound(boatAccountId);
+    const sealed = yield* repo
+      .sealedKey(boatAccountId)
+      .pipe(Effect.mapError(internal("Failed to read the Boat account.")));
+    if (sealed === undefined) return yield* notFound(boatAccountId);
+    const opened = yield* Effect.flatMap(CredentialCipher, (cipher) =>
+      cipher.decrypt(sealed.sealedKey),
+    ).pipe(Effect.mapError(internal("Failed to open the Boat account's key.")));
+    const parsed = BoatSecret.parse(opened);
+    if (!parsed.ok)
+      return yield* new BoatAccountInternalServerError({
+        message: "The Boat account's stored key is not a Boat key.",
+      });
+    return { account, credential: parsed.value };
+  });
+
+const decodeProof = Schema.decodeUnknownOption(boatKeyProofSchema);
+
+/**
+ * `POST /v1/boat-accounts/:id/prove`: a full check of a stored account's key with a throwaway VM
+ * (`proveBoatKey`): started, used, and deleted with the snapshot it saved, on every path. One per
+ * account at a time; the result is kept for `list` (`lastProof`).
+ */
+export const proveBoatAccount = (boatAccountId: string) =>
+  Effect.gen(function* () {
+    yield* requireBoatAccounts;
+    const { account, credential } = yield* openStoredAccount(boatAccountId);
+    if (account.removalRequestedAt !== null) return yield* removing(boatAccountId);
+    const client = yield* openClient(credential, account.organization);
+    const proofs = yield* BoatKeyProofRepo;
+    const proven = yield* Effect.tryPromise({
+      try: () => proveBoatKey({ proofs, account: account.id, client }),
+      catch: internal("Failed to record the Boat account's full check."),
+    });
+    if (proven.kind === "running")
+      return yield* new BoatAccountConflictError({
+        code: "boat-proof-running",
+        message: `A full check of Boat account ${boatAccountId} is already running, or what it made in Boat is still being removed; try again once it has finished.`,
+      });
+    return proven.proof;
   });
 
 /** `POST /v1/boat-accounts/:id/check`: checks a stored account's key again (read-only). */

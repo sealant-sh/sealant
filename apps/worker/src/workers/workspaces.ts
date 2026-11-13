@@ -1154,6 +1154,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           });
         });
       }
+      // What an interrupted full check of a Boat key left in Boat is deleted here, once its
+      // claim has passed.
+      const proofs = await boatAssembly.sweepKeyProofs().catch(() => []);
+      const pending = proofs.filter((each) => each.outcome === "pending");
+      if (pending.length > 0)
+        console.warn("Boat full checks still hold something in Boat; the next tick tries again", {
+          proofs: pending.map((each) => each.proofId),
+        });
       const removals = await boatAssembly.reconcileRemovals?.();
       for (const removal of removals ?? [])
         if (removal.outcome === "removed")

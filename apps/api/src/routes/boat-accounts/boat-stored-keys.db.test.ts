@@ -10,6 +10,8 @@ import { CredentialCipher, type CredentialCipherService } from "@sealant/credent
 import {
   BoatAccountRepo,
   BoatAccountRepoLive,
+  BoatKeyProofRepo,
+  BoatKeyProofRepoLive,
   createSealantDB,
   SealantDB,
   type DB,
@@ -75,12 +77,16 @@ describe.skipIf(DATABASE_URL === undefined)(
     // Nothing is overridden but how a key reaches Boat: the install's own key is the env's (none),
     // and whether Boat launches is what the workers reported.
     const run = <A, E>(
-      effect: Effect.Effect<A, E, BoatAccountRepo | CredentialCipher | SealantDB>,
+      effect: Effect.Effect<
+        A,
+        E,
+        BoatAccountRepo | BoatKeyProofRepo | CredentialCipher | SealantDB
+      >,
     ) =>
       Effect.runPromise(
         effect.pipe(
           Effect.provide(
-            BoatAccountRepoLive.pipe(
+            Layer.merge(BoatAccountRepoLive, BoatKeyProofRepoLive).pipe(
               Layer.provideMerge(Layer.succeed(SealantDB, db)),
               Layer.provideMerge(Layer.succeed(CredentialCipher, cipher)),
             ),
@@ -98,7 +104,11 @@ describe.skipIf(DATABASE_URL === undefined)(
         ),
       );
     const refusal = <A, E>(
-      effect: Effect.Effect<A, E, BoatAccountRepo | CredentialCipher | SealantDB>,
+      effect: Effect.Effect<
+        A,
+        E,
+        BoatAccountRepo | BoatKeyProofRepo | CredentialCipher | SealantDB
+      >,
     ) => run(Effect.flip(effect));
     const report = (input: {
       readonly worker: string;
@@ -202,6 +212,37 @@ describe.skipIf(DATABASE_URL === undefined)(
           boatCreate({ boatAccountId: created.boatAccountId, resources: "none" }),
         );
         expect(gone.message).toContain("stores no Boat account");
+      }),
+    );
+
+    it(
+      "proves a stored account with a throwaway VM, keeps the result for list, and leaves nothing in Boat",
+      { timeout: 60_000 },
+      fresh(async () => {
+        const created = await run(
+          routes.createBoatAccount({ label: "Org P", apiKey: ACCOUNT_KEY }),
+        );
+        const proof = await run(routes.proveBoatAccount(created.boatAccountId));
+        expect(proof).toMatchObject({
+          outcome: "passed",
+          starts: 1,
+          leftBehind: { vm: null, snapshot: null },
+        });
+        const listed = await run(routes.listBoatAccounts());
+        expect(
+          listed.items.find((item) => item.boatAccountId === created.boatAccountId)?.lastProof,
+        ).toMatchObject({ proofId: proof.proofId });
+        expect(
+          [...boat.sandboxes.values()].filter(
+            (sandbox) => sandbox.labels["sealant-key-proof"] !== undefined && !sandbox.withdrawn,
+          ),
+        ).toEqual([]);
+        expect(
+          [...boat.snapshots.keys()].filter((name) => name.startsWith("sealant-key-proof-")),
+        ).toEqual([]);
+        expect(await refusal(routes.proveBoatAccount(randomUUID()))).toMatchObject({
+          _tag: "BoatAccountNotFoundError",
+        });
       }),
     );
 

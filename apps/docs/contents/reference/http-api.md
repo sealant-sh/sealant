@@ -209,6 +209,22 @@ Core needs `exec`, `file.write`, `host`, `sandbox.create`, `sandbox.delete`, `sa
 `sandbox.resume`, `sandbox.stop`, `snapshot.read` and `snapshot.write`. `sandbox.delete-own` is not
 enough: after a rotation the new key deletes VMs the old key created.
 
+- `POST /v1/boat-accounts/:boatAccountId/prove` runs a full check of a stored account's key, since
+  Boat lets no key read all of its own permissions and has no dry run. Core starts the smallest VM
+  in the account, runs a command in it, publishes a port and saves a snapshot, then deletes the
+  snapshot and the VM. It answers
+  `{ proofId, startedAt, finishedAt, outcome, steps, starts, leftBehind: { vm, snapshot } }`:
+  `outcome` is `passed`, `refused` or `interrupted`; each of the six steps (`start-vm`,
+  `run-command`, `publish-port`, `save-snapshot`, `delete-snapshot`, `delete-vm`) is `passed`,
+  `refused` (with Boat's reason in `boat`), `no-answer` or `not-reached`. `starts` is how many VM
+  starts it asked Boat for (0 or 1). `leftBehind` names what Boat may still hold of it when the
+  answer is given; the worker's sweep removes it shortly after. Leaving nothing behind is how the
+  check is built. It is recorded before anything is created, with what may be created. Whatever was
+  issued is deleted when the check ends. A check that stops halfway is taken over by the worker's
+  sweep, which deletes its VM (by id, or found by its label) and its snapshot (by name). The VM's
+  own lifetime in Boat is 15 minutes. A second check of the same account while one runs, or while
+  what it left is being removed, answers `409` `boat-proof-running`. `GET /v1/boat-accounts` carries
+  each account's last check as `lastProof` (null until it is proven). It takes a minute or more.
 - `DELETE /v1/boat-accounts/:boatAccountId` is refused while the account has runs whose VMs Boat may
   still hold, or an image build in flight (`409`, code `boat-account-in-use`, with `liveRuns` and
   `buildsInFlight`). Otherwise the account answers `state: "removing"`: no new workspace runs in it,

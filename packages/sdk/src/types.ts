@@ -21,6 +21,7 @@ import type {
 } from "node:stream/web";
 
 import type {
+  BoatKeyProof,
   BoatKeyReport,
   WorkspacePublication as WireWorkspacePublication,
   ConnectedAccountLogin,
@@ -2502,6 +2503,11 @@ export interface BoatAccount {
    * Each fact is `observed: true` with its value, or `observed: false` with Boat's reason.
    */
   readonly report: BoatKeyReport | null;
+  /**
+   * The account's last full check (`prove`), with when it finished; null until it is proven. Only
+   * `list()` fills it; the other calls answer null.
+   */
+  readonly lastProof: BoatKeyProof | null;
 }
 
 /**
@@ -2551,6 +2557,16 @@ export interface BoatAccountsNamespace {
    * (422, `reason` `boat-key-unverified`) and keeps the last report.
    */
   check(boatAccountId: string): Promise<BoatAccount>;
+  /**
+   * A full check of a stored account's key: the control plane starts the smallest VM in the
+   * account, runs a command, publishes a port and saves a snapshot, then deletes the snapshot and
+   * the VM, and answers each step as `passed`, `refused` (with Boat's reason in `boat`),
+   * `no-answer` or `not-reached`. It uses one VM start (`starts`) and says what Boat may still hold
+   * of it (`leftBehind`), which the control plane removes shortly after. It never leaves a VM or a
+   * snapshot behind for good. A second check of the same account while one runs, or while what it
+   * left is being removed, rejects (`reason` `boat-proof-running`). It takes a minute or more.
+   */
+  prove(boatAccountId: string): Promise<BoatKeyProof>;
   /** The control plane's own Boat key's last report (`BoatInstallKey`). */
   installKey(): Promise<BoatInstallKey>;
   /** Checks the control plane's own Boat key with Boat now, as `check` does a stored one. */

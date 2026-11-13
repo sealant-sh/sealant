@@ -277,8 +277,11 @@ These call the live API and work end-to-end:
   its snapshot slots, each observed or not with Boat's reason). The control plane's own key is not
   in `list()`: `.installKey()` reads its last report and `.checkInstallKey()` checks it now
   (`BoatInstallKey`: `label`, `report`). A refused key rejects with `SealantApiError`, whose `boat`,
-  `missingPermissions` and `boatKeyReport` say why. Needs a service key. See
-  [Boat accounts](/docs/reference/http-api#boat-accounts) for what each call refuses.
+  `missingPermissions` and `boatKeyReport` say why. `.prove(boatAccountId)` runs a full check with a
+  throwaway VM and answers a `BoatKeyProof` (`outcome`, `steps` each `passed`, `refused` with Boat's
+  reason, `no-answer` or `not-reached`, `starts`, `leftBehind`); `list()` carries each account's
+  `lastProof`. Needs a service key. See [Boat accounts](/docs/reference/http-api#boat-accounts) for
+  what each call refuses.
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside

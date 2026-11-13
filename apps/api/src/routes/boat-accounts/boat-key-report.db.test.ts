@@ -8,6 +8,8 @@ import { CredentialCipher, type CredentialCipherService } from "@sealant/credent
 import {
   BoatAccountRepo,
   BoatAccountRepoLive,
+  BoatKeyProofRepo,
+  BoatKeyProofRepoLive,
   createSealantDB,
   SealantDB,
   type DB,
@@ -72,11 +74,13 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
     account.organizationHeaders.length = 0;
   });
 
-  const run = <A, E>(effect: Effect.Effect<A, E, BoatAccountRepo | CredentialCipher | SealantDB>) =>
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, BoatAccountRepo | BoatKeyProofRepo | CredentialCipher | SealantDB>,
+  ) =>
     Effect.runPromise(
       effect.pipe(
         Effect.provide(
-          BoatAccountRepoLive.pipe(
+          Layer.merge(BoatAccountRepoLive, BoatKeyProofRepoLive).pipe(
             Layer.provideMerge(Layer.succeed(SealantDB, db)),
             Layer.provideMerge(Layer.succeed(CredentialCipher, cipher)),
           ),
@@ -95,7 +99,7 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
       ),
     );
   const refusal = <A, E>(
-    effect: Effect.Effect<A, E, BoatAccountRepo | CredentialCipher | SealantDB>,
+    effect: Effect.Effect<A, E, BoatAccountRepo | BoatKeyProofRepo | CredentialCipher | SealantDB>,
   ) => run(Effect.flip(effect));
 
   it("stores a trimmed key with its report, and list shows it with when it was observed", async () => {

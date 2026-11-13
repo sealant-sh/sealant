@@ -174,7 +174,8 @@ export type BoatCreateInput = {
       /** Replay the recorded body version. Version 1 predates explicit snapshot/privacy fields. */
       readonly requestVersion: 1 | 2;
       readonly marker: string;
-      readonly purpose?: "native-build";
+      /** `key-proof`: a full check's throwaway VM, labelled `sealant-key-proof` with the marker. */
+      readonly purpose?: "native-build" | "key-proof";
     }
   | {
       readonly lifetime: Extract<BoatLifetime, { readonly kind: "bounded" }>;
@@ -444,11 +445,13 @@ export class HttpBoatApi implements BoatApi {
           ? ownershipLabels(input.ownership)
           : build
             ? boatBuildOwnershipLabels(input.buildOwnership)
-            : {
-                "sealant-dev": "boat-stream",
-                [input.purpose === "native-build" ? "sealant-build" : "sealant-spike"]:
-                  input.marker,
-              },
+            : input.purpose === "key-proof"
+              ? { "sealant-key-proof": input.marker }
+              : {
+                  "sealant-dev": "boat-stream",
+                  [input.purpose === "native-build" ? "sealant-build" : "sealant-spike"]:
+                    input.marker,
+                },
         ...(input.from === undefined ? {} : { from: input.from }),
       },
       { "Idempotency-Key": input.idempotencyKey },
@@ -490,6 +493,38 @@ export class HttpBoatApi implements BoatApi {
     return complete.length === 1
       ? { kind: "found", ownership, sandbox: first }
       : { kind: "conflict", ownership, matches: complete };
+  }
+
+  /**
+   * The VMs a full check created (`sealant-key-proof` = its marker), from every page of Boat's
+   * list. `unknown`: Boat did not answer completely. An empty list is not proof of absence right
+   * after the create; the caller decides how long to wait before it trusts one.
+   */
+  async findKeyProof(
+    marker: string,
+  ): Promise<
+    | { readonly kind: "listed"; readonly sandboxes: readonly BoatSandbox[] }
+    | { readonly kind: "unknown"; readonly error: BoatApiError }
+  > {
+    const found: BoatSandbox[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 20; page++) {
+      const query = new URLSearchParams({ limit: "200" });
+      query.append("label", `sealant-key-proof=${marker}`);
+      if (cursor !== null) query.set("cursor", cursor);
+      const listed = await this.#request(
+        "discover",
+        "GET",
+        `/sandboxes?${query}`,
+        inventoryResponse,
+      );
+      if (!listed.ok) return { kind: "unknown", error: listed.error };
+      for (const sandbox of listed.value.sandboxes)
+        if (sandbox.labels?.["sealant-key-proof"] === marker) found.push(sandbox);
+      cursor = listed.value.pageInfo.nextCursor;
+      if (cursor === null) return { kind: "listed", sandboxes: found };
+    }
+    return { kind: "unknown", error: new BoatApiError("discover", null, "repeated_cursor") };
   }
 
   /**
