@@ -347,7 +347,7 @@ describe.skipIf(DATABASE_URL === undefined)(
             .select({ value: count() })
             .from(telemetryEvents)
             .where(eq(telemetryEvents.runId, runId))
-            .pipe(Effect.map((rows) => Number(rows[0]?.value ?? 0)));
+            .pipe(Effect.map((rows) => rows[0]?.value ?? 0));
 
           // First ingest.
           yield* Effect.scoped(ingester.run(runId, TARGET));
