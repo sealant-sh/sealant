@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { CredentialCipher, type CredentialCipherService } from "@sealant/credentials";
 import {
+  BoatAccountRepo,
+  BoatAccountRepoLive,
   BoatRunRepo,
   BoatRunRepoLive,
   NativePublicationRepo,
@@ -33,6 +35,7 @@ import {
   boatAccountControl,
   boatControlMaterialLayer,
   boatConvergenceWorkerLayer,
+  boatInstallNames,
   boatNativeCatalogLayer,
   boatProviderFromEnv,
   boatReadinessWorkerLayer,
@@ -40,8 +43,10 @@ import {
   boatResourcesLayer,
   boatSealedExecutionLayer,
   boatVmWorkerLayer,
+  loadBoatCredential,
   loadPackagedRuntime,
   makeBoatTunnelCarrierLayer,
+  refreshBoatKeyReports,
   verifyBoatBearers,
   type BoatAccountId,
   type BoatAccountProvider,
@@ -52,6 +57,8 @@ import {
   type BoatClientFactory,
   type BoatConvergenceSweep,
   type BoatGatewayHost,
+  type BoatKeyRefreshOptions,
+  type BoatKeyRefreshOutcome,
   type BoatNativeCatalogOptions,
   type BoatNativeCatalogService,
   type BoatResourcesOutcome,
@@ -70,6 +77,7 @@ export type BoatWorkerEnv = Pick<
   | "SEALANT_BOAT_API_KEY"
   | "SEALANT_BOAT_API_KEY_FILE"
   | "SEALANT_BOAT_DEPLOYMENT_ID"
+  | "SEALANT_BOAT_ORGANIZATION"
   | "SEALANT_BOAT_BUILDER_OWNER"
   | "SEALANT_BOAT_STATE_DIRECTORY"
   | "SEALANT_BOAT_GATEWAY_HOST_ID"
@@ -182,7 +190,8 @@ interface Stack extends BoatWorkerStack {
 }
 
 /**
- * What this worker runs for Boat, from its settings alone, or `undefined` when it has no Boat key.
+ * What this worker runs for Boat, from its settings, or `undefined` when Boat is off for it: no
+ * Boat key, no state directory and no resource gateway.
  *
  * Every Boat account of the install (the default one, from the env key, and each stored one) gets
  * its own copy of the Boat owners below, built on that account's client and deployment label: a
@@ -190,8 +199,12 @@ interface Stack extends BoatWorkerStack {
  * account's copy is built when something first needs it (its first launch, a sweep of its runs),
  * never at worker start for an account that has none.
  *
- * - With the builder (`SEALANT_BOAT_BUILDER_OWNER` and `SEALANT_BOAT_STATE_DIRECTORY`) it serves
- *   Boat workspaces: the adapter is registered, and its stops go through the shared stop path as
+ * The install's own account exists where the worker has the env key. Its names (deployment label,
+ * builder owner) are the operator's settings where set, else the ones the install keeps in its
+ * database (`boatInstallNames`), which the API reads too.
+ *
+ * - With the state directory (`SEALANT_BOAT_STATE_DIRECTORY`) it serves Boat workspaces, in the
+ *   install's own account where it has the env key and in every stored account: the adapter is registered, and its stops go through the shared stop path as
  *   every runtime's do, with a resource gateway or without one. The resource gateway is optional.
  *   With it, Boat workspaces of every account reach project resources through gateways on this
  *   worker's Docker host: the tunnel is carried over the VM's hosted HTTPS route, which each
@@ -216,24 +229,50 @@ export const assembleBoat = async (input: {
   readonly clientFor?: BoatClientFactory;
   /** How often a stored account's key revision is read again. Default 10 s. */
   readonly revisionCheckMs?: number;
+  /** How a key is opened for its report's check. Absent: Boat's real API; a test supplies a fake. */
+  readonly keyClientFor?: BoatKeyRefreshOptions["clientFor"];
 }) => {
   const { env, db, credentialCipher } = input;
-  const defaultProvider = boatProviderFromEnv(env, input.clientFor);
-  if (defaultProvider === undefined) return undefined;
+  const envAccount = boatProviderFromEnv(env, input.clientFor);
+  const gateway = boatGatewayHost(env, input.docker);
+  // Boat serves launches where its state directory is set, the way MicroVM does where its build
+  // role is: the worker's env schema then holds the cipher beside it.
+  const stateDirectory = env.SEALANT_BOAT_STATE_DIRECTORY;
+  const launches = stateDirectory !== undefined;
+  if (envAccount === undefined && !launches && gateway === undefined) return undefined;
   if (credentialCipher === undefined)
     throw new Error("Boat reconciliation configuration is incomplete.");
-  const gateway = boatGatewayHost(env, input.docker);
-  // Boat serves launches where its builder is configured, the way MicroVM does where its build
-  // role is: the worker's env schema then holds the Boat provider configuration complete.
-  const launches = env.SEALANT_BOAT_BUILDER_OWNER !== undefined;
-  const stateDirectory = env.SEALANT_BOAT_STATE_DIRECTORY;
-  if (launches && stateDirectory === undefined)
-    throw new Error("Boat construction custody is not configured.");
   const allocationsOnly = gateway === undefined && !launches;
+  const names =
+    envAccount === undefined
+      ? undefined
+      : await boatInstallNames(
+          {
+            deploymentId: envAccount.deploymentId,
+            builderOwner: env.SEALANT_BOAT_BUILDER_OWNER,
+            withBuilder: launches,
+          },
+          db,
+        );
+  const defaultProvider =
+    envAccount === undefined || names === undefined
+      ? undefined
+      : { deploymentId: names.deploymentId, api: envAccount.api, builderOwner: names.builderOwner };
+  // The install's own key once more, for its report's check only: the client above holds the other.
+  const defaultKey = (() => {
+    if (envAccount === undefined) return undefined;
+    const credential = loadBoatCredential({
+      value: env.SEALANT_BOAT_API_KEY,
+      file: env.SEALANT_BOAT_API_KEY_FILE,
+    });
+    return credential.ok
+      ? { credential: credential.value, organization: envAccount.organization }
+      : undefined;
+  })();
   const directory = new BoatAccountDirectory({
     db,
     cipher: credentialCipher,
-    defaultAccount: { ...defaultProvider, builderOwner: env.SEALANT_BOAT_BUILDER_OWNER },
+    ...(defaultProvider === undefined ? {} : { defaultAccount: defaultProvider }),
     ...(input.clientFor === undefined ? {} : { clientFor: input.clientFor }),
     ...(input.revisionCheckMs === undefined ? {} : { revisionCheckMs: input.revisionCheckMs }),
   });
@@ -418,13 +457,16 @@ export const assembleBoat = async (input: {
     };
   };
 
-  // The default account's owners are built at start, as they always were.
-  const fallback = await build({
-    accountId: null,
-    deploymentId: defaultProvider.deploymentId,
-    builderOwner: env.SEALANT_BOAT_BUILDER_OWNER,
-    api: defaultProvider.api,
-  });
+  // The default account's owners are built at start, as they always were, where it has one.
+  const fallback =
+    defaultProvider === undefined
+      ? undefined
+      : await build({
+          accountId: null,
+          deploymentId: defaultProvider.deploymentId,
+          builderOwner: defaultProvider.builderOwner,
+          api: defaultProvider.api,
+        });
   const stored = new Map<string, Promise<Stack | undefined>>();
   /** The stacks of accounts removed while this worker ran: disposed at shutdown. */
   const retired: Stack[] = [];
@@ -484,19 +526,24 @@ export const assembleBoat = async (input: {
     const accounts = [...(await directory.listWithRuns()), ...(await directory.listRemoving())];
     const ids = [...new Set(accounts.map((account) => account.id))];
     const built = await Promise.all(ids.map((id) => stackOf(id).catch(() => undefined)));
-    return [fallback, ...built.filter((stack): stack is Stack => stack !== undefined)];
+    return [fallback, ...built].filter((stack): stack is Stack => stack !== undefined);
   };
 
   const router = new BoatAccountRouterAdapter({ stacks, resourceGateway: gateway !== undefined });
-  const defaultCatalog = await fallback.catalog();
-  const registration =
-    defaultCatalog === undefined
-      ? undefined
-      : {
-          kind: "boat-native" as const,
-          adapter: router,
-          artifacts: boatAccountCatalog({ stacks, pins: defaultCatalog }),
-        };
+  // The default account's catalog is made at start, as it always was: its builder's runtime is
+  // checked before the worker serves anything. Pins are the catalog repository's, any account's.
+  await fallback?.catalog();
+  const publications = await repos.runPromise(NativePublicationRepo);
+  const registration = !launches
+    ? undefined
+    : {
+        kind: "boat-native" as const,
+        adapter: router,
+        artifacts: boatAccountCatalog({
+          stacks,
+          pins: { markConsumer: publications.markConsumer, release: publications.release },
+        }),
+      };
 
   /**
    * One pass of the removals asked for: each such account's saved images are deleted from its Boat
@@ -544,6 +591,11 @@ export const assembleBoat = async (input: {
     return report;
   };
 
+  const launchReport = {
+    launches: registration !== undefined,
+    defaultAccount: registration !== undefined && fallback !== undefined,
+    resourceGateway: registration !== undefined && gateway !== undefined,
+  };
   const control = allocationsOnly
     ? undefined
     : boatAccountControl(async (runId) => (await stacks.ofRun(runId))?.control);
@@ -608,6 +660,38 @@ export const assembleBoat = async (input: {
           return stack?.applyLink === undefined ? ("pending" as const) : stack.applyLink(runId);
         },
     reconcileRemovals: registration === undefined ? undefined : reconcileRemovals,
+    /**
+     * What this worker does for Boat, as the API reads it (`boat_launch_reports`): whether it
+     * launches Boat workspaces, in the install's own account too, and with the resource gateway.
+     */
+    launchReport,
+    /** Writes this worker's launch report (`launchReport`) as observed now. */
+    reportLaunch: (worker: string, now: Date = new Date()) =>
+      Effect.runPromise(
+        Effect.flatMap(BoatAccountRepo, (repo) =>
+          repo.reportLaunch({ worker, ...launchReport, observedAt: now }),
+        ).pipe(Effect.provide(BoatAccountRepoLive), Effect.provideService(SealantDB, db)),
+      ),
+    /**
+     * One pass of the key reports: every key whose report is older than a day (or `force`d) is
+     * checked against Boat again and its report replaced; Boat not answering keeps the last one.
+     */
+    refreshKeyReports: (pass?: {
+      readonly force?: readonly string[];
+      readonly now?: () => Date;
+      readonly everyMs?: number;
+    }): Promise<readonly BoatKeyRefreshOutcome[]> =>
+      refreshBoatKeyReports(
+        {
+          db,
+          cipher: credentialCipher,
+          ...(defaultKey === undefined ? {} : { defaultKey }),
+          ...(input.keyClientFor === undefined ? {} : { clientFor: input.keyClientFor }),
+          ...(pass?.now === undefined ? {} : { now: pass.now }),
+          ...(pass?.everyMs === undefined ? {} : { everyMs: pass.everyMs }),
+        },
+        pass?.force === undefined ? {} : { force: pass.force },
+      ),
     dispose: async () => {
       const built = await Promise.all(
         [...stored.values()].map((stack) => stack.catch(() => undefined)),

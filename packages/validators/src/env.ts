@@ -487,11 +487,12 @@ export const resourceInstancesEnvSchema = z.object({
 });
 
 /**
- * The deployment's Boat account access, read by every process that reaches Boat: the worker (VMs,
+ * The install's own Boat account, read by every process that reaches Boat: the worker (VMs,
  * readiness, stop) and the API (control connections for sessions and credential pushes). Held the
- * way AWS credentials are for MicroVM: the process builds its own provider client from it. Exactly
- * one of the key and the key file; the file must be a root-owned 0400 regular file in a root-owned
- * 0700 directory (`loadBoatCredential`).
+ * way AWS credentials are for MicroVM: the process builds its own provider client from it. All of it
+ * is optional: an install can run Boat only from the Boat keys it stores (`/v1/boat-accounts`).
+ * With the key, exactly one of the key and the key file; the file must be a root-owned 0400 regular
+ * file in a root-owned 0700 directory (`loadBoatCredential`).
  */
 export const boatProviderEnvSchema = z.object({
   SEALANT_BOAT_API_KEY: z
@@ -503,9 +504,22 @@ export const boatProviderEnvSchema = z.object({
     .startsWith("/")
     .refine((value) => !value.includes("\0") && !value.endsWith("/"))
     .optional(),
+  /**
+   * The `sealant-deployment` label of what Core makes with the install's own key. Optional: without
+   * it Core makes one name once and keeps it in its database. An install that set it keeps it.
+   */
   SEALANT_BOAT_DEPLOYMENT_ID: z
     .string()
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/)
+    .optional(),
+  /**
+   * The Boat organization the install's own key bills (its id or name), sent as `X-Boat-Org` on
+   * every request made with that key. Unset, a personal key bills its active wallet.
+   */
+  SEALANT_BOAT_ORGANIZATION: z
+    .string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,127}$/)
+    .refine((value) => value.trim() === value)
     .optional(),
 });
 
@@ -514,14 +528,11 @@ type BoatProviderEnvInput = z.infer<typeof boatProviderEnvSchema> & {
 };
 const hasBoatCredential = (input: BoatProviderEnvInput) =>
   input.SEALANT_BOAT_API_KEY !== undefined || input.SEALANT_BOAT_API_KEY_FILE !== undefined;
-const BOAT_PROVIDER_INCOMPLETE =
-  "Boat requires its key (SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE), SEALANT_BOAT_DEPLOYMENT_ID and SEALANT_CREDENTIALS_KEY together.";
 /**
- * One key source; a key or a deployment id is Boat turned on for this process, and brings the
- * other and the credential cipher. A process with neither does not reach Boat.
+ * One key source. The key brings the credential cipher, which seals every Boat run's bearer; the
+ * organization names what the key bills, so it needs the key.
  */
 const addBoatProviderIssues = (input: BoatProviderEnvInput, ctx: z.RefinementCtx) => {
-  const hasCredential = hasBoatCredential(input);
   if (input.SEALANT_BOAT_API_KEY !== undefined && input.SEALANT_BOAT_API_KEY_FILE !== undefined)
     ctx.addIssue({
       code: "custom",
@@ -529,17 +540,20 @@ const addBoatProviderIssues = (input: BoatProviderEnvInput, ctx: z.RefinementCtx
       message:
         "Boat credentials require exactly one of SEALANT_BOAT_API_KEY and SEALANT_BOAT_API_KEY_FILE.",
     });
-  if (!hasCredential && input.SEALANT_BOAT_DEPLOYMENT_ID === undefined) return;
-  if (!hasCredential)
+  if (input.SEALANT_BOAT_ORGANIZATION !== undefined && !hasBoatCredential(input))
     ctx.addIssue({
       code: "custom",
-      path: ["SEALANT_BOAT_API_KEY_FILE"],
-      message: BOAT_PROVIDER_INCOMPLETE,
+      path: ["SEALANT_BOAT_ORGANIZATION"],
+      message:
+        "SEALANT_BOAT_ORGANIZATION names the Boat organization the install's own key bills, and no key is set (SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE). A stored Boat account names its organization when it is created.",
     });
-  for (const key of ["SEALANT_BOAT_DEPLOYMENT_ID", "SEALANT_CREDENTIALS_KEY"] as const) {
-    if (input[key] === undefined)
-      ctx.addIssue({ code: "custom", path: [key], message: BOAT_PROVIDER_INCOMPLETE });
-  }
+  if (hasBoatCredential(input) && input.SEALANT_CREDENTIALS_KEY === undefined)
+    ctx.addIssue({
+      code: "custom",
+      path: ["SEALANT_CREDENTIALS_KEY"],
+      message:
+        "Boat requires SEALANT_CREDENTIALS_KEY beside its key: every Boat run's bearer is sealed with it.",
+    });
 };
 
 export const appServerEnvSchema = databaseEnvSchema
@@ -556,8 +570,8 @@ export const appServerEnvSchema = databaseEnvSchema
   .merge(boatProviderEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
-  // Boat is on for the API when it is given the Boat deployment (or key): it then opens Boat runs'
-  // control connections itself, so the key and the cipher must be there too.
+  // The API opens Boat runs' control connections itself, with the install's own key or a stored
+  // account's; whether Boat can launch is the worker's to say (`boat_launch_reports`).
   addBoatProviderIssues(input, ctx);
   addControlClientTlsIssue(input, ctx);
   addRetiredMicrovmImageIssues(input, ctx);
@@ -826,17 +840,22 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(boatProviderEnvSchema)
   .extend({
     /**
-     * The Boat builder. Set (with SEALANT_BOAT_STATE_DIRECTORY), this worker serves Boat
-     * workspaces, the way SEALANT_MICROVM_BUILD_ROLE_ARN makes it serve MicroVM ones; the Boat
-     * provider configuration is then required. The resource gateway is not: see
+     * Where this worker keeps Boat's image-build journals. Set, this worker launches Boat
+     * workspaces, the way SEALANT_MICROVM_BUILD_ROLE_ARN makes it serve MicroVM ones: in the
+     * install's own Boat account (the env key, where it has one) and in every Boat account the
+     * install stores. It must outlive the worker. The resource gateway is not required: see
      * SEALANT_BOAT_GATEWAY_HOST_ID.
      */
-    SEALANT_BOAT_BUILDER_OWNER: z.uuid().optional(),
     SEALANT_BOAT_STATE_DIRECTORY: z
       .string()
       .startsWith("/")
       .refine((value) => !value.includes("\0") && !value.endsWith("/"))
       .optional(),
+    /**
+     * The `sealant-owner` of the saved images built in the install's own Boat account. Optional:
+     * without it Core makes one once and keeps it in its database. An install that set it keeps it.
+     */
+    SEALANT_BOAT_BUILDER_OWNER: z.uuid().optional(),
     /**
      * The resource gateway: this stable id of the Docker host its containers run on, with
      * SEALANT_BOAT_GATEWAY_RELAY_HOST and SEALANT_BOAT_GATEWAY_IMAGE. All three, or none. With
@@ -867,7 +886,6 @@ export const workerServerEnvSchema = databaseEnvSchema
   });
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
-  const hasCredential = hasBoatCredential(input);
   addBoatProviderIssues(input, ctx);
   // The resource gateway is optional, and all or nothing: its host, its image and where the worker
   // relays every tunnel to it. With it, Boat workspaces reach project resources and the gateways
@@ -892,21 +910,12 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
           missingGatewayKeys.length === 1 ? "is" : "are"
         } not set. Set all three, or none of them to run Boat without a resource gateway.`,
       });
-    for (const key of ["SEALANT_BOAT_DEPLOYMENT_ID", "SEALANT_CREDENTIALS_KEY"] as const) {
-      if (input[key] === undefined)
-        ctx.addIssue({
-          code: "custom",
-          path: [key],
-          message:
-            "Boat resource reconciliation requires the complete gateway and provider configuration.",
-        });
-    }
-    if (!hasCredential)
+    if (input.SEALANT_CREDENTIALS_KEY === undefined)
       ctx.addIssue({
         code: "custom",
-        path: ["SEALANT_BOAT_API_KEY_FILE"],
+        path: ["SEALANT_CREDENTIALS_KEY"],
         message:
-          "Boat resource reconciliation requires the complete gateway and provider configuration.",
+          "Boat resource reconciliation requires SEALANT_CREDENTIALS_KEY: each gateway's keys are sealed with it.",
       });
     if (!input.DOCKER_RUNTIME_ENABLED || input.DEFAULT_RUNTIME_ADAPTER !== "docker")
       ctx.addIssue({
@@ -914,33 +923,28 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
         message: "Boat resource reconciliation requires the Docker resource host.",
       });
   }
-  // Either builder setting is Boat serving workspaces from this worker, with a resource gateway
-  // or without one.
+  // The state directory is this worker launching Boat workspaces, with a resource gateway or
+  // without one, and with the install's own key or only stored accounts' keys.
   if (
-    input.SEALANT_BOAT_BUILDER_OWNER !== undefined ||
-    input.SEALANT_BOAT_STATE_DIRECTORY !== undefined
-  ) {
-    for (const key of [
-      "SEALANT_BOAT_DEPLOYMENT_ID",
-      "SEALANT_BOAT_BUILDER_OWNER",
-      "SEALANT_BOAT_STATE_DIRECTORY",
-      "SEALANT_CREDENTIALS_KEY",
-    ] as const) {
-      if (input[key] === undefined)
-        ctx.addIssue({
-          code: "custom",
-          path: [key],
-          message: `Boat workspaces require ${key}: durable construction and FINAL close need the complete Boat configuration.`,
-        });
-    }
-    if (!hasCredential)
-      ctx.addIssue({
-        code: "custom",
-        path: ["SEALANT_BOAT_API_KEY_FILE"],
-        message:
-          "Boat workspaces require the Boat key: SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE.",
-      });
-  }
+    input.SEALANT_BOAT_STATE_DIRECTORY !== undefined &&
+    input.SEALANT_CREDENTIALS_KEY === undefined
+  )
+    ctx.addIssue({
+      code: "custom",
+      path: ["SEALANT_CREDENTIALS_KEY"],
+      message:
+        "Boat workspaces require SEALANT_CREDENTIALS_KEY: stored Boat keys and every run's bearer are sealed with it.",
+    });
+  if (
+    input.SEALANT_BOAT_BUILDER_OWNER !== undefined &&
+    input.SEALANT_BOAT_STATE_DIRECTORY === undefined
+  )
+    ctx.addIssue({
+      code: "custom",
+      path: ["SEALANT_BOAT_STATE_DIRECTORY"],
+      message:
+        "Boat workspaces require SEALANT_BOAT_STATE_DIRECTORY, where the image-build journals live: SEALANT_BOAT_BUILDER_OWNER is set and this worker would build Boat images without it.",
+    });
   addControlClientTlsIssue(input, ctx);
   addRetiredMicrovmImageIssues(input, ctx);
   if (

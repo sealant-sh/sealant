@@ -153,10 +153,12 @@ logged at info with the user id, person id and uid.
 ## Boat accounts
 
 An install's default Boat account is its env key (`SEALANT_BOAT_API_KEY` or
-`SEALANT_BOAT_API_KEY_FILE`). A product that serves several organizations stores one more Boat
-account per organization, so each organization's Boat VMs run in, and are billed to, its own Boat
-account. Core has no notion of organizations: it knows each account by id, and the caller keeps the
-mapping. These routes need a service key, and an install that serves Boat (`503` otherwise).
+`SEALANT_BOAT_API_KEY_FILE`), and it is optional: an install can run Boat from the accounts it
+stores alone. A product that serves several organizations stores one Boat account per organization,
+so each organization's Boat VMs run in, and are billed to, its own Boat account. Core has no notion
+of organizations: it knows each account by id, and the caller keeps the mapping. These routes need a
+service key, and the install's credential key (`SEALANT_CREDENTIALS_KEY`; `503` otherwise). With no
+env key, `check("default")` answers `404`.
 
 - `POST /v1/boat-accounts { label, apiKey, organization? }` checks the key with Boat by read-only
   calls before it stores anything (whitespace around a pasted key is trimmed). A key Boat refuses
@@ -225,13 +227,25 @@ create whose outcome is unknown.
 A workspace names its account at create in `spec.runtime.boatAccountId`, and every run of it,
 restarts included, stays in that account. Omitted, it runs in the default account. An unknown or
 removed account answers `404`, one being removed `409`, and naming one for a workspace that does not
-run on Boat `400`. Each account has its own deployment label and builder owner, derived from its id,
-so two accounts stored over the same real Boat account never read each other's VMs, and each builds
-its own saved images, on its first launch. Every Boat run records the account it was created under,
-and every later call for it (readiness, stop, recovery, sweeps, tunnels, control connections) uses
-that account's key. Runs reach project resources through the install's resource gateway whatever
-their account: the tunnel is carried over the VM's hosted HTTPS route, which the run's own account's
-key opens.
+run on Boat `400`.
+
+Whether a Boat workspace can be launched is the worker's answer, not the API's guess: each worker
+says every minute whether it launches Boat workspaces, whether it has the install's own key, and
+whether it has the resource gateway, and the create reads the reports of the last five minutes. A
+Boat create (or restart) that no worker could serve is refused before anything is reserved, `503`,
+with a sentence that says who can change it: code `unsupported-runtime` when no worker launches
+Boat, or when the install has neither its own key nor a stored account; `boat-account-required` when
+the spec names no account and no launching worker has the install's own key; `gateway-unavailable`
+when the spec reaches project resources (`runtime.resources` other than `"none"`) and no launching
+worker has the resource gateway.
+
+Each account has its own deployment label and builder owner, derived from its id, so two accounts
+stored over the same real Boat account never read each other's VMs, and each builds its own saved
+images, on its first launch. Every Boat run records the account it was created under, and every
+later call for it (readiness, stop, recovery, sweeps, tunnels, control connections) uses that
+account's key. Runs reach project resources through the install's resource gateway whatever their
+account: the tunnel is carried over the VM's hosted HTTPS route, which the run's own account's key
+opens.
 
 A workspace's SSH sessions (an `ssh` shell or command, VS Code Remote-SSH) run as root unless its
 create asks for its owner's own Linux user: `sshAsOwner: true` on `POST /v1/workspaces`. Core takes

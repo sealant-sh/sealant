@@ -197,6 +197,8 @@ export interface FakeBoatEvent {
 export interface FakeBoatOptions {
   readonly runId: string;
   readonly credential: string;
+  /** More keys of the same Boat account (a rotation's new key); each is listed by `/api-keys`. */
+  readonly otherCredentials?: readonly string[];
   /** Docker network the twins join. The host reaches them by IP; they reach the host gateway. */
   readonly network: string;
   /** The guest-twin base image a create without `from` boots. */
@@ -524,7 +526,8 @@ export class FakeBoat {
       response.end(JSON.stringify(value));
     };
     try {
-      if (request.headers.authorization !== `Bearer ${this.options.credential}`)
+      const accepted = [this.options.credential, ...(this.options.otherCredentials ?? [])];
+      if (!accepted.some((credential) => request.headers.authorization === `Bearer ${credential}`))
         throw new HttpError(401, "unauthorized");
       const raw = await readBody(request);
       const json = (): unknown => (raw.length === 0 ? undefined : JSON.parse(raw.toString("utf8")));
@@ -889,7 +892,7 @@ export class FakeBoat {
           status: 403,
           body: boatErrorEnvelope({ status: 403, code: "api_key_org_forbidden" }),
         };
-      const credential = this.options.credential;
+      const credentials = [this.options.credential, ...(this.options.otherCredentials ?? [])];
       const other = {
         id: "key_other",
         name: "laptop",
@@ -902,26 +905,24 @@ export class FakeBoat {
       const own =
         key === "limited"
           ? []
-          : [
-              {
-                id: "key_own",
-                name: "sealant",
-                keyPrefix: credential.slice(0, 9),
-                keyLastFour: credential.slice(-4),
-                teamId: key.teamId ?? null,
-                createdAt: now(),
-                lastUsedAt: now(),
+          : credentials.map((credential, index) => ({
+              id: index === 0 ? "key_own" : `key_own_${String(index)}`,
+              name: "sealant",
+              keyPrefix: credential.slice(0, 9),
+              keyLastFour: credential.slice(-4),
+              teamId: key.teamId ?? null,
+              createdAt: now(),
+              lastUsedAt: now(),
+              expiresAt: key.expiresAt === undefined ? null : key.expiresAt,
+              expired: key.expired ?? false,
+              expiringSoon: key.expiringSoon ?? false,
+              scope: {
                 expiresAt: key.expiresAt === undefined ? null : key.expiresAt,
-                expired: key.expired ?? false,
-                expiringSoon: key.expiringSoon ?? false,
-                scope: {
-                  expiresAt: key.expiresAt === undefined ? null : key.expiresAt,
-                  actions: key.actions ?? ["*"],
-                  sandboxes: key.sandboxes ?? "*",
-                  environments: "*",
-                },
+                actions: key.actions ?? ["*"],
+                sandboxes: key.sandboxes ?? "*",
+                environments: "*",
               },
-            ];
+            }));
       return {
         status: 200,
         body: {

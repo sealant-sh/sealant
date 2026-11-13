@@ -49,12 +49,13 @@ describe("parseWorkerEnv", () => {
 
   it("requires the complete reconciliation contract without changing runtime selection", () => {
     expect(parseWorkerEnv({}).SEALANT_BOAT_API_KEY).toBeUndefined();
-    for (const values of [
-      { SEALANT_BOAT_API_KEY: "test-key-for-local-only" },
-      { SEALANT_BOAT_DEPLOYMENT_ID: "test" },
-    ]) {
-      expect(() => parseWorkerEnv(values)).toThrow("Boat requires its key");
-    }
+    // The key brings the cipher; a deployment name alone needs nothing.
+    expect(() => parseWorkerEnv({ SEALANT_BOAT_API_KEY: "test-key-for-local-only" })).toThrow(
+      "SEALANT_CREDENTIALS_KEY",
+    );
+    expect(parseWorkerEnv({ SEALANT_BOAT_DEPLOYMENT_ID: "test" }).SEALANT_BOAT_DEPLOYMENT_ID).toBe(
+      "test",
+    );
     expect(
       parseWorkerEnv({
         SEALANT_BOAT_API_KEY: "test-key-for-local-only",
@@ -106,7 +107,7 @@ describe("parseWorkerEnv", () => {
       parseWorkerEnv({ ...base, ...carriedOnly, SEALANT_BOAT_GATEWAY_RELAY_HOST: "0.0.0.0" }),
     ).toThrow("Invalid environment variables");
   });
-  it("requires one credential source with deployment and cipher, including file-only gateway configuration", () => {
+  it("requires one credential source with the cipher, including file-only gateway configuration", () => {
     const base = {
       SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
       SEALANT_BOAT_DEPLOYMENT_ID: "proof",
@@ -117,11 +118,11 @@ describe("parseWorkerEnv", () => {
     expect(() =>
       parseWorkerEnv({ ...base, SEALANT_BOAT_API_KEY: "test-key-for-local-only" }),
     ).toThrow("exactly one");
-    for (const key of Object.keys(base)) {
-      expect(() =>
-        parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
-      ).toThrow(/Boat requires its key \(SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE\)/);
-    }
+    // The deployment is optional: the install keeps a name of its own. The cipher is not.
+    const { SEALANT_BOAT_DEPLOYMENT_ID: _deployment, ...unnamed } = base;
+    expect(parseWorkerEnv(unnamed).SEALANT_BOAT_DEPLOYMENT_ID).toBeUndefined();
+    const { SEALANT_CREDENTIALS_KEY: _cipher, ...unsealed } = base;
+    expect(() => parseWorkerEnv(unsealed)).toThrow("SEALANT_CREDENTIALS_KEY");
     expect(() => parseWorkerEnv({ ...base, SEALANT_BOAT_API_KEY_FILE: "relative" })).toThrow();
     expect(
       parseWorkerEnv({
@@ -132,7 +133,7 @@ describe("parseWorkerEnv", () => {
       }).DEFAULT_RUNTIME_ADAPTER,
     ).toBe("docker");
   });
-  it("serves Boat workspaces where the builder is configured, and then needs the complete Boat configuration", () => {
+  it("serves Boat workspaces where the state directory is set, with the gateway complete", () => {
     const base = {
       SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
       SEALANT_BOAT_DEPLOYMENT_ID: "proof",
@@ -151,18 +152,32 @@ describe("parseWorkerEnv", () => {
       expect(() => parseWorkerEnv(env)).toThrow(
         "Boat resource reconciliation requires SEALANT_BOAT_GATEWAY_RELAY_HOST",
       );
-    for (const key of Object.keys(base))
-      expect(
-        () =>
-          parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
-        key,
-      ).toThrow();
+    const without = (key: string) =>
+      Object.fromEntries(Object.entries(base).filter(([name]) => name !== key));
+    // The key, the deployment and the builder owner are each optional: stored keys alone run
+    // Boat, and the install keeps its own names.
+    for (const key of [
+      "SEALANT_BOAT_API_KEY_FILE",
+      "SEALANT_BOAT_DEPLOYMENT_ID",
+      "SEALANT_BOAT_BUILDER_OWNER",
+    ])
+      expect(parseWorkerEnv(without(key)).SEALANT_BOAT_STATE_DIRECTORY, key).toBe(
+        base.SEALANT_BOAT_STATE_DIRECTORY,
+      );
+    for (const key of [
+      "SEALANT_BOAT_STATE_DIRECTORY",
+      "SEALANT_CREDENTIALS_KEY",
+      "SEALANT_BOAT_GATEWAY_HOST_ID",
+      "SEALANT_BOAT_GATEWAY_RELAY_HOST",
+      "SEALANT_BOAT_GATEWAY_IMAGE",
+    ])
+      expect(() => parseWorkerEnv(without(key)), key).toThrow();
     // With its gateway, Boat still runs beside the Docker resource host.
     expect(() => parseWorkerEnv({ ...base, DOCKER_RUNTIME_ENABLED: "false" })).toThrow(
       "Docker resource host",
     );
   });
-  it("serves Boat workspaces from the provider and builder settings alone, with no resource gateway and no Docker host", () => {
+  it("serves Boat workspaces from the state directory and the cipher alone, with no resource gateway and no Docker host", () => {
     const base = {
       SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
       SEALANT_BOAT_DEPLOYMENT_ID: "proof",
@@ -183,13 +198,21 @@ describe("parseWorkerEnv", () => {
       { DEFAULT_RUNTIME_ADAPTER: "boat" },
     ])
       expect(parseWorkerEnv({ ...base, ...runtime })).toMatchObject({ ...base });
-    // Every provider and builder setting is still required.
-    for (const key of Object.keys(base))
-      expect(
-        () =>
-          parseWorkerEnv(Object.fromEntries(Object.entries(base).filter(([name]) => name !== key))),
-        key,
-      ).toThrow();
+    // The state directory and the cipher are what launching needs; the rest is optional.
+    const without = (key: string) =>
+      Object.fromEntries(Object.entries(base).filter(([name]) => name !== key));
+    expect(() => parseWorkerEnv(without("SEALANT_BOAT_STATE_DIRECTORY"))).toThrow(
+      "SEALANT_BOAT_STATE_DIRECTORY",
+    );
+    expect(() => parseWorkerEnv(without("SEALANT_CREDENTIALS_KEY"))).toThrow(
+      "SEALANT_CREDENTIALS_KEY",
+    );
+    expect(
+      parseWorkerEnv({
+        SEALANT_BOAT_STATE_DIRECTORY: base.SEALANT_BOAT_STATE_DIRECTORY,
+        SEALANT_CREDENTIALS_KEY: base.SEALANT_CREDENTIALS_KEY,
+      }).SEALANT_BOAT_API_KEY_FILE,
+    ).toBeUndefined();
   });
   it("refuses a half-set resource gateway at start, naming the variables that are missing", () => {
     const base = {

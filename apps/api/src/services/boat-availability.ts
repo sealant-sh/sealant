@@ -8,9 +8,11 @@ import {
 import { BoatAccountRepo } from "@sealant/db";
 import { BOAT_RUNTIME_ID } from "@sealant/validators";
 import {
+  BOAT_LAUNCH_REPORT_FRESH_MS,
   HttpBoatApi,
+  boatLaunchRefusal,
+  boatLaunchSupportOf,
   loadBoatCredential,
-  unregisteredRuntimeRefusal,
   type BoatKeyCheckClient,
   type BoatResult,
   type BoatSecret,
@@ -20,14 +22,50 @@ import { Context, Effect } from "effect";
 import { env } from "../runtime-env.js";
 
 /**
- * Whether this deployment serves Boat, as far as the API can tell: it was given the Boat key (the
- * env schema then holds the deployment and the credential cipher beside it), the way it holds AWS
- * credentials for MicroVM. Every principal that may create workspaces is served alike.
+ * Whether the API can take part in Boat at all: it can open sealed Boat keys and run bearers
+ * (`SEALANT_CREDENTIALS_KEY`). Whether Boat can launch is the worker's to say (`boatLaunchable`).
  */
 export const BoatConfigured = Context.Reference<boolean>("@sealant/api/BoatConfigured", {
-  defaultValue: () =>
-    env.SEALANT_BOAT_API_KEY !== undefined || env.SEALANT_BOAT_API_KEY_FILE !== undefined,
+  defaultValue: () => env.SEALANT_CREDENTIALS_KEY !== undefined,
 });
+
+/** The Boat organization the install's own key bills (`SEALANT_BOAT_ORGANIZATION`), if named. */
+export const BoatDefaultOrganization = Context.Reference<string | undefined>(
+  "@sealant/api/BoatDefaultOrganization",
+  { defaultValue: () => env.SEALANT_BOAT_ORGANIZATION },
+);
+
+const storeFailed = () =>
+  new WorkspaceInternalServerError({ message: "Failed to read whether Boat can launch here." });
+
+/** What the workers that reported in the last five minutes do for Boat (`boat_launch_reports`). */
+const boatLaunchSupport = Effect.gen(function* () {
+  const reports = yield* (yield* BoatAccountRepo)
+    .launchReports(new Date(Date.now() - BOAT_LAUNCH_REPORT_FRESH_MS))
+    .pipe(Effect.mapError(storeFailed));
+  return boatLaunchSupportOf(reports);
+});
+
+/**
+ * Whether this install can launch a Boat workspace, and why not: the one answer the create's
+ * refusal and the runtime report both read. It is the worker's own: a worker launches Boat
+ * workspaces and reports so (`boat_launch_reports`), with or without the install's own key; and
+ * some account can run one, the install's own key on that worker or a stored account.
+ */
+export const boatLaunchRefusalNow = Effect.gen(function* () {
+  if (!(yield* BoatConfigured))
+    return "This install's API has no SEALANT_CREDENTIALS_KEY, so it cannot open Boat keys; the install's operator can set it.";
+  const support = yield* boatLaunchSupport;
+  const refusal = boatLaunchRefusal(support, { namesAccount: true, resources: "none" });
+  if (refusal !== undefined || support.defaultAccount) return refusal;
+  const stored = yield* (yield* BoatAccountRepo).list().pipe(Effect.mapError(storeFailed));
+  return stored.some((account) => account.removalRequestedAt === null)
+    ? undefined
+    : "This install has no Boat key of its own and stores no Boat account, so no Boat workspace can be started. Store one (POST /v1/boat-accounts), or ask the install's operator to set SEALANT_BOAT_API_KEY.";
+});
+
+/** `boatLaunchable`: true when a Boat workspace can be launched here (see `boatLaunchRefusalNow`). */
+export const boatLaunchable = Effect.map(boatLaunchRefusalNow, (refusal) => refusal === undefined);
 
 /** The reads the API asks of Boat with a key: its check, and what a rotation must still see. */
 export type BoatKeyClient = BoatKeyCheckClient & Pick<HttpBoatApi, "get" | "getSnapshot">;
@@ -49,35 +87,71 @@ export const BoatKeyClients = Context.Reference<
     }),
 });
 
-/** The install's own Boat key (`SEALANT_BOAT_API_KEY` or its file), for its check; never returned. */
-export const BoatDefaultKey = Context.Reference<() => BoatResult<BoatSecret>>(
+/**
+ * The install's own Boat key (`SEALANT_BOAT_API_KEY` or its file), for its check; never returned.
+ * `undefined`: the install has none.
+ */
+export const BoatDefaultKey = Context.Reference<() => BoatResult<BoatSecret> | undefined>(
   "@sealant/api/BoatDefaultKey",
   {
     defaultValue: () => () =>
-      loadBoatCredential({
-        value: env.SEALANT_BOAT_API_KEY,
-        file: env.SEALANT_BOAT_API_KEY_FILE,
-      }),
+      env.SEALANT_BOAT_API_KEY === undefined && env.SEALANT_BOAT_API_KEY_FILE === undefined
+        ? undefined
+        : loadBoatCredential({
+            value: env.SEALANT_BOAT_API_KEY,
+            file: env.SEALANT_BOAT_API_KEY_FILE,
+          }),
   },
 );
 
-/** Boat on a deployment that did not configure it is refused like any unregistered runtime. */
+/**
+ * Boat where no worker launches it, or where no account can run it, is refused at create with the
+ * sentence that says who can change it, under the code of any unregistered runtime.
+ */
 export const requireBoatConfigured = Effect.gen(function* () {
-  if (yield* BoatConfigured) return;
-  return yield* new WorkspaceServiceUnavailableError(unregisteredRuntimeRefusal(BOAT_RUNTIME_ID));
+  const refusal = yield* boatLaunchRefusalNow;
+  if (refusal === undefined) return;
+  return yield* new WorkspaceServiceUnavailableError({
+    code: "unsupported-runtime",
+    message: refusal,
+  });
 });
 
 /**
  * The Boat account a workspace's spec names (`runtime.boatAccountId`) is one it may run in: the
  * workspace runs on Boat, and the account is stored on this install and not being removed. A spec
- * that names none runs in the install's default account and needs nothing here.
+ * that names none runs in the install's own account, which a launching worker must have
+ * (`boat-account-required`). A spec that reaches project resources needs a launching worker with
+ * the resource gateway (`gateway-unavailable`). Each is what the worker would refuse after the
+ * create; it is refused here, before anything is reserved.
  */
 export const requireBoatAccount = (
-  spec: { readonly runtime: { readonly boatAccountId?: string | undefined } },
+  spec: {
+    readonly runtime: {
+      readonly boatAccountId?: string | undefined;
+      readonly resources?: string | undefined;
+    };
+  },
   runtimeFamily: string,
 ) =>
   Effect.gen(function* () {
     const accountId = spec.runtime.boatAccountId;
+    if (runtimeFamily === BOAT_RUNTIME_ID && (yield* BoatConfigured)) {
+      const support = yield* boatLaunchSupport;
+      const refusal = boatLaunchRefusal(support, {
+        namesAccount: accountId !== undefined,
+        resources: spec.runtime.resources,
+      });
+      if (refusal !== undefined)
+        return yield* new WorkspaceServiceUnavailableError({
+          code: !support.launches
+            ? "unsupported-runtime"
+            : accountId === undefined && !support.defaultAccount
+              ? "boat-account-required"
+              : "gateway-unavailable",
+          message: refusal,
+        });
+    }
     if (accountId === undefined) return;
     if (runtimeFamily !== BOAT_RUNTIME_ID)
       return yield* new WorkspaceBadRequestError({

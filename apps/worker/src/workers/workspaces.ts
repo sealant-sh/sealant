@@ -404,8 +404,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         ),
       );
   const resourceReconciler = resourceAssembly?.reconciler;
-  // What this worker runs for Boat, from its settings alone (`assembleBoat`): the adapter where
-  // the builder is configured, with a resource gateway or without one.
+  // What this worker runs for Boat, from its settings (`assembleBoat`): the adapter where the state
+  // directory is set, with a resource gateway or without one, with an env key or stored keys only.
   const boatAssembly = await assembleBoat({
     env,
     db,
@@ -1229,6 +1229,44 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     }
   };
   void verifyBoatBearers();
+  // What this worker does for Boat, written now and every minute: the API answers "can this
+  // install launch Boat" from it, so a create no worker can serve is refused at create.
+  const reportBoatLaunch = async () => {
+    try {
+      await boatAssembly?.reportLaunch(env.WORKER_ID);
+    } catch {
+      console.error("Boat launch report could not be written; the next minute tries again");
+    }
+  };
+  void reportBoatLaunch();
+  const boatLaunchReportTimer =
+    boatAssembly === undefined ? undefined : setInterval(reportBoatLaunch, 60_000);
+  boatLaunchReportTimer?.unref();
+  // Every Boat key's report kept fresh: the install's own key checked now, at start, and every
+  // key whose report is a day old checked again (looked at hourly). Read-only calls to Boat.
+  let boatKeyRefreshRunning = false;
+  const refreshBoatKeys = async (force: readonly string[] = []) => {
+    if (boatAssembly === undefined || boatKeyRefreshRunning) return;
+    boatKeyRefreshRunning = true;
+    try {
+      const outcomes = await boatAssembly.refreshKeyReports({ force });
+      const unanswered = outcomes.filter(
+        (each) => each.outcome !== "refreshed" && each.outcome !== "fresh",
+      );
+      if (unanswered.length > 0)
+        console.warn("Boat key reports not refreshed; the last ones are kept", {
+          accounts: unanswered,
+        });
+    } catch {
+      console.error("Boat key reports could not be refreshed; the next pass tries again");
+    } finally {
+      boatKeyRefreshRunning = false;
+    }
+  };
+  void refreshBoatKeys(["default"]);
+  const boatKeyRefreshTimer =
+    boatAssembly === undefined ? undefined : setInterval(() => void refreshBoatKeys(), 3_600_000);
+  boatKeyRefreshTimer?.unref();
 
   resourceTickTimer.unref();
 
@@ -1248,6 +1286,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       clearInterval(recoverySweepTimer);
       clearInterval(exitReconcilerTimer);
       if (boatSweepTimer !== undefined) clearInterval(boatSweepTimer);
+      if (boatLaunchReportTimer !== undefined) clearInterval(boatLaunchReportTimer);
+      if (boatKeyRefreshTimer !== undefined) clearInterval(boatKeyRefreshTimer);
       // Before the Boat runtime goes: a delivery in flight finishes its configuration on it.
       await boatLinkConsumer?.cancel();
       await boatAssembly?.dispose();

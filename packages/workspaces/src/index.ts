@@ -112,7 +112,12 @@ export {
   boatAccountControlMaterial,
   boatAccountControlMaterialLayer,
 } from "./runtime/boat/account-control.js";
-export { boatProviderFromEnv, type BoatProviderEnvLike } from "./runtime/boat/provider-env.js";
+export {
+  boatInstallNames,
+  boatProviderFromEnv,
+  type BoatEnvAccount,
+  type BoatProviderEnvLike,
+} from "./runtime/boat/provider-env.js";
 export {
   BoatControlError,
   BoatControlMaterial,

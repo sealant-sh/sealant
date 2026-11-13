@@ -380,6 +380,24 @@ is set.
 | `SEALANT_MICROVM_FLUSH_TIMEOUT_MS`        | `50000`                            | The agent's kill switch for a hung `sealantctl capture flush` in the suspend/terminate hooks (the platform's hook timeout is at most 60 s). sealantd itself returns a flush within its 10 s shutdown grace, so a larger value buys nothing today. A capture daemon's shutdown final flush is bounded inside it (`SEALANT_SHUTDOWN_FINAL_DEADLINE_MS`: this less a tenth, 5–60 s). |
 | `SEALANT_MICROVM_WS_AUTH`                 | `header`                           | How the endpoint token rides a WebSocket upgrade: `X-aws-proxy-*` headers, or the documented `lambda-microvms.*` subprotocols.                                                                                                                                                                                                                                                    |
 
+## Boat runtime
+
+Boat runs workspaces as VMs in a Boat account. Every setting is optional, and an install can run
+Boat from the Boat keys it stores (`POST /v1/boat-accounts`) with none of the key settings below.
+
+| Variable                       | Process     | Default            | What it does                                                                                                                                                        |
+| ------------------------------ | ----------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_BOAT_STATE_DIRECTORY` | worker      | unset (Boat off)   | Where Boat's image-build journals live; it must outlive the worker. Set, the worker launches Boat workspaces. Needs `SEALANT_CREDENTIALS_KEY`.                      |
+| `SEALANT_BOAT_API_KEY`         | API, worker | unset              | The install's own Boat key, or `SEALANT_BOAT_API_KEY_FILE` (a root-owned 0400 file). A workspace that names no stored account runs with it.                         |
+| `SEALANT_BOAT_ORGANIZATION`    | API, worker | unset              | The Boat organization the install's own key bills (id or name), sent as `X-Boat-Org` on every request with that key. Unset, a personal key bills its active wallet. |
+| `SEALANT_BOAT_DEPLOYMENT_ID`   | API, worker | made once by Core  | The `sealant-deployment` label of what the install's own key makes. Unset, Core makes one and keeps it in its database; an install that set it keeps it.            |
+| `SEALANT_BOAT_BUILDER_OWNER`   | worker      | made once by Core  | The `sealant-owner` of the saved images built with the install's own key. Same rule as the deployment label.                                                        |
+| `SEALANT_BOAT_GATEWAY_HOST_ID` | worker      | unset (no gateway) | With `SEALANT_BOAT_GATEWAY_RELAY_HOST` and `SEALANT_BOAT_GATEWAY_IMAGE`, the resource gateway: Boat workspaces reach their project's resources.                     |
+
+The API refuses a Boat create that no worker could serve, from what the workers report (see the HTTP
+reference's Boat accounts section). Each Boat key's report is refreshed once a day by the worker,
+and the install's own key is checked when the worker starts.
+
 ## Notable runtime defaults
 
 You should not need to set these for a standard self-host — compose already supplies sensible

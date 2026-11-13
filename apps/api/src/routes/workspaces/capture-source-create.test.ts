@@ -381,8 +381,20 @@ const makeRecordingLayer = (
 
   return Layer.mergeAll(
     Layer.mock(ConnectedAccountRepo, {}),
-    // No spec here names a Boat account.
-    Layer.mock(BoatAccountRepo, {}),
+    // No spec here names a Boat account. A worker launches Boat, with the install's own key and
+    // the resource gateway, wherever the API is configured for it.
+    Layer.mock(BoatAccountRepo, {
+      launchReports: () =>
+        Effect.succeed([
+          {
+            worker: "worker-test",
+            launches: true,
+            defaultAccount: true,
+            resourceGateway: true,
+            observedAt: new Date(),
+          },
+        ]),
+    }),
     Layer.mock(GitHubInstallationRepo, {}),
     Layer.mock(GitHubInstallationRepositoryCacheRepo, {}),
     Layer.mock(GitHubSourceIntegrationService, {
@@ -1299,7 +1311,7 @@ describe("Boat runtime selection", () => {
       ).toMatchObject({
         _tag: "WorkspaceServiceUnavailableError",
         code: "unsupported-runtime",
-        message: "No runtime adapter is registered for target.runtime.family 'boat'.",
+        message: expect.stringContaining("SEALANT_CREDENTIALS_KEY"),
       });
       expect(denied.state.job, principal.kind).toBeUndefined();
       expect(denied.state.reservations?.size ?? 0, principal.kind).toBe(0);

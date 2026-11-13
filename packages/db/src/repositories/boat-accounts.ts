@@ -1,10 +1,16 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import { and, asc, count, eq, exists, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, count, eq, exists, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
-import { boatAccounts, boatKeyReports, type BoatAccountRow } from "../schema/boat-accounts.js";
+import {
+  boatAccounts,
+  boatInstall,
+  boatKeyReports,
+  boatLaunchReports,
+  type BoatAccountRow,
+} from "../schema/boat-accounts.js";
 import { boatRuns } from "../schema/boat-runs.js";
 import { nativePublications } from "../schema/native-publications.js";
 
@@ -54,6 +60,19 @@ export interface BoatKeyReportRecord {
   readonly observedAt: Date;
 }
 
+/** What one worker said it does for Boat, and when. */
+export interface BoatLaunchReportRecord {
+  /** The worker's id (`WORKER_ID`). */
+  readonly worker: string;
+  /** It launches Boat workspaces: its Boat adapter is registered. */
+  readonly launches: boolean;
+  /** It has the install's own Boat key, so a workspace that names no stored account can run. */
+  readonly defaultAccount: boolean;
+  /** It has the resource gateway, so a Boat workspace can reach its project's resources. */
+  readonly resourceGateway: boolean;
+  readonly observedAt: Date;
+}
+
 /** What a removal request found: done, or refused for what the account still has in Boat. */
 export type BoatAccountRemovalRequest =
   | { readonly kind: "requested"; readonly account: BoatAccountRecord }
@@ -96,6 +115,18 @@ export interface BoatAccountRepoService {
   }) => Failing<BoatAccountRecord>;
   /** Replaces the key's last check report (`account`: an account id, or `default`). */
   readonly saveReport: (input: BoatKeyReportRecord) => Failing<void>;
+  /**
+   * The `sealant-deployment` label of the install's own account. Set once, the first time it is
+   * asked for: to `preferred` (the operator's setting) when given, otherwise to a name Core makes.
+   * Never changed afterwards; a caller with a setting uses its setting.
+   */
+  readonly installDeployment: (preferred: string | undefined) => Failing<string>;
+  /** The same, for the `sealant-owner` of the saved images built in the install's own account. */
+  readonly installBuilderOwner: (preferred: string | undefined) => Failing<string>;
+  /** Replaces a worker's launch report, and forgets reports no worker renewed for a day. */
+  readonly reportLaunch: (input: BoatLaunchReportRecord) => Failing<void>;
+  /** Every worker's launch report observed at or after `since`, newest first. */
+  readonly launchReports: (since: Date) => Failing<readonly BoatLaunchReportRecord[]>;
   /** Every stored check report, by account (`default` for the env key). */
   readonly reports: () => Failing<ReadonlyMap<string, BoatKeyReportRecord>>;
   /** The account whatever its state, removed included; never its key. */
@@ -432,8 +463,75 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     const rows = yield* db.select().from(boatKeyReports);
     return new Map(rows.map((row) => [row.account, row]));
   });
+  const installDeployment = Effect.fn("BoatAccountRepo.installDeployment")(function* (
+    preferred: string | undefined,
+  ) {
+    const [row] = yield* db
+      .insert(boatInstall)
+      .values({ id: "install", deploymentId: preferred ?? `sealant-install-${randomUUID()}` })
+      .onConflictDoUpdate({
+        target: boatInstall.id,
+        set: { deploymentId: sql`coalesce(${boatInstall.deploymentId}, excluded.deployment_id)` },
+      })
+      .returning({ value: boatInstall.deploymentId });
+    if (row?.value == null) return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+    return row.value;
+  });
+  const installBuilderOwner = Effect.fn("BoatAccountRepo.installBuilderOwner")(function* (
+    preferred: string | undefined,
+  ) {
+    const [row] = yield* db
+      .insert(boatInstall)
+      .values({ id: "install", builderOwner: preferred ?? randomUUID() })
+      .onConflictDoUpdate({
+        target: boatInstall.id,
+        set: { builderOwner: sql`coalesce(${boatInstall.builderOwner}, excluded.builder_owner)` },
+      })
+      .returning({ value: boatInstall.builderOwner });
+    if (row?.value == null) return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+    return row.value;
+  });
+  const reportLaunch = Effect.fn("BoatAccountRepo.reportLaunch")(function* (
+    input: BoatLaunchReportRecord,
+  ) {
+    const values = {
+      launches: input.launches,
+      defaultAccount: input.defaultAccount,
+      resourceGateway: input.resourceGateway,
+      observedAt: input.observedAt,
+    };
+    yield* db
+      .insert(boatLaunchReports)
+      .values({ worker: input.worker, ...values })
+      .onConflictDoUpdate({ target: boatLaunchReports.worker, set: values });
+    yield* db
+      .delete(boatLaunchReports)
+      .where(
+        lt(boatLaunchReports.observedAt, new Date(input.observedAt.getTime() - 24 * 3_600_000)),
+      );
+  });
+  const launchReports = Effect.fn("BoatAccountRepo.launchReports")(function* (since: Date) {
+    const rows = yield* db
+      .select()
+      .from(boatLaunchReports)
+      .where(gte(boatLaunchReports.observedAt, since))
+      .orderBy(sql`${boatLaunchReports.observedAt} desc`);
+    return rows.map(
+      (row): BoatLaunchReportRecord => ({
+        worker: row.worker,
+        launches: row.launches,
+        defaultAccount: row.defaultAccount,
+        resourceGateway: row.resourceGateway,
+        observedAt: row.observedAt,
+      }),
+    );
+  });
   return BoatAccountRepo.of({
     create: (input) => boundary(create(input)),
+    installDeployment: (preferred) => boundary(installDeployment(preferred)),
+    installBuilderOwner: (preferred) => boundary(installBuilderOwner(preferred)),
+    reportLaunch: (input) => boundary(reportLaunch(input)),
+    launchReports: (since) => boundary(launchReports(since)),
     saveReport: (input) => boundary(saveReport(input)),
     reports: () => boundary(reports()),
     get: (id) => boundary(get(id)),

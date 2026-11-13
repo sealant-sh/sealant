@@ -26,11 +26,11 @@ import { CredentialCipher } from "@sealant/credentials";
 import { BoatAccountRepo, type BoatAccountRecord } from "@sealant/db";
 import {
   BoatSecret,
-  boatKeyRefusedReport,
   boatOrganizationSchema,
   boatSandboxIdSchema,
   boatSnapshotNameSchema,
   checkBoatKey,
+  observeBoatKey,
   type BoatKeyCheck,
 } from "@sealant/workspaces";
 import { Effect, Option, Schema } from "effect";
@@ -39,6 +39,7 @@ import { env } from "../../runtime-env.js";
 import {
   BoatConfigured,
   BoatDefaultKey,
+  BoatDefaultOrganization,
   BoatKeyClients,
   type BoatKeyClient,
 } from "../../services/boat-availability.js";
@@ -57,14 +58,17 @@ const toWire = (account: BoatAccountRecord, report: BoatKeyReport | null): BoatA
 /** When this process first served the install's own key: the env key has no creation time. */
 const SERVING_SINCE = new Date().toISOString();
 /** The install's own key as `list` and `check` show it: it cannot be rotated or removed here. */
-const defaultWire = (report: BoatKeyReport | null): BoatAccountWire => ({
+const defaultWire = (
+  report: BoatKeyReport | null,
+  organization: string | null,
+): BoatAccountWire => ({
   boatAccountId: BOAT_DEFAULT_ACCOUNT_ID,
   label: "This install's Boat key",
   state: "active",
   createdAt: SERVING_SINCE,
   keyRotatedAt: null,
   source: "environment",
-  organization: null,
+  organization,
   report,
 });
 
@@ -82,14 +86,12 @@ const environmentKey = (verb: string) =>
 
 const internal = (message: string) => () => new BoatAccountInternalServerError({ message });
 
-/** Stored accounts need Boat itself (the env key) and somewhere to seal keys. */
+/**
+ * Stored accounts need somewhere to seal keys, and nothing else: an install runs Boat from them
+ * with or without a key of its own in its environment.
+ */
 const requireBoatAccounts = Effect.gen(function* () {
-  if (!(yield* BoatConfigured))
-    return yield* new BoatAccountServiceUnavailableError({
-      message:
-        "Boat accounts need Boat configured on this install: SEALANT_BOAT_API_KEY (or SEALANT_BOAT_API_KEY_FILE) and SEALANT_BOAT_DEPLOYMENT_ID.",
-    });
-  const key = env.SEALANT_CREDENTIALS_KEY?.trim();
+  const key = (yield* BoatConfigured) ? env.SEALANT_CREDENTIALS_KEY?.trim() : undefined;
   if (key === undefined || key.length === 0)
     return yield* new BoatAccountServiceUnavailableError({
       message: "Boat accounts require SEALANT_CREDENTIALS_KEY to be configured.",
@@ -236,7 +238,7 @@ export const listBoatAccounts = () =>
     const reportOf = (account: string) => storedReport(reports.get(account)?.report);
     return {
       items: [
-        defaultWire(reportOf(BOAT_DEFAULT_ACCOUNT_ID)),
+        defaultWire(reportOf(BOAT_DEFAULT_ACCOUNT_ID), (yield* BoatDefaultOrganization) ?? null),
         ...accounts.map((account) => toWire(account, reportOf(account.id))),
       ],
     };
@@ -257,11 +259,17 @@ export const checkBoatAccount = (boatAccountId: string) =>
     let account: BoatAccountRecord | undefined;
     if (boatAccountId === BOAT_DEFAULT_ACCOUNT_ID) {
       const key = (yield* BoatDefaultKey)();
+      if (key === undefined)
+        return yield* new BoatAccountNotFoundError({
+          message:
+            "This install has no Boat key of its own (SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE); its Boat accounts are the stored ones.",
+        });
       if (!key.ok)
         return yield* new BoatAccountServiceUnavailableError({
           message: "The install's own Boat key could not be read from its environment.",
         });
       credential = key.value;
+      organization = (yield* BoatDefaultOrganization) ?? null;
     } else {
       account = yield* repo
         .get(boatAccountId)
@@ -284,15 +292,13 @@ export const checkBoatAccount = (boatAccountId: string) =>
       credential = parsed.value;
     }
     const client = yield* openClient(credential, organization);
-    const check = yield* runCheck(client, organization);
-    if (check.kind === "unverified")
-      return yield* unverified(check.failure, "the last report was kept.");
-    const report =
-      check.kind === "refused"
-        ? boatKeyRefusedReport(check.failure, { organization })
-        : check.report;
-    yield* saveReport(account?.id ?? BOAT_DEFAULT_ACCOUNT_ID, report);
-    return account === undefined ? defaultWire(report) : toWire(account, report);
+    const observed = yield* Effect.promise(() => observeBoatKey(client, { organization }));
+    if (observed.kind === "kept")
+      return yield* unverified(observed.failure, "the last report was kept.");
+    yield* saveReport(account?.id ?? BOAT_DEFAULT_ACCOUNT_ID, observed.report);
+    return account === undefined
+      ? defaultWire(observed.report, organization)
+      : toWire(account, observed.report);
   });
 
 const notFound = (boatAccountId: string) =>
