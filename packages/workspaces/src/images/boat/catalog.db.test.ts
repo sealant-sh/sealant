@@ -822,7 +822,7 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
           expect((yield* repo.retire(oldest.id))?.state).toBe("retiring");
           expect(
             yield* Effect.flip(repo.reserve(record.ownership.key, yield* consumer(db, f.owner))),
-          ).toMatchObject({ code: "consumer-conflict" });
+          ).toMatchObject({ code: "publication-removing" });
           const removal = yield* repo.claim(oldest.id, "remove", 60000);
           if (!removal || retiring?.publication === null || retiring?.publication === undefined)
             throw new Error("missing removal claim");
@@ -1153,7 +1153,7 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
                   yield* Effect.flip(
                     repo.reserve(record.ownership.key, yield* consumer(db, f.owner)),
                   ),
-                ).toMatchObject({ code: "consumer-conflict" });
+                ).toMatchObject({ code: "publication-removing" });
                 expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
                   id: record.ownership.buildId,
                   outcome: "updated",

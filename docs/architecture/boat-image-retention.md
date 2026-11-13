@@ -21,13 +21,16 @@ its spec again. So an image is kept when any of these holds, checked in
    can still start in this account (`NativePublicationRepo.startable`): not archived, and queued,
    running, ready, or stopped or failed within `SEALANT_BOAT_IMAGE_RESUME_DAYS` (14). After a Core
    upgrade that changes the recipe, a stopped workspace wants the new key, so the old image is no
-   longer wanted.
+   longer wanted. Only Boat workspaces count: every create has an image scope whatever its runtime,
+   so a workspace counts only when its latest launch resolved to Boat (or has not resolved yet and
+   asks for `boat` or `auto`) and Boat can launch its spec. A Docker workspace, or one Boat refuses
+   (a custom base image, host directories, Arch, Fedora), is never planned here.
 3. **A build of its scope is queued or running.** That job's spec was not read when the wanted keys
    were, so nothing of its scope is removed meanwhile.
 4. **Something used it recently.** It became ready, or a run was pinned to it or released it, within
    `SEALANT_BOAT_IMAGE_MIN_AGE_HOURS` (24): a rolled-back Core still finds its images.
 
-If any startable workspace's spec cannot be planned, or there are more than 20,000 of them, the pass
+If any counted workspace's spec cannot be planned, or there are more than 20,000 of them, the pass
 removes nothing. A spec that no longer parses cannot launch and is ignored.
 
 ## Bounds
@@ -58,7 +61,10 @@ to answer 404, then the row becomes `removed`. A failure (a lost reply, Boat ref
 row `quarantined` with `native-removal-pending`, which the journal sweep and the next pass retry: a
 snapshot Boat already deleted reads 404 and is recorded removed. A process that dies after recording
 keeps its claim for 30 minutes, then the next pass takes it over. A launch of an environment whose
-image is being removed is refused until the removal finishes (`consumer-conflict`), then builds the
-image again.
+image is being removed waits, as for a build in progress: reserve answers `publication-removing`,
+the catalog answers `publication-pending`, and the build job tries again until the removal is
+recorded, then builds the image again. It waits as long as the removal takes: seconds normally,
+until the next journal sweep after a failed delete, up to the 30-minute claim after a worker died
+mid-removal.
 
 Schema: none changed. A rolled-back Core reads every row this one writes.

@@ -25,6 +25,8 @@ import {
 import { expireNativeClaim } from "@sealant/db/testing/native-publications";
 import { withWorkspaceJobTestDatabase } from "@sealant/db/testing/workspace-publications";
 import {
+  boatLaunchSupport,
+  newWorkspaceSchema,
   nativeArtifactConsumerSchema,
   type NativeArtifactConsumer,
   type NativePublicationKey,
@@ -88,6 +90,11 @@ const environment = (name: string, account?: string): NewWorkspace => {
   });
   return {
     ...base,
+    // A Boat workspace starts from a capture of its files (Mend's sessions), never a clone.
+    sources: {
+      ...base.sources,
+      workspace: { kind: "capture", endpoint: "https://mend.example.invalid/capture" },
+    },
     lifecycle: { ...base.lifecycle, setup: [{ run: `echo ${name}`, shell: "bash" }] },
     runtime: { ...base.runtime, ...(account === undefined ? {} : { boatAccountId: account }) },
   };
@@ -131,7 +138,11 @@ interface Context {
     readonly changedAt?: Date;
     readonly job?: "queued" | "running" | "succeeded" | "failed";
     readonly binds?: readonly { readonly mountPath: string; readonly subpath: string }[];
+    /** The runtime its latest launch resolved to; absent, none is recorded (not launched yet). */
+    readonly adapter?: "boat" | "docker";
   }) => Promise<string>;
+  /** Whether Boat's builder plans this spec at all. */
+  readonly plans: (spec: NewWorkspace) => Promise<boolean>;
   /** One retention pass at `at`, with the worker's default bounds, every page. */
   readonly reap: (
     at: Date,
@@ -237,6 +248,12 @@ const withRetention = (body: (c: Context) => Promise<void>) =>
         return { deploymentId, owner, service: await runtime.runPromise(BoatNativeCatalog) };
       };
       const catalog = await makeCatalog(`sealant-install-${randomUUID()}`, true);
+      const planner = new BoatSnapshotBuilder({
+        api,
+        runtimeBundle: bundle,
+        journalDirectory: journals[0] ?? "",
+        owner: catalog.owner,
+      });
       const person = async (): Promise<Scope> => {
         const id = `usr_retention_${randomUUID()}`;
         await Effect.runPromise(
@@ -318,9 +335,18 @@ const withRetention = (body: (c: Context) => Promise<void>) =>
               requestPayload: input.spec,
             }),
           );
+          if (input.adapter !== undefined)
+            await Effect.runPromise(
+              db.insert(schema.workspaceRuntimeInstances).values({
+                runId,
+                status: input.status === "stopped" ? "stopped" : "running",
+                adapter: input.adapter,
+              }),
+            );
           return workspaceId;
         },
         reap: (at, on = catalog) => pages(at, on),
+        plans: async (spec) => (await planner.plan(spec)).ok,
         state: async (id) => (await Effect.runPromise(repo.get(id)))?.state,
         snapshotOf: async (id) => {
           const record = await Effect.runPromise(repo.get(id));
@@ -517,6 +543,73 @@ describe.skipIf(databaseUrl === undefined || bundleDirectory === undefined)(
         expect(await c.used()).toBe(5);
       }));
 
+    it("counts only Boat workspaces: Docker ones Boat refuses neither count nor stop the pass", () =>
+      withRetention(async (c) => {
+        const person = await c.person();
+        // The install's own account, beside Docker: every create has an image scope, Docker or not.
+        const wanted = await c.build(environment("boat-wanted"), person);
+        const unused = await c.build(environment("boat-unused"), person);
+        for (const each of [wanted, unused]) await c.release(each.pin, each.publicationId);
+        await c.workspace({
+          spec: environment("boat-wanted"),
+          scope: person,
+          status: "stopped",
+          adapter: "boat",
+        });
+        const base = createWorkspaceBuildSpec();
+        // The Boat environments here are ones Boat launches.
+        expect(boatLaunchSupport(environment("boat-wanted")).supported).toBe(true);
+        const customImage: NewWorkspace = {
+          ...base,
+          target: {
+            runtime: { family: "auto", mode: "prefer" },
+            os: { family: "custom", mode: "require", baseImage: "docker.io/library/ubuntu:24.04" },
+          },
+        };
+        const arch: NewWorkspace = {
+          ...base,
+          target: {
+            runtime: { family: "auto", mode: "prefer" },
+            os: { family: "arch", mode: "require" },
+          },
+        };
+        const hostDirectories: NewWorkspace = {
+          ...base,
+          sources: {
+            ...base.sources,
+            mounts: [
+              {
+                hostPath: "/srv/projects",
+                mountPath: "/projects",
+                readOnly: true,
+                bindable: false,
+              },
+            ],
+          },
+        };
+        for (const spec of [customImage, arch, hostDirectories]) {
+          expect(newWorkspaceSchema.safeParse(spec).success).toBe(true);
+          expect(boatLaunchSupport(spec).supported).toBe(false);
+        }
+        // Boat's planner refuses the first two: counted, either would stop the whole pass.
+        expect(await c.plans(customImage)).toBe(false);
+        expect(await c.plans(arch)).toBe(false);
+        await c.workspace({ spec: customImage, scope: person, status: "ready", adapter: "docker" });
+        await c.workspace({ spec: arch, scope: person, status: "stopped", adapter: "docker" });
+        // Failed before any runtime was chosen: no adapter recorded, and Boat refuses its spec.
+        await c.workspace({ spec: hostDirectories, scope: person, status: "failed" });
+
+        const pass = await c.reap(later(2));
+        expect(pass).toEqual(
+          expect.arrayContaining([
+            { id: unused.publicationId, outcome: "updated", code: "removed" },
+            { id: wanted.publicationId, outcome: "skipped", code: "retained" },
+          ]),
+        );
+        expect(await c.state(wanted.publicationId)).toBe("ready");
+        expect(await c.used()).toBe(1);
+      }));
+
     it("leaves another install's images, another account's and a full check's snapshot alone", () =>
       withRetention(async (c) => {
         const person = await c.person();
@@ -579,15 +672,21 @@ describe.skipIf(databaseUrl === undefined || bundleDirectory === undefined)(
         // Boat has deleted it; Core holds it as a removal still pending, never as an image to use.
         expect(c.boat.snapshots.has(lostName)).toBe(false);
         expect(await c.state(lost.publicationId)).toBe("quarantined");
-        await expect(
+        // A launch of that environment meanwhile waits, as for a build in progress: its build job
+        // tries again on `publication-pending`, and no person reads a store error.
+        const waiting = await c.consumer(person);
+        const launch = () =>
           Effect.runPromise(
             c.catalog.service.acquire({
               spec: environment("lost"),
               scope: person,
-              consumer: await c.consumer(person),
+              consumer: waiting,
             }),
-          ),
-        ).rejects.toMatchObject({ code: "consumer-conflict" });
+          );
+        await expect(launch()).rejects.toMatchObject({
+          code: "publication-pending",
+          detail: "native-publication-removing",
+        });
 
         // The crashed claim lapses; the next pass finishes both.
         await Effect.runPromise(expireNativeClaim(c.db, crashed.publicationId));
@@ -600,6 +699,10 @@ describe.skipIf(databaseUrl === undefined || bundleDirectory === undefined)(
         );
         expect(await c.state(lost.publicationId)).toBe("removed");
         expect(await c.state(crashed.publicationId)).toBe("removed");
+        // The waiting launch, tried again, builds the image anew.
+        const rebuilt = await launch();
+        expect(rebuilt.publicationId).not.toBe(lost.publicationId);
+        expect(await c.state(rebuilt.publicationId)).toBe("ready");
         expect(c.boat.snapshots.has(crashedName)).toBe(false);
         expect(
           c.boat.events.filter(

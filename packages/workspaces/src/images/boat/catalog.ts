@@ -9,6 +9,7 @@ import {
   type SealantDB,
 } from "@sealant/db";
 import {
+  boatLaunchSupport,
   newWorkspaceSchema,
   nativeImageScopeSchema,
   nativeBuildRetryReasonSchema,
@@ -100,8 +101,8 @@ export interface BoatNativeCatalogService {
   /**
    * One page of this account's retention: each saved image no workspace can use any more is
    * removed (`NativeRetentionPolicy`). The keys still wanted are what this Core plans, now, for the
-   * latest launch of every workspace that can still start in the account: not archived, and live,
-   * or stopped or failed at or after `stoppedSince`. An image is also kept while a run holds it,
+   * latest launch of every Boat workspace that can still start in the account (`startsOnBoat`):
+   * not archived, and live, or stopped or failed at or after `stoppedSince`. An image is also kept while a run holds it,
    * while a build of its scope is queued or running, and until nothing has used it since
    * `unusedSince`. If any of those specs cannot be planned, nothing is removed.
    */
@@ -169,6 +170,18 @@ const publication = (
   snapshot: built.artifact,
   evidence: built.evidence,
 });
+/**
+ * Whether a workspace's next launch can be a Boat one, and so look up an image here. Every create
+ * has an image scope whatever its runtime: a workspace whose launch resolved to another runtime,
+ * one that asks for another runtime and has not launched yet, and one whose spec Boat refuses (a
+ * custom base image, host directories, Arch, Fedora) never looks a Boat image up, and is never
+ * planned. An `auto` spec Boat can run counts even where the install's default is Docker: its key
+ * matches no Boat image unless that spec also launched on Boat.
+ */
+const startsOnBoat = (spec: NativeAcquireInput["spec"], adapter: string | null) =>
+  (adapter === null
+    ? spec.target.runtime.family === "boat" || spec.target.runtime.family === "auto"
+    : adapter === "boat") && boatLaunchSupport(spec).supported;
 const failureCode = (error: NativeCatalogFailure) =>
   error instanceof NativeCatalogError ? (error.detail ?? error.code) : error.code;
 
@@ -211,7 +224,21 @@ const make = (
           );
         }
       }
-      const record = yield* repo.reserve(key, input.consumer);
+      // An image being removed (retention, a withdrawal) is waited for like a build in progress:
+      // the build job tries again, and once the removal is recorded the next reserve builds anew.
+      const record = yield* repo.reserve(key, input.consumer).pipe(
+        Effect.catchIf(
+          (error) => error.code === "publication-removing",
+          () =>
+            Effect.fail(
+              new NativeCatalogError(
+                "publication-pending",
+                undefined,
+                "native-publication-removing",
+              ),
+            ),
+        ),
+      );
       const id = record.ownership.publicationId;
       if (record.state === "ready") {
         const checked = yield* Effect.result(
@@ -352,7 +379,7 @@ const make = (
           // A launch whose spec or scope no longer parses cannot start: its build job refuses it.
           const spec = newWorkspaceSchema.safeParse(row.spec);
           const scope = nativeImageScopeSchema.safeParse(row.scope);
-          if (!spec.success || !scope.success) continue;
+          if (!spec.success || !scope.success || !startsOnBoat(spec.data, row.adapter)) continue;
           const id = createHash("sha256").update(JSON.stringify(row.spec)).digest("hex");
           let plan = plans.get(id);
           if (plan === undefined) {

@@ -44,7 +44,12 @@ export class NativeCatalogStoreError extends Error {
       | "consumer-released"
       | "stale-claim"
       | "invalid-input"
-      | "account-unavailable",
+      | "account-unavailable"
+      /**
+       * Reserve: this key's image is being removed (retiring, or its removal pending). Not a
+       * conflict of the caller's: a launch waits for the removal, then builds the image again.
+       */
+      | "publication-removing",
   ) {
     super(`Native catalog store failed during ${operation}: ${code}`);
   }
@@ -67,6 +72,12 @@ export interface NativeStartableWorkspace {
   /** The latest build job's request, unparsed: the spec that job's acquire planned from. */
   readonly spec: unknown;
   readonly scope: unknown;
+  /**
+   * The runtime the latest launch resolved to (`workspace_runtime_instances.adapter`), or null
+   * when none is recorded yet (queued, or failed before a runtime was chosen). Every create has an
+   * image scope whatever its runtime, so this is what tells a Docker workspace from a Boat one.
+   */
+  readonly adapter: string | null;
 }
 
 /** Transactional ownership; provider and filesystem operations belong outside these methods. */
@@ -152,11 +163,12 @@ export interface NativePublicationRepoService {
     readonly after?: string;
   }) => Effect.Effect<ReadonlyArray<NativeCatalogRecord>, NativeCatalogStoreError>;
   /**
-   * One page, by workspace id, of the workspaces whose next launch would run in this deployment's
-   * Boat account and look up an image there: not archived, their latest launch a Boat one (its
-   * build job has an image scope) in this account, and either not stopped or failed, or stopped
-   * or failed at or after `stoppedSince`. A stopped Boat workspace is started again from its
-   * latest launch's spec, so each row is the spec and scope that launch planned from.
+   * One page, by workspace id, of the workspaces whose next launch may run in this deployment's
+   * Boat account and look up an image there: not archived, their latest launch's spec naming this
+   * account (or none, for the install's own), and either not stopped or failed, or stopped or
+   * failed at or after `stoppedSince`. A stopped Boat workspace is started again from its latest
+   * launch's spec, so each row is the spec and scope that launch planned from, and the runtime it
+   * resolved to: the caller keeps only the Boat ones.
    */
   readonly startable: (input: {
     readonly deploymentId: string;
@@ -453,7 +465,9 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             record.state === "retiring" ||
             (record.state === "quarantined" && record.reason === "native-removal-pending")
           )
-            return yield* Effect.fail(new NativeCatalogStoreError("reserve", "consumer-conflict"));
+            return yield* Effect.fail(
+              new NativeCatalogStoreError("reserve", "publication-removing"),
+            );
           yield* db
             .insert(consumers)
             .values({ ...consumer, publicationId: row.id })
@@ -837,9 +851,14 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           workspaceId: workspaces.id,
           spec: ociImageBuildJobs.requestPayload,
           scope: ociImageBuildJobs.imageScope,
+          adapter: workspaceRuntimeInstances.adapter,
         })
         .from(workspaces)
         .innerJoin(ociImageBuildJobs, eq(ociImageBuildJobs.runId, workspaces.latestRunId))
+        .leftJoin(
+          workspaceRuntimeInstances,
+          eq(workspaceRuntimeInstances.runId, workspaces.latestRunId),
+        )
         .where(
           and(
             isNull(workspaces.archivedAt),

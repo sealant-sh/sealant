@@ -401,8 +401,8 @@ Boat from the Boat keys it stores (`POST /v1/boat-accounts`) with none of the ke
 Boat includes ten saved images (snapshots) per account and bills each one beyond that by the day. A
 worker that launches Boat workspaces removes, once an hour, each image it built in an account that
 no workspace can use any more. An image is kept while any of these holds: a run uses it (a running
-workspace, a standby, a stop in progress, a build in flight); it is the image a workspace that can
-still start would look up (not archived, and running, queued, or stopped or failed within
+workspace, a standby, a stop in progress, a build in flight); it is the image a Boat workspace that
+can still start would look up (not archived, and running, queued, or stopped or failed within
 `SEALANT_BOAT_IMAGE_RESUME_DAYS`, its latest launch's spec planned with the running Core); a build
 for its owner or resource domain is queued or running; or something used it within
 `SEALANT_BOAT_IMAGE_MIN_AGE_HOURS`. Images Core did not build, another install's, and a full check's
