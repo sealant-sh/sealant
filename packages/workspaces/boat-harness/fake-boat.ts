@@ -60,8 +60,9 @@ export interface FakeSandbox {
   /** The saved snapshot's copy of `/var/lib/sealant/docker` this VM starts from, if any. */
   readonly dockerSeed: string | undefined;
   /**
-   * The wallet that pays for it: `personal`, or an organization's id. Fixed at create; a request
-   * that bills another wallet does not see it. Absent: `personal`.
+   * The wallet that pays for it: `personal`, or an organization's id. Fixed at create. Only the VM
+   * list is scoped to it: a read or any other request by id finds the VM whichever wallet the
+   * request names (observed 2026-11-13). Absent: `personal`.
    */
   readonly wallet?: string;
 }
@@ -81,7 +82,12 @@ export interface FakeSnapshot {
   /** The volume holding the source's `/var/lib/sealant/docker`: Boat saves the whole disk. */
   readonly dockerData: string;
   status: "saving" | "ready" | "failed";
-  /** The wallet it was saved in, as its source VM's; absent: `personal`. */
+  /**
+   * The wallet whose allowance it counts on: the one the save named. It changes nothing else: the
+   * account's snapshots are listed, read, deleted and launched from whichever wallet a request
+   * names (docs.boat.dev saved snapshots: "unique within your account"; observed 2026-11-13).
+   * Absent: `personal`.
+   */
   readonly wallet?: string;
 }
 
@@ -537,11 +543,12 @@ export class FakeBoat {
   }
 
   /**
-   * The wallet a request bills and sees (docs.boat.dev/organizations/active-wallet): the
-   * organization it names (by id, or by name in any case), `personal`, or else the account's
-   * active wallet. An organization key bills its own organization only: naming another, or
-   * `personal`, is `403 api_key_org_mismatch`. Naming an organization the account is not in is
-   * refused.
+   * The wallet a request bills (docs.boat.dev/organizations/active-wallet), and the one the VM list
+   * and the snapshot allowance are read for: the organization it names (by id, or by name in any
+   * case), `personal`, or else the account's active wallet. An organization key bills its own
+   * organization only: naming another, or `personal`, is `403 api_key_org_mismatch`. Naming an
+   * organization the account is not in is `403 not_org_member` (observed on both lists and
+   * `/limits`, 2026-11-13). A request by id reads none of this for a personal key.
    */
   #walletOf(named: string | undefined): string {
     const resolve = (value: string) => {
@@ -562,15 +569,34 @@ export class FakeBoat {
     }
     if (named === undefined) return this.account.activeWallet ?? "personal";
     const wallet = resolve(named);
-    if (wallet === undefined) throw new HttpError(404, "org_not_found");
+    if (wallet === undefined) throw new HttpError(403, "not_org_member");
     return wallet;
   }
 
-  /** A VM the request's wallet sees; another wallet's is not found, as a missing one. */
-  #sandboxIn(id: string, wallet: string): FakeSandbox {
+  /**
+   * Whether the key reaches something billed to `wallet`: a personal key reaches everything of its
+   * account whichever wallet pays (observed 2026-11-13: `GET /sandboxes/:id` answers 200 under the
+   * other wallet and under a made-up name, and every saved snapshot answers under every wallet); an
+   * organization key only its own organization's.
+   */
+  #reaches(wallet: string): boolean {
+    return (
+      this.account.key !== "organization" ||
+      wallet === (this.account.keyOrganization ?? "team_acme")
+    );
+  }
+
+  /** A VM of the account, by id, whichever wallet the request names. */
+  #owned(id: string): FakeSandbox {
     const sandbox = this.#sandbox(id);
-    if (fakeWalletOf(sandbox) !== wallet) throw new HttpError(404, "sandbox_not_found");
+    if (!this.#reaches(fakeWalletOf(sandbox))) throw new HttpError(404, "sandbox_not_found");
     return sandbox;
+  }
+
+  /** A saved snapshot of the account, by name, whichever wallet the request names. */
+  #ownedSnapshot(name: string): FakeSnapshot | undefined {
+    const snapshot = this.snapshots.get(name);
+    return snapshot === undefined || !this.#reaches(fakeWalletOf(snapshot)) ? undefined : snapshot;
   }
 
   /** Live (not completed-deleted) sandboxes, as an inventory would list them. */
@@ -695,9 +721,11 @@ export class FakeBoat {
       }
       if (this.account.suspended === true && path !== "/me")
         throw new HttpError(403, "org_suspended");
-      const wallet = this.#walletOf(
-        url.searchParams.get("org") ?? (typeof named === "string" ? named : undefined),
-      );
+      const naming = url.searchParams.get("org") ?? (typeof named === "string" ? named : undefined);
+      // Read only where a request's wallet matters: a create, a save, the VM list, the snapshot
+      // allowance, `/limits`. An organization key is checked on every request.
+      const wallet = () => this.#walletOf(naming);
+      if (this.account.key === "organization") wallet();
       const account = this.#accountReads(
         method,
         path,
@@ -725,7 +753,7 @@ export class FakeBoat {
           return send(200, { ok: true, sandbox: this.#view(existing) });
         }
         const fault = this.faults.create?.(body);
-        const sandbox = this.#create(body, fault === "stuck", wallet);
+        const sandbox = this.#create(body, fault === "stuck", wallet());
         this.#idempotency.set(key, {
           body: raw.toString("utf8"),
           id: sandbox.id,
@@ -738,18 +766,19 @@ export class FakeBoat {
         }
         return send(202, { ok: true, sandbox: this.#view(sandbox) });
       }
-      if (method === "GET" && path === "/sandboxes") return send(200, this.#inventory(url, wallet));
+      if (method === "GET" && path === "/sandboxes")
+        return send(200, this.#inventory(url, wallet()));
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)$/))) {
         const id = match[1] ?? "";
         if (method === "GET")
           return send(200, {
             ok: true,
-            sandbox: this.#view(this.#sandboxIn(id, wallet)),
+            sandbox: this.#view(this.#owned(id)),
           });
         if (method === "DELETE") {
           if (request.headers["x-ascii-confirm-delete"] !== id)
             throw new HttpError(400, "delete_confirmation_required");
-          const sandbox = this.#sandboxIn(id, wallet);
+          const sandbox = this.#owned(id);
           // Recorded: Boat accepts a deletion with 202 and an operation to poll.
           const operation = this.#delete(sandbox);
           if (this.faults.deleteReply?.(sandbox) === "lose") {
@@ -761,7 +790,7 @@ export class FakeBoat {
         }
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/commands$/)) && method === "POST") {
-        const sandbox = this.#sandboxIn(match[1] ?? "", wallet);
+        const sandbox = this.#owned(match[1] ?? "");
         const body = commandBody.parse(json());
         await this.faults.beforeCommand?.(body.command, sandbox);
         if (body.detached === true) {
@@ -793,7 +822,7 @@ export class FakeBoat {
         });
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/commands\/(\d+)$/))) {
-        this.#sandboxIn(match[1] ?? "", wallet);
+        this.#owned(match[1] ?? "");
         const process = this.#processes.get(Number(match[2]));
         if (process === undefined || process.sandboxId !== match[1])
           return send(200, {
@@ -831,7 +860,7 @@ export class FakeBoat {
         }
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/files$/)) && method === "PUT") {
-        const sandbox = this.#sandboxIn(match[1] ?? "", wallet);
+        const sandbox = this.#owned(match[1] ?? "");
         const body = fileBody.parse(json());
         await this.#writeGuestFile(sandbox, body.path, Buffer.from(body.content, "utf8"));
         return send(200, { ok: true });
@@ -840,7 +869,7 @@ export class FakeBoat {
         (match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/files\/upload-url$/)) &&
         method === "POST"
       ) {
-        const sandbox = this.#sandboxIn(match[1] ?? "", wallet);
+        const sandbox = this.#owned(match[1] ?? "");
         const body = uploadBody.parse(json());
         const token = randomBytes(24).toString("hex");
         this.#uploads.set(token, {
@@ -856,7 +885,7 @@ export class FakeBoat {
         });
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/host$/)) && method === "POST") {
-        const sandbox = this.#sandboxIn(match[1] ?? "", wallet);
+        const sandbox = this.#owned(match[1] ?? "");
         const body = hostBody.parse(json());
         return send(200, {
           ok: true,
@@ -865,13 +894,13 @@ export class FakeBoat {
         });
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/stop$/)) && method === "POST") {
-        const sandbox = this.#sandboxIn(match[1] ?? "", wallet);
+        const sandbox = this.#owned(match[1] ?? "");
         sandbox.state = "archiving";
         this.#track(this.#archive(sandbox));
         return send(202, { ok: true });
       }
       if ((match = path.match(/^\/sandboxes\/(bx_[a-z0-9]+)\/resume$/)) && method === "POST") {
-        const sandbox = this.#sandboxIn(match[1] ?? "", wallet);
+        const sandbox = this.#owned(match[1] ?? "");
         resumeBody.parse(json());
         sandbox.state = "provisioned";
         sandbox.stoppedAt = null;
@@ -901,33 +930,35 @@ export class FakeBoat {
       if (path === "/saved-snapshots" && method === "POST" && this.options.trialAccount === true)
         throw new HttpError(403, "trial_saved_snapshots_not_allowed");
       if (path === "/saved-snapshots" && method === "POST") {
-        const saved = this.#save(snapshotBody.parse(json()), wallet);
+        const saved = this.#save(snapshotBody.parse(json()), wallet());
         if (this.faults.saveReply?.(saved.name) === "lose") {
           request.socket.destroy();
           return;
         }
         return send(202, { ok: true, snapshot: saved });
       }
+      // The account's snapshots whichever wallet is named; only the allowance is that wallet's.
       if (path === "/saved-snapshots" && method === "GET") {
-        const snapshots = [...this.snapshots.values()]
-          .filter((snapshot) => fakeWalletOf(snapshot) === wallet)
-          .map((snapshot) => this.#snapshotView(snapshot));
+        const billed = wallet();
+        const held = [...this.snapshots.values()].filter((snapshot) =>
+          this.#reaches(fakeWalletOf(snapshot)),
+        );
+        const used = held.filter((snapshot) => fakeWalletOf(snapshot) === billed).length;
         return send(200, {
           ok: true,
-          snapshots,
+          snapshots: held.map((snapshot) => this.#snapshotView(snapshot)),
           allowance: {
-            org: null,
+            org: billed === "personal" ? null : billed,
             included: this.account.allowance?.included ?? 10,
-            used: this.account.allowance?.used ?? snapshots.length,
-            extra: Math.max(0, snapshots.length - 10),
+            used: this.account.allowance?.used ?? used,
+            extra: Math.max(0, used - 10),
             extraDailyDollars: 0,
           },
         });
       }
       if ((match = path.match(/^\/saved-snapshots\/([a-z0-9-]+)$/))) {
-        const snapshot = this.snapshots.get(match[1] ?? "");
-        if (snapshot === undefined || fakeWalletOf(snapshot) !== wallet)
-          throw new HttpError(404, "not_found");
+        const snapshot = this.#ownedSnapshot(match[1] ?? "");
+        if (snapshot === undefined) throw new HttpError(404, "not_found");
         if (method === "GET")
           return send(200, {
             ok: true,
@@ -973,7 +1004,7 @@ export class FakeBoat {
     path: string,
     url: URL,
     named: string | undefined,
-    wallet: string,
+    walletOf: () => string,
   ): { readonly status: number; readonly body: unknown } | undefined {
     if (method !== "GET") return undefined;
     const account = this.account;
@@ -1006,6 +1037,7 @@ export class FakeBoat {
         },
       };
     if (path === "/limits") {
+      const wallet = walletOf();
       const organization = url.searchParams.get("org") ?? named;
       const team =
         wallet === "personal" ? undefined : this.#orgs().find((org) => org["id"] === wallet);
@@ -1112,12 +1144,11 @@ export class FakeBoat {
     let image = this.options.baseImage;
     let dockerSeed: string | undefined;
     if (body.from !== undefined) {
-      const snapshot = this.snapshots.get(body.from);
-      if (
-        snapshot === undefined ||
-        snapshot.status !== "ready" ||
-        fakeWalletOf(snapshot) !== wallet
-      )
+      // Any saved snapshot of the account: the new VM bills the wallet named, whichever wallet's
+      // allowance the snapshot counts on (docs.boat.dev saved snapshots: members "start sandboxes
+      // from it").
+      const snapshot = this.#ownedSnapshot(body.from);
+      if (snapshot === undefined || snapshot.status !== "ready")
         throw new HttpError(404, "snapshot_not_found");
       image = snapshot.image;
       dockerSeed = snapshot.dockerData;
@@ -1343,8 +1374,9 @@ export class FakeBoat {
     sandbox.deletion.status = "completed";
   }
 
+  /** A save counts on the allowance of the wallet the request names (docs.boat.dev templates). */
   #save(body: z.infer<typeof snapshotBody>, wallet: string): SnapshotView {
-    const sandbox = this.#sandboxIn(body.sandboxId, wallet);
+    const sandbox = this.#owned(body.sandboxId);
     if (this.snapshots.has(body.name)) throw new HttpError(409, "snapshot_name_taken");
     const snapshot: FakeSnapshot = {
       name: body.name,

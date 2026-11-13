@@ -502,6 +502,9 @@ describe.skipIf(DATABASE_URL === undefined)(
         ),
       ).toBe(true);
       // A rotation to a key that shows its wallet pins it there, and finds the image on the way.
+      // Boat reads it under every wallet, so it is recorded where the account now creates.
+      // (sealant#641 recorded it in personal, on a fake that hid it from a request naming
+      // team_acme.)
       const rotated = await run(routes.rotateBoatAccountKey(id, { apiKey: ACCOUNT_KEY }));
       expect(rotated).toMatchObject({ organization: "team_acme" });
       expect(await stored(id)).toMatchObject({ organization: "team_acme", keyKind: "personal" });
@@ -511,7 +514,7 @@ describe.skipIf(DATABASE_URL === undefined)(
             repo.objectWallet({ accountId: id }, { publication: image }),
           ),
         ),
-      ).toEqual({ kind: "known", wallet: "personal" });
+      ).toEqual({ kind: "known", wallet: "team_acme" });
       await run(availability.requireBoatAccount({ runtime: { boatAccountId: id } }, "boat"));
     });
 

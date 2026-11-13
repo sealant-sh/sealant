@@ -2598,10 +2598,10 @@ export interface BoatInstallKey {
 
 /**
  * What a key's account made in Boat before the control plane recorded wallets, that it cannot
- * reach: Boat has it in none of the wallets the key can bill (for a key without `account.read`,
- * which cannot list them: not in the one it bills). It stays recorded, is never used or removed by
- * the control plane, and holds nothing up; look for it in Boat, in each organization the key's
- * account has been in.
+ * reach: Boat did not find it, and that does not prove it gone (a key without `account.read`
+ * cannot list the wallets it can bill). What Boat's answers prove gone is recorded removed and not
+ * listed here. It stays recorded, is never used or removed by the control plane, and holds nothing
+ * up; look for it in Boat, in each organization the key's account has been in.
  */
 export interface BoatUnreachable {
   /** Saved images, by snapshot name (Saved snapshots in Boat). */

@@ -166,7 +166,10 @@ export interface BoatUnreachableObjects {
   readonly builds: readonly string[];
 }
 
-/** What an owner may hold in Boat whose wallet sealant does not know. */
+/**
+ * What an owner may hold in Boat whose wallet sealant does not know, and what an earlier build
+ * recorded unreachable that Boat's answers can settle now (`relook`).
+ */
 export interface BoatUnknownObjects {
   /** Runs Boat may hold a VM for; `sandboxId` null: a create whose VM is not on record yet. */
   readonly liveRuns: readonly { readonly runId: string; readonly sandboxId: string | null }[];
@@ -180,21 +183,39 @@ export interface BoatUnknownObjects {
     readonly sandboxId: string | null;
     readonly snapshotName: string | null;
   }[];
+  /**
+   * Rows recorded unreachable, looked at again under a complete wallet list: saved images not
+   * removed, image builds Boat may still hold something of, and runs whose VM Boat had reported
+   * past creation (a 404 for one never reported is not absence, `boat_runs`).
+   */
+  readonly relook: {
+    readonly images: readonly { readonly publicationId: string; readonly name: string }[];
+    readonly builds: readonly string[];
+    readonly runs: readonly { readonly runId: string; readonly sandboxId: string }[];
+  };
 }
 
 /**
  * Where sealant found an owner's objects, and the pin to give it. `wallet` null with `found`: the key's
- * only wallet. An image `unreachable`: Boat has it in none of the key's wallets.
+ * only wallet. `unreachable`: Boat's answer placed it in none of the key's wallets without proving it
+ * gone. `gone`: a key of the account that made it read it by id under every wallet of a complete
+ * list and Boat has it under none, which proves it gone, since Boat answers a read by id whichever
+ * wallet is named: an image is then recorded removed, and a run recorded unreachable is recorded
+ * not found (`relook`).
  */
 export interface BoatWalletResolution {
   readonly runs: readonly (
     | { readonly runId: string; readonly wallet: string | null }
     | { readonly runId: string; readonly unreachable: true }
+    | { readonly runId: string; readonly gone: true }
   )[];
   readonly images: readonly (
     | { readonly publicationId: string; readonly wallet: string | null }
     | { readonly publicationId: string; readonly unreachable: true }
+    | { readonly publicationId: string; readonly gone: true }
   )[];
+  /** Image builds recorded unreachable to look at again: their wallet becomes unknown. */
+  readonly builds?: readonly string[];
   readonly proofs: readonly (
     | { readonly id: string; readonly wallet: string | null }
     | { readonly id: string; readonly unreachable: true }
@@ -387,12 +408,13 @@ export interface BoatAccountRepoService {
   /**
    * Records where an object of unknown wallet was found, or that Boat has it in none of the wallets
    * the key can bill (`unreachable`: a run's VM is then absent on that basis, and nothing waits on
-   * it). Only rows whose wallet is still unknown change.
+   * it), or that Boat's answers prove a saved image gone (`gone`: recorded removed). Only rows whose
+   * wallet is still unknown change.
    */
   readonly recordObjectWallet: (
     owner: BoatWalletOwner,
     ref: BoatObjectRef,
-    found: { readonly wallet: string | null } | "unreachable",
+    found: { readonly wallet: string | null } | "unreachable" | "gone",
   ) => Failing<void>;
   /**
    * Records where sealant found the owner's objects and, with `pin`, pins an owner not pinned yet,
@@ -443,6 +465,26 @@ const proofOutstanding = (id: string) =>
 const heldImage = sql`(${nativePublications.state} in ('ready','retiring') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} = 'native-removal-pending'))`;
 /** Image builds Boat may hold a VM or a save of: queued, building, or their cleanup pending. */
 const imageBuildInFlight = sql`(${nativePublications.state} in ('reserved','building') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} like 'native-cleanup-pending-%')) and ${nativePublications.boatWalletState} <> 'unreachable'`;
+
+/** A saved image recorded unreachable that Boat may still hold: looked at again (`relook`). */
+const unreachableImage = sql`${nativePublications.boatWalletState} = 'unreachable' and ${nativePublications.state} not in ('removed','superseded')`;
+/** An image build recorded unreachable whose VM or save Boat may still hold. */
+const unreachableBuild = sql`${nativePublications.boatWalletState} = 'unreachable' and (${nativePublications.state} in ('reserved','building') or (${nativePublications.state} = 'quarantined' and ${nativePublications.reason} like 'native-cleanup-pending-%'))`;
+/**
+ * A run recorded unreachable whose VM Boat had reported past creation: a 404 for it under every
+ * wallet is Boat's word that the VM is gone (`boat_runs`).
+ */
+const unreachableSeenRun = sql`${boatRuns.absentBasis} = 'unreachable' and ${boatRuns.sandboxId} is not null and ${boatRuns.createdSeenAt} is not null`;
+/** A saved image Boat's answers prove gone: recorded removed, wherever its wallet stood. */
+const goneImage = {
+  state: "removed",
+  generation: sql`${nativePublications.generation} + 1`,
+  claimToken: null,
+  claimUntil: null,
+  claimPurpose: null,
+} as const;
+/** The rows a gone image's record changes: a saved image Boat may have held. */
+const goneImageRow = sql`${nativePublications.publication} is not null and ${nativePublications.state} in ('ready','retiring','quarantined')`;
 
 /** The runs of an owner: a stored account's, or the install's own (no account). */
 const ownedRuns = (owner: BoatWalletOwner) =>
@@ -941,11 +983,41 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           outstandingProof,
         ),
       );
+    const relookImages = yield* db
+      .select({ publicationId: nativePublications.id, name: publicationName })
+      .from(nativePublications)
+      .where(
+        and(
+          eq(nativePublications.deploymentId, deploymentId),
+          unreachableImage,
+          isNotNull(nativePublications.publication),
+        ),
+      )
+      .orderBy(asc(nativePublications.id));
+    const relookBuilds = yield* db
+      .select({ id: nativePublications.id })
+      .from(nativePublications)
+      .where(and(eq(nativePublications.deploymentId, deploymentId), unreachableBuild))
+      .orderBy(asc(nativePublications.id));
+    const relookRuns = yield* db
+      .select({ runId: boatRuns.runId, sandboxId: boatRuns.sandboxId })
+      .from(boatRuns)
+      .where(and(ownedRuns(owner), unreachableSeenRun))
+      .orderBy(asc(boatRuns.runId));
     return {
       liveRuns: runs,
       images: images.flatMap((row) =>
         row.name === null ? [] : [{ publicationId: row.publicationId, name: row.name }],
       ),
+      relook: {
+        images: relookImages.flatMap((row) =>
+          row.name === null ? [] : [{ publicationId: row.publicationId, name: row.name }],
+        ),
+        builds: relookBuilds.map((row) => row.id),
+        runs: relookRuns.flatMap((row) =>
+          row.sandboxId === null ? [] : [{ runId: row.runId, sandboxId: row.sandboxId }],
+        ),
+      },
       builds: builds.map((row) => row.id),
       proofs: proofs.map((row) => ({
         id: row.id,
@@ -963,7 +1035,11 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
    * removal retention runs. A build found there beside another is left as it is. Run under the
    * owner's row, which a reservation reads `for share`, so no image is reserved meanwhile.
    */
-  const locateImage = (where: SQL | undefined, wallet: string | null) =>
+  const locateImage = (
+    where: SQL | undefined,
+    wallet: string | null,
+    from: readonly ("unknown" | "unreachable")[] = ["unknown"],
+  ) =>
     Effect.gen(function* () {
       const rows = yield* db
         .select({
@@ -972,7 +1048,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           saved: isNotNull(nativePublications.publication),
         })
         .from(nativePublications)
-        .where(and(where, eq(nativePublications.boatWalletState, "unknown")));
+        .where(and(where, inArray(nativePublications.boatWalletState, [...from])));
       for (const row of rows) {
         const [taken] = yield* db
           .select({ id: nativePublications.id })
@@ -1005,7 +1081,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           .where(
             and(
               eq(nativePublications.id, row.id),
-              eq(nativePublications.boatWalletState, "unknown"),
+              inArray(nativePublications.boatWalletState, [...from]),
             ),
           );
       }
@@ -1085,9 +1161,20 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
   const recordObjectWallet = Effect.fn("BoatAccountRepo.recordObjectWallet")(function* (
     owner: BoatWalletOwner,
     ref: BoatObjectRef,
-    found: { readonly wallet: string | null } | "unreachable",
+    found: { readonly wallet: string | null } | "unreachable" | "gone",
   ) {
     const where = yield* objectRows(owner, ref);
+    if (found === "gone") {
+      // Only a saved image is recorded gone here; a run's VM is by its own 404 (`boat_runs`).
+      if (where.images !== undefined)
+        yield* db
+          .update(nativePublications)
+          .set(goneImage)
+          .where(
+            and(where.images, goneImageRow, eq(nativePublications.boatWalletState, "unknown")),
+          );
+      return;
+    }
     const known = found === "unreachable" ? undefined : found.wallet;
     const set =
       found === "unreachable"
@@ -1155,6 +1242,19 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           outstandingProof,
         ),
       );
+    const relookImage = db
+      .select({ one: sql`1` })
+      .from(nativePublications)
+      .where(
+        and(
+          eq(nativePublications.deploymentId, boatAccounts.deploymentId),
+          or(unreachableImage, unreachableBuild),
+        ),
+      );
+    const relookRun = db
+      .select({ one: sql`1` })
+      .from(boatRuns)
+      .where(and(eq(boatRuns.accountId, boatAccounts.id), unreachableSeenRun));
     const rows = yield* db
       .select()
       .from(boatAccounts)
@@ -1169,6 +1269,8 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             exists(unknownRun),
             exists(unknownImage),
             exists(unknownProof),
+            exists(relookImage),
+            exists(relookRun),
           ),
         ),
       )
@@ -1189,21 +1291,28 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         .pipe(Effect.orElseSucceed(() => undefined));
     for (const run of resolution.runs)
       yield* each(
-        db
-          .update(boatRuns)
-          .set(
-            "unreachable" in run
-              ? unreachableRun
-              : { boatWallet: run.wallet, boatWalletState: "known" },
-          )
-          .where(
-            and(
-              eq(boatRuns.runId, run.runId),
-              ownedRuns(owner),
-              eq(boatRuns.boatWalletState, "unknown"),
-              isNull(boatRuns.absentAt),
-            ),
-          ),
+        "gone" in run
+          ? // A VM Boat had reported past creation, read by id under every wallet and found under
+            // none: Boat's word that it is gone, as its 404 under the recorded wallet is.
+            db
+              .update(boatRuns)
+              .set({ absentBasis: "not-found" })
+              .where(and(eq(boatRuns.runId, run.runId), ownedRuns(owner), unreachableSeenRun))
+          : db
+              .update(boatRuns)
+              .set(
+                "unreachable" in run
+                  ? unreachableRun
+                  : { boatWallet: run.wallet, boatWalletState: "known" },
+              )
+              .where(
+                and(
+                  eq(boatRuns.runId, run.runId),
+                  ownedRuns(owner),
+                  eq(boatRuns.boatWalletState, "unknown"),
+                  isNull(boatRuns.absentAt),
+                ),
+              ),
       );
     for (const image of resolution.images) {
       const where = and(
@@ -1216,9 +1325,34 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
               .update(nativePublications)
               .set({ boatWallet: null, boatWalletState: "unreachable" })
               .where(and(where, eq(nativePublications.boatWalletState, "unknown")))
-          : locateImage(where, image.wallet),
+          : "gone" in image
+            ? db
+                .update(nativePublications)
+                .set(goneImage)
+                .where(
+                  and(
+                    where,
+                    goneImageRow,
+                    inArray(nativePublications.boatWalletState, ["unknown", "unreachable"]),
+                  ),
+                )
+            : locateImage(where, image.wallet, ["unknown", "unreachable"]),
       );
     }
+    // A build recorded unreachable is looked for again, by its own catalog, as one never found.
+    for (const publicationId of resolution.builds ?? [])
+      yield* each(
+        db
+          .update(nativePublications)
+          .set({ boatWallet: null, boatWalletState: "unknown" })
+          .where(
+            and(
+              eq(nativePublications.id, publicationId),
+              eq(nativePublications.deploymentId, deploymentId),
+              unreachableBuild,
+            ),
+          ),
+      );
     for (const proof of resolution.proofs)
       yield* each(
         db

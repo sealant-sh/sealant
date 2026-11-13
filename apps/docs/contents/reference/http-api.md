@@ -329,19 +329,32 @@ instead.
   pins it from the new key.
 
   What an account made before sealant recorded wallets has no wallet on record. A request about one
-  of these objects names no wallet, as before. If Boat does not find it there, sealant looks for it
-  under every wallet the key can bill, naming each. The worker does the same in the background, one
-  object at a time.
-  - Found in one wallet: the wallet is recorded, and the request is made there.
-  - Found in none of them (for a key without `account.read`, which cannot list its wallets: not in
-    the one it bills): the object is recorded unreachable, never gone. A run's session ends, its VM
+  of these objects names no wallet, as before. Boat answers a personal key's read of a VM or a saved
+  image by id whichever wallet the request names, and lists saved images for the whole account; only
+  its list of VMs is per wallet. So if Boat does not find an object with no wallet named, sealant
+  reads it under every wallet the key can bill, naming each. The worker does the same in the
+  background, one object at a time.
+  - Found under one wallet: that wallet is recorded, and the request is made there.
+  - Found under several: a saved image is recorded in the wallet the account creates in now, and is
+    from then on an image like any other there: a launch uses it if its recipe matches, and image
+    retention removes it once nothing uses it. A VM is left unrecorded: every request about it by id
+    is answered, and a search of the VM list for it reads every wallet's list.
+  - Found under none of a complete list: Boat's answer proves it gone. A saved image is recorded
+    removed, a build's cleanup finishes, and a run's VM is recorded not found.
+  - Found under none, for a key without `account.read` (it cannot list its wallets, so the miss
+    proves nothing): the object is recorded unreachable, never gone. A run's session ends, its VM
     "could not be found in any wallet this key can bill". A build is abandoned and built again where
     the account is pinned. A saved image is never used again.
   - Boat not answering: only that object waits, and is looked for again.
 
   Unreachable objects are reported in `unreachable` (`savedImages`, `runs`, `builds`), on each
-  account and on `GET /v1/boat-accounts/install-key` for the install's own key. sealant never
-  removes them, and they hold nothing up: not a change, a rotation or a removal.
+  account and on `GET /v1/boat-accounts/install-key` for the install's own key; `null` when there
+  are none. sealant never removes them, and they hold nothing up: not a change, a rotation or a
+  removal. Under a key that can list its wallets, the worker reads what was recorded unreachable
+  again by the same rule: an image Boat still has is placed as above, one it does not is recorded
+  removed, and a run whose VM Boat had reported is recorded not found. A run whose VM Boat still has
+  stays reported. sealant removes only what it has a record of: a saved image in Boat that no record
+  names is never touched.
 
 - `DELETE /v1/boat-accounts/:boatAccountId` is refused while the account has runs whose VMs Boat may
   still hold, or an image build in flight (`409`, code `boat-account-in-use`, with `liveRuns` and

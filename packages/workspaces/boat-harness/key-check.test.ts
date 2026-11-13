@@ -13,7 +13,12 @@ import type { DockerResult } from "./docker.js";
 import { FakeBoat, type FakeBoatAccount } from "./fake-boat.js";
 import { BOAT_REFUSALS } from "./refusals.js";
 
-const ok = (stdout = ""): DockerResult => ({ code: 0, stdout, stderr: "", timedOut: false });
+const ok = (stdout = ""): DockerResult => ({
+  code: 0,
+  stdout,
+  stderr: "",
+  timedOut: false,
+});
 const credential = "boat_live_fixture_key_0123456789abcd";
 const now = () => new Date("2026-11-13T12:00:00.000Z");
 const nextDay = () => new Date("2026-11-14T12:00:00.000Z");
@@ -44,6 +49,15 @@ const start = async (account: FakeBoatAccount = {}, organization?: string) => {
   });
   if (!api.ok) throw api.error;
   return { fake, api: api.value };
+};
+
+/** One field of a JSON body, as it came. */
+const field = (body: unknown, name: string): unknown =>
+  typeof body === "object" && body !== null ? Reflect.get(body, name) : undefined;
+/** How many items a JSON body lists under `name`. */
+const listed = (body: unknown, name: string): unknown => {
+  const items = field(body, name);
+  return Array.isArray(items) ? items.length : items;
 };
 
 describe("a Boat key's check", () => {
@@ -86,14 +100,36 @@ describe("a Boat key's check", () => {
         wallets: {
           observed: true,
           choices: [
-            { id: "personal", kind: "personal", name: "personal", role: "owner", active: true },
-            { id: "team_acme", kind: "organization", name: "acme", role: "admin", active: false },
+            {
+              id: "personal",
+              kind: "personal",
+              name: "personal",
+              role: "owner",
+              active: true,
+            },
+            {
+              id: "team_acme",
+              kind: "organization",
+              name: "acme",
+              role: "admin",
+              active: false,
+            },
           ],
         },
         billing: { mode: "active-wallet" },
         requiredPermissions: [...BOAT_REQUIRED_PERMISSIONS],
-        permissions: { observed: true, held: ["*"], missing: [], limitedToSandboxes: false },
-        expiry: { observed: true, expiresAt: null, expired: false, expiringSoon: false },
+        permissions: {
+          observed: true,
+          held: ["*"],
+          missing: [],
+          limitedToSandboxes: false,
+        },
+        expiry: {
+          observed: true,
+          expiresAt: null,
+          expired: false,
+          expiringSoon: false,
+        },
         start: {
           observed: true,
           canStart: true,
@@ -133,7 +169,11 @@ describe("a Boat key's check", () => {
       missingPermissions: ["sandbox.delete"],
       report: {
         permissions: { observed: true, missing: ["sandbox.delete"] },
-        expiry: { observed: true, expiresAt: "2027-02-11T00:00:00.000Z", expired: false },
+        expiry: {
+          observed: true,
+          expiresAt: "2027-02-11T00:00:00.000Z",
+          expired: false,
+        },
       },
     });
   });
@@ -189,7 +229,10 @@ describe("a Boat key's check", () => {
         permissions: {
           observed: false,
           reason: "refused",
-          boat: { kind: "organization-mismatch", code: "api_key_org_forbidden" },
+          boat: {
+            kind: "organization-mismatch",
+            code: "api_key_org_forbidden",
+          },
         },
         expiry: { observed: false, reason: "refused" },
         start: { observed: true, canStart: true },
@@ -215,7 +258,11 @@ describe("a Boat key's check", () => {
     fake.faults = { refuse: () => BOAT_REFUSALS["key-expired"] };
     expect(await checkBoatKey(api, { organization: null, now })).toMatchObject({
       kind: "refused",
-      failure: { kind: "key-expired", code: "api_key_expired", requestId: expect.any(String) },
+      failure: {
+        kind: "key-expired",
+        code: "api_key_expired",
+        requestId: expect.any(String),
+      },
     });
   });
 
@@ -240,7 +287,9 @@ describe("a Boat key's check", () => {
       BOAT_REFUSALS["no-machine"],
       BOAT_REFUSALS.refused,
     ]) {
-      fake.faults = { refuse: (call) => (call.path === "/sandboxes" ? refusal : undefined) };
+      fake.faults = {
+        refuse: (call) => (call.path === "/sandboxes" ? refusal : undefined),
+      };
       expect(await checkBoatKey(api, { organization: null, now })).toMatchObject({
         kind: "unverified",
         failure: { code: refusal.code },
@@ -266,7 +315,10 @@ describe("a Boat key's check", () => {
     fake.faults = {
       refuse: (call) =>
         call.path === "/sandboxes"
-          ? { ...BOAT_REFUSALS["permission-missing"], details: { action: "sandbox.read" } }
+          ? {
+              ...BOAT_REFUSALS["permission-missing"],
+              details: { action: "sandbox.read" },
+            }
           : undefined,
     };
     expect(await checkBoatKey(api, { organization: null, now })).toMatchObject({
@@ -281,7 +333,11 @@ describe("a Boat key's check", () => {
       kind: "checked",
       report: {
         identity: { observed: true, accountStatus: "suspended" },
-        start: { observed: false, reason: "refused", boat: { kind: "account-suspended" } },
+        start: {
+          observed: false,
+          reason: "refused",
+          boat: { kind: "account-suspended" },
+        },
       },
     });
   });
@@ -351,26 +407,54 @@ describe("a Boat key's check", () => {
     const secret = BoatSecret.parse(credential);
     if (!secret.ok) throw secret.error;
     expect(
-      HttpBoatApi.create({ credential: secret.value, organization: "acme\r\nX-Other: 1" }).ok,
+      HttpBoatApi.create({
+        credential: secret.value,
+        organization: "acme\r\nX-Other: 1",
+      }).ok,
     ).toBe(false);
   });
 
   describe("which wallet it bills", () => {
     const twoOrganizations: FakeBoatAccount["orgs"] = [
-      { id: "usr_fake", name: "fake-owner", type: "personal", role: "owner", active: false },
-      { id: "team_acme", name: "acme", type: "org", role: "admin", active: true },
-      { id: "team_zeta", name: "zeta", type: "org", role: "member", active: false },
+      {
+        id: "usr_fake",
+        name: "fake-owner",
+        type: "personal",
+        role: "owner",
+        active: false,
+      },
+      {
+        id: "team_acme",
+        name: "acme",
+        type: "org",
+        role: "admin",
+        active: true,
+      },
+      {
+        id: "team_zeta",
+        name: "zeta",
+        type: "org",
+        role: "member",
+        active: false,
+      },
     ];
 
     it("lists the wallets of a personal key in two organizations, the active one marked, and says it is not pinned", async () => {
-      const { api } = await start({ orgs: twoOrganizations, activeWallet: "team_acme" });
+      const { api } = await start({
+        orgs: twoOrganizations,
+        activeWallet: "team_acme",
+      });
       const check = await checkBoatKey(api, { organization: null, now });
       expect(check).toMatchObject({
         kind: "checked",
         report: {
           organization: null,
           keyKind: { observed: true, kind: "personal" },
-          wallet: { observed: true, kind: "organization", organizationId: "team_acme" },
+          wallet: {
+            observed: true,
+            kind: "organization",
+            organizationId: "team_acme",
+          },
           wallets: {
             observed: true,
             choices: [
@@ -381,7 +465,13 @@ describe("a Boat key's check", () => {
                 role: "owner",
                 active: false,
               },
-              { id: "team_acme", kind: "organization", name: "acme", role: "admin", active: true },
+              {
+                id: "team_acme",
+                kind: "organization",
+                name: "acme",
+                role: "admin",
+                active: true,
+              },
               {
                 id: "team_zeta",
                 kind: "organization",
@@ -397,7 +487,10 @@ describe("a Boat key's check", () => {
     });
 
     it("says an unpinned key's wallet changed after its active wallet is switched, and keeps saying it", async () => {
-      const { fake, api } = await start({ orgs: twoOrganizations, activeWallet: "team_acme" });
+      const { fake, api } = await start({
+        orgs: twoOrganizations,
+        activeWallet: "team_acme",
+      });
       const first = await observeBoatKey(api, { organization: null, now });
       if (first.kind !== "report") throw new Error("not reported");
       fake.account = { ...fake.account, activeWallet: "personal" };
@@ -407,7 +500,10 @@ describe("a Boat key's check", () => {
         now: nextDay,
       });
       if (second.kind !== "report") throw new Error("not reported");
-      expect(second.report.wallet).toEqual({ observed: true, kind: "personal" });
+      expect(second.report.wallet).toEqual({
+        observed: true,
+        kind: "personal",
+      });
       expect(second.report.billing).toEqual({
         mode: "active-wallet",
         walletChanged: {
@@ -435,7 +531,10 @@ describe("a Boat key's check", () => {
         now,
       });
       if (pinned.kind !== "report") throw new Error("not reported");
-      expect(pinned.report.billing).toEqual({ mode: "pinned", organization: "personal" });
+      expect(pinned.report.billing).toEqual({
+        mode: "pinned",
+        organization: "personal",
+      });
     });
 
     it("keeps billing the personal wallet when pinned to it, after the active wallet is switched", async () => {
@@ -462,21 +561,77 @@ describe("a Boat key's check", () => {
     });
 
     it("says an organization's key bills its own organization, with nothing to choose", async () => {
-      const { api } = await start({ key: "organization", keyOrganization: "team_acme" });
+      const { api } = await start({
+        key: "organization",
+        keyOrganization: "team_acme",
+      });
       const check = await checkBoatKey(api, { organization: null, now });
       expect(check).toMatchObject({
         kind: "checked",
         report: {
           keyKind: { observed: true, kind: "organization" },
-          wallet: { observed: true, kind: "organization", organizationId: "team_acme" },
+          wallet: {
+            observed: true,
+            kind: "organization",
+            organizationId: "team_acme",
+          },
           billing: { mode: "key-organization" },
         },
       });
     });
   });
 
-  it("keeps each wallet's VMs and saved snapshots apart: another wallet's are not found", async () => {
+  // What real Boat answered a personal key whose account bills `personal` and one organization,
+  // read-only on 2026-11-13 (sealant-sh/mend#1630): a read by id is account-wide, the VM list is
+  // scoped to the wallet named, and the saved-snapshot list is account-wide with only its
+  // allowance per wallet. A name the account is not in is refused on the lists, ignored by id.
+  it("answers a personal key's reads by id under any wallet, lists VMs per wallet and saved snapshots account-wide", async () => {
+    const { fake } = await start({ activeWallet: "personal" });
+    fake.seedSandbox({
+      id: "bx_3456789b",
+      wallet: "personal",
+      labels: { "sealant-x": "1" },
+    });
+    fake.seedSnapshot({ name: "sealant-old-personal", wallet: "personal" });
+    fake.seedSnapshot({ name: "sealant-old-acme", wallet: "team_acme" });
+    const read = async (path: string, wallet: string | undefined) => {
+      const response = await fetch(`${fake.baseUrl}${path}`, {
+        headers: {
+          authorization: `Bearer ${credential}`,
+          ...(wallet === undefined ? {} : { "x-boat-org": wallet }),
+        },
+      });
+      const body: unknown = await response.json();
+      return { status: response.status, body };
+    };
+    const table = [];
+    for (const wallet of [undefined, "personal", "team_acme", "acme", "team_doesnotexist0000"]) {
+      const byId = await read("/sandboxes/bx_3456789b", wallet);
+      const vms = await read("/sandboxes", wallet);
+      const snapshots = await read("/saved-snapshots", wallet);
+      const byName = await read("/saved-snapshots/sealant-old-acme", wallet);
+      table.push([
+        wallet ?? "none",
+        byId.status,
+        vms.status === 200 ? listed(vms.body, "sandboxes") : [vms.status, field(vms.body, "code")],
+        snapshots.status === 200
+          ? [listed(snapshots.body, "snapshots"), field(field(snapshots.body, "allowance"), "used")]
+          : [snapshots.status, field(snapshots.body, "code")],
+        byName.status,
+      ]);
+    }
+    expect(table).toEqual([
+      ["none", 200, 1, [2, 1], 200],
+      ["personal", 200, 1, [2, 1], 200],
+      ["team_acme", 200, 0, [2, 1], 200],
+      ["acme", 200, 0, [2, 1], 200],
+      ["team_doesnotexist0000", 200, [403, "not_org_member"], [403, "not_org_member"], 200],
+    ]);
+  });
+
+  it("bills a create to the wallet it names, from a saved snapshot counted on another, and lists the VM only there", async () => {
     const { fake, api } = await start({}, "team_acme");
+    fake.seedSnapshot({ name: "sealant-old-personal", wallet: "personal" });
     const created = await api.create({
       idempotencyKey: randomUUID(),
       marker: randomUUID(),
@@ -487,12 +642,32 @@ describe("a Boat key's check", () => {
     if (!created.ok) throw new Error("not created");
     const secret = BoatSecret.parse(credential);
     if (!secret.ok) throw secret.error;
-    const personal = HttpBoatApi.create({ credential: secret.value, baseUrl: fake.baseUrl });
+    const personal = HttpBoatApi.create({
+      credential: secret.value,
+      baseUrl: fake.baseUrl,
+    });
     if (!personal.ok) throw personal.error;
     const seen = await personal.value.get(created.value.id);
-    expect(seen.ok ? "seen" : seen.error.status).toBe(404);
-    const own = await api.get(created.value.id);
-    expect(own.ok ? "seen" : [own.error.status, own.error.code]).toBe("seen");
+    expect(seen.ok ? "seen" : seen.error.status).toBe("seen");
     expect(fake.heldIn("team_acme").sandboxes).toEqual([created.value.id]);
+    expect(fake.heldIn("personal").sandboxes).toEqual([]);
+  });
+
+  it("keeps an organization key to its own organization's VMs and saved snapshots", async () => {
+    const { fake } = await start({
+      key: "organization",
+      keyOrganization: "team_acme",
+    });
+    fake.seedSandbox({ id: "bx_3456789c", wallet: "personal", labels: {} });
+    fake.seedSnapshot({ name: "sealant-old-personal", wallet: "personal" });
+    const headers = { authorization: `Bearer ${credential}` };
+    expect((await fetch(`${fake.baseUrl}/sandboxes/bx_3456789c`, { headers })).status).toBe(404);
+    expect(
+      (
+        await fetch(`${fake.baseUrl}/saved-snapshots/sealant-old-personal`, {
+          headers,
+        })
+      ).status,
+    ).toBe(404);
   });
 });

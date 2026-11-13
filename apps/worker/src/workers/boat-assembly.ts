@@ -889,12 +889,15 @@ export const assembleBoat = async (input: {
     input.keyClientFor !== undefined ||
     input.proofClientFor !== undefined;
   const missingClient = new BoatApiError("credential", null, "check_client_missing");
-  /** Where something is: the one wallet that has it, nowhere (every wallet said so), or unknown. */
+  /**
+   * Where something is: the one wallet that has it, every wallet that does (Boat reads a VM or a
+   * saved snapshot by id whichever wallet is named), nowhere (every wallet said so), or unknown.
+   */
   const locate = async (
     wallets: readonly string[],
     read: (api: BoatApi) => Promise<Seen>,
     credential: BoatSecret,
-  ): Promise<{ readonly in: string } | "nowhere" | "unanswered"> => {
+  ): Promise<{ readonly in: string } | { readonly several: true } | "nowhere" | "unanswered"> => {
     const seen = await Promise.all(
       wallets.map(async (wallet) => {
         const api = probeClient(credential, wallet);
@@ -906,9 +909,8 @@ export const assembleBoat = async (input: {
     );
     const found = seen.filter(([, each]) => each === "found");
     if (found.length === 1 && found[0] !== undefined) return { in: found[0][0] };
-    return found.length === 0 && seen.every(([, each]) => each === "absent")
-      ? "nowhere"
-      : "unanswered";
+    if (found.length > 1) return { several: true };
+    return seen.every(([, each]) => each === "absent") ? "nowhere" : "unanswered";
   };
 
   /**
@@ -916,12 +918,25 @@ export const assembleBoat = async (input: {
    * the install's own key without a setting) and every object whose wallet sealant does not know.
    * An owner not pinned is pinned at once: to the install's setting, to an organization key's only
    * wallet, or to the wallet a personal key bills now (which needs `account.read`). The pin is for
-   * what it makes from then on and waits for nothing it made before. Each object of unknown wallet
-   * is then looked for, one at a time, under every wallet the key can bill, naming each: found in
-   * one, that is recorded; found in none of a complete list, it is recorded unreachable (a run's VM
-   * is then absent on that basis); Boat not answering, or no list, leaves only that object for the
-   * next pass. An image build is reconciled by a catalog of its own whose builder does the same.
-   * Then the install's setting is applied, if it changed.
+   * what it makes from then on and waits for nothing it made before.
+   *
+   * Each object of unknown wallet is then read by id under every wallet the key can bill, naming
+   * each. Boat answers a personal key's read by id whichever wallet is named (observed 2026-11-13),
+   * so the read shows whether Boat has it, not where:
+   * - found under exactly one wallet: that is recorded;
+   * - found under several: a saved image is recorded in the wallet the owner creates in now, and
+   *   is from then on an image like any other there (a launch finds it if its recipe matches;
+   *   retention removes it when nothing uses it); a VM or a full check is left unknown, since the
+   *   VM list, which is per wallet, is what places it, and every request by id about it works;
+   * - found under none of a complete list: a saved image is recorded removed (Boat's answer proves
+   *   it gone); a run's VM and a full check are left to their own reads, which now take that 404
+   *   as Boat's word;
+   * - Boat not answering, or no list (no `account.read`): only that object waits for the next pass.
+   * Under a complete list, what an earlier build recorded unreachable is looked at again the same
+   * way: an image found is placed, one gone is recorded removed; a run whose VM Boat had reported is
+   * recorded not found; a build becomes unknown, for its own catalog to look for.
+   * An image build is reconciled by a catalog of its own whose builder does the same. Then the
+   * install's setting is applied, if it changed.
    */
   const resolveWallets = async () => {
     const report: { accountId: string; outcome: string }[] = [];
@@ -968,15 +983,18 @@ export const assembleBoat = async (input: {
           });
           current = { kind: "known", wallet: target.desired };
         }
-        const unknown = await accountRepo(
-          Effect.flatMap(BoatAccountRepo, (repo) => repo.unknownObjects(target.owner)),
-        );
+        const unknownObjects = () =>
+          accountRepo(Effect.flatMap(BoatAccountRepo, (repo) => repo.unknownObjects(target.owner)));
+        let unknown = await unknownObjects();
         if (
           current.kind === "known" &&
           unknown.liveRuns.length === 0 &&
           unknown.images.length === 0 &&
           unknown.builds.length === 0 &&
-          unknown.proofs.length === 0
+          unknown.proofs.length === 0 &&
+          unknown.relook.images.length === 0 &&
+          unknown.relook.builds.length === 0 &&
+          unknown.relook.runs.length === 0
         )
           return "resolved";
         // Each build, by a catalog of its own; one failing leaves only that build for the next pass.
@@ -984,6 +1002,8 @@ export const assembleBoat = async (input: {
           const stack = await stackOf(target.accountId).catch(() => undefined);
           for (const publicationId of unknown.builds)
             await stack?.reconcileBuild?.(publicationId).catch(() => undefined);
+          // A build finished just now is a saved image to place in this same pass.
+          unknown = await unknownObjects();
         }
         const credential = await target.credential();
         if (credential === undefined) return "unavailable";
@@ -1015,6 +1035,8 @@ export const assembleBoat = async (input: {
           if (billed === undefined) return "unavailable";
           await resolve(target.owner, { ...nothing, pin: { organization: billed, keyKind } });
         }
+        // Where the owner creates now: where an image found under several wallets is placed.
+        const pinned = current.kind === "known" ? current.wallet : (billed ?? null);
         const wallets =
           observed.wallets?.observed === true
             ? observed.wallets.choices.map((choice) => choice.id)
@@ -1042,32 +1064,56 @@ export const assembleBoat = async (input: {
               },
               credential,
             );
-            return typeof found === "object"
+            // Found nowhere: its own read (presence, a stop) takes Boat's 404 as its word.
+            return typeof found === "object" && "in" in found
               ? { runId: run.runId, wallet: found.in }
-              : found === "nowhere" && complete
-                ? { runId: run.runId, unreachable: true as const }
-                : undefined;
+              : undefined;
           }),
         );
-        const images = await pooled(
-          unknown.images.map((image) => async () => {
-            const name = boatSnapshotNameSchema.safeParse(image.name);
-            if (!name.success) return undefined;
-            const found = await locate(
-              searched,
-              async (api) => {
-                const read = await api.getSnapshot(name.data);
-                return read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered";
-              },
-              credential,
-            );
-            return typeof found === "object"
-              ? { publicationId: image.publicationId, wallet: found.in }
-              : found === "nowhere" && complete
-                ? { publicationId: image.publicationId, unreachable: true as const }
-                : undefined;
-          }),
-        );
+        /** An image, read by name under every wallet: placed, gone, or left for the next pass. */
+        const placeImage = async (image: {
+          readonly publicationId: string;
+          readonly name: string;
+        }) => {
+          const name = boatSnapshotNameSchema.safeParse(image.name);
+          if (!name.success) return undefined;
+          const found = await locate(
+            searched,
+            async (api) => {
+              const read = await api.getSnapshot(name.data);
+              return read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered";
+            },
+            credential,
+          );
+          return typeof found === "object"
+            ? { publicationId: image.publicationId, wallet: "in" in found ? found.in : pinned }
+            : found === "nowhere" && complete
+              ? { publicationId: image.publicationId, gone: true as const }
+              : undefined;
+        };
+        const images = await pooled(unknown.images.map((image) => () => placeImage(image)));
+        // What an earlier build recorded unreachable, only under a complete list.
+        const relookImages = complete
+          ? await pooled(unknown.relook.images.map((image) => () => placeImage(image)))
+          : [];
+        const relookRuns = complete
+          ? await pooled(
+              unknown.relook.runs.map((run) => async () => {
+                const id = boatSandboxIdSchema.safeParse(run.sandboxId);
+                if (!id.success) return undefined;
+                const found = await locate(
+                  searched,
+                  async (api) => {
+                    const read = await api.get(id.data);
+                    return read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered";
+                  },
+                  credential,
+                );
+                // Found, the VM is still there: it stays reported unreachable.
+                return found === "nowhere" ? { runId: run.runId, gone: true as const } : undefined;
+              }),
+            )
+          : [];
         const proofs = await pooled(
           unknown.proofs.map((proof) => async () => {
             const found = await locate(
@@ -1096,17 +1142,18 @@ export const assembleBoat = async (input: {
               },
               credential,
             );
-            return typeof found === "object"
+            // Found under several, or nowhere: the check's sweep reads it by id with the account's
+            // locating client, which takes a 404 under every wallet as Boat's word.
+            return typeof found === "object" && "in" in found
               ? { id: proof.id, wallet: found.in }
-              : found === "nowhere" && complete
-                ? { id: proof.id, unreachable: true as const }
-                : undefined;
+              : undefined;
           }),
         );
         await resolve(target.owner, {
-          runs: runs.filter((each) => each !== undefined),
-          images: images.filter((each) => each !== undefined),
+          runs: [...runs, ...relookRuns].filter((each) => each !== undefined),
+          images: [...images, ...relookImages].filter((each) => each !== undefined),
           proofs: proofs.filter((each) => each !== undefined),
+          ...(complete ? { builds: unknown.relook.builds } : {}),
         });
         return current.kind === "unresolved" ? "pinned" : "recorded";
       })().catch(() => "unavailable");
@@ -1311,9 +1358,37 @@ export const assembleBoat = async (input: {
           const routed =
             account === "default" ? defaultProvider?.api : (await directory.provider(account))?.api;
           if (routed === undefined) return undefined;
-          // Every request about its VM or snapshot finds the wallet they are in; the listing of an
-          // unfinished check's create names none, as the released sealant did.
-          const released = client.value;
+          // Every request about its VM or snapshot finds the wallet they are in. The VM list is
+          // per wallet, so the listing of an unfinished check's create is read under every wallet
+          // the key lists: an empty list under the active wallet alone is never "no VM". Without
+          // the list (no `account.read`), or a wallet not answering, nothing is concluded.
+          const credential = key.credential;
+          const everyWallet: BoatKeyProofClient["findKeyProof"] = async (marker) => {
+            const unlocated = {
+              kind: "unknown",
+              error: new BoatApiError("discover", null, "object_unlocated"),
+            } as const;
+            const lister = checkClient(credential);
+            if (!lister.ok) return unlocated;
+            const listed = await lister.value.orgs().catch(() => undefined);
+            if (listed === undefined || !listed.ok) return unlocated;
+            const each = await Promise.all(
+              listed.value.map(async (org) => {
+                const named = open(credential, {
+                  organization: org.type === "personal" ? "personal" : org.id,
+                });
+                return named.ok
+                  ? named.value.findKeyProof(marker).catch(() => undefined)
+                  : undefined;
+              }),
+            );
+            const sandboxes = [];
+            for (const answer of each) {
+              if (answer === undefined || answer.kind === "unknown") return unlocated;
+              sandboxes.push(...answer.sandboxes);
+            }
+            return { kind: "listed", sandboxes } as const;
+          };
           return {
             create: (...args) => routed.create(...args),
             get: (...args) => routed.get(...args),
@@ -1323,7 +1398,7 @@ export const assembleBoat = async (input: {
             getSnapshot: (...args) => routed.getSnapshot(...args),
             deleteSnapshot: (...args) => routed.deleteSnapshot(...args),
             deleteSandbox: (...args) => routed.deleteSandbox(...args),
-            findKeyProof: (...args) => released.findKeyProof(...args),
+            findKeyProof: everyWallet,
           };
         },
       });

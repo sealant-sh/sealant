@@ -213,9 +213,9 @@ export type BoatKeyProof = typeof boatKeyProofSchema.Type;
 
 /**
  * What a key's account made in Boat before sealant recorded wallets, that sealant cannot reach: Boat
- * has it in none of the wallets the key can bill (for a key without `account.read`, which cannot list
- * them: not in the one it bills). It was since deleted in Boat, or is in an organization the key's
- * account has left. sealant keeps it recorded, never uses or removes it, and waits on it for nothing;
+ * did not find it, and that does not prove it gone (a key without `account.read` cannot list the
+ * wallets it can bill). What Boat's answers prove gone (read by id under every wallet of a complete
+ * list) is recorded removed and not listed here. sealant keeps it recorded, never uses or removes it, and waits on it for nothing;
  * look for it in Boat, in each organization the key's account has been in.
  */
 export const boatUnreachableSchema = Schema.Struct({
