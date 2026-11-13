@@ -489,6 +489,13 @@ const createDefaultEventStreamOpener = (dockerSocketPath: string): DockerEventSt
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+/** A failed `docker kill` in words: its message, or what it rejected with. */
+const describeKillFailure = (failure: unknown): string => {
+  if (failure instanceof Error) return failure.message;
+  if (typeof failure === "string") return failure;
+  return JSON.stringify(failure) ?? "unknown failure";
+};
+
 /**
  * One `docker events --format '{{json .}}'` line as an exit event, or undefined when the line is
  * not a container `die` for one of this adapter's containers (the stream is filtered daemon-side,
@@ -600,11 +607,8 @@ const loadRuntimeCatalogFromDockerSocket = async (
   };
 };
 
-const createAdapterError = (code: string, message: string): Error & { code: string } => {
-  const error = new Error(message) as Error & { code: string };
-  error.code = code;
-  return error;
-};
+const createAdapterError = (code: string, message: string): Error & { code: string } =>
+  Object.assign(new Error(message), { code });
 
 // `docker rm -f` / `docker inspect` against a missing container fail with "No such container"
 // (or "No such object", depending on the CLI path) on stderr, surfaced in the execFile error
@@ -1271,12 +1275,13 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       );
     }
 
+    const state = isRecord(parsedState) ? parsedState : {};
+    const { Status: status, Running: running, ExitCode: exitCode, Error: error } = state;
     if (
-      typeof parsedState !== "object" ||
-      parsedState === null ||
-      typeof (parsedState as { Status?: unknown }).Status !== "string" ||
-      typeof (parsedState as { Running?: unknown }).Running !== "boolean" ||
-      typeof (parsedState as { ExitCode?: unknown }).ExitCode !== "number"
+      !isRecord(parsedState) ||
+      typeof status !== "string" ||
+      typeof running !== "boolean" ||
+      typeof exitCode !== "number"
     ) {
       throw createAdapterError(
         "adapter-unavailable",
@@ -1284,15 +1289,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       );
     }
 
-    return {
-      status: (parsedState as { Status: string }).Status,
-      running: (parsedState as { Running: boolean }).Running,
-      exitCode: (parsedState as { ExitCode: number }).ExitCode,
-      error:
-        typeof (parsedState as { Error?: unknown }).Error === "string"
-          ? (parsedState as { Error: string }).Error
-          : "",
-    };
+    return { status, running, exitCode, error: typeof error === "string" ? error : "" };
   }
 
   private async readContainerLogs(containerId: string): Promise<string | undefined> {
@@ -2349,7 +2346,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         const kill =
           killFailure === undefined
             ? "the kill was accepted"
-            : `kill: ${killFailure instanceof Error ? killFailure.message : String(killFailure)}`;
+            : `kill: ${describeKillFailure(killFailure)}`;
         const failure = createAdapterError(
           "adapter-unavailable",
           `Workspace container '${parsed.reference ?? parsed.resourceId}' is still running after it was asked to end (status: ${state.status}; ${kill}).`,

@@ -10,6 +10,7 @@ import {
   OCI_REPOSITORY_MESSAGE,
 } from "@sealant/api-contracts";
 import { splitUrlUserinfo } from "@sealant/validators/url-for-display";
+import { Predicate } from "effect";
 
 import { selectLoadedImageIdentifier } from "./docker-load-output.js";
 
@@ -30,11 +31,11 @@ const parseJsonObject = (value: string): unknown => {
 };
 
 const expectRecord = (value: unknown, message: string): Record<string, unknown> => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!Predicate.isObject(value)) {
     throw new Error(message);
   }
 
-  return value as Record<string, unknown>;
+  return value;
 };
 
 const expectStringArray = (value: unknown, message: string): Array<string> => {

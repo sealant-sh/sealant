@@ -216,7 +216,7 @@ export class KubernetesCallerRuntime implements ResourceRuntime {
     this.core = config.makeApiClient(CoreV1Api);
     this.execution = new Exec(config);
   }
-  private async apply<T extends KubernetesObject>(object: T): Promise<void> {
+  private async apply(object: KubernetesObject): Promise<void> {
     await this.objects.patch(
       object,
       undefined,
@@ -416,7 +416,7 @@ export class KubernetesCallerRuntime implements ResourceRuntime {
           await Effect.runPromise(this.options.cipher.decrypt(instance.secretEnvSealed)),
         );
       }
-      await this.apply<V1Secret>({
+      const secret: V1Secret = {
         apiVersion: "v1",
         kind: "Secret",
         metadata: {
@@ -431,7 +431,8 @@ export class KubernetesCallerRuntime implements ResourceRuntime {
             Buffer.from(value).toString("base64"),
           ]),
         ),
-      });
+      };
+      await this.apply(secret);
       await this.apply(objects.service);
       await this.apply(objects.statefulSet);
       const deadline = Date.now() + (this.options.readyTimeoutMs ?? 120_000);

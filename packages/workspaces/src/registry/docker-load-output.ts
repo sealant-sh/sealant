@@ -31,8 +31,9 @@ export const selectLoadedImageIdentifier = (
 
   const parsed = parseDockerLoadOutput(output);
 
-  if (parsed.references.length === 1) {
-    return parsed.references[0] as string;
+  const [onlyReference, ...otherReferences] = parsed.references;
+  if (onlyReference !== undefined && otherReferences.length === 0) {
+    return onlyReference;
   }
 
   if (parsed.references.length > 1) {
@@ -41,8 +42,9 @@ export const selectLoadedImageIdentifier = (
     );
   }
 
-  if (parsed.imageIds.length === 1) {
-    return parsed.imageIds[0] as string;
+  const [onlyImageId, ...otherImageIds] = parsed.imageIds;
+  if (onlyImageId !== undefined && otherImageIds.length === 0) {
+    return onlyImageId;
   }
 
   throw new Error("Could not determine a source image identifier from docker load output.");

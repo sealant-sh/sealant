@@ -1,7 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import { z } from "zod";
+
+/** A WebSocket message's bytes as text. A default (nodebuffer) socket delivers one Buffer. */
+const messageText = (data: RawData): string =>
+  Buffer.isBuffer(data)
+    ? data.toString()
+    : Array.isArray(data)
+      ? Buffer.concat(data).toString()
+      : Buffer.from(data).toString();
 
 /** Safe phase only: neither endpoint responses nor credentials belong in proof errors. */
 export class BoatProofError extends Error {
@@ -293,12 +301,12 @@ export class MendProofClient {
           );
           socket.on("message", (data, binary) => {
             if (binary) {
-              output = (output + data.toString()).slice(-4096);
+              output = (output + messageText(data)).slice(-4096);
               if (output.includes(marker)) proved = true;
             } else {
               let raw: unknown;
               try {
-                raw = JSON.parse(data.toString());
+                raw = JSON.parse(messageText(data));
               } catch {
                 finish(new BoatProofError("shell-control"));
                 socket.terminate();

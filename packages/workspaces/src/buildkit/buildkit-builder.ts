@@ -202,13 +202,8 @@ export const runBuildkitCommand: BuildkitCommandRunner = (command, args, options
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
-    const commandError = (code: string, message: string) => {
-      const error = new Error(`${message}: ${command} ${args.join(" ")}`) as Error & {
-        code: string;
-      };
-      error.code = code;
-      return error;
-    };
+    const commandError = (code: string, message: string) =>
+      Object.assign(new Error(`${message}: ${command} ${args.join(" ")}`), { code });
 
     // Stopping the command (it went silent, or the caller aborted it): SIGTERM, then SIGKILL if
     // it ignores that. It is settled on the command's own exit, not on its pipes closing — a
@@ -286,20 +281,24 @@ export const runBuildkitCommand: BuildkitCommandRunner = (command, args, options
       }
 
       if (signal !== null) {
-        const error = new Error(
-          `BuildKit command exited via signal ${signal}: ${command} ${args.join(" ")}`,
-        ) as Error & { code: string };
-        error.code = "buildkit-command-failed";
-        reject(error);
+        reject(
+          Object.assign(
+            new Error(`BuildKit command exited via signal ${signal}: ${command} ${args.join(" ")}`),
+            { code: "buildkit-command-failed" },
+          ),
+        );
         return;
       }
 
       if (code !== 0) {
-        const error = new Error(
-          `BuildKit command failed with exit ${code ?? "unknown"}: ${command} ${args.join(" ")}\n${stderr || stdout}`,
-        ) as Error & { code: string };
-        error.code = "buildkit-command-failed";
-        reject(error);
+        reject(
+          Object.assign(
+            new Error(
+              `BuildKit command failed with exit ${code ?? "unknown"}: ${command} ${args.join(" ")}\n${stderr || stdout}`,
+            ),
+            { code: "buildkit-command-failed" },
+          ),
+        );
         return;
       }
 
@@ -542,9 +541,7 @@ const getDotfilesSource = (blueprint: WorkspaceBlueprint) => {
 };
 
 const createBuildkitCompilerError = (code: string, message: string) => {
-  const error = new Error(message) as Error & { code: string };
-  error.code = code;
-  return error;
+  return Object.assign(new Error(message), { code });
 };
 
 const getBuildkitSupportForOs = (

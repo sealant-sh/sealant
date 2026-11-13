@@ -25,17 +25,21 @@ export type {
 
 const defaultPackageTargetOs: PackageTargetOs = "fedora";
 
-type RepologyProjectResponseEntry = {
-  readonly repo?: string;
-  readonly subrepo?: string;
-  readonly srcname?: string;
-  readonly binname?: string;
-  readonly visiblename?: string;
-  readonly version?: string;
-  readonly status?: string;
-};
+/** The fields of a Repology package entry this module reads; the API sends more. */
+const repologyProjectResponseEntrySchema = Schema.Struct({
+  repo: Schema.optionalKey(Schema.String),
+  subrepo: Schema.optionalKey(Schema.String),
+  srcname: Schema.optionalKey(Schema.String),
+  binname: Schema.optionalKey(Schema.String),
+  visiblename: Schema.optionalKey(Schema.String),
+  version: Schema.optionalKey(Schema.String),
+  status: Schema.optionalKey(Schema.String),
+});
+type RepologyProjectResponseEntry = typeof repologyProjectResponseEntrySchema.Type;
 
-type RepologySearchResponse = Record<string, readonly RepologyProjectResponseEntry[]>;
+const repologyProjectResponseSchema = Schema.Array(repologyProjectResponseEntrySchema);
+const repologySearchResponseSchema = Schema.Record(Schema.String, repologyProjectResponseSchema);
+type RepologySearchResponse = typeof repologySearchResponseSchema.Type;
 
 const repologyRepoByTargetOs: Record<PackageTargetOs, string> = {
   arch: "arch",
@@ -509,7 +513,7 @@ export const createRepologyClient = (options: RepologyClientOptions): RepologyCl
     release?.();
   };
 
-  const fetchJson = async <T>(path: string): Promise<T> => {
+  const fetchJson = async <A>(path: string, schema: Schema.Codec<A>): Promise<A> => {
     await paceRequests();
 
     try {
@@ -530,7 +534,7 @@ export const createRepologyClient = (options: RepologyClientOptions): RepologyCl
         );
       }
 
-      return (await response.json()) as T;
+      return Schema.decodeUnknownSync(schema)(await response.json());
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Repology API request failed for ${path}. ${message}`, { cause: error });
@@ -539,13 +543,15 @@ export const createRepologyClient = (options: RepologyClientOptions): RepologyCl
 
   return {
     getProject: async (projectName) => {
-      return fetchJson<readonly RepologyProjectResponseEntry[]>(
+      return fetchJson(
         `/project/${encodeURIComponent(projectName)}`,
+        repologyProjectResponseSchema,
       );
     },
     searchProjects: async (query, targetOs) => {
-      return fetchJson<RepologySearchResponse>(
+      return fetchJson(
         `/projects/?search=${encodeURIComponent(query)}&inrepo=${encodeURIComponent(repologyRepoByTargetOs[targetOs])}`,
+        repologySearchResponseSchema,
       );
     },
   };

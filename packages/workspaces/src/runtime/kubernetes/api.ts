@@ -19,8 +19,22 @@ import {
   type V1Secret,
   type V1Service,
 } from "@kubernetes/client-node";
+import { Schema } from "effect";
 
 import type { CertificateObject } from "./manifests.js";
+
+/**
+ * What is read back from a Certificate: its name, and the labels that say which run made it. The
+ * apiserver omits empty labels, so they may be absent.
+ */
+const certificateReadSchema = Schema.Struct({
+  metadata: Schema.Struct({
+    name: Schema.String,
+    labels: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  }),
+});
+export type CertificateRead = typeof certificateReadSchema.Type;
+const decodeCertificate = Schema.decodeUnknownSync(certificateReadSchema);
 
 export class KubernetesApiError extends Error {
   override readonly name = "KubernetesApiError";
@@ -103,9 +117,9 @@ export interface KubernetesApi {
   readonly createCertificate: (
     certificate: CertificateObject,
   ) => Promise<CreateOutcome<CertificateObject>>;
-  readonly getCertificate: (name: string) => Promise<CertificateObject | undefined>;
+  readonly getCertificate: (name: string) => Promise<CertificateRead | undefined>;
   readonly deleteCertificate: (name: string) => Promise<DeleteOutcome>;
-  readonly listCertificates: (labelSelector: string) => Promise<readonly CertificateObject[]>;
+  readonly listCertificates: (labelSelector: string) => Promise<readonly CertificateRead[]>;
 }
 
 const CERT_MANAGER = { group: "cert-manager.io", version: "v1", plural: "certificates" } as const;
@@ -360,7 +374,7 @@ export const createLiveKubernetesApi = (options: LiveKubernetesApiOptions): Kube
           namespace,
           name,
         });
-        return object as CertificateObject;
+        return decodeCertificate(object);
       }),
     deleteCertificate: (name) =>
       remove("delete certificate", () =>
@@ -378,8 +392,8 @@ export const createLiveKubernetesApi = (options: LiveKubernetesApiOptions): Kube
           namespace,
           labelSelector,
         });
-        const items = (list as { items?: unknown }).items;
-        return Array.isArray(items) ? (items as CertificateObject[]) : [];
+        const items = isRecord(list) ? list["items"] : undefined;
+        return Array.isArray(items) ? items.map((item) => decodeCertificate(item)) : [];
       } catch (error) {
         throw toApiError("list certificates", error);
       }
