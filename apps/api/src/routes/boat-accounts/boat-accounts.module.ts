@@ -582,10 +582,13 @@ export const checkBoatInstallKey = () =>
 
 /**
  * How many of the VMs and saved images the account has now the new key cannot see. Each is read in
- * the wallet it was made in. One made before sealant recorded wallets is looked for under every
- * wallet the new key can bill: found in one, that is recorded; found in none, it counts as unseen,
- * unless both keys are the same Boat account's (`sameAccount`): then the old key could not reach it
- * either, and it is recorded unreachable. Only Boat's own 404, or a VM that is not this account's,
+ * the wallet it was made in. One made before sealant recorded wallets is read under every wallet the
+ * new key can bill, which Boat answers whichever wallet is named (observed 2026-11-13): found under
+ * one, that is recorded; under several, a saved image is recorded in the wallet the account creates
+ * in (`createWallet`), anything else left unknown; found in none, it counts as unseen, unless both
+ * keys are the same Boat account's (`sameAccount`): then Boat's 404 under every wallet of a complete
+ * list proves it gone (a saved image is recorded removed; a VM's own read records it), and without
+ * the list it is recorded unreachable. Only Boat's own 404, or a VM that is not this account's,
  * counts; Boat not answering is no answer.
  */
 const unseenBy = (
@@ -602,9 +605,11 @@ const unseenBy = (
   },
   /** The new key's client naming `wallet` (null: none). */
   clientIn: (wallet: string | null) => BoatKeyClient | undefined,
-  /** Every wallet the new key can bill, as its report lists them. */
-  wallets: readonly string[],
+  /** Every wallet the new key can bill, as its report lists them; undefined: no list. */
+  wallets: readonly string[] | undefined,
   sameAccount: boolean,
+  /** The wallet the account creates in now (null: none named), if it has one. */
+  createWallet: string | null | undefined,
 ) =>
   Effect.gen(function* () {
     let unseen = 0;
@@ -624,10 +629,10 @@ const unseenBy = (
         };
         if (wallet !== undefined) return yield* Effect.promise(() => ask(wallet));
         const seen = yield* Effect.promise(() =>
-          Promise.all(wallets.map(async (each) => [each, await ask(each)] as const)),
+          Promise.all((wallets ?? []).map(async (each) => [each, await ask(each)] as const)),
         );
         const found = seen.filter(([, answer]) => answer === "found");
-        const record = (located: { readonly wallet: string | null } | "unreachable") =>
+        const record = (located: { readonly wallet: string | null } | "unreachable" | "gone") =>
           Effect.flatMap(BoatAccountRepo, (repo) =>
             repo.recordObjectWallet({ accountId: account.id }, ref, located),
           ).pipe(Effect.orElseSucceed(() => undefined));
@@ -635,10 +640,15 @@ const unseenBy = (
           yield* record({ wallet: found[0][0] });
           return "found" as const;
         }
-        if (found.length > 1) return "found" as const;
+        if (found.length > 1) {
+          if ("snapshot" in ref && createWallet !== undefined)
+            yield* record({ wallet: createWallet });
+          return "found" as const;
+        }
         if (seen.some(([, answer]) => answer === "unanswered")) return "unanswered" as const;
         if (!sameAccount) return "absent" as const;
-        yield* record("unreachable");
+        // The same Boat account's key: under a complete list Boat's 404 is its word that it is gone.
+        yield* record(wallets === undefined ? "unreachable" : "gone");
         return "found" as const;
       });
     for (const { sandboxId, wallet } of holds.sandboxes) {
@@ -749,8 +759,11 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
         const opened = clients(credential, wallet === null ? undefined : { organization: wallet });
         return opened.ok ? opened.value : undefined;
       },
-      report.wallets?.observed === true ? report.wallets.choices.map((each) => each.id) : [],
+      report.wallets?.observed === true ? report.wallets.choices.map((each) => each.id) : undefined,
       sameAccount,
+      // Where the account creates once rotated: its pin, or the one this rotation gives it.
+      account.organization ??
+        (account.keyKind === "organization" ? null : pinOf(report)?.organization),
     );
     if (unseen > 0)
       return yield* new BoatAccountConflictError({

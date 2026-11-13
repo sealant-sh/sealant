@@ -65,9 +65,9 @@ const keyUnavailable = (operation: string) =>
 const walletUnresolved = (operation: string) =>
   new BoatApiError(operation, null, "account_wallet_unresolved");
 /**
- * Boat has the object in none of the wallets the key can bill (for a key that cannot list them: not
- * in the one it bills). sealant recorded that, and asks about it no more. Not a 404: nothing reads
- * this as the object being gone.
+ * Boat did not find the object where the key could look, and that does not prove it gone: the key
+ * cannot list the wallets it can bill (no `account.read`). sealant recorded it unreachable, and asks
+ * about it no more. Not a 404: nothing reads this as the object being gone.
  */
 const objectUnreachable = (operation: string) =>
   new BoatApiError(operation, null, "object_unreachable");
@@ -94,6 +94,11 @@ export interface BoatObjectRouter {
   readonly clientIn: (wallet: string | null, fresh: boolean) => Promise<BoatResult<BoatApi>>;
   /** The wallet new objects are made in; read fresh. */
   readonly createWallet: () => Promise<BoatCreateWallet>;
+  /**
+   * The wallet the owner creates in now, where a saved snapshot Boat reads under every wallet is
+   * recorded. Absent: `createWallet` (they differ only for a build, which creates in its own).
+   */
+  readonly ownerWallet?: () => Promise<BoatCreateWallet>;
   readonly objectOf: (ref: BoatObjectRef) => Promise<BoatObjectWallet>;
   readonly record: (
     ref: BoatObjectRef,
@@ -119,16 +124,29 @@ const refKey = (ref: BoatObjectRef) => JSON.stringify(ref);
  * An account's client: every request names the wallet of the object it is about. A create names the
  * wallet the account makes things in now (its pin, or an organization key's only wallet). A request
  * about something sealant made names the wallet recorded for it; one made before sealant recorded
- * wallets goes out as it did then, naming none, and if Boat does not find it there, it is looked for
- * under every wallet the key can bill: found in one, that is recorded and the request made there;
- * found in none, it is recorded unreachable (`object_unreachable`), never gone; the wallets not
- * readable or not all answering, the request fails for this object only (`object_unlocated`).
+ * wallets goes out as it did then, naming none.
+ *
+ * Boat answers a personal key's read by id, of a VM or a saved snapshot, whichever wallet the request
+ * names, and lists saved snapshots account-wide (observed 2026-11-13); only the VM list is scoped to
+ * a wallet. So where an object of unknown wallet is cannot be learned by reading it, and need not be:
+ * if Boat does not find it with no wallet named, it is read under every wallet the key can bill.
+ * - Found under exactly one: that wallet is recorded and the request made there.
+ * - Found under more than one: a saved snapshot is recorded in the wallet the account creates in
+ *   now, where retention and launches look for it; anything else is left unknown, and the request
+ *   is made under a wallet that answered.
+ * - Found under none of a complete list: Boat's 404 stands, which proves it gone, as it did for the
+ *   released sealant. Without the list (no `account.read`) the miss proves nothing: the object is
+ *   recorded unreachable (`object_unreachable`), never gone.
+ * - Not every wallet answering: the request fails for this object only (`object_unlocated`).
  * Boat refusing the key (401, 403) may mean it was rotated a moment ago: the key is read again and
  * the request made once more if that opened another client. Every request here is safe to repeat.
  */
 export class StoredAccountApi implements BoatApi {
   readonly #router: BoatObjectRouter;
-  /** Known and unreachable objects, which never move again. */
+  /**
+   * Objects whose wallet is known, which never moves again. (One recorded unreachable may be found
+   * by the worker's pass later, so it is read from its row each time.)
+   */
   readonly #settled = new Map<string, BoatObjectWallet>();
   /**
    * Objects of unknown wallet whose delete, by sealant, Boat accepted with no wallet named: a
@@ -162,26 +180,25 @@ export class StoredAccountApi implements BoatApi {
     const settled = this.#settled.get(key);
     if (settled !== undefined) return settled;
     const found = await this.#router.objectOf(ref);
-    if (found.kind === "known" || found.kind === "unreachable") this.#settled.set(key, found);
+    if (found.kind === "known") this.#settled.set(key, found);
     return found;
   }
   async #record(ref: BoatObjectRef, found: { readonly wallet: string | null } | "unreachable") {
     await this.#router.record(ref, found);
-    this.#settled.set(
-      refKey(ref),
-      found === "unreachable" ? { kind: "unreachable" } : { kind: "known", wallet: found.wallet },
-    );
+    if (found !== "unreachable")
+      this.#settled.set(refKey(ref), { kind: "known", wallet: found.wallet });
   }
   /**
    * Where an object Boat did not find without a wallet named is: the key's wallets, each asked with
    * `probe`. Without `account.read` there is no list, and the miss in the wallet it bills is all
-   * there is: the object is unreachable, as the released sealant would have read it as gone.
+   * there is: the object is unreachable (or, for `released`, the released answer stands). Found
+   * under none of a complete list: `released`, Boat's answer stands (a 404 then proves it gone).
    */
   async #locate(
     operation: string,
     ref: BoatObjectRef,
     probe: (api: BoatApi) => Promise<Probe>,
-    /** Whether finding it nowhere is recorded (`unreachable`), or left as the released answer. */
+    /** Whether finding it nowhere without a list is recorded (`unreachable`), or left as released. */
     nowhere: "unreachable" | "released",
   ): Promise<{ readonly wallet: string | null } | BoatApiError | "released"> {
     const released = await this.#open(operation, null, false);
@@ -205,15 +222,23 @@ export class StoredAccountApi implements BoatApi {
       }),
     );
     const found = seen.filter(([, answer]) => answer === "found");
-    if (found.length === 1 && found[0] !== undefined) {
-      await this.#record(ref, { wallet: found[0][0] });
-      return { wallet: found[0][0] };
+    const [first] = found;
+    if (found.length === 1 && first !== undefined) {
+      await this.#record(ref, { wallet: first[0] });
+      return { wallet: first[0] };
     }
-    if (found.length === 0 && seen.every(([, answer]) => answer === "absent")) {
-      if (nowhere === "released") return "released";
-      await this.#record(ref, "unreachable");
-      return objectUnreachable(operation);
+    if (first !== undefined) {
+      // Boat reads it by id under every wallet: which one it counts on cannot be read. A saved
+      // snapshot is placed where the account creates now; anything else is asked where it answered.
+      if (!("snapshot" in ref)) return { wallet: first[0] };
+      const current = await (this.#router.ownerWallet ?? this.#router.createWallet)().catch(
+        () => undefined,
+      );
+      if (current?.kind !== "known") return { wallet: first[0] };
+      await this.#record(ref, { wallet: current.wallet });
+      return { wallet: current.wallet };
     }
+    if (seen.every(([, answer]) => answer === "absent")) return "released";
     return objectUnlocated(operation);
   }
   /** A request about one object, in the wallet it is in. */
@@ -241,7 +266,7 @@ export class StoredAccountApi implements BoatApi {
       return answered;
     }
     // A miss after Boat accepted sealant's own delete of it (the read that confirms the delete):
-    // the delete is done. Any other answer proves nothing once the owner switches wallets.
+    // the delete is done.
     if (this.#deletedUnnamed.has(refKey(ref))) return answered;
     const located = await this.#locate(operation, ref, probe, nowhere).catch(() =>
       objectUnlocated(operation),
@@ -384,6 +409,7 @@ const buildRouter = (router: BoatObjectRouter, publicationId: string): BoatObjec
     const where = await router.objectOf({ publication: publicationId });
     return where.kind === "known" ? where : { kind: "unresolved" };
   },
+  ownerWallet: router.createWallet,
   objectOf: () => router.objectOf({ publication: publicationId }),
   record: (_ref, found) => router.record({ publication: publicationId }, found),
 });

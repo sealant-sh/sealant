@@ -294,10 +294,12 @@ These call the live API and work end-to-end:
   own wallets, and only what the account makes next is made in the new one. It rejects with
   `boat-key-organization` for an organization's key. Images made in the old wallet are removed there
   by the control plane. `unreachable` (`BoatUnreachable`) names what the account made before the
-  control plane recorded wallets and Boat has in none of the key's wallets: `savedImages`, `runs`
-  (each ended as gone) and `builds` (built again); none of it holds anything up. The control plane's
-  own key is not in `list()`: `.installKey()` reads its last report and `.checkInstallKey()` checks
-  it now (`BoatInstallKey`: `label`, `report`, `unreachable`). A refused key rejects with
+  control plane recorded wallets that Boat did not find under any of the key's wallets, where that
+  does not prove it gone (a key without `account.read` cannot list them): `savedImages`, `runs`
+  (each ended as gone) and `builds` (built again); none of it holds anything up, and it is `null`
+  when there is none. What Boat's answers prove gone is recorded removed and not listed. The control
+  plane's own key is not in `list()`: `.installKey()` reads its last report and `.checkInstallKey()`
+  checks it now (`BoatInstallKey`: `label`, `report`, `unreachable`). A refused key rejects with
   `SealantApiError`, whose `boat`, `missingPermissions` and `boatKeyReport` say why.
   `.prove(boatAccountId)` runs a full check with a throwaway VM and answers a `BoatKeyProof`
   (`outcome`, `steps` each `passed`, `refused` with Boat's reason, `no-answer` or `not-reached`,

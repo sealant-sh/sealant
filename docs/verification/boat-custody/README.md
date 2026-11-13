@@ -295,7 +295,9 @@ Where the docs say nothing, a constant lets the adversary do either. Main's own 
   same account (a unique index on unfinished rows prevents it).
 - The `unreachable` absence sealant#641 added (a run made before sealant recorded wallets, whose VM
   is in no wallet the key can bill) and the wallet each request names. Its hunks in the covered
-  files are not yet read against the models, so the sync commit stays at `dd39b9de`.
+  files are not yet read against the models, so the sync commit stays at `dd39b9de`. SLNT-947 keeps
+  that absence only for a key that cannot list its wallets; under a complete list Boat's 404 under
+  every wallet is the run ledger's own `not-found` absence.
 - The TypeScript itself. The models are written by hand; they are as close to the code as the
   coverage record in the skill says, at the commit above.
 
