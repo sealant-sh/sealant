@@ -6,8 +6,9 @@ A Boat session is stopped by the same path that stops every runtime's executor
 (`worker/reconcile-runtime-exits.ts`). Boat has no close owner of its own. What stays Boat's is the
 adapter (`runtime/boat/adapter.ts`), the one deletion of a VM and the release of what it held once
 Boat no longer has it (`runtime/boat/removal.ts`), and a small convergence sweep
-(`runtime/boat/convergence.ts`). Every fact Core holds about a Boat run is a column of its one row
-in `boat_runs`, each written by one guarded statement (`packages/db/src/repositories/boat-runs.ts`).
+(`runtime/boat/convergence.ts`). Every fact sealant holds about a Boat run is a column of its one
+row in `boat_runs`, each written by one guarded statement
+(`packages/db/src/repositories/boat-runs.ts`).
 
 A stop is the FINAL drain, then the VM's deletion, then a poll of Boat's deletion operation. A VM
 whose FINAL is incomplete stays until FINAL completes or the owner discards it, without bound.
@@ -52,7 +53,7 @@ Three things let a stop remove a VM without the guest answering:
 - **Discard.** The owner discarded the unsaved captures (`requestDiscard`). The VM is removed under
   the `discarded` basis and the capture ends `discarded`.
 - **Attestation, for an executor that ended.** A trusted caller attested a sealed FINAL of this
-  executor (`attestCompletion`) that covers everything Core observed of it, and its daemon has
+  executor (`attestCompletion`) that covers everything sealant observed of it, and its daemon has
   ended. The VM is removed under `attested-complete`. A VM whose daemon is still up is drained first
   whatever is attested, as on every runtime: it may have written since the seal.
 
@@ -62,12 +63,12 @@ authorizes the same removal: it is re-based on the current evidence and issued a
 
 ### Trust boundary: attestations are believed
 
-Core cannot verify an attestation against the capture store; it records what an authorized service
-caller asserts. A false attestation that nothing Core observed contradicts is believed, and the VM
-with any unsaved work is removed. Core refuses an attestation only when it names another executor or
-when a later observation of the daemon (a higher epoch, a later unsaved capture) contradicts it.
-Granting the attestation route to a caller is therefore granting it authority to end that executor's
-retention.
+sealant cannot verify an attestation against the capture store; it records what an authorized
+service caller asserts. A false attestation that nothing sealant observed contradicts is believed,
+and the VM with any unsaved work is removed. sealant refuses an attestation only when it names
+another executor or when a later observation of the daemon (a higher epoch, a later unsaved capture)
+contradicts it. Granting the attestation route to a caller is therefore granting it authority to end
+that executor's retention.
 
 ## Recovery of a kept VM
 
@@ -76,7 +77,7 @@ can start on the VM again whatever it answers:
 
 - **No launch was ever pushed** (the VM was never bound, or its execution had not reached the push):
   the execution is aborted, a compare-and-set against the push, and the answer is `nothing-to-save`,
-  from Core's own record that no daemon ran. The sweep then removes the VM.
+  from sealant's own record that no daemon ran. The sweep then removes the VM.
 - **A launch may have been pushed:** the execution is held and the
   [guest agent](boat-guest-agent.md) is asked to recover the capture (`POST /sealant/recover`, with
   the capture token the sweep unsealed from the run's capture record). The agent answers from its

@@ -251,7 +251,7 @@ export const dockerServiceHealthSchema = z.discriminatedUnion("status", [
     /**
      * What the engine is made of (the containerd binary and socket dockerd uses, its version and
      * the shim's, whether a system containerd was there) and the failing command's last output.
-     * Free text: Core redacts and bounds it before it enters a diagnostic.
+     * Free text: sealant redacts and bounds it before it enters a diagnostic.
      */
     output: z.string().max(4096).optional(),
   }),

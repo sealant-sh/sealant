@@ -98,7 +98,7 @@ afterEach(() => {
 });
 
 describe("a bounded forward's writable", () => {
-  it("fails once Core resets the forward, while no write is waiting", async () => {
+  it("fails once sealant resets the forward, while no write is waiting", async () => {
     const { core, forward } = await open();
     const writer = forward.writable.getWriter();
     await writer.ready;
@@ -111,7 +111,7 @@ describe("a bounded forward's writable", () => {
     await expect(writer.close()).rejects.toThrow();
   });
 
-  it("reports a reset when the workspace ends before Core took what was written", async () => {
+  it("reports a reset when the workspace ends before sealant took what was written", async () => {
     const { core, forward } = await open();
     const writer = forward.writable.getWriter();
     await writer.write(new Uint8Array(3));
@@ -126,7 +126,7 @@ describe("a bounded forward's writable", () => {
     await expect(reader.read()).resolves.toMatchObject({ done: true });
   });
 
-  it("ends cleanly when the workspace ends after Core took everything written", async () => {
+  it("ends cleanly when the workspace ends after sealant took everything written", async () => {
     const { core, forward } = await open();
     const writer = forward.writable.getWriter();
     await writer.write(new Uint8Array(3));
@@ -165,7 +165,7 @@ describe("a bounded forward's writable", () => {
     await expect(forward.closed).resolves.toEqual({ kind: "reset", reason: "aborted" });
   });
 
-  it("is ready only while Core has granted credit", async () => {
+  it("is ready only while sealant has granted credit", async () => {
     const { core, opening } = await opened({ openWindow: false });
     expect(await settled(opening)).toBe("pending");
     core.progress(0, 0);
@@ -185,7 +185,7 @@ describe("a bounded forward's writable", () => {
     expect(await settled(writer.ready)).toBe("fulfilled");
   });
 
-  it("pulls nothing from a source while Core grants no credit", async () => {
+  it("pulls nothing from a source while sealant grants no credit", async () => {
     const { core, forward } = await open();
     let pulls = 0;
     const source = new ReadableStream<Uint8Array>({

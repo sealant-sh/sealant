@@ -136,7 +136,7 @@ Safe evidence is retained locally under `.audit/boat-detached-acceptance-2026110
 was read only by the production file loader, never printed, copied, or passed in an environment
 variable or argument. Its original mode was restored. No VM 131 access, writes or third build.
 
-A new Mend preview must bundle the changed Core worker. The transport layer alone needs no
+A new Mend preview must bundle the changed sealant worker. The transport layer alone needs no
 migration. The stacked [failed-build recovery](boat-failed-build-recovery.md) layer adds a migration
 and restores ordinary acquisition for run 4's quarantined recipe without a manual DB reset. The real
 session proof still gates admission; a successful native build adds no claim for readiness, resource

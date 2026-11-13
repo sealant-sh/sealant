@@ -1,6 +1,6 @@
 /**
- * A process started as a person's Linux user, through Core's check, Core's control client and a
- * real daemon, on a per-person image launched with an owner map (Mend's ADR 0016 decision 1;
+ * A process started as a person's Linux user, through sealant's check, sealant's control client and
+ * a real daemon, on a per-person image launched with an owner map (Mend's ADR 0016 decision 1;
  * sealantd#147 and #148):
  *
  * 1. **The check** (`liveProcessUserChannel`): the daemon reports `exec.user`; a person in the
@@ -11,11 +11,11 @@
  *    works (the owner map left no-new-privileges unset).
  * 3. **A session as the person** (`OpenSessionArgs.user`): the PTY's leader is theirs.
  * 4. **A workspace whose sealantd has no `exec.user`** (the image with sealantd 0.19.0 copied over
- *    its own): the check answers unsupported and runs nothing, so Core refuses with that reason.
- * 5. **The daemon's own rule** (sealantd#151, #152): asked directly, past Core's check, it runs the
- *    owner map's people or a person in Mend's range (uid 40001–49999, group `mend`): an image user,
- *    a user outside `mend` and root are each refused and nothing runs; an in-range `mend` user the
- *    map does not name runs, and so does a person who joins after the executor booted.
+ *    its own): the check answers unsupported and runs nothing, so sealant refuses with that reason.
+ * 5. **The daemon's own rule** (sealantd#151, #152): asked directly, past sealant's check, it runs
+ *    the owner map's people or a person in Mend's range (uid 40001–49999, group `mend`): an image
+ *    user, a user outside `mend` and root are each refused and nothing runs; an in-range `mend` user
+ *    the map does not name runs, and so does a person who joins after the executor booted.
  *
  * The image must be a managed per-person image whose sealantd reports `exec.user` and applies its
  * own rule (0.20.0-next.154 or later, as pinned): `SEALANT_PROCESS_USER_E2E_IMAGE`, default
@@ -340,9 +340,9 @@ describe.skipIf(!runsAsUser)("a process as a person, on a per-person image", () 
     expect(processUserCheckOutcome(unknown)).toMatchObject({ reason: "unknown-user" });
   }, 60_000);
 
-  it("the daemon refuses root and anyone outside Mend's range, whatever Core's check said", async () => {
+  it("the daemon refuses root and anyone outside Mend's range, whatever sealant's check said", async () => {
     // sealantd#151/#152 (0.20.0-next.154): the owner map's people, or a uid in 40001-49999 whose
-    // primary group is 40000. Straight to the daemon, past Core's check: a person with sudo who
+    // primary group is 40000. Straight to the daemon, past sealant's check: a person with sudo who
     // edits /etc/passwd still cannot run anything as root, a system user or a reserved uid in
     // another group.
     for (const user of ["builder", "1500", "m0ther000", "root", "0"]) {

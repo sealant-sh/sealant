@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Core's pins of sealantd, moved together to one version (ADR 0015 in sealant-sh/mend):
+// sealant's pins of sealantd, moved together to one version (ADR 0015 in sealant-sh/mend):
 //
 // - the image the worker bakes into workspace images (buildkit-builder.ts) and the cf-bridge image,
-//   always written as `tag@sha256:<digest>`: a moved tag cannot change what Core builds;
+//   always written as `tag@sha256:<digest>`: a moved tag cannot change what sealant builds;
 // - the two runtime packages, exact, in every manifest that names them (RUNTIME_MANIFESTS).
 //
 // A release lives under the plain names (`ghcr.io/sealant-sh/sealantd:X.Y.Z`, `@sealant/runtime-*`);

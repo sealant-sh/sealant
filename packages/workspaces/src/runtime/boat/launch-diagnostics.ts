@@ -199,7 +199,7 @@ const diagnosticSchema = z.object({
     .object({
       sentBytes: z.number().int().nonnegative().optional(),
       receivedBytes: z.number().int().nonnegative().optional(),
-      /** Whether Core's end of the carrier was attached. Not attached, nothing could flow. */
+      /** Whether sealant's end of the carrier was attached. Not attached, nothing could flow. */
       carrierAttached: z.boolean().optional(),
     })
     .optional(),

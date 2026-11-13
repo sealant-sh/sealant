@@ -29,7 +29,7 @@ Stop.
 
 ## Worker configuration on VM 131
 
-Use a Mend build bundling this Core branch, including the new
+Use a Mend build bundling this sealant branch, including the new
 `20261108010038_boat_interactive_control` migration and `boat-assets` beside `dist/`. The gateway
 built from #471 remains suitable; this layer does not change `boat-tunnel`.
 
@@ -69,11 +69,11 @@ The checker uses a dedicated Mend account token, a project with a linked TCP res
 connected Codex account. It launches protocol mode with no inference prompt, opens real Mend shell
 processes using server-issued upgrade tickets, and writes a unique worktree file. It requires the
 linked resource's name to resolve inside the exact tunnel subnet and accept a TCP connection. It
-then waits for Mend's actual idle Stop, checks FINAL/deletion/slot-release records in Core, reads
+then waits for Mend's actual idle Stop, checks FINAL/deletion/slot-release records in sealant, reads
 the captured file through Mend, resumes in a different VM, verifies its bytes, and stops. No
 synthetic launch token, SQL timestamp edits, bootstrap or queue consumer is used.
 
-Build the separate checker container from the same exact Core revision as the worker:
+Build the separate checker container from the same exact sealant revision as the worker:
 
 ```sh
 docker build --target builder -f apps/worker/Dockerfile -t boat-session-proof:REVISION .
@@ -108,7 +108,7 @@ docker run --name boat-session-proof --rm --network "$PREVIEW_NETWORK" \
 The evidence parent directory must already exist. The run directory must be new. The checker fsyncs
 both the ledger and its directory entries before sending create. It never automatically retries
 create, launch or resume. Native construction has its own 30-minute budget. After the current
-attempt's publication is observed ready in Core, authenticated readiness gets a fresh 12 minutes,
+attempt's publication is observed ready in sealant, authenticated readiness gets a fresh 12 minutes,
 including on resume. The in-flight Mend HTTP request allows both budgets and is cancelled when a
 phase expires. The ledger records `publication-ready` and `readiness-budget` separately.
 `BOAT_PROOF_BUILD_BUDGET_MS` may select a 1–60 minute construction budget. Shell execution has 60
@@ -156,6 +156,6 @@ allocation keeps the existing matching row and launch lease. A foreign runtime b
 before a provider create.
 
 These establish local behavior only. Session 6 still needs the deployed Mend worker and real Boat
-proof. This fix requires a new Core pin in the Mend preview and a checker image rebuilt from the
+proof. This fix requires a new sealant pin in the Mend preview and a checker image rebuilt from the
 same revision. It adds no migration. No VM 131 writes, key reads, provider calls or allocations were
 made for this fix.

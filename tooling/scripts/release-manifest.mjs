@@ -29,7 +29,7 @@
  * {<name>: {file, sha512, integrity}}).
  *
  * The rules are sealant-sh/mend's scripts/release-manifest.mjs, and the index binding is
- * sealant-sh/sealantd's; the images are Core's.
+ * sealant-sh/sealantd's; the images are sealant's.
  */
 import { createHash } from "node:crypto";
 import {

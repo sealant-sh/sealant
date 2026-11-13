@@ -153,8 +153,8 @@ jobs:
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
 
-      # The binary from the image Core pins (the reference pin-sealantd.mjs writes), copied out of a
-      # container that is created and never started.
+      # The binary from the image sealant pins (the reference pin-sealantd.mjs writes), copied out
+      # of a container that is created and never started.
       - name: The pinned sealantd binary
         run: |
           image=$(node tooling/scripts/pin-sealantd.mjs --print-image)

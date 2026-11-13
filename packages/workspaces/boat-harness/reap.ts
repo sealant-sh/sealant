@@ -3,7 +3,7 @@
  * (automatic, when the test process dies) and `cleanup.ts` (by hand).
  *
  * Ownership is never inferred: a run owns exactly the Docker objects labelled
- * `sh.sealant.boat-harness=<run>`. Core's own objects get that label from `bin/docker`.
+ * `sh.sealant.boat-harness=<run>`. sealant's own objects get that label from `bin/docker`.
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 
@@ -128,7 +128,7 @@ const countObjects = (objects: LabelledObjects) =>
   objects.images.length;
 
 /**
- * One harness run per Docker host: Core's worker reconciles resource networks and gateways
+ * One harness run per Docker host: sealant's worker reconciles resource networks and gateways
  * host-wide, so two stacks on one host disturb each other. The lock is a named container running
  * a heartbeat; creating it is atomic. Its holder renews it (`keepLock`), and so does the holder's
  * reaper until the run is reaped. A lock is taken over only when its heartbeat has stopped and no

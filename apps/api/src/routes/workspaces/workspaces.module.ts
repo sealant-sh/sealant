@@ -1658,7 +1658,7 @@ export const createWorkspace = (input: {
     }
 
     // The owner's own Linux user, never one the caller names (Mend ADR 0016, decision 10): the
-    // uid of the home Core writes and holds the owner's logins in.
+    // uid of the home sealant writes and holds the owner's logins in.
     const sshUser =
       body.sshAsOwner === true ? yield* ownerSshUser(parsedSpec, body.ownerUserId) : undefined;
 
@@ -2867,7 +2867,7 @@ const requireReadyExecutor = (
     const target = executor.target;
     if (target === undefined) {
       return yield* new WorkspaceBadGatewayError({
-        message: `Core has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime). Nothing was started.`,
+        message: `sealant has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime). Nothing was started.`,
       });
     }
     return {
@@ -3126,11 +3126,11 @@ export const flushWorkspaceCapture = (input: {
 const API_CAPTURE_ROUND_TRIP_MS = 55 * 60_000;
 
 /**
- * Every capture status Core relays from an executor is evidence about its disk (review 5 #3,
+ * Every capture status sealant relays from an executor is evidence about its disk (review 5 #3,
  * decision 14), recorded against the run's executor as it arrives, before anything else is asked
  * or the answer is returned — at stop, at attestation and at every deletion it counts, whoever
  * asked. Fenced (review 6 #5): the observation is marked in flight in the drain record BEFORE the
- * request is sent, so until its answer is durably recorded nothing Core holds of the executor
+ * request is sent, so until its answer is durably recorded nothing sealant holds of the executor
  * counts as current. A fence that cannot be opened: nothing is asked (the route fails). An answer
  * that cannot be recorded is still returned — the caller received it — and its fence stays open.
  */
@@ -3174,7 +3174,7 @@ const apiObservationRecorder = (runId: string) =>
             Effect.as(true),
             Effect.catchCause((cause) =>
               Effect.logError(
-                `Capture observation of run ${runId} could not be recorded; the answer is returned, and its observation stays unresolved: nothing Core holds of this executor counts as current until a later one is recorded.`,
+                `Capture observation of run ${runId} could not be recorded; the answer is returned, and its observation stays unresolved: nothing sealant holds of this executor counts as current until a later one is recorded.`,
                 cause,
               ).pipe(Effect.as(false)),
             ),
@@ -3342,7 +3342,7 @@ const withCaptureTarget = <A, R = never>(
       Effect.mapError((error) =>
         error instanceof CaptureObservationUnrecordedError
           ? new WorkspaceInternalServerError({
-              message: `Core could not record the ${input.verb}'s answer, so nothing was asked of the workspace runtime: ${error.message}`,
+              message: `sealant could not record the ${input.verb}'s answer, so nothing was asked of the workspace runtime: ${error.message}`,
             })
           : new WorkspaceConflictError({
               message: `The workspace runtime refused the ${input.verb}: ${error.message}`,
@@ -3605,7 +3605,7 @@ export const stopWorkspace = (input: {
     }
 
     // The control plane that owns the capture store attests a sealed FINAL of the executor:
-    // recorded only when it names THIS executor and nothing Core observed from it contradicts it
+    // recorded only when it names THIS executor and nothing sealant observed from it contradicts it
     // (an older epoch, a later capture, or a report that its work is not saved made after the
     // seal: received evidence beats stored evidence), and then it lets that executor's disk go
     // once it has ended.

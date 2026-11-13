@@ -128,9 +128,9 @@ stay in the user's home (`/home/<name>`, mode 0700).
 ## Restoring a capture per person
 
 A capture workspace (one whose worktree a session channel saves and restores) is told who owns what
-its restore writes with an owner map on its source, `ownerMap: { gid, worktreeUid, people }`. Core
-passes it to `sealantd` at boot as `SEALANT_CAPTURE_OWNER_MAP`, JSON in `sealantd`'s own form
-(`{"gid":40000,"worktree":40012,"people":{"acct_a":40012}}`):
+its restore writes with an owner map on its source, `ownerMap: { gid, worktreeUid, people }`.
+sealant passes it to `sealantd` at boot as `SEALANT_CAPTURE_OWNER_MAP`, JSON in `sealantd`'s own
+form (`{"gid":40000,"worktree":40012,"people":{"acct_a":40012}}`):
 
 - **A person's saved directory**, `<harnessHome>/people/<id>/`, is restored owned by their uid and
   the `mend` group. The directory itself is `0710`: the group may pass through to `conversations/`,
@@ -146,11 +146,11 @@ passes it to `sealantd` at boot as `SEALANT_CAPTURE_OWNER_MAP`, JSON in `sealant
   that names nobody, it is set, as for every other workspace. The executor is root by design here,
   not a sandbox.
 
-Core checks the map at create: `gid` 40000, every uid in 40001–49999 (the range's first id is the
+sealant checks the map at create: `gid` 40000, every uid in 40001–49999 (the range's first id is the
 group's), ids that are one directory name, no id and no uid twice, at most 256 people. It launches
 one only on an image whose probe reports `restore.owner_map` from its `sealantd`. On an image whose
 `sealantd` does not report it, the launch fails with `owner-map-unsupported` and nothing starts. On
-an image with no probe, or with a probe Core cannot read, it fails with `owner-map-unverified`.
+an image with no probe, or with a probe sealant cannot read, it fails with `owner-map-unverified`.
 Cloudflare sandboxes refuse it at create. On Kubernetes it runs under runc: a per-person Pod may
 escalate (`allowPrivilegeEscalation: true`) and adds `FSETID`, so each person's `sudo` works.
 Kubernetes refuses it under gVisor (`ociRuntime: "runsc"`).
@@ -176,7 +176,7 @@ workspace without a map boots and restores exactly as before, and pays nothing f
 their home of a running workspace, as their user, with the same sources and the same applier as a
 create's dotfiles: chezmoi, stow or copy, then each tree's `./install.sh`. The image's `sealantd`
 must report `dotfiles.user` (0.20.0-next.150 and later do; otherwise `409`
-`dotfiles-user-unsupported`), and 0.20.0-next.152 and later, which Core pins, write every file as
+`dotfiles-user-unsupported`), and 0.20.0-next.152 and later, which sealant pins, write every file as
 the person.
 
 - **As the person, into their home.** The user must exist and must not be root or in root's group,

@@ -464,7 +464,7 @@ export const workspaceImagePlatformEnvSchema = z.object({
 const IPV4_RANGE = /^(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/u;
 
 /**
- * Resource instances (Mend ADR 0019): the Docker host that runs them, and the IPv4 ranges Core
+ * Resource instances (Mend ADR 0019): the Docker host that runs them, and the IPv4 ranges sealant
  * carves its own networks from, so they never draw on the daemon's default address pools. A
  * linked executor's reach network takes a `/27` of the reach range; an instance's egress network a
  * `/28` of the egress range. Read by the API (up, stop, exec, link) and the worker (the hooks and
@@ -505,8 +505,9 @@ export const boatProviderEnvSchema = z.object({
     .refine((value) => !value.includes("\0") && !value.endsWith("/"))
     .optional(),
   /**
-   * The `sealant-deployment` label of what Core makes with the install's own key. Optional: without
-   * it Core makes one name once and keeps it in its database. An install that set it keeps it.
+   * The `sealant-deployment` label of what sealant makes with the install's own key. Optional:
+   * without it sealant makes one name once and keeps it in its database. An install that set it
+   * keeps it.
    */
   SEALANT_BOAT_DEPLOYMENT_ID: z
     .string()
@@ -853,7 +854,8 @@ export const workerServerEnvSchema = databaseEnvSchema
       .optional(),
     /**
      * The `sealant-owner` of the saved images built in the install's own Boat account. Optional:
-     * without it Core makes one once and keeps it in its database. An install that set it keeps it.
+     * without it sealant makes one once and keeps it in its database. An install that set it keeps
+     * it.
      */
     SEALANT_BOAT_BUILDER_OWNER: z.uuid().optional(),
     /**
@@ -895,12 +897,13 @@ export const workerServerEnvSchema = databaseEnvSchema
     SEALANT_BOAT_IMAGE_GC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
     /**
      * How long a stopped or failed Boat workspace keeps the image it would start again from. Within
-     * it, the image its latest launch's spec plans to (with this Core) is never removed.
+     * it, the image its latest launch's spec plans to (with this sealant) is never removed.
      */
     SEALANT_BOAT_IMAGE_RESUME_DAYS: z.coerce.number().min(1).default(14),
     /**
      * An image no run has used for less than this (it became ready, or a run started on it or
-     * ended on it, more recently) is kept whatever else holds, so a rolled-back Core finds its own.
+     * ended on it, more recently) is kept whatever else holds, so a rolled-back sealant finds its
+     * own.
      */
     SEALANT_BOAT_IMAGE_MIN_AGE_HOURS: z.coerce.number().min(1).default(24),
   });

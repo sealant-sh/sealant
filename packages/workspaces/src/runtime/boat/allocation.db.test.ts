@@ -874,7 +874,7 @@ const runOf = async (s: AllocationFixture, runId: string): Promise<BoatRun> => {
 /**
  * A run's row in the words these assertions use, each read from the row: how far its VM is
  * (`phase`), why it is held (`reason`), and what is recorded of its deletion (`removal`: the claim
- * on the first DELETE, Boat's deletion operation, or how Core knows Boat holds no VM).
+ * on the first DELETE, Boat's deletion operation, or how sealant knows Boat holds no VM).
  */
 const vmView = (run: BoatRun) => {
   const removal =
@@ -4115,7 +4115,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       await execute(s.executor.stage(target.runtimeInstanceId, Redacted.make(launchMaterial())));
       await execute(s.resourceOwner.prepare(target));
       await execute(s.executor.recordIsolation(target, ISOLATION));
-      // Core durably issued start; the guest's reply never came.
+      // sealant durably issued start; the guest's reply never came.
       await execute(s.repo.issueLaunch(target.runId));
       await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
       s.gateway.allowRemoval = true;
@@ -4123,7 +4123,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       // Work may exist and nothing proves it saved: the VM is kept, never deleted on a guess.
       await execute(paths.stop(target)).catch(() => "kept");
       expect(s.provider.deleteCalls).toBe(0);
-      // The start is fenced: Core can never send it again.
+      // The start is fenced: sealant can never send it again.
       expect(await launchPhase(s, target.runId)).toBe("held");
       await expect(execute(s.executor.launch(target.runtimeInstanceId))).rejects.toThrow(
         "invocation-held",
@@ -4239,7 +4239,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
           tunnelReceipt: prepared.gateway.receipt,
         }),
       );
-      // The agent accepts the launch; its reply never reaches Core.
+      // The agent accepts the launch; its reply never reaches sealant.
       s.guest.lostLaunchReply = true;
       await expect(execute(s.executor.launch(target.runId))).rejects.toThrow();
       expect(await launchPhase(s, target.runId)).toBe("issued");
@@ -4698,7 +4698,7 @@ const lostCreate = async (s: AllocationFixture, o: Awaited<ReturnType<typeof obs
   return { input, key: reserved.idempotencyKey };
 };
 
-/** Core's record of when create was issued, 25 hours ago by the database's clock. */
+/** sealant's record of when create was issued, 25 hours ago by the database's clock. */
 const agedIssuance = (s: AllocationFixture, id: string) =>
   execute(backdateBoatCreate(s.db, id, 25 * HOUR));
 
@@ -6222,7 +6222,7 @@ describe.runIf(databaseUrl !== undefined).each([
       await unreleased(s, target);
     }, options));
 
-  it("deletes a VM no launch was ever pushed to on Core's own record of that, with no authorization, and fences it first", () =>
+  it("deletes a VM no launch was ever pushed to on sealant's own record of that, with no authorization, and fences it first", () =>
     test(async (s) => {
       // Bound and exchanged, never launched: nothing ran on it.
       const target = await execute(s.allocations.prepare(s.input));
@@ -8380,7 +8380,7 @@ describe.runIf(databaseUrl !== undefined)("Boat adapter recover", () => {
       }
     }));
 
-  it("answers nothing to save for a launch never pushed, from Core's own record: it aborts the execution and asks the agent nothing", () =>
+  it("answers nothing to save for a launch never pushed, from sealant's own record: it aborts the execution and asks the agent nothing", () =>
     test(async (s) => {
       const f = await adapterFixture(s);
       try {
@@ -9066,7 +9066,7 @@ describe.runIf(databaseUrl !== undefined)("Boat run row: one guarded statement p
       expect(gone.sandboxId).toBe(target.sandboxId);
       expect(recorded.sandboxId).toBe(target.sandboxId);
       // Whichever landed first, the row ends absent on Boat's 404; a completion read later does
-      // not rewrite how Core came to know.
+      // not rewrite how sealant came to know.
       expect(await runOf(s, target.runId)).toMatchObject({
         absentBasis: "not-found",
         absentAt: expect.any(Date),

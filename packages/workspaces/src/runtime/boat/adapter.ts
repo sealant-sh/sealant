@@ -353,7 +353,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
    * and then only when one of these holds, read at the moment the DELETE is about to be sent:
    *
    *  - no launch was ever pushed to the VM (it was never bound, or it was fenced with no launch
-   *    issued): Core's own record that no daemon ran on it;
+   *    issued): sealant's own record that no daemon ran on it;
    *  - the run's capture record holds an issued removal under a live hold: the shared path's
    *    deletion ticket, which it issues right before this call and only while the evidence it was
    *    authorized on (a complete FINAL observed or attested) is still current, with no
@@ -439,7 +439,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
    *
    *  - a launch never pushed to the VM's agent is never pushed (the fence and the push are each
    *    one statement on the run's row: whichever is first decides, and the fence says which), and
-   *    a VM never bound has none to push: `nothing-to-save`, by Core's own record that no daemon
+   *    a VM never bound has none to push: `nothing-to-save`, by sealant's own record that no daemon
    *    ran on it;
    *  - a launch that may have been pushed is held, and the agent is asked to recover it on the
    *    VM's own disk (`POST /sealant/recover`), handed the capture token the sweep unsealed. Only
@@ -517,7 +517,7 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
             `not recoverable in place · the daemon of Boat VM ${sandboxId} ${
               input.daemonRecoveryBoot === false
                 ? "predates sealantd's recovery boot"
-                : "is of a build Core cannot tell has sealantd's recovery boot"
+                : "is of a build sealant cannot tell has sealantd's recovery boot"
             }: restarting it would run its ordinary boot over the work its disk holds. It is kept until its owner discards it`,
           );
         if (input.secretEnv === undefined)

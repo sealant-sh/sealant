@@ -113,7 +113,7 @@ describe("finalizeInteractiveRun", () => {
   });
 });
 
-/** A stand-in Core API that keeps every request body it was sent. */
+/** A stand-in sealant API that keeps every request body it was sent. */
 const recordingApi = async () => {
   const bodies: unknown[] = [];
   const server: Server = createServer((req, res) => {

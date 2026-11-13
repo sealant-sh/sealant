@@ -86,7 +86,7 @@ export interface BoatProofInventory {
   /** Exact ready catalog artifacts, independently matched to the provider. Never VM allocations. */
   readonly retainedSnapshots?: readonly { readonly publicationId: string; readonly name: string }[];
 }
-/** Core has already given up on this attempt. Its cause is the runtime row's recorded error. */
+/** sealant has already given up on this attempt. Its cause is the runtime row's recorded error. */
 export interface ProofFailure {
   readonly runId: string;
   readonly attemptStatus: string;
@@ -94,7 +94,7 @@ export interface ProofFailure {
   readonly errorCode: string | null;
   readonly errorMessage: string | null;
 }
-/** The rows the failure lookup reads. The proof core passes Core's repositories. */
+/** The rows the failure lookup reads. The proof core passes sealant's repositories. */
 export interface ProofFailureReads {
   readonly workspace: (
     id: string,
@@ -112,7 +112,7 @@ export interface ProofFailureReads {
   >;
 }
 /**
- * Core's verdict on the workspace's current attempt. Mend sets sealantRunId only once the agent
+ * sealant's verdict on the workspace's current attempt. Mend sets sealantRunId only once the agent
  * starts, so a launch that fails earlier is found through the workspace, as publication() does.
  */
 export const findProofFailure = async (
@@ -392,7 +392,7 @@ const trackProofSession = (input: {
       const observed = await remember();
       if (observed === undefined) return undefined;
       if (observed.runtime?.closed) return true;
-      // A create that never launched has no Core runtime or provider deletion to await.
+      // A create that never launched has no sealant runtime or provider deletion to await.
       return observed.runtime === undefined &&
         observed.session.sealantRunId === null &&
         ["stopped", "completed", "failed"].includes(observed.session.status)
@@ -486,12 +486,12 @@ export const runBoatLiveCheck = async (
     const checkAnswer = () => {
       if (answer?.ok === false) throw answer.error;
     };
-    // Core's verdict is final. Waiting out the budget after it only delays cleanup by minutes.
+    // sealant's verdict is final. Waiting out the budget after it only delays cleanup by minutes.
     const checkCore = (failure: ProofFailure | undefined) => {
       if (failure === undefined || failure.runId === previousRunId) return;
       io.record({ event: "core-launch-failed", phase, ...failure });
       process.stderr.write(
-        `Boat proof ${phase}: Core failed the launch (${failure.errorCode ?? failure.attemptStatus}): ${failure.errorMessage ?? "no recorded cause"}\n`,
+        `Boat proof ${phase}: sealant failed the launch (${failure.errorCode ?? failure.attemptStatus}): ${failure.errorMessage ?? "no recorded cause"}\n`,
       );
       throw new BoatProofError(`${phase}-core-failed`);
     };

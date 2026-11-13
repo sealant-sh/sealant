@@ -61,7 +61,7 @@ export const nativeBootEnv = (
       }),
     );
   } else if (source.kind === "git") {
-    // `git` is Core's blueprint term; pinned sealantd v0.18.2 names this wire mode `clone`.
+    // `git` is sealant's blueprint term; pinned sealantd v0.18.2 names this wire mode `clone`.
     entries.push(["SEALANT_WORKSPACE_SOURCE", "clone"]);
     entries.push(["SEALANT_WORKSPACE_REPO_URL", source.url]);
     if (source.ref !== undefined) {
@@ -129,7 +129,7 @@ export const nativeBootEnv = (
     entries.push([key, value]);
   }
   // Service-owned and last-wins over every plaintext lane. The v2 agent pins the same five values
-  // before boot, and both Core and the agent reject them in secretEnvJson.
+  // before boot, and both sealant and the agent reject them in secretEnvJson.
   if (blueprint.tooling.services?.docker?.enabled === true) {
     entries.push(["DOCKER_HOST", "unix:///run/docker/docker.sock"]);
     entries.push(["DOCKER_CONTEXT", ""]);

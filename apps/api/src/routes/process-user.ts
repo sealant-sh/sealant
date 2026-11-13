@@ -2,9 +2,9 @@
  * Whether a process may start as the Linux user an exec or a session names (Mend ADR 0016
  * decision 1), decided before anything is created or started. `user` goes to the workspace's
  * sealantd (`exec.user`, 0.20.0-next.150 and later), which starts the process as that passwd entry;
- * Core allows it only for a person Mend made (a uid in 40001–49999 whose primary group is `mend`),
- * never root, on a workspace whose daemon reports the capability. Anything else is refused with
- * `user-unsupported`, worded by reason, and nothing is started. A request without `user` never
+ * sealant allows it only for a person Mend made (a uid in 40001–49999 whose primary group is
+ * `mend`), never root, on a workspace whose daemon reports the capability. Anything else is refused
+ * with `user-unsupported`, worded by reason, and nothing is started. A request without `user` never
  * comes here. This check reads the executor's passwd, which a person with `sudo` can edit; the
  * daemon checks the entry it resolves again (sealantd#151 and #152, 0.20.0-next.154 and later) and
  * starts a process only as one of its owner map's people or a person in Mend's reserved range (a uid
@@ -107,7 +107,7 @@ export const checkProcessUser = (input: {
     if (target === undefined) {
       return {
         kind: "unanswered",
-        message: `Core has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime), so it cannot check '${user}'. Nothing was started.`,
+        message: `sealant has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime), so it cannot check '${user}'. Nothing was started.`,
       } satisfies ProcessUserVerdict;
     }
     if (allowed.holds(instance.runId, user))

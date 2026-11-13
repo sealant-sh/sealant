@@ -1,4 +1,4 @@
-// Loaded into Core's worker and API with `node --import`. It sends every TLS connection for
+// Loaded into sealant's worker and API with `node --import`. It sends every TLS connection for
 // `boat.dev` and `*.on.boat.dev` to the harness's fake Boat on 127.0.0.1, keeping the real HTTPS
 // origin, SNI and certificate checks (the harness CA arrives through NODE_EXTRA_CA_CERTS). This
 // covers undici (the provider API, signed uploads and the receiver) and `ws` (the sealantd control
@@ -11,7 +11,7 @@ const port = Number(process.env.SEALANT_BOAT_HARNESS_PORT);
 if (!Number.isInteger(port) || port <= 0)
   throw new Error("boat-harness preload: SEALANT_BOAT_HARNESS_PORT is required");
 
-// Core's logs print error causes through util.inspect. Keep the whole chain, so a failure's
+// sealant's logs print error causes through util.inspect. Keep the whole chain, so a failure's
 // innermost code (e.g. a BoatTunnelStoreError's) reaches the harness logs.
 util.inspect.defaultOptions.depth = 12;
 

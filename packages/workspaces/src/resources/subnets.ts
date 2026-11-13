@@ -21,7 +21,7 @@ export const resourceSubnetPools = (ranges: {
   egress: parseSubnetPool(ranges.egress, EGRESS_PREFIX),
 });
 
-/** The runtime's subnets, held in Core's table by the repository. */
+/** The runtime's subnets, held in sealant's table by the repository. */
 export const repositorySubnets = (
   repo: ResourceInstanceRepoService,
   pools: ResourceSubnetPools,

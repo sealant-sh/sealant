@@ -1,6 +1,6 @@
 /**
  * Checks a Boat key against Boat by read-only calls, and reports what Boat showed of it: who it is,
- * which wallet it bills, its permissions and which of the ones Core needs are missing, when it
+ * which wallet it bills, its permissions and which of the ones sealant needs are missing, when it
  * expires, whether the wallet can start a VM now and why not, and its snapshot slots. Each fact is
  * observed, or not observed with the reason; nothing is guessed. Nothing here creates, changes or
  * deletes anything in Boat.
@@ -25,7 +25,7 @@ export type BoatKeyCheckClient = Pick<
 /**
  * `refused`: Boat refused the key itself (unknown, revoked, expired, another organization's).
  * `unverified`: Boat did not answer whether it accepts it. `checked`: Boat accepted it, and the
- * report says what it showed; `missingPermissions` are the permissions Core needs that the key
+ * report says what it showed; `missingPermissions` are the permissions sealant needs that the key
  * provably lacks (from its listed scope, or Boat's own refusal of a call that needs one).
  */
 export type BoatKeyCheck =
@@ -117,7 +117,7 @@ export const checkBoatKey = async (
       provenMissing.push(failure.permission ?? "sandbox.read");
     // Boat accepted the key and refused for the account (suspended, billing, a limit, a trial):
     // the check goes on, and the report shows it. Anything else (a rate limit, no machine, no
-    // answer, a refusal Core does not classify) says nothing about the key: unverified.
+    // answer, a refusal sealant does not classify) says nothing about the key: unverified.
     else if (!ACCOUNT_REFUSALS.has(failure.kind)) return { kind: "unverified", failure };
   }
   const [me, orgs, limits, keys, allowance] = await Promise.all([

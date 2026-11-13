@@ -29,7 +29,7 @@ Implemented in this pass:
 - installation import auto-grants the importing user and immediately performs repository sync
 - manual installation sync is now grant-aware and blocks inactive installations
 - API tests added for webhookless installation import and grant-aware sync rejection
-- web core API client and tRPC router now expose GitHub installation import, listing, repository
+- web sealant API client and tRPC router now expose GitHub installation import, listing, repository
   listing, and manual sync flows
 - authenticated GitHub setup page added for callback-driven import and manual installation-id import
 - sandbox creation UI now supports a GitHub App source mode with installation picker, repo picker,

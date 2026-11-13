@@ -54,7 +54,7 @@ const parseDnsResolvers = (config: string): ReadonlyArray<string> => {
         throw new CallerDnsConfigurationError();
       return address;
     });
-  // Docker's file describes the daemon's actual upstreams, unlike Core's own resolv.conf in
+  // Docker's file describes the daemon's actual upstreams, unlike sealant's own resolv.conf in
   // a packaged container. Never interpret the embedded loopback address as the upstream.
   const external = /^# ExtServers:\s*\[([^\]\n]*)\]\s*$/m.exec(config)?.[1];
   const addresses = nameservers.includes("127.0.0.11")
@@ -367,7 +367,7 @@ export class DockerCallerRuntime {
       if (!/^\d+\.\d+\.\d+\.\d+$/.test(anchorIp))
         throw new Error("The instance has no private address.");
       const chain = `CORESVC_CB_${String(reach.callbackPort)}`;
-      // Mend may share its container with Core and workspace-facing listeners. Restrict just
+      // Mend may share its container with sealant and workspace-facing listeners. Restrict just
       // this configured callback port on every interface, leaving those other listeners alone.
       const callbackGuard = [
         "set -eu",

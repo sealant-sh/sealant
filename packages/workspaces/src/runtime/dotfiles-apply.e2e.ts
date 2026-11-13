@@ -1,5 +1,5 @@
 /**
- * A person's dotfiles applied as their user into their home, through Core's staging and a real
+ * A person's dotfiles applied as their user into their home, through sealant's staging and a real
  * daemon, on a per-person image (Mend's ADR 0016 decision 11; sealantd#147):
  *
  * 1. The stage script, over the live channel, reads the daemon's `dotfiles.user` capability, checks

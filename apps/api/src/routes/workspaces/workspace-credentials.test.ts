@@ -713,7 +713,7 @@ describe("putWorkspaceCredentials", () => {
     expect(world.ran).toEqual([]);
   });
 
-  it("refuses a Claude key where the run saves state, or where Core cannot tell", async () => {
+  it("refuses a Claude key where the run saves state, or where sealant cannot tell", async () => {
     const cases: ReadonlyArray<readonly [SavedRoots | undefined, string, string]> = [
       [
         { workingDirectory: "/workspace/repo", harnessHome: "/captured" },
@@ -1056,7 +1056,7 @@ describe("putWorkspaceCredentials", () => {
     world.exits.push("throw");
     const failure = failed(await world.put({ onBehalfOfUserId: ALICE, claude: "work" }));
     expect(failure).toMatchObject({ _tag: "WorkspaceBadGatewayError" });
-    expect(failure.message).toContain("Core removes whatever of it landed");
+    expect(failure.message).toContain("sealant removes whatever of it landed");
     expect(world.homes.rows.get(`run_1 ${HOME}`)).toMatchObject({ onBehalfOfUserId: ALICE });
     expect(
       [...world.homes.placementRows.values()].map((row) => [row.accountId, row.state]),
@@ -1408,7 +1408,7 @@ describe("placement receipts", () => {
     succeeded(await world.put({ onBehalfOfUserId: ALICE, claude: "default" }));
     world.exits.push("throw");
     const failure = failed(await world.release());
-    expect(failure.message).toContain("Core finishes the release once the executor answers");
+    expect(failure.message).toContain("sealant finishes the release once the executor answers");
     expect([...world.homes.placementRows.values()]).toEqual([
       expect.objectContaining({ state: "removing" }),
     ]);

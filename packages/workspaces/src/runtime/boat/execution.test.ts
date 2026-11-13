@@ -201,7 +201,7 @@ describe("Boat worker public bootstrap transport", () => {
   });
 });
 
-/** The hosted origin Core holds for a VM; every test routes it to a local server. */
+/** The hosted origin sealant holds for a VM; every test routes it to a local server. */
 const HOSTED_ORIGIN = "https://fixture-8080.on.boat.dev";
 const realFetch = globalThis.fetch;
 const servers: http.Server[] = [];

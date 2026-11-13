@@ -376,8 +376,8 @@ refreshes it.
   one person) keeps the planner's `CLAUDE_CODE_OAUTH_TOKEN`: writing a file there would add an exec
   to every such cold launch, for nothing. Inference outside workspaces (the Agent SDK in the API
   process) keeps the variable too.
-- **Verified** against Claude Code 2.1.289 (the version Core's images carry), in a container, with
-  `ANTHROPIC_BASE_URL` pointed at a recording server. With only this file in `~/.claude`,
+- **Verified** against Claude Code 2.1.289 (the version sealant's images carry), in a container,
+  with `ANTHROPIC_BASE_URL` pointed at a recording server. With only this file in `~/.claude`,
   `claude auth status` reports `loggedIn: true, authMethod: claude.ai`. `claude -p` and the TUI both
   send `Authorization: Bearer <token>` with the `oauth-2025-04-20` beta, and the TUI opens straight
   to its prompt. Without the file, both say "Not logged in".
@@ -430,7 +430,7 @@ GET    ?ownerUserId                                                        → {
   (instance, home): the person, the account per provider whose copy is there, and the hold's
   generation. The first put names the home's person; a put naming anyone else is refused, 409
   `home-held`, and nothing is written. The same person may change an account or remove a provider.
-  The home is held until it is released: `DELETE` removes every login file Core names in it
+  The home is held until it is released: `DELETE` removes every login file sealant names in it
   (recorded or not: an unconfirmed write may have landed) and deletes the row; only then can the
   home be taken by another person. Release is idempotent (`released: false` when it held nothing);
   on a stopped executor it deletes the row only.
@@ -460,8 +460,8 @@ GET    ?ownerUserId                                                        → {
      marker or its own generation's (a launch delivered twice writes twice; a launch's take presents
      token 0, as nothing precedes it), and makes it; every later write writes only while the marker
      names its hold; a release removes the files and the marker only while the marker is absent or
-     its own hold's (a home Core holds no record of is released whatever its marker says). It then
-     raises the mark to its token.
+     its own hold's (a home sealant holds no record of is released whatever its marker says). It
+     then raises the mark to its token.
 
   An exec issued before any later write, take or release into the home therefore writes nothing,
   whatever ran in between: a late write from an earlier hold, and a late release followed by a late
@@ -479,20 +479,21 @@ GET    ?ownerUserId                                                        → {
   which the person could otherwise read through `/proc`.
 - **No login in argv or the environment, at any step (Oct 2026).** sealantd publishes a process's
   arguments in `processStarted`, and `/proc` shows every process's arguments and environment, so a
-  login is never in either. Core runs `sh -c <script>` with no session (a plain process, whose stdin
-  sealantd neither records nor publishes) and writes the payloads, one base64 line each, to its
-  stdin; the script holds no login. The root half reads them into shell variables it never exports
-  and hands them to the owner's half as a here-document on its stdin; the owner's half reads them
-  the same way and hands each to `base64 -d` or `node` as a here-document of its own. A shell writes
-  a here-document into a pipe; bash before 5.1, or a document larger than the pipe, writes a 0600
-  temporary file in `$TMPDIR` and unlinks it at once, so the root half sets `TMPDIR` to the state
-  directory (root's only, outside every home and capture root) and the owner's half to the home,
-  never where the workspace's environment points it (saved state, for one). Until this, the root
-  half started `env -i … p0="$p0" … setpriv …`, so every payload was in `env`'s argv for an instant
-  and then in the environment of `setpriv`, the owner's shell and every command it ran (`mkdir`,
-  `base64`, `node`, which also took pi's and opencode's entry as `e=`). A test runs the script with
-  every command shimmed to record its argv and environment (and under `strace` where it works), and
-  the Docker e2e watches every process's `cmdline` and `environ` as root through repeated puts.
+  login is never in either. sealant runs `sh -c <script>` with no session (a plain process, whose
+  stdin sealantd neither records nor publishes) and writes the payloads, one base64 line each, to
+  its stdin; the script holds no login. The root half reads them into shell variables it never
+  exports and hands them to the owner's half as a here-document on its stdin; the owner's half reads
+  them the same way and hands each to `base64 -d` or `node` as a here-document of its own. A shell
+  writes a here-document into a pipe; bash before 5.1, or a document larger than the pipe, writes a
+  0600 temporary file in `$TMPDIR` and unlinks it at once, so the root half sets `TMPDIR` to the
+  state directory (root's only, outside every home and capture root) and the owner's half to the
+  home, never where the workspace's environment points it (saved state, for one). Until this, the
+  root half started `env -i … p0="$p0" … setpriv …`, so every payload was in `env`'s argv for an
+  instant and then in the environment of `setpriv`, the owner's shell and every command it ran
+  (`mkdir`, `base64`, `node`, which also took pi's and opencode's entry as `e=`). A test runs the
+  script with every command shimmed to record its argv and environment (and under `strace` where it
+  works), and the Docker e2e watches every process's `cmdline` and `environ` as root through
+  repeated puts.
 - **Hard links.** Each whole-file login (Claude's, Codex's, GitHub's) is opened by the owner's half
   (made if missing, not yet truncated) and checked through its descriptor (`/proc/$$/fd/N`) before
   any of them is written: a regular file with one link, or the put is refused, `86` (Claude), `87`
@@ -504,7 +505,7 @@ GET    ?ownerUserId                                                        → {
   someone else's file, and an in-place write would land there too. A removal unlinks only the home's
   name. Before the hold changes, the script checks that it can drop to the owner at all; an executor
   that cannot answers `home-unusable` and leaves no marker.
-- **Homes Core writes into.** A home's parent must be root's and not group- or world-writable
+- **Homes sealant writes into.** A home's parent must be root's and not group- or world-writable
   (unless sticky), so the person cannot rename the home between the checks and the writes; a home
   root owns is refused unless it is `/root` (root's own, with the shared layout's links). Both
   answer `home-unusable`. A mark that is not a number (a write cut short) refuses every token, and
@@ -522,7 +523,7 @@ GET    ?ownerUserId                                                        → {
 - **Rolling deploys.** An API older than pi's and opencode's logins releases a home by removing the
   whole-file logins and the marker and deleting the record, leaving pi's and opencode's copies. The
   next take of the home removes every login it does not write, and the next release removes every
-  login Core names whether or not it holds a record, so either clears them; until then the home
+  login sealant names whether or not it holds a record, so either clears them; until then the home
   holds no record, no marker and no refresh reaches the copies.
 - **Links, and dotfiles.** No component of the home's path may be a link. In a home that is not
   root's, a login directory (`.claude`, `.codex`, `.config`, `.config/gh`) that is a link must lead
@@ -576,15 +577,15 @@ the home's owner with node:
 - **each failure says what it is**: a file that is not a regular file the owner can write (a
   directory at `auth.json`), or a node failure, is `82` (pi) or `83` (opencode); a file that really
   is outside the home, under `/workspace`, or has another hard link is `84` or `85`; all are
-  `home-unusable` with the file named, never "a symbolic link". A removal finds nothing of Core's in
-  any of those places and succeeds, so a first take refused there releases its own marker and the
+  `home-unusable` with the file named, never "a symbolic link". A removal finds nothing of sealant's
+  in any of those places and succeeds, so a first take refused there releases its own marker and the
   home is never left looking like another person's (`home-held`).
 
 A Codex account that is an API key, or has no account id or readable expiry, cannot be either tool's
 login: `409` `connected-account-unsupported` with `provider: "codex"`. Choosing pi's
 `defaultProvider` stays the caller's (Mend's seed).
 
-**A partial put (Oct 2026).** `partial: true` keeps a join at exactly one Core call whatever the
+**A partial put (Oct 2026).** `partial: true` keeps a join at exactly one sealant call whatever the
 person has connected: each named provider whose account is refused (`connected-account-missing`,
 `-invalid`, `-unsupported`) is left out of the write and its login removed from the home, as `null`
 would remove it, so the home holds exactly what is connected; the answer's `skipped` lists each with
@@ -639,16 +640,16 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   `ExecArgs.user` / `OpenSessionArgs.user` (sealantd#147, 0.20.0-next.150 and later), which starts
   the process as that passwd entry (uid, groups, `HOME`, umask 0002, private `TMPDIR` and
   `XDG_RUNTIME_DIR`, the image's `person-env`, none of the daemon's logins; `CAP_FOWNER` only
-  without no-new-privileges). Before anything is created Core refuses, with 409 `user-unsupported`
-  and the reason in the message: root, a uid outside 40001–49999 (no I/O); then, over one control
-  connection to the ready executor, a daemon that does not report `exec.user` ("this workspace's
-  sealantd doesn't run processes as another user"), and a passwd entry that is missing or not in
-  range (uid outside the range or primary group not `mend`, checked as root with `getent`).
-  Cloudflare's sandboxes are refused outright. A yes is kept per executor and user for ten minutes
-  in the API process, so a person's run of execs pays the check once; a request without `user` takes
-  none of these steps. The run records the user (`runs.process_user`, `user` on the run resource)
-  and nothing else of the process; argv stays unstored (sealant#329). **Version skew.** A process as
-  a user has its own routes and its own queue (`workspace-run-exec-as-user`, kind
+  without no-new-privileges). Before anything is created sealant refuses, with 409
+  `user-unsupported` and the reason in the message: root, a uid outside 40001–49999 (no I/O); then,
+  over one control connection to the ready executor, a daemon that does not report `exec.user`
+  ("this workspace's sealantd doesn't run processes as another user"), and a passwd entry that is
+  missing or not in range (uid outside the range or primary group not `mend`, checked as root with
+  `getent`). Cloudflare's sandboxes are refused outright. A yes is kept per executor and user for
+  ten minutes in the API process, so a person's run of execs pays the check once; a request without
+  `user` takes none of these steps. The run records the user (`runs.process_user`, `user` on the run
+  resource) and nothing else of the process; argv stays unstored (sealant#329). **Version skew.** A
+  process as a user has its own routes and its own queue (`workspace-run-exec-as-user`, kind
   `workspace.run-exec-as-user.requested`): an API from before them answers `404`, a worker from
   before them neither consumes the queue nor parses the kind, so neither can drop `user` and run the
   person's commands as root. `user` on the plain routes is refused, and the legacy queue's parser
@@ -656,31 +657,32 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   (`checkedExecutorRunId`); a worker that finds another one checks again before starting anything,
   and every exec as a user re-reads `exec.user` on its own connection, as the session path does
   before it opens the session. Operators still upgrade the API and the worker together (documented).
-  Core's uid check runs inside the executor, where a person with `sudo` could rewrite `/etc/passwd`,
-  so sealantd checks the passwd entry it resolves again (sealantd#151 and #152, 0.20.0-next.154 and
-  later, which Core pins): exec, sessions and `dotfiles.apply` start a process only as one of the
-  owner map's people (its people's uids or its worktree uid, in the map's gid) or a person in Mend's
-  reserved range (a uid in 40001–49999 whose primary group is 40000), with or without a map. The map
-  is read once, at boot, so a person who joins after it gets their uid in the range and is admitted
-  by it (sealantd#152, 0.20.0-next.154; #151 alone refused every later joiner). Root, root's group,
-  a uid outside the range and a reserved uid in another group are refused (invalid argument) before
-  anything starts: a person with `sudo` who edits `/etc/passwd` still cannot get the daemon to run
-  anything as root or a system user. An SDK sends `user` only to a control plane whose index reports
-  `features.processUserRoutes` (kept five minutes, a failed read fifteen seconds), only on the
-  as-user routes, and refuses it client-side otherwise. `features.processUser` stays `false`: SDKs
-  from before the as-user routes read `true` as leave to send `user` on the plain routes, which a
-  control plane from before `user` decodes without the field and runs as the workspace's own user.
-  The index's `features` also reports `dotfilesApply`, `credentialsPartialPut`,
-  `credentialsPiOpencode` and `captureOwnerMap`; each workspace read reports `processUser`
-  (`supported`, `unsupported`, `unknown`) from its image's sealantd (the build's probe).
+  sealant's uid check runs inside the executor, where a person with `sudo` could rewrite
+  `/etc/passwd`, so sealantd checks the passwd entry it resolves again (sealantd#151 and #152,
+  0.20.0-next.154 and later, which sealant pins): exec, sessions and `dotfiles.apply` start a
+  process only as one of the owner map's people (its people's uids or its worktree uid, in the map's
+  gid) or a person in Mend's reserved range (a uid in 40001–49999 whose primary group is 40000),
+  with or without a map. The map is read once, at boot, so a person who joins after it gets their
+  uid in the range and is admitted by it (sealantd#152, 0.20.0-next.154; #151 alone refused every
+  later joiner). Root, root's group, a uid outside the range and a reserved uid in another group are
+  refused (invalid argument) before anything starts: a person with `sudo` who edits `/etc/passwd`
+  still cannot get the daemon to run anything as root or a system user. An SDK sends `user` only to
+  a control plane whose index reports `features.processUserRoutes` (kept five minutes, a failed read
+  fifteen seconds), only on the as-user routes, and refuses it client-side otherwise.
+  `features.processUser` stays `false`: SDKs from before the as-user routes read `true` as leave to
+  send `user` on the plain routes, which a control plane from before `user` decodes without the
+  field and runs as the workspace's own user. The index's `features` also reports `dotfilesApply`,
+  `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`; each workspace read
+  reports `processUser` (`supported`, `unsupported`, `unknown`) from its image's sealantd (the
+  build's probe).
 - **The image's per-person capability.** The image build's probe (sealant#327) records on the
   build's metadata `imageProbe`: the tools (setuid `sudo`, `useradd`, `setfacl`, `setpriv`,
   `flock`), the sudoers rule, a writable passwd, the `mend` group, the reserved ids, and what its
   sealantd reports; a managed image that cannot run the layout, `setpriv` and `flock` included,
-  fails its build. Core derives `personLayout = { status, missing, unknown, runtime, acl }` from it
-  with `imagePersonLayoutSupport` (the runtime's `no_new_privs` counted: Kubernetes workspaces run
-  with it, where `sudo` cannot raise a person) and the operator's `SEALANT_WORKSPACE_ACLS`. Anything
-  not known is `unknown`, never `supported`. It is reported on every workspace read's
+  fails its build. sealant derives `personLayout = { status, missing, unknown, runtime, acl }` from
+  it with `imagePersonLayoutSupport` (the runtime's `no_new_privs` counted: Kubernetes workspaces
+  run with it, where `sudo` cannot raise a person) and the operator's `SEALANT_WORKSPACE_ACLS`.
+  Anything not known is `unknown`, never `supported`. It is reported on every workspace read's
   `publishedImage`, for that workspace's runtime, so a launch's image is known with no extra call
   (SDK `launch.image` after `ready()`, `workspace.image()`), and before a create by
   `POST /v1/workspaces/image { spec }` (SDK `workspaces.inspectImage(options)`): the spec is planned
@@ -701,7 +703,7 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   (`spec.sources.workspace.ownerMap = { gid, worktreeUid, people: [{ id, uid }] }`, SDK
   `source.ownerMap`): who owns what sealantd's restore writes (its ADR-0015 "Per-person saved
   directories", sealantd#145), and whether the executor is a per-person one (a root daemon whose map
-  names someone leaves no-new-privileges unset, sealantd#148). Core delivers it as
+  names someone leaves no-new-privileges unset, sealantd#148). sealant delivers it as
   `SEALANT_CAPTURE_OWNER_MAP` in sealantd's JSON (`{"gid","worktree","people":{id: uid}}`, people in
   id order) from `captureOwnerMapEnv`, emitted after every other entry and empty without a map, so
   Docker, Kubernetes and MicroVM boot it alike. Cloudflare refuses it at create and in its adapter.
@@ -749,7 +751,7 @@ unchanged. The SDK carries a typed error's body code as `SealantApiError.reason`
   (sealantd#147, #149): the clone, chezmoi, stow or copy as the user, then each tree's bootstrap
   (`./install.sh`, or `bootstrapCommand`) as one managed process of the user.
 - **Every file inside the home is the user's (sealantd#149, #150; 0.20.0-next.152 and later, which
-  Core pins).** Root reads each archive once, through a descriptor that follows no link, into a
+  sealant pins).** Root reads each archive once, through a descriptor that follows no link, into a
   root-only staging directory outside every home (under `/run/sealant/dotfiles-staging`, 0700,
   removed when the apply ends) and unpacks it there with `--no-same-owner`. Before it unpacks, an
   archive is refused when a member has an absolute path or a `..`, lies under a link the archive

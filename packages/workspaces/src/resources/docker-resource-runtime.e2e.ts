@@ -45,7 +45,7 @@ const tag = `core-res-e2e-${String(process.pid)}`;
 const executors = { w1: `${tag}-w1`, w2: `${tag}-w2` } as const;
 const ownNetworks = { w1: `${tag}-w1-net`, w2: `${tag}-w2-net` } as const;
 
-/** Subnets from a /20 this run picks, as Core's table would hand them out. */
+/** Subnets from a /20 this run picks, as sealant's table would hand them out. */
 const subnetPool = (): ResourceSubnets & { readonly held: ReadonlyMap<string, string> } => {
   const third = 16 * Math.floor(Math.random() * 15);
   const held = new Map<string, string>();
@@ -77,7 +77,7 @@ describe("resource instances on Docker", () => {
   const subnets = subnetPool();
   const runtime = new DockerResourceRuntime({ subnets, readyTimeoutMs: 90_000 });
   const links = [linkedExecutor(executors.w1, "w1"), linkedExecutor(executors.w2, "w2")];
-  // The image declares VOLUME /var/lib/postgresql; the spec names none, so Core must cover it.
+  // The image declares VOLUME /var/lib/postgresql; the spec names none, so sealant must cover it.
   const db = record(
     randomUUID(),
     postgresSpec({ image: POSTGRES, volumes: [], env: { POSTGRES_HOST_AUTH_METHOD: "trust" } }),

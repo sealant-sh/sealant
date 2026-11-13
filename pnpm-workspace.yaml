@@ -74,9 +74,10 @@ catalog:
   zod: ^4.1.12
 
 # Our own sealantd packages, published only by sealant-sh/sealantd's workflows with provenance, are
-# never held back by the release-age policy: a prerelease Core pins (0.20.0-next.N, published from
-# sealantd's main minutes earlier) would otherwise wait a day. Installs are bound to the lockfile, so
-# this lets no version in that the lockfile does not name (ADR 0015 in sealant-sh/mend).
+# never held back by the release-age policy: a prerelease sealant pins (0.20.0-next.N, published
+# from sealantd's main minutes earlier) would otherwise wait a day. Installs are bound to the
+# lockfile, so this lets no version in that the lockfile does not name (ADR 0015 in
+# sealant-sh/mend).
 minimumReleaseAgeExclude:
   - "@sealant/runtime-client"
   - "@sealant/runtime-protocol"

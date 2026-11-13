@@ -245,7 +245,7 @@ except (TimeoutError,ConnectionRefusedError,PermissionError): print('blocked')`,
     console.info(
       "Legacy workload replaced with read-only DNS configuration; retained data preserved",
     );
-    // Also cover Core's ordinary creation path with no override. On a LAN host this exercises
+    // Also cover sealant's ordinary creation path with no override. On a LAN host this exercises
     // Docker's host(address) metadata; CI uses whatever IPv4 resolver its daemon configures.
     await runtime.stop(instance);
     await docker("container", "inspect", "--format", "{{.Name}}", workload, name);

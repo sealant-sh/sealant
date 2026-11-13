@@ -1,10 +1,10 @@
 /**
- * How Core orders the capture evidence it receives from one executor (review 6 #6, decision 17):
+ * How sealant orders the capture evidence it receives from one executor (review 6 #6, decision 17):
  * by the executor's own history, never by the clocks of the processes that read it. sealantd
  * stamps every status and FINAL answer (and every final seal) with its position — the lease
  * epoch, the launch it runs as, the daemon boot that answered, how many boots opened its disk, and
  * an observation number that only grows within the boot — and an answer with a later position is
- * the newer one, whichever Core worker read it and whatever that worker's clock said.
+ * the newer one, whichever sealant worker read it and whatever that worker's clock said.
  *
  * Where no position can order two answers (either lacks one: a daemon that predates the stamp;
  * different epochs or launches, which are different executors'; boots of one launch no generation

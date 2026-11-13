@@ -146,7 +146,7 @@ export interface WorkspaceCaptureDrainRepoService {
   /**
    * Mark an observation of the run's executor in flight, BEFORE the request is sent (review 6
    * #5): `token` names it until it is resolved — by `recordStatus` with its answer, or by
-   * `closeObservation` when nothing was received. While any is unresolved, nothing Core holds of
+   * `closeObservation` when nothing was received. While any is unresolved, nothing sealant holds of
    * the executor counts as current, and no deletion is authorized on it. It lapses `ttlMs` after
    * it was opened (the database's clock), or when its request ended without its answer recorded
    * (`endObservation`); a lapsed fence still counts until an observation opened after it lapsed
@@ -183,8 +183,8 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly token: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
-   * Record a capture status Core received from the run's executor — a drain's, the public flush
-   * and status routes', a probe's, a sampler's: every status Core receives is evidence about the
+   * Record a capture status sealant received from the run's executor — a drain's, the public flush
+   * and status routes', a probe's, a sampler's: every status sealant receives is evidence about the
    * executor's disk, whoever asked (review 5 #3). `fence`: the observation it answers
    * (`openObservation`), resolved by this write, which also resolves every fence that lapsed
    * before it was opened. Ordered by the executor's own history, never by any process's clock
@@ -195,7 +195,7 @@ export interface WorkspaceCaptureDrainRepoService {
    * 9 #4): an incomparable later answer never erases one. No `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
    * reader's clock, kept for display only. Bumps the evidence version whether or not it replaced
    * the stored status; answers whether it did. A removal still held (`deleting`) is voided: what
-   * Core received about the executor outranks a decision taken before it. One already issued
+   * sealant received about the executor outranks a decision taken before it. One already issued
    * (`deleting-issued`) cannot be revoked and stays; the bumped version keeps it from being issued
    * again on the old evidence (`reconcileIssuedDeletion`). Atomic under the row lock.
    */
@@ -479,7 +479,7 @@ export const CAPTURE_LEDGER_CONTRACT = "4";
  * Mark the transaction as a writer that keeps the ledger's invariants itself (review 10, decision
  * 32): `unsaved_statuses`, an issued removal until each of its requests' outcome is known, the
  * evidence behind every removal request, recovery claims. The table's trigger keeps them for every
- * write NOT marked with {@link CAPTURE_LEDGER_CONTRACT} — a Core process from before them, still
+ * write NOT marked with {@link CAPTURE_LEDGER_CONTRACT} — a sealant process from before them, still
  * running in a rolling deploy — and, for marked writes too, refuses to end an issued removal while
  * a request of it has an unknown outcome. Local to the transaction.
  */

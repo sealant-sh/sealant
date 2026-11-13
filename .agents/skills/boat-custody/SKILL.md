@@ -1,18 +1,18 @@
 ---
 name: boat-custody
 description:
-  Model-check Boat custody (TLA+): Core never forgets a Boat VM that may exist, and a full check of a
-  Boat key leaves nothing behind. Use when a change touches Boat run creation, discovery, replay,
-  observation or deletion (vm.ts, removal.ts, convergence.ts, boat_runs), the full check
+  Model-check Boat custody (TLA+): sealant never forgets a Boat VM that may exist, and a full check
+  of a Boat key leaves nothing behind. Use when a change touches Boat run creation, discovery,
+  replay, observation or deletion (vm.ts, removal.ts, convergence.ts, boat_runs), the full check
   (key-proof.ts, boat_key_proofs), or a Boat account's rotation or removal; or to rerun or update
   these models.
 ---
 
 # Boat custody
 
-Two TLA+ models in `docs/verification/boat-custody/` hold Core to two promises:
+Two TLA+ models in `docs/verification/boat-custody/` hold sealant to two promises:
 
-- **Run ledger** (`BoatRunLedger.tla`, invariant `NoForgottenVM`): Core never records a run as
+- **Run ledger** (`BoatRunLedger.tla`, invariant `NoForgottenVM`): sealant never records a run as
   absent, and so never stops tracking it, while Boat may hold a VM for it.
 - **Full check** (`BoatKeyProof.tla`, `NothingLeftWhenSettled`, `KeyKeptWhileLeftover`,
   `EventuallyDeleted`): what a full check made is eventually deleted, and the account keeps the key
@@ -170,5 +170,5 @@ one in full, with its likelihood and a proposed fix the model accepts.
 | `ledger-finding-snapshot-before-key`        | P1-C (Boat silence): a replay refused for its deleted source snapshot records never-created while Boat holds the VM.                          |
 | `proof-finding-start-race`                  | P2-A: a rotation or removal commits between the check's account read and its ledger insert.                                                   |
 | `proof-finding-claim-overlap`               | P2-B: a check that outlives its claim is settled from the sweep's stale copy.                                                                 |
-| `proof-finding-late-save`                   | P2-C: a save Core gave up on lands after the check's snapshot delete answered 404.                                                            |
+| `proof-finding-late-save`                   | P2-C: a save sealant gave up on lands after the check's snapshot delete answered 404.                                                         |
 | `proof-finding-404-while-creating`          | P2-D (Boat silence): `deleteVm`'s poll takes a 404 for a VM still being created.                                                              |

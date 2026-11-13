@@ -19,14 +19,14 @@ import { nativePublications } from "./native-publications.js";
 const instant = () => timestamp({ mode: "date", withTimezone: true });
 
 /**
- * One row per Boat run: everything Core asked of Boat for the run, everything Boat answered, and
+ * One row per Boat run: everything sealant asked of Boat for the run, everything Boat answered, and
  * everything handed to the VM's agent. A fact is a column, set once by one guarded statement.
  *
  * The row outlives job claims and holds the run's publication pin until Boat's own answer says it
  * has no VM for the run (`absent_at`). `absent_at` is terminal and comes from Boat alone
  * (`absent_basis`): its typed 404 for a VM it had reported past creation, its own completed
- * deletion operation, or Core's own record that create was never issued or was refused. A timeout
- * or an unreadable reply is never absence, and nothing here stands for elapsed time.
+ * deletion operation, or sealant's own record that create was never issued or was refused. A
+ * timeout or an unreadable reply is never absence, and nothing here stands for elapsed time.
  */
 export const boatRuns = snakeCase.table(
   "boat_runs",

@@ -12,7 +12,7 @@ pnpm --filter @sealant/workspaces exec tsx boat-harness/up.ts --launch   # keep 
 
 A failed run keeps its evidence in `$TMPDIR/boat-harness-<run>.*/`: the worker and API logs, the
 fake Boat's event log (`boat-events.json`, every provider call and guest answer through the proxy),
-Core's Boat rows (`core-rows.json`) and each live twin's `sealant*` journal.
+sealant's Boat rows (`core-rows.json`) and each live twin's `sealant*` journal.
 
 It needs Docker with privileged containers, cgroup v2, kernel WireGuard (`modprobe wireguard`; twins
 share the host's kernel and cannot load modules), `openssl`, and internet access for the native
@@ -24,14 +24,14 @@ minutes. CI runs it on pull requests that touch Boat code, nightly, and on deman
 
 | Part                                                              | Real or fake                                                                                                                                                        |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core worker                                                       | Real: the production bundle (`apps/worker` build) with its packaged Boat assets                                                                                     |
-| Core API                                                          | Real, from source                                                                                                                                                   |
+| sealant worker                                                    | Real: the production bundle (`apps/worker` build) with its packaged Boat assets                                                                                     |
+| sealant API                                                       | Real, from source                                                                                                                                                   |
 | Boat adapter, allocation, execution, shared stop, guest transport | Real                                                                                                                                                                |
 | Native snapshot build                                             | Real `BoatSnapshotBuilder` and `install-recipe`, run in the guest twin                                                                                              |
 | Guest                                                             | Real `sealant-agent.service` (the MicroVM agent in Boat host mode, `boat-bind.mjs`, the workspace's dockerd when asked) and pinned sealantd, under systemd as PID 1 |
 | Resource gateway                                                  | Real `DockerBoatTunnel` and gateway image, real WireGuard                                                                                                           |
-| `db` resource                                                     | Real Postgres through Core's Docker resource runtime                                                                                                                |
-| Capture session channel                                           | Core's `capture-channel.fixture.ts` in a container, standing in for Mend's                                                                                          |
+| `db` resource                                                     | Real Postgres through sealant's Docker resource runtime                                                                                                             |
+| Capture session channel                                           | sealant's `capture-channel.fixture.ts` in a container, standing in for Mend's                                                                                       |
 | Driving client                                                    | `@sealant/sdk`, the surface Mend uses                                                                                                                               |
 | Boat's control plane                                              | Fake: `fake-boat.ts`                                                                                                                                                |
 | Boat's hosted port proxy                                          | Fake: `fake-boat.ts`                                                                                                                                                |
@@ -66,7 +66,7 @@ minutes. CI runs it on pull requests that touch Boat code, nightly, and on deman
   forwards HTTP and WebSocket to the guest's port 8080, a WebSocket as raw bytes after the upgrade.
   Proxy faults apply to upgrades too, and each upgrade is recorded (`proxy-upgrade <path>`).
 
-Core reaches it without production changes. `preload.mjs`, loaded with `node --import`, sends TLS
+sealant reaches it without production changes. `preload.mjs`, loaded with `node --import`, sends TLS
 connections for `boat.dev` and `*.on.boat.dev` to the fake on 127.0.0.1 and keeps SNI and
 certificate checks. The harness CA comes in through `NODE_EXTRA_CA_CERTS`. This covers undici and
 `ws`. The preload refuses to load without its port, so a harness process cannot reach real Boat, and
@@ -122,9 +122,9 @@ Two invariants are checked in the same place, for every launch: a run never had 
 that ended cleanly (the owner's Stop, no error, no discard) captured its FINAL before the fake Boat
 was asked to delete the VM. Every Stop a scenario makes of a ready launch goes through `cleanStop`,
 and for those launches a skipped FINAL check fails the scenario, so a change to who writes the stop
-columns cannot turn the check off silently. That is: Core recorded the FINAL drain complete before
-the fake Boat recorded the delete, and the capture channel answered the head that FINAL names (if
-any; a resumed run with no changes names its restored head or none) before it too. The capture
+columns cannot turn the check off silently. That is: sealant recorded the FINAL drain complete
+before the fake Boat recorded the delete, and the capture channel answered the head that FINAL names
+(if any; a resumed run with no changes names its restored head or none) before it too. The capture
 channel's proxy records when each `capture.register` was answered.
 
 A scenario that hits a known defect on main is an expected failure (`defects.ts`, `markers.ts`). A
@@ -134,7 +134,7 @@ passes only while it fails exactly that way. Any other failure fails it, and so 
 fix's pull request removes the marker. An `intermittent` marker (C1, a timing defect) passes either
 way but still fails on any other error.
 
-Core sometimes records only an error class (`readiness` / `Error`). A failure message therefore
+sealant sometimes records only an error class (`readiness` / `Error`). A failure message therefore
 carries two pieces of evidence: the guest's journal lines that name a cause, and every non-200
 answer the guest gave through the hosted proxy. Defect signatures may match either.
 
@@ -149,14 +149,14 @@ nothing spawned yet) has nothing to find. A stopped lock is taken over only when
 with its run exists; otherwise the new run stops and names `cleanup.ts`. A run also refuses to start
 beside another run's labelled objects, lock or not.
 
-Core's worker reconciles some Docker objects host-wide (resource reach networks, Boat gateways). The
-harness refuses to start if any Sealant resource or gateway object already exists on the Docker
+sealant's worker reconciles some Docker objects host-wide (resource reach networks, Boat gateways).
+The harness refuses to start if any Sealant resource or gateway object already exists on the Docker
 host. Set `BOAT_HARNESS_ALLOW_SHARED_DOCKER=1` to accept that risk. The worker and API get their own
 `TMPDIR`, because the worker sweeps stale build contexts from its temp directory.
 
-Ownership is a label, never a guess. Core's worker and API run the docker CLI from `PATH`, and the
-harness puts `bin/docker` first there. It adds `--label sh.sealant.boat-harness=<run>` to every
-container, network and volume Core creates, refuses global options rather than create anything
+Ownership is a label, never a guess. sealant's worker and API run the docker CLI from `PATH`, and
+the harness puts `bin/docker` first there. It adds `--label sh.sealant.boat-harness=<run>` to every
+container, network and volume sealant creates, refuses global options rather than create anything
 unlabelled, and passes everything else through. The harness labels its own objects the same way.
 Teardown, the reaper and `cleanup.ts` remove only objects carrying the run's label, so they cannot
 touch another deployment's resources. The run's scratch directory is removed too, except its logs.

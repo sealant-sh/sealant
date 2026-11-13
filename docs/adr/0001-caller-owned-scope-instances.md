@@ -49,11 +49,11 @@ const tar = await services.backup("executor", "data");
 // Stream tar to the application's backup store, then up with the new pinned image.
 ```
 
-Secret env is a separate write-only input. It is encrypted with Core's credential cipher before
+Secret env is a separate write-only input. It is encrypted with sealant's credential cipher before
 persistence, excluded from specs, replies, run records, diagnostic errors and command arguments.
 Omission retains existing secrets; an explicit map replaces them. Changing secrets replaces the
 container. Only the provider receives plaintext. Provider administrators can inspect process env, as
-they can inspect the volume. Applications must keep Core's encryption key through upgrades.
+they can inspect the volume. Applications must keep sealant's encryption key through upgrades.
 
 `up` is idempotent by scope and instance key. A changed spec stops and removes the old container
 before starting its replacement over the same named volumes. Explicitly stopped instances stay
@@ -71,11 +71,11 @@ failure fails that stream, so the caller must discard the incomplete tar.
 ## Provider and network boundaries
 
 The caller is configured by the operator, never an arbitrary container or pod selector supplied by
-an API request. In Mend's packaged install, Mend and Core are processes in the same `mend`
+an API request. In Mend's packaged install, Mend and sealant are processes in the same `mend`
 container. That container is the caller; `localhost` in an Executor container is not Mend. Mend
-binds its private sign-in listener on its private container interface. A separate Core install names
-the Mend server container instead. Bare-host callers need a container endpoint; unsupported caller
-configurations fail clearly before starting a workload.
+binds its private sign-in listener on its private container interface. A separate sealant install
+names the Mend server container instead. Bare-host callers need a container endpoint; unsupported
+caller configurations fail clearly before starting a workload.
 
 Docker uses a dedicated internal caller network per instance and a separate egress network. A
 network namespace anchor gets the rules before the workload starts. Only the caller reaches the
@@ -84,11 +84,11 @@ private addresses. Public internet egress remains available for integration tool
 published and workspaces never join these networks. Rules deny private, link-local, metadata and
 IPv6 destinations except that explicit callback and the configured IPv4 DNS resolvers on UDP/TCP 53.
 The workload holds neither NET_ADMIN nor NET_RAW. The anchor and its networks outlive workload
-replacement, preserving DNS and addresses. Core also filters the caller's callback port on every
+replacement, preserving DNS and addresses. sealant also filters the caller's callback port on every
 interface, so a workspace-facing interface cannot expose that listener. Other caller ports keep
 their deployment's existing behavior. Archive removes that instance's callback allow rule and keeps
 the port closed to other sources. Operators must not replace the configured caller container while
-an instance runs; stop its instances first, replace the caller, then start them so Core restores
+an instance runs; stop its instances first, replace the caller, then start them so sealant restores
 networks and guards.
 
 Kubernetes uses a one-replica StatefulSet with retained, individually named PVCs, a ClusterIP
@@ -97,10 +97,10 @@ selectors are deployment configuration. Ingress admits only the caller on the de
 egress admits only the caller's callback port, with DNS and public internet egress. The deployment
 must enforce NetworkPolicy and isolate service pods from broader allow policies. AWS MicroVM,
 Firecracker and other runtimes refuse caller instances with a named unsupported runtime error. They
-do not silently use Docker. Kubernetes caller ingress policy belongs to the deployment, since Core
-cannot replace policies for Mend's other listeners. Its callback Service must select the configured
-caller pods and expose the configured callback port. Do not publish that listener through an Ingress
-or a workspace service.
+do not silently use Docker. Kubernetes caller ingress policy belongs to the deployment, since
+sealant cannot replace policies for Mend's other listeners. Its callback Service must select the
+configured caller pods and expose the configured callback port. Do not publish that listener through
+an Ingress or a workspace service.
 
 ## Data flow and limits
 
@@ -140,8 +140,8 @@ Docker's `ExtServers` metadata, including `host(address)` entries; otherwise par
 nameservers. Accept only validated IP literals, deduplicate them, and admit IPv4 UDP/TCP destination
 port 53 to those exact addresses before private-address rejection. IPv6 stays denied. An
 unavailable, malformed or IPv6-only resolver configuration fails startup closed. Do not fall back to
-Core's own resolver file, which can describe a different container from the Docker host, and do not
-add public fallback resolvers or a blanket private port-53 exemption. Existing anchors get the
+sealant's own resolver file, which can describe a different container from the Docker host, and do
+not add public fallback resolvers or a blanket private port-53 exemption. Existing anchors get the
 current rules on their next convergence. This remains inside the existing Docker caller adapter; a
 new configuration service or public DNS option would add unnecessary caller burden.
 
@@ -185,7 +185,7 @@ objects but never hides permission or provider errors.
 Docker removes the workload, namespace anchor, transient guard/probe/backup containers, callback
 allow rule, dedicated networks and retained named volumes. Kubernetes removes the StatefulSet,
 service pod, backup pod/policy, Service, Secret, NetworkPolicy and retained PVCs, waiting for
-termination/deletion before reporting success. No caller-owned volume backups are stored by Core:
+termination/deletion before reporting success. No caller-owned volume backups are stored by sealant:
 backup is a tar stream, and purge removes any abandoned helper. Copies downloaded by Mend or an
 operator, external snapshots and database/WAL backups are outside this operation. Provider removal
 is not a guarantee of physical media sanitization. Kubernetes storage must use Delete reclaim policy

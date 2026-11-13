@@ -18,7 +18,7 @@
  *
  * Members are the people the application lets reach the domain. A grant or a revoke carries
  * `version`, the application's own number for its decision about this person, rising with each
- * decision it makes (its record's revision, say). Core writes the decision only over a lower
+ * decision it makes (its record's revision, say). sealant writes the decision only over a lower
  * version. The same version with the same state is a repeat, answered with the member unchanged.
  * The same version with the other state, or a lower one, is stale: `409`, carrying the decision
  * that stands. So a delayed grant never undoes a newer revoke, whatever order decisions arrive in

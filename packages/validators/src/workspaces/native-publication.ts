@@ -143,9 +143,10 @@ export const nativeCatalogClaimSchema = z.object({
 /**
  * The Boat failure kinds after which a build may pass on a later try with the same key and
  * account, so the next launch spends the one fresh reservation on it: Boat did not answer, a rate
- * limit, no machine, the plan's running limit (it frees when a session stops), and a refusal Core
- * does not classify. Every other kind (the key, its permissions, the account, billing, a trial,
- * the snapshot allowance) needs a person; the build stays quarantined with that kind as its reason.
+ * limit, no machine, the plan's running limit (it frees when a session stops), and a refusal
+ * sealant does not classify. Every other kind (the key, its permissions, the account, billing, a
+ * trial, the snapshot allowance) needs a person; the build stays quarantined with that kind as its
+ * reason.
  */
 export const NATIVE_REBUILD_BOAT_FAILURES = [
   "native-boat-no-answer",

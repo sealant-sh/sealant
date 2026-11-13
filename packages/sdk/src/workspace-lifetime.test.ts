@@ -171,7 +171,7 @@ describe("workspace.ready() failure codes", () => {
       "owner-map-unsupported",
       "The image's sealantd does not restore files per person.",
     ],
-    ["owner-map-unverified", "owner-map-unverified", "Core could not read the image's probe."],
+    ["owner-map-unverified", "owner-map-unverified", "sealant could not read the image's probe."],
     // A Boat deployment with no resource gateway refused a workspace that may be linked.
     [
       "gateway-unavailable",

@@ -6,7 +6,7 @@ import {
 } from "./connected-accounts.js";
 
 /*
-Browser-safe zod mirrors of the profiles core API contract (packages/api-contracts). Used by the
+Browser-safe zod mirrors of the profiles sealant API contract (packages/api-contracts). Used by the
 web tRPC router + profile "agents" UI. Bindings embed connected-account summaries only — never
 secret material. Note: the connect-time `setProfileCredentialBindingRequestSchema` (with
 `profileId` in the body) lives in ./connected-accounts.js; the schema here mirrors the HTTP body

@@ -3,7 +3,7 @@
 `turbo` is pinned exactly to **2.11.9** in the root `package.json`. The full notes, covering how
 turbo is meant to be used, the rules, and the 2.10.x crash, live in Mend:
 [`docs/operations/turbo.md`](https://github.com/sealant-sh/mend/blob/main/docs/operations/turbo.md).
-Core was locked to 2.9.18, which predates that crash (vercel/turborepo#13254). Turbo 2.10.0 to
+sealant was locked to 2.9.18, which predates that crash (vercel/turborepo#13254). Turbo 2.10.0 to
 2.10.3 segfaulted whenever it stopped running tasks, after a failure, a Ctrl-C or a timeout. Pin
 exactly and upgrade on purpose.
 

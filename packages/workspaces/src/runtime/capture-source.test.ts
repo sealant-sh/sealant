@@ -44,7 +44,7 @@ const captureSource = (input: {
 };
 
 describe("the shutdown final flush's deadline (e2e 5)", () => {
-  // e2e 5 (HS): the store was down, Core stopped the executor, and the SIGTERM final flush
+  // e2e 5 (HS): the store was down, sealant stopped the executor, and the SIGTERM final flush
   // retried for the whole 3600 s stop timeout until Docker killed it: the exit 75 that keeps and
   // recovers the disk was never reached. The deadline is the stop grace less a margin.
   it("ends inside the runtime's stop grace, leaving the daemon time to exit 75", () => {

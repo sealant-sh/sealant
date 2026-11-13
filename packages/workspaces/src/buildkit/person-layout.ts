@@ -287,12 +287,15 @@ export const PERSON_SUDOERS = personSudoers(PERSON_ENV, FHS_PATH);
  */
 export const NIX_PROFILE = "/nix/var/nix/profiles/default";
 
-/** The fixed PATH of the scripts Core runs as root. A nix image has its tools only in its profile. */
+/**
+ * The fixed PATH of the scripts sealant runs as root. A nix image has its tools only in its
+ * profile.
+ */
 export const FIXED_SYSTEM_PATH = [...FHS_PATH, `${NIX_PROFILE}/bin`].join(":");
 
 /**
  * Repository packages each managed family adds for the person layout. nixos/nix also lacks sed and
- * getent, which this layout, Mend's prepare and Core's user check run (its awk comes with the
+ * getent, which this layout, Mend's prepare and sealant's user check run (its awk comes with the
  * package layer).
  */
 export const PERSON_LAYOUT_PACKAGES = {
@@ -657,7 +660,7 @@ export const imagePersonLayoutSupport = (probe: WorkspaceImageProbe): PersonLayo
   if (probe.mendGroup === "absent" && !probe.tools.groupadd) missing.push("groupadd");
   if (!probe.sudoersMend && !probe.sudoersIncludesDir) missing.push("sudoers");
   if (!probe.tools.setfacl) missing.push("setfacl");
-  // Core writes a person's logins into their home under flock, as them through setpriv.
+  // sealant writes a person's logins into their home under flock, as them through setpriv.
   if (!probe.tools.setpriv) missing.push("setpriv");
   if (probe.tools.flock === false) missing.push("flock");
   if (probe.tools.flock === undefined) unknown.push("flock");
@@ -699,7 +702,7 @@ export const imageAppliesOwnerMap = (
  * Whether an image's daemon starts executions and sessions as a user (`exec.user`): `yes` when the
  * sealantd its probe asked lists it, `no` when it answered without it (or had no `capabilities`
  * command), `unknown` when the image has no probe or the answer could not be read. A daemon
- * without it ignores `user` and would run the process as root, so Core refuses one there.
+ * without it ignores `user` and would run the process as root, so sealant refuses one there.
  */
 export const imageRunsProcessesAsUser = (
   probe: WorkspaceImageProbe | undefined,

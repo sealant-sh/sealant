@@ -1,7 +1,7 @@
 /**
  * Brings up the whole local Boat stack: Postgres, the guest-twin and gateway images, the fake Boat
- * provider with its hosted proxy, a capture channel, and Core's real worker (the production bundle,
- * with its packaged Boat assets) and API (from source), both loaded with `preload.mjs`.
+ * provider with its hosted proxy, a capture channel, and sealant's real worker (the production
+ * bundle, with its packaged Boat assets) and API (from source), both loaded with `preload.mjs`.
  */
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -64,8 +64,8 @@ export interface CaptureRegister {
 }
 
 /**
- * Core's database refused a harness query (e.g. a table or column a change dropped). Waits fail at
- * once on it rather than retrying until their timeout.
+ * sealant's database refused a harness query (e.g. a table or column a change dropped). Waits fail
+ * at once on it rather than retrying until their timeout.
  */
 export class QueryError extends Error {
   override readonly name = "QueryError";
@@ -112,10 +112,10 @@ export interface HarnessStack {
   readonly apiUrl: string;
   readonly worker: ManagedProcess;
   readonly api: ManagedProcess;
-  /** Runs read-only SQL in Core's database and returns its rows as JSON values. */
+  /** Runs read-only SQL in sealant's database and returns its rows as JSON values. */
   readonly query: (sql: string) => Promise<unknown[]>;
   /**
-   * Makes each of Core's gateway configures wait `seconds` before it runs (a slow configuration
+   * Makes each of sealant's gateway configures wait `seconds` before it runs (a slow configuration
    * holding the gateway host's lock), or, with `undefined`, run at once again.
    */
   readonly slowGatewayConfigure: (seconds: number | undefined) => Promise<void>;
@@ -125,8 +125,8 @@ export interface HarnessStack {
   readonly write: (sql: string) => Promise<void>;
   /** SIGKILLs the worker: no finalizers run, as when a host dies. */
   readonly killWorker: () => Promise<void>;
-  /** Core-labelled Docker objects (resources, gateways) created since the stack started. */
-  /** Everything labelled with this run, Core's objects included (see `bin/docker`). */
+  /** sealant-labelled Docker objects (resources, gateways) created since the stack started. */
+  /** Everything labelled with this run, sealant's objects included (see `bin/docker`). */
   readonly ownedObjects: () => Promise<LabelledObjects>;
   /** Starts the worker, optionally with environment overrides (e.g. another gateway image). */
   readonly startWorker: (overrides?: WorkerOverrides) => Promise<void>;
@@ -427,7 +427,7 @@ export interface StackOptions {
 }
 
 /**
- * Core's worker reconciles some Docker objects host-wide: resource reach networks
+ * sealant's worker reconciles some Docker objects host-wide: resource reach networks
  * (`DockerResourceRuntime.converge`) and Boat gateways. On a shared Docker host it would treat
  * another deployment's objects as its own garbage. Refuse to start beside them.
  */
@@ -444,7 +444,7 @@ const preflight = async (runId: string) => {
   if (foreign.length > 0)
     throw new Error(
       `This Docker host already has Sealant resource or Boat gateway objects (${foreign.slice(0, 5).join(", ")}). ` +
-        "Core's worker reconciles those host-wide, so the harness will not run beside them. " +
+        "sealant's worker reconciles those host-wide, so the harness will not run beside them. " +
         "Stop that deployment, or set BOAT_HARNESS_ALLOW_SHARED_DOCKER=1 to accept the risk.",
     );
 };
@@ -509,7 +509,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
     // The base ends on the stock archive, as a Boat VM does; when only the mirror answers, the
     // twins (and the native build in them) read the mirror instead.
     const twinImage = archive === STOCK_ARCHIVE ? twinBase : await mirroredTwin(twinBase, archive);
-    // Core wants the gateway by digest. Its containers get this run's label from `bin/docker`.
+    // sealant wants the gateway by digest. Its containers get this run's label from `bin/docker`.
     const gatewayImage = (
       await dockerOk(["image", "inspect", "-f", "{{.Id}}", gatewayBase])
     ).trim();
@@ -535,10 +535,10 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       return { range, host };
     };
     const { range: subnet, host: hostIp } = await bridge(network);
-    // Runs after the worker and API stop. Core's objects carry the label too (`bin/docker`).
+    // Runs after the worker and API stop. sealant's objects carry the label too (`bin/docker`).
     cleanups.push(() => removeLabelled(label, { images: true }));
 
-    // Core's database.
+    // sealant's database.
     const dbPort = await freePort();
     await dockerOk([
       "run",
@@ -745,10 +745,11 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
       SEALANT_RESOURCE_TICK_MS: "2000",
       SEALANT_BOAT_HARNESS_PORT: String(boat.proxyPort),
       [RUN_ENV]: runId,
-      // Core runs the docker CLI from PATH; the wrapper labels what it creates with this run.
+      // sealant runs the docker CLI from PATH; the wrapper labels what it creates with this run.
       PATH: `${join(here, "bin")}:${process.env.PATH ?? ""}`,
       SEALANT_BOAT_HARNESS_REAL_DOCKER: realDocker,
-      // `bin/docker` delays Core's gateway configures while this file exists (slowGatewayConfigure).
+      // `bin/docker` delays sealant's gateway configures while this file exists
+      // (slowGatewayConfigure).
       SEALANT_BOAT_HARNESS_CONFIGURE_DELAY_FILE: configureDelayFile,
       NODE_EXTRA_CA_CERTS: tls.ca,
       NODE_OPTIONS: `--import ${join(here, "preload.mjs")}`,

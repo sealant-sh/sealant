@@ -2,11 +2,11 @@
 (***************************************************************************)
 (* Promise 1, the run ledger.                                              *)
 (*                                                                         *)
-(* Property: Core never records a Boat run as absent (never-created,       *)
+(* Property: sealant never records a Boat run as absent (never-created,    *)
 (* not-found or deletion-completed), and so never stops tracking it, while *)
 (* Boat may hold a VM for it.                                              *)
-(* Harm: a VM bills by the second with no time limit, and nothing in Core  *)
-(* will ever delete it.                                                    *)
+(* Harm: a VM bills by the second with no time limit, and nothing in       *)
+(* sealant will ever delete it.                                            *)
 (*                                                                         *)
 (* One run, one idempotency key, so at most one VM (called "V"). Every     *)
 (* step below is one SQL statement (or one transaction) or one HTTP call   *)
@@ -24,9 +24,9 @@
 (* already linked to a VM never makes a second VM; a create that failed    *)
 (* before a VM existed releases its key (within about 2 minutes, here at   *)
 (* any moment); any call may be refused or go unanswered; a reply may be   *)
-(* lost after Boat acted; a request may reach Boat after Core gave up on   *)
-(* it; the label listing may lag a create; a DELETE ends billing at once   *)
-(* and its operation completes later. Where the docs are silent the        *)
+(* lost after Boat acted; a request may reach Boat after sealant gave up   *)
+(* on it; the label listing may lag a create; a DELETE ends billing at     *)
+(* once and its operation completes later. Where the docs are silent the   *)
 (* constants below let the adversary do either.                            *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
@@ -34,7 +34,7 @@ EXTENDS Naturals, FiniteSets, TLC
 CONSTANTS
     Sweeps,       \* workers running BoatVm.reconcile (vm.ts) at once
     Inspectors,   \* other callers of BoatVm.observe: inspect, recovery (adapter.ts)
-    MaxSends,     \* creates Core may send in one behaviour (first create plus replays)
+    MaxSends,     \* creates sealant may send in one behaviour (first create plus replays)
     MaxLost,      \* replies Boat may lose after acting
     MaxRetries,   \* drive retries of the launch (vm.ts `prepared`: 119 in 120 s)
     MaxLapses,    \* lapses of a live launch's lease (a stalled worker, the database out of reach)
@@ -103,7 +103,7 @@ VARIABLES
     boatOp,    \* Boat's deletion operation: "none" | "pending" | "completed"
     queue,     \* creates sent and not yet acted on by Boat (request ids)
     from,      \* request id -> the actor that sent it
-    \* Core: the run's boat_runs row (boat-runs.ts) and its runtime row
+    \* sealant: the run's boat_runs row (boat-runs.ts) and its runtime row
     createIssued, \* create_issued_at is set
     replayIssued, \* (MarkReplayBeforeSend only) a replay was marked on the row
     sandbox,      \* sandbox_id: "null" | "V"
@@ -130,7 +130,7 @@ boundVars == <<sends, lost, retries, lapses, crashes, stops>>
 vars      == <<boatVars, rowVars, envVars, actorVars, boundVars>>
 
 -----------------------------------------------------------------------------
-(* Reads of Core's rows *)
+(* Reads of sealant's rows *)
 
 \* boatRunVmPhase (packages/validators/src/workspaces/boat-run.ts)
 Phase ==
@@ -854,9 +854,9 @@ TypeOK ==
     /\ stopJob \in {"none", "mark", "done"}
     /\ \A a \in Actors : inbox[a] \in Kinds \cup {"none"}
 
-(* THE PROPERTY. Once Core commits an absence the run leaves every sweep   *)
-(* (listUnresolved, listUnsettled), so from then on Boat must hold no VM   *)
-(* for it: not now, and not later from a create still on its way.          *)
+(* THE PROPERTY. Once sealant commits an absence the run leaves every      *)
+(* sweep (listUnresolved, listUnsettled), so from then on Boat must hold   *)
+(* no VM for it: not now, and not later from a create still on its way.    *)
 NoForgottenVM == absent # "null" => vm \in {"none", "deleted"}
 
 =============================================================================

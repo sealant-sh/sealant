@@ -234,7 +234,8 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
                 daemonExit: {
                   code: 1,
                   signal: null,
-                  // An older agent's output is not redacted: Core removes the launch's secrets too.
+                  // An older agent's output is not redacted: sealant removes the launch's secrets
+                  // too.
                   output: "sealantd boot: capture token capture-version-one refused\nexiting",
                 },
               },
@@ -301,7 +302,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         tunnel: { sentBytes: 444, receivedBytes: 0 },
       });
       expect(boatLaunchSummary(silent)).toContain('"tunnel":{"sentBytes":444,"receivedBytes":0}');
-      // The diagnostic also says whether Core's end of the carrier was attached.
+      // The diagnostic also says whether sealant's end of the carrier was attached.
       guest.request = async (...args) =>
         tunnel({
           configured: true,
@@ -518,7 +519,8 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
         expect(guest.networkBodies).toHaveLength(before);
       }
       guest.networkStatus = current;
-      // Core's end connects to the agent's carrier route with the control token and hosted cookie.
+      // sealant's end connects to the agent's carrier route with the control token and hosted
+      // cookie.
       const connection = Redacted.value(await execute(executor.tunnel(target)));
       expect(connection.url).toMatch(/^wss:\/\/.+\/sealant\/tunnel$/);
       expect(connection.headers["Authorization"]).toMatch(/^Bearer [a-f0-9]{64}$/);

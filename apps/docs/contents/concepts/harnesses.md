@@ -56,7 +56,8 @@ To bump a harness:
 1. Read the version to pin: `npm view @anthropic-ai/claude-code version`,
    `npm view @openai/codex version`, `npm view opencode-ai version`, and the latest release tag of
    `earendil-works/pi` (without its `v`).
-2. Change it in `HARNESS_VERSIONS`. The tests read the same table, so nothing else in Core changes.
+2. Change it in `HARNESS_VERSIONS`. The tests read the same table, so nothing else in sealant
+   changes.
 3. In Mend, check what was surveyed against an older version: the credential survey in
    `packages/sessions/src/harness-state.ts` and `CLAUDE_CODE_PROTOCOL_VERSION` in
    `packages/agent-protocol`.

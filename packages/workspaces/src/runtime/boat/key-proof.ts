@@ -1,7 +1,7 @@
 /**
  * A full check of a Boat key (SLNT-784): Boat lets no key read all of its own permissions and has
- * no dry run, so Core proves the key by doing what a session does, once, on the smallest VM: start
- * it, run a command, publish a port, save a snapshot, then delete the snapshot and the VM.
+ * no dry run, so sealant proves the key by doing what a session does, once, on the smallest VM:
+ * start it, run a command, publish a port, save a snapshot, then delete the snapshot and the VM.
  *
  * Leaving nothing behind is the design, not the happy path:
  * - The ledger row (`boat_key_proofs`) is written before anything is created, and names what may be

@@ -226,7 +226,7 @@ const savedNothing = (error: unknown) => {
  * the closed set of failure kinds, which decides whether a later launch rebuilds
  * (`nativeBuildRetryReasonSchema`) and is always a valid quarantine reason. Boat is still settling
  * this idempotency key: `native-provider-idempotency_in_progress`, which the build retries. No
- * answer at all, or a call Core refused itself: `native-provider-<Core's own code>`.
+ * answer at all, or a call sealant refused itself: `native-provider-<sealant's own code>`.
  */
 const providerFailureCode = (error: BoatApiError) =>
   error.code === "idempotency_in_progress"

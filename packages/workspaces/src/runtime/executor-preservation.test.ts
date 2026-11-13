@@ -1,6 +1,6 @@
 /**
  * The preservation policy's two review-4 rules (#1): recorded evidence lets only an executor
- * that ENDED go (a running one is drained first), and an attestation is weighed against Core's
+ * that ENDED go (a running one is drained first), and an attestation is weighed against sealant's
  * own observations — a newer report that the work is not saved revokes an older seal.
  */
 import { describe, expect, it } from "vitest";
@@ -85,7 +85,7 @@ describe("attestationCoversExecutor · freshness", () => {
     );
   });
 
-  // Review 6 #6: clocks order nothing. A failed observation read by a Core worker whose clock is
+  // Review 6 #6: clocks order nothing. A failed observation read by a sealant worker whose clock is
   // an hour behind the store's still counts against the seal when the executor's own history does
   // not place it before the seal; one without any position cannot be placed at all.
   it("never lets a clock place an observation before the seal", () => {

@@ -767,7 +767,7 @@ describe("/forward/v2 windows", () => {
       },
     },
     {
-      name: "sends a text frame this Core cannot read",
+      name: "sends a text frame this sealant cannot read",
       reason: "protocol-violation",
       send: (socket) => socket.send(JSON.stringify({ t: "credit", bytes: 1 })),
     },
@@ -1025,7 +1025,7 @@ describe("the legacy /forward route", () => {
     expect(status).toBe(401);
   });
 
-  it("is what a Core without /forward/v2 serves, which the v2 client reports as protocol-unsupported", async () => {
+  it("is what a sealant without /forward/v2 serves, which the v2 client reports as protocol-unsupported", async () => {
     const old = await serve({ release: "previous", requestsPerMinute: 10_000 });
     try {
       const probe = await fetch(`${old.baseUrl}/v1/workspaces/wks_ready/forward/v2`);

@@ -1283,7 +1283,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     );
   });
 
-  // Review 10, decision 32: a rolling deploy runs a Core process from before the current
+  // Review 10, decision 32: a rolling deploy runs a sealant process from before the current
   // invariants beside current ones, on the current schema. The old writer here is the ninth
   // review's repository, verbatim (`@sealant/db/testing/review9-capture-drains`); the database
   // keeps the invariants for it.
@@ -1706,7 +1706,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       expect((await row(runId))?.unsavedStatuses).toHaveLength(2);
     });
 
-    // Review 12 #3: the immediately previous Core writer (review 11, 1d268ec) already marked its
+    // Review 12 #3: the immediately previous sealant writer (review 11, 1d268ec) already marked its
     // transactions as a current writer, so the table's trigger let it through; but it knows no
     // per-request outcomes and released an issued removal on the refusal of its latest request,
     // while an earlier request, accepted with its reply lost, could still act. The marker is now

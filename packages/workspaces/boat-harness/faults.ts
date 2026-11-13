@@ -128,11 +128,11 @@ const sessionCreate = (body: unknown) =>
   body.labels !== null &&
   "sealant-run" in body.labels;
 
-/** Core's one provider command in a session VM: the agent's bind exchange. */
+/** sealant's one provider command in a session VM: the agent's bind exchange. */
 const BIND = /boat-bind\.mjs/;
 
 export const scenarios = {
-  /** Run 6's class: Boat accepts create, but the reply is lost. Core must adopt the one VM. */
+  /** Run 6's class: Boat accepts create, but the reply is lost. sealant must adopt the one VM. */
   async createReplyLost(stack: HarnessStack, project: Project) {
     let armed = true;
     await withFaults(
@@ -160,8 +160,8 @@ export const scenarios = {
 
   /**
    * Boat refuses the session's create: its key expired (SLNT-782). The SDK caller reads why, as
-   * Boat's kind, code and request id, and Core asks for the VM once, never retrying it as a create
-   * whose outcome is unknown.
+   * Boat's kind, code and request id, and sealant asks for the VM once, never retrying it as a
+   * create whose outcome is unknown.
    */
   async createRefused(stack: HarnessStack, project: Project) {
     await withFaults(
@@ -199,7 +199,7 @@ export const scenarios = {
     );
   },
 
-  /** Boat never leaves provisioning. Core must give up within its budget and delete the VM. */
+  /** Boat never leaves provisioning. sealant must give up within its budget and delete the VM. */
   async provisioningStuck(stack: HarnessStack, project: Project) {
     await withFaults(
       stack,
@@ -308,8 +308,8 @@ export const scenarios = {
 
   /**
    * The agent answers the launch push with an error (400), a 409 carrying a well-formed reason, or
-   * a transient 503. No 409 `{reason}` is a launch refusal any more (#586): Core must read it as an
-   * invalid reply, never adopt it as an earlier launch.
+   * a transient 503. No 409 `{reason}` is a launch refusal any more (#586): sealant must read it as
+   * an invalid reply, never adopt it as an earlier launch.
    */
   agentRefuses: (status: 400 | 409 | 503) =>
     async function agentRefuses(stack: HarnessStack, project: Project) {
@@ -337,7 +337,7 @@ export const scenarios = {
       );
     },
 
-  /** Run 11's class: dnsmasq starts 8 s late. Core must wait for the gateway, not race it. */
+  /** Run 11's class: dnsmasq starts 8 s late. sealant must wait for the gateway, not race it. */
   async gatewaySlow(stack: HarnessStack, project: Project) {
     const image = (
       await dockerOk(["image", "inspect", "-f", "{{.Id}}", await slowGatewayImage()])
@@ -353,9 +353,9 @@ export const scenarios = {
   },
 
   /**
-   * The gateway container dies after Core configured it, before the guest joins its tunnel. Core
-   * may fail the launch with the gateway's cause, or recreate the gateway and go ready; a ready
-   * launch must then have a new gateway and a working tunnel (`db:5432`), and stop cleanly.
+   * The gateway container dies after sealant configured it, before the guest joins its tunnel.
+   * sealant may fail the launch with the gateway's cause, or recreate the gateway and go ready; a
+   * ready launch must then have a new gateway and a working tunnel (`db:5432`), and stop cleanly.
    */
   async gatewayCrashes(stack: HarnessStack, project: Project) {
     let killed: string[] | undefined;
@@ -397,7 +397,8 @@ export const scenarios = {
           });
           return;
         }
-        // Core may start the same container again or make a new one: either way, started after the kill.
+        // sealant may start the same container again or make a new one: either way, started after
+        // the kill.
         const running: string[] = [];
         for (const name of (await stack.ownedObjects()).containers.filter((entry) =>
           entry.startsWith("boat-tunnel-"),
@@ -502,8 +503,8 @@ export const scenarios = {
 
   /**
    * Boat's deletion stays `processing`. The launch fails at the launch push (a 400), after its
-   * tunnel slot and publication pin are held. While Boat says `processing` the VM is not gone, so Core must
-   * keep both; once the deletion completes it must release them.
+   * tunnel slot and publication pin are held. While Boat says `processing` the VM is not gone, so
+   * sealant must keep both; once the deletion completes it must release them.
    */
   async deletionStuck(stack: HarnessStack, project: Project) {
     let stuck: string | undefined;

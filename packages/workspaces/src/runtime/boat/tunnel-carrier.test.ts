@@ -20,7 +20,9 @@ const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 
   }
 };
 
-/** The agent's `/sealant/tunnel`, as far as Core can tell: a WebSocket that checks the bearer. */
+/**
+ * The agent's `/sealant/tunnel`, as far as sealant can tell: a WebSocket that checks the bearer.
+ */
 const startAgent = async (options: { readonly refuse?: number } = {}) => {
   const sockets: WebSocket[] = [];
   const received: Buffer[] = [];

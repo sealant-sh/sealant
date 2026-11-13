@@ -53,7 +53,7 @@ export interface BoatRemovalOptions {
    * to save. Asked only for such a VM, and only when a DELETE is about to be sent: a VM Boat no
    * longer has is only cleaned up, a recorded deletion operation is only polled, and a VM no
    * launch was ever pushed to (never bound, or its execution aborted) is the removal's own to
-   * delete, by Core's own record that nothing ran on it. Absent: not authorized.
+   * delete, by sealant's own record that nothing ran on it. Absent: not authorized.
    */
   readonly authorized?: Effect.Effect<boolean>;
 }

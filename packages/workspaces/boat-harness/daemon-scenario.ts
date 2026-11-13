@@ -52,7 +52,7 @@ const deletesOf = (stack: HarnessStack, sandbox: string) => ({
   ),
 });
 
-/** The session is as it was: ready for Mend and Core, its VM bound and live, nothing deleted. */
+/** The session is as it was: ready for Mend and sealant, its VM bound and live, nothing deleted. */
 const assertStillReady = async (stack: HarnessStack, run: Launch, sandbox: string) => {
   const view = await runtimeView(stack, run.runId);
   const evidence = `runtime ${JSON.stringify(view)}`;
@@ -102,7 +102,7 @@ export const agentBrieflyUnreachable = async (stack: HarnessStack, project: Proj
       mode = undefined;
     },
   );
-  // Each phase spanned a whole inspection period, so each failed at least one of Core's reads.
+  // Each phase spanned a whole inspection period, so each failed at least one of sealant's reads.
   expect(hits.unreachable, JSON.stringify(hits)).toBeGreaterThan(0);
   expect(hits.unavailable, JSON.stringify(hits)).toBeGreaterThan(0);
   await assertStillReady(stack, run, sandbox);
@@ -119,7 +119,7 @@ export const agentBrieflyUnreachable = async (stack: HarnessStack, project: Proj
 };
 
 /**
- * sealantd is killed in a ready session; the VM and its agent stay up. Core must record the run
+ * sealantd is killed in a ready session; the VM and its agent stay up. sealant must record the run
  * failed (`runtime-exited`), drain FINAL from the daemon recovered on the VM's own disk before it
  * deletes the VM, send one DELETE, and leave nothing behind. The edit made before the kill comes
  * back byte for byte on a fresh VM.
@@ -145,7 +145,7 @@ export const daemonKilled = async (stack: HarnessStack, project: Project) => {
   ).toBe("active");
 
   const recorded = await until(
-    "Core to record the daemon's exit",
+    "sealant to record the daemon's exit",
     async () => {
       const view = await runtimeView(stack, first.runId);
       return view.status === "failed" ? view : undefined;

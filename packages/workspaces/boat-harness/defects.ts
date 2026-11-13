@@ -20,7 +20,7 @@ import type { Defect } from "./markers.js";
 /**
  * Contracts F3: the control bridge and sealantd disagree about who may connect. The audit found
  * the bridge pins the PID 1 holder while sealantd is its child; the harness also sees sealantd
- * itself reject the bridge ("rejected control connection from unauthorized peer"). Core records
+ * itself reject the bridge ("rejected control connection from unauthorized peer"). sealant records
  * only `readiness` / `Error`, so the signature reads the guest evidence the harness attaches.
  */
 export const PEER_PID: Defect = {

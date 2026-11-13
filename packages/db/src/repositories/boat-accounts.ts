@@ -51,9 +51,9 @@ type Failing<A> = Effect.Effect<A, BoatAccountStoreError>;
 export interface BoatAccountRecord {
   readonly id: string;
   readonly label: string;
-  /** The `sealant-deployment` label of every VM and saved image Core makes under the key. */
+  /** The `sealant-deployment` label of every VM and saved image sealant makes under the key. */
   readonly deploymentId: string;
-  /** The `sealant-owner` of every saved image Core builds under the key. */
+  /** The `sealant-owner` of every saved image sealant builds under the key. */
   readonly builderOwner: string;
   readonly keyRevision: number;
   /** The Boat organization the account bills (`X-Boat-Org`); null: none named. */
@@ -101,7 +101,7 @@ export type BoatAccountRemovalRequest =
       readonly kind: "in-use";
       /** Runs whose VM Boat may still have under the key: no absence committed. */
       readonly liveRuns: number;
-      /** Saved images Core is building in the account right now. */
+      /** Saved images sealant is building in the account right now. */
       readonly buildsInFlight: number;
     };
 
@@ -138,8 +138,8 @@ export interface BoatAccountRepoService {
   readonly saveReport: (input: BoatKeyReportRecord) => Failing<void>;
   /**
    * The `sealant-deployment` label of the install's own account. Set once, the first time it is
-   * asked for: to `preferred` (the operator's setting) when given, otherwise to a name Core makes.
-   * Never changed afterwards; a caller with a setting uses its setting.
+   * asked for: to `preferred` (the operator's setting) when given, otherwise to a name sealant
+   * makes. Never changed afterwards; a caller with a setting uses its setting.
    */
   readonly installDeployment: (preferred: string | undefined) => Failing<string>;
   /** The same, for the `sealant-owner` of the saved images built in the install's own account. */
@@ -195,7 +195,7 @@ export interface BoatAccountRepoService {
     id: string,
   ) => Failing<readonly { readonly runId: string; readonly sandboxId: string }[]>;
   /**
-   * The names of the saved images Core built in the account that Boat may still hold: the ones
+   * The names of the saved images sealant built in the account that Boat may still hold: the ones
    * launches use, and the ones retiring or whose removal is pending.
    */
   readonly heldImages: (id: string) => Failing<readonly string[]>;
@@ -216,8 +216,8 @@ export interface BoatAccountRepoService {
   readonly listWithRuns: () => Failing<readonly BoatAccountRecord[]>;
   /**
    * The removal's end: the sealed key is erased. Only for an account whose removal was asked, and
-   * only once Boat holds nothing Core made under the key, as one statement under the account's row
-   * reads it: no run whose VM's absence is not committed, no image reserved, building, held or
+   * only once Boat holds nothing sealant made under the key, as one statement under the account's
+   * row reads it: no run whose VM's absence is not committed, no image reserved, building, held or
    * pending removal. `held`: something is still there, and nothing was changed.
    */
   readonly finishRemoval: (id: string) => Failing<"removed" | "held">;

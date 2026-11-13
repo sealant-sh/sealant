@@ -1,8 +1,8 @@
 /**
- * TEST FIXTURE — the drain ledger repository exactly as Core shipped it before review 10
+ * TEST FIXTURE — the drain ledger repository exactly as sealant shipped it before review 10
  * (`packages/db/src/repositories/workspace-capture-drains.ts` at 20e2aeb262fb, the ninth review's
- * head), kept so tests can run an OLD Core writer against the CURRENT schema, as a rolling deploy
- * does (decision 32): it maintains no `unsaved_statuses`, releases issued removals, ignores
+ * head), kept so tests can run an OLD sealant writer against the CURRENT schema, as a rolling
+ * deploy does (decision 32): it maintains no `unsaved_statuses`, releases issued removals, ignores
  * recovery claims, and never marks its transactions as a current writer. Not used by any
  * production path. Changes from the original: this comment, and the service key.
  */
@@ -141,7 +141,7 @@ export interface WorkspaceCaptureDrainRepoService {
   /**
    * Mark an observation of the run's executor in flight, BEFORE the request is sent (review 6
    * #5): `token` names it until it is resolved — by `recordStatus` with its answer, or by
-   * `closeObservation` when nothing was received. While any is unresolved, nothing Core holds of
+   * `closeObservation` when nothing was received. While any is unresolved, nothing sealant holds of
    * the executor counts as current, and no deletion is authorized on it. It lapses `ttlMs` after
    * it was opened (the database's clock); a lapsed fence still counts until an observation opened
    * after it lapsed is recorded. Bumps the evidence version. Answers when it was opened.
@@ -166,8 +166,8 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly token: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
-   * Record a capture status Core received from the run's executor — a drain's, the public flush
-   * and status routes', a probe's, a sampler's: every status Core receives is evidence about the
+   * Record a capture status sealant received from the run's executor — a drain's, the public flush
+   * and status routes', a probe's, a sampler's: every status sealant receives is evidence about the
    * executor's disk, whoever asked (review 5 #3). `fence`: the observation it answers
    * (`openObservation`), resolved by this write, which also resolves every fence that lapsed
    * before it was opened. Ordered by the executor's own history, never by any process's clock
@@ -177,7 +177,7 @@ export interface WorkspaceCaptureDrainRepoService {
    * `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
    * reader's clock, kept for display only. Bumps the evidence version whether or not it replaced
    * the stored status; answers whether it did. A removal still held (`deleting`) is voided: what
-   * Core received about the executor outranks a decision taken before it. One already issued
+   * sealant received about the executor outranks a decision taken before it. One already issued
    * (`deleting-issued`) cannot be revoked and stays; the bumped version keeps it from being issued
    * again on the old evidence (`reconcileIssuedDeletion`). Atomic under the row lock.
    */

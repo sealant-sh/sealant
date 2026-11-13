@@ -3,8 +3,8 @@
  *
  * An install's default Boat account is its env key (`SEALANT_BOAT_API_KEY`). A product that serves
  * several organizations (Mend) stores one more account per organization, so each organization's
- * Boat VMs run in, and are billed to, that organization's own Boat account. Core has no notion of
- * organizations: it knows the account by id, and the caller keeps the mapping.
+ * Boat VMs run in, and are billed to, that organization's own Boat account. sealant has no notion
+ * of organizations: it knows the account by id, and the caller keeps the mapping.
  *
  * A workspace names its account at create (`spec.runtime.boatAccountId`; SDK `boatAccountId`) and
  * every run of it stays in that account. Install-scoped: a caller that reached this surface holds
@@ -34,11 +34,11 @@ export const BOAT_DEFAULT_ACCOUNT_ID = "default";
 const BoatAccountRef = Schema.Union([BoatAccountId, Schema.Literal(BOAT_DEFAULT_ACCOUNT_ID)]);
 
 /**
- * A fact Boat did not let Core observe, and why. `refused`: Boat refused the read (`boat` says
+ * A fact Boat did not let sealant observe, and why. `refused`: Boat refused the read (`boat` says
  * how; an organization key is refused Boat's key list). `no-answer`: Boat did not answer.
  * `not-listed`: Boat's key list did not include this key (a key limited to some VMs gets an empty
  * list), or included more than one that could be it. `unreadable`: Boat answered with something
- * Core could not read. Core never guesses a fact it did not observe.
+ * sealant could not read. sealant never guesses a fact it did not observe.
  */
 export const boatKeyNotObservedSchema = Schema.Struct({
   observed: Schema.Literal(false),
@@ -53,7 +53,7 @@ const observedOr = <F extends Schema.Struct.Fields>(fields: F) =>
   ]);
 
 /**
- * What Core observed of a Boat key, from Boat's own answers, at `observedAt`. Each fact is
+ * What sealant observed of a Boat key, from Boat's own answers, at `observedAt`. Each fact is
  * `observed: true` with its value, or `observed: false` with the reason Boat did not show it.
  */
 export const boatKeyReportSchema = Schema.Struct({
@@ -81,13 +81,13 @@ export const boatKeyReportSchema = Schema.Struct({
     organizationName: Schema.optional(Schema.String),
     role: Schema.optional(Schema.String),
   }),
-  /** The permissions Core needs of every key, from the Boat calls it makes. */
+  /** The permissions sealant needs of every key, from the Boat calls it makes. */
   requiredPermissions: Schema.Array(Schema.String),
   /** The key's permissions (`GET /api-keys`), and which of the required ones it lacks. */
   permissions: observedOr({
     held: Schema.Array(Schema.String),
     missing: Schema.Array(Schema.String),
-    /** The key is limited to some VMs or environments: it cannot reach VMs Core creates. */
+    /** The key is limited to some VMs or environments: it cannot reach VMs sealant creates. */
     limitedToSandboxes: Schema.Boolean,
   }),
   /** When the key expires; `expiresAt` null: it never does. */
@@ -133,12 +133,12 @@ export const boatKeyProofStepSchema = Schema.Struct({
 export type BoatKeyProofStep = typeof boatKeyProofStepSchema.Type;
 
 /**
- * A full check of a Boat key: Core started the smallest VM, ran a command in it, published a port,
- * saved a snapshot, then deleted the snapshot and the VM, and says how far it got. `outcome`:
+ * A full check of a Boat key: sealant started the smallest VM, ran a command in it, published a
+ * port, saved a snapshot, then deleted the snapshot and the VM, and says how far it got. `outcome`:
  * `passed` (every step), `refused` (Boat refused a step; the first refused or unanswered step
  * says why), or `interrupted` (the check stopped before it finished; what it made was removed by
  * the sweep). `starts`: how many VM starts it asked Boat for (0 or 1). `leftBehind`: what Boat
- * may still hold of it when the answer was given. `removalConfirmed` true: Core saw Boat delete
+ * may still hold of it when the answer was given. `removalConfirmed` true: sealant saw Boat delete
  * everything it made. False: the worker's sweep owns what is left and keeps deleting it, with
  * `vm` (an id) and `snapshot` (a name) naming what is known; `vm` is null when a VM may exist
  * whose id Boat never answered (the sweep finds it by its label). Until the sweep has finished,
@@ -220,7 +220,7 @@ export class BoatAccountBadRequestError extends Schema.TaggedError<BoatAccountBa
 
 /**
  * Boat refused the key (`boat-key-refused`: it answered that the key is not valid, has expired or
- * belongs to another organization; `boat` says which), the key provably lacks permissions Core
+ * belongs to another organization; `boat` says which), the key provably lacks permissions sealant
  * needs (`boat-key-missing-permissions`, named in `missingPermissions`), or Boat did not answer
  * whether it is valid (`boat-key-unverified`: try again). Nothing was stored or changed. The
  * message never names the key or any part of it.
@@ -258,7 +258,7 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * `boat-account-environment`: the install's own key (`default`) is set in its environment, not
  * through this API. `boat-proof-running`: a full check of the account is running, or Boat may
  * still hold what one made (the message names the VM and the snapshot): a second check, a key
- * rotation and a removal wait until Core has deleted it.
+ * rotation and a removal wait until sealant has deleted it.
  */
 export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConflictError>()(
   "BoatAccountConflictError",
