@@ -10,6 +10,7 @@ import {
   planWorkspaceImageBuild,
 } from "../../buildkit/buildkit-builder.js";
 import { createWorkspaceBuildSpec } from "../../buildkit/docker-parity.fixture.js";
+import { NIX_PROFILE } from "../../buildkit/person-layout.js";
 import { BOAT_AGENT_FILES, BOAT_AGENT_MANIFEST_FILE } from "../../runtime/boat/agent-contract.js";
 import {
   BOAT_AGENT_DOCKER_DROPIN_PATH,
@@ -17,6 +18,7 @@ import {
   boatAgentManifestDigest,
   createNativeRecipe,
   NATIVE_SUBSTRATE,
+  nativeLaunchBootEntries,
 } from "./recipe.js";
 import {
   NATIVE_RUNTIME_PIN,
@@ -50,8 +52,60 @@ const withDocker = (base = spec()) => ({
   tooling: { ...base.tooling, services: { docker: { enabled: true } } },
 });
 const text = (bytes: Uint8Array | undefined) => Buffer.from(bytes ?? []).toString();
+/** A unit file's `Environment=` assignments, in order. */
+const unitEnvironment = (lines: string) =>
+  lines
+    .split("\n")
+    .filter((line) => line.startsWith("Environment="))
+    .map((line) => line.slice("Environment=".length))
+    .map((entry): [string, string] => [
+      entry.slice(0, entry.indexOf("=")),
+      entry.slice(entry.indexOf("=") + 1),
+    ]);
 
 describe("native recipe boundary", () => {
+  it("starts sealantd with a PATH that finds the shell the environment declares, Nix included (SLNT-786)", async () => {
+    // A session's terminal runs Mend's interactive argv, the bare name of the image's shell
+    // (`["zsh"]`), which sealantd looks up on its own PATH. The agent starts sealantd with its own
+    // environment (the unit's) under the boot env the launch pushes (`nativeLaunchBootEntries`,
+    // what the Boat adapter sends). Ubuntu has no zsh of its own; a Nix image has it in its profile.
+    for (const family of ["ubuntu", "nix"] as const)
+      for (const shell of ["bash", "zsh", "fish"] as const) {
+        const base = spec(family);
+        const blueprint = {
+          ...base,
+          customization: { ...base.customization, defaultShell: shell },
+        };
+        const recipe = await createNativeRecipe(blueprint, serializationBundleFixture);
+        if (!recipe.ok) throw recipe.error;
+        const files = recipe.value.files;
+        const unit = files.find((file) => file.path === BOAT_AGENT_UNIT_PATH);
+        const daemonEnv = {
+          ...Object.fromEntries(unitEnvironment(text(unit?.bytes))),
+          ...Object.fromEntries(nativeLaunchBootEntries(blueprint)),
+        };
+        const login = daemonEnv.SEALANT_LOGIN_SHELL_PATH ?? "";
+        const directory = login.slice(0, login.lastIndexOf("/"));
+        expect(login.slice(login.lastIndexOf("/") + 1)).toBe(shell);
+        expect((daemonEnv.PATH ?? "").split(":"), `${family}/${shell}`).toContain(directory);
+        if (family === "nix") {
+          // The PATH the image declares, the one its project install ran with.
+          expect(daemonEnv.PATH).toBe(Object.fromEntries(recipe.value.bootEntries).PATH);
+          expect(directory).toBe(`${NIX_PROFILE}/bin`);
+          const project = text(
+            files.find((file) => file.path.endsWith("project-install.sh"))?.bytes,
+          );
+          expect(project).toContain(`export PATH='${daemonEnv.PATH}'`);
+          if (shell !== "bash") expect(project).toContain(`'nixpkgs#${shell}'`);
+        } else {
+          // Ubuntu's launch names no PATH: sealantd keeps the unit's, as before.
+          expect(Object.fromEntries(nativeLaunchBootEntries(blueprint))).not.toHaveProperty("PATH");
+          expect(daemonEnv.PATH).toBe(
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          );
+        }
+      }
+  });
   it("ships the guest agent, its Boat host mode and the bind CLI beside the pinned Node, run by one unit", async () => {
     const planned = await createNativeRecipe(spec(), serializationBundleFixture);
     if (!planned.ok) throw planned.error;

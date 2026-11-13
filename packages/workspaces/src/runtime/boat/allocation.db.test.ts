@@ -1672,6 +1672,8 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
           SEALANT_WORKSPACE_SOURCE: "capture",
           SEALANT_SECRET_ENV_FILE: "/run/sealant/secrets/env.json",
         });
+        // An Ubuntu launch names no PATH: sealantd keeps the agent unit's (SLNT-786 is Nix's).
+        expect(s.guest.launches[0]?.bootEnv).not.toHaveProperty("PATH");
         expect(s.provider.creates).toHaveLength(1);
         await execute(s.runtimes.markStopRequested({ runId: f.input.runId, stopReason: "user" }));
         s.gateway.allowRemoval = true;
