@@ -12,6 +12,7 @@
   },
   "scripts": {
     "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
+    "test": "vitest run",
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@sealant/typescript": "workspace:*"
+    "@sealant/typescript": "workspace:*",
+    "vitest": "catalog:"
   }
 }
