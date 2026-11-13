@@ -244,6 +244,7 @@ export { nativePublications, nativePublicationConsumers } from "./native-publica
 export {
   boatAccounts,
   boatInstall,
+  boatKeyProofs,
   boatKeyReports,
   boatLaunchReports,
   type BoatAccountRow,

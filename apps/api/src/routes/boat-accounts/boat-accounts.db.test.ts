@@ -4,6 +4,8 @@ import { CredentialCipher, type CredentialCipherService } from "@sealant/credent
 import {
   BoatAccountRepo,
   BoatAccountRepoLive,
+  BoatKeyProofRepo,
+  BoatKeyProofRepoLive,
   createSealantDB,
   SealantDB,
   user,
@@ -59,12 +61,12 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
   });
 
   const layer = () =>
-    BoatAccountRepoLive.pipe(
+    Layer.merge(BoatAccountRepoLive, BoatKeyProofRepoLive).pipe(
       Layer.provideMerge(Layer.succeed(SealantDB, db)),
       Layer.provideMerge(Layer.succeed(CredentialCipher, cipher)),
     );
   const run = <A, E>(
-    effect: Effect.Effect<A, E, BoatAccountRepo | CredentialCipher | SealantDB>,
+    effect: Effect.Effect<A, E, BoatAccountRepo | BoatKeyProofRepo | CredentialCipher | SealantDB>,
     configured = true,
   ) =>
     Effect.runPromise(
@@ -82,7 +84,7 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
       ),
     );
   const refusal = <A, E>(
-    effect: Effect.Effect<A, E, BoatAccountRepo | CredentialCipher | SealantDB>,
+    effect: Effect.Effect<A, E, BoatAccountRepo | BoatKeyProofRepo | CredentialCipher | SealantDB>,
     configured = true,
   ) => run(Effect.flip(effect), configured);
 
@@ -156,7 +158,7 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
     expect(checked.every((request) => request.startsWith("GET "))).toBe(true);
     const listed = await run(routes.listBoatAccounts());
     const mine = listed.items.find((item) => item.boatAccountId === created.boatAccountId);
-    expect(mine).toEqual(created);
+    expect(mine).toEqual({ ...created, lastProof: null });
     expect(JSON.stringify(listed)).not.toContain(KEY_A);
     // Stored sealed, under its own deployment label and builder owner.
     const stored = await run(

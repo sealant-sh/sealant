@@ -121,6 +121,8 @@ export interface FakeBoatFaults {
    */
   deleteReply?: (sandbox: FakeSandbox) => "lose" | undefined;
   snapshot?: (name: string) => "failed" | undefined;
+  /** `lose`: Boat starts saving the snapshot, then the HTTP reply is dropped. */
+  saveReply?: (name: string) => "lose" | undefined;
   /**
    * Boat refuses this call with its error envelope (`FakeBoatRefusal`), or `no-answer`: the
    * connection is dropped before any reply. Checked after the key, before the call does anything.
@@ -766,11 +768,14 @@ export class FakeBoat {
       }
       if (path === "/saved-snapshots" && method === "POST" && this.options.trialAccount === true)
         throw new HttpError(403, "trial_saved_snapshots_not_allowed");
-      if (path === "/saved-snapshots" && method === "POST")
-        return send(202, {
-          ok: true,
-          snapshot: this.#save(snapshotBody.parse(json())),
-        });
+      if (path === "/saved-snapshots" && method === "POST") {
+        const saved = this.#save(snapshotBody.parse(json()));
+        if (this.faults.saveReply?.(saved.name) === "lose") {
+          request.socket.destroy();
+          return;
+        }
+        return send(202, { ok: true, snapshot: saved });
+      }
       if (path === "/saved-snapshots" && method === "GET") {
         const snapshots = [...this.snapshots.values()].map((snapshot) =>
           this.#snapshotView(snapshot),

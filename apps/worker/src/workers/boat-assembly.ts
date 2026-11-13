@@ -5,6 +5,8 @@ import { CredentialCipher, type CredentialCipherService } from "@sealant/credent
 import {
   BoatAccountRepo,
   BoatAccountRepoLive,
+  BoatKeyProofRepo,
+  BoatKeyProofRepoLive,
   BoatRunRepo,
   BoatRunRepoLive,
   NativePublicationRepo,
@@ -46,7 +48,10 @@ import {
   loadBoatCredential,
   loadPackagedRuntime,
   makeBoatTunnelCarrierLayer,
+  openStoredBoatKey,
   refreshBoatKeyReports,
+  sweepBoatKeyProofs,
+  HttpBoatApi,
   verifyBoatBearers,
   type BoatAccountId,
   type BoatAccountProvider,
@@ -57,6 +62,9 @@ import {
   type BoatClientFactory,
   type BoatConvergenceSweep,
   type BoatGatewayHost,
+  type BoatKeyProofClient,
+  type BoatResult,
+  type BoatSecret,
   type BoatKeyRefreshOptions,
   type BoatKeyRefreshOutcome,
   type BoatNativeCatalogOptions,
@@ -231,6 +239,11 @@ export const assembleBoat = async (input: {
   readonly revisionCheckMs?: number;
   /** How a key is opened for its report's check. Absent: Boat's real API; a test supplies a fake. */
   readonly keyClientFor?: BoatKeyRefreshOptions["clientFor"];
+  /** How a key is opened for a full check's sweep. Absent: Boat's real API; a test supplies a fake. */
+  readonly proofClientFor?: (
+    credential: BoatSecret,
+    options?: { readonly organization?: string },
+  ) => BoatResult<BoatKeyProofClient>;
 }) => {
   const { env, db, credentialCipher } = input;
   const envAccount = boatProviderFromEnv(env, input.clientFor);
@@ -669,6 +682,40 @@ export const assembleBoat = async (input: {
      * launches Boat workspaces, in the install's own account too, and with the resource gateway.
      */
     launchReport,
+    /**
+     * One pass of the full checks' sweep: whatever an interrupted check, or one whose cleanup Boat
+     * refused, still holds in Boat (its VM, its snapshot) is deleted with its account's key.
+     */
+    sweepKeyProofs: async (now?: Date) => {
+      const proofs = await Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* BoatKeyProofRepo;
+        }).pipe(Effect.provide(BoatKeyProofRepoLive), Effect.provideService(SealantDB, db)),
+      );
+      const open =
+        input.proofClientFor ??
+        ((credential: BoatSecret, options?: { readonly organization?: string }) =>
+          HttpBoatApi.create({
+            credential,
+            ...(options?.organization === undefined ? {} : { organization: options.organization }),
+          }));
+      return sweepBoatKeyProofs({
+        proofs,
+        ...(now === undefined ? {} : { now: () => now }),
+        clientFor: async (account) => {
+          const key =
+            account === "default"
+              ? defaultKey
+              : await openStoredBoatKey({ db, cipher: credentialCipher }, account);
+          if (key === undefined) return undefined;
+          const client = open(
+            key.credential,
+            key.organization === undefined ? undefined : { organization: key.organization },
+          );
+          return client.ok ? client.value : undefined;
+        },
+      });
+    },
     /** Writes this worker's launch report (`launchReport`), stamped by the database's clock. */
     reportLaunch: (worker: string, observedAt?: Date) =>
       Effect.runPromise(

@@ -101,6 +101,30 @@ export interface BoatKeyRefreshOutcome {
   readonly outcome: "refreshed" | "kept" | "fresh" | "unavailable";
 }
 
+/** Opens a stored account's sealed key, with its organization; `undefined` when it does not open. */
+export const openStoredBoatKey = async (
+  options: { readonly db: DB; readonly cipher: CredentialCipherService },
+  accountId: string,
+): Promise<
+  { readonly credential: BoatSecret; readonly organization: string | undefined } | undefined
+> => {
+  const sealed = await Effect.runPromise(
+    Effect.flatMap(BoatAccountRepo, (repo) => repo.sealedKey(accountId)).pipe(
+      Effect.provide(BoatAccountRepoLive),
+      Effect.provideService(SealantDB, options.db),
+    ),
+  );
+  if (sealed === undefined) return undefined;
+  const opened = await Effect.runPromise(
+    options.cipher.decrypt(sealed.sealedKey).pipe(Effect.option),
+  );
+  if (Option.isNone(opened)) return undefined;
+  const credential = BoatSecret.parse(opened.value);
+  return credential.ok
+    ? { credential: credential.value, organization: sealed.organization ?? undefined }
+    : undefined;
+};
+
 const defaultClientFor: NonNullable<BoatKeyRefreshOptions["clientFor"]> = (credential, options) =>
   HttpBoatApi.create({
     credential,
@@ -136,19 +160,7 @@ export const refreshBoatKeyReports = async (
     return last === undefined || now().getTime() - last.observedAt.getTime() >= everyMs;
   };
 
-  /** Opens a stored account's sealed key; `undefined` when it does not open. */
-  const storedKey = async (accountId: string) => {
-    const sealed = await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.sealedKey(accountId)));
-    if (sealed === undefined) return undefined;
-    const opened = await Effect.runPromise(
-      options.cipher.decrypt(sealed.sealedKey).pipe(Effect.option),
-    );
-    if (Option.isNone(opened)) return undefined;
-    const credential = BoatSecret.parse(opened.value);
-    return credential.ok
-      ? { credential: credential.value, organization: sealed.organization ?? undefined }
-      : undefined;
-  };
+  const storedKey = (accountId: string) => openStoredBoatKey(options, accountId);
 
   const refresh = async (
     account: string,

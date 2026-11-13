@@ -7,6 +7,7 @@ import {
   createBoatAccount,
   getBoatInstallKey,
   listBoatAccounts,
+  proveBoatAccount,
   removeBoatAccount,
   rotateBoatAccountKey,
 } from "./boat-accounts.module.js";
@@ -24,5 +25,6 @@ export const BoatAccountsHandlersLive = HttpApiBuilder.group(
       .handle("checkBoatAccount", ({ params }) => checkBoatAccount(params.boatAccountId))
       .handle("getBoatInstallKey", () => getBoatInstallKey())
       .handle("checkBoatInstallKey", () => checkBoatInstallKey())
+      .handle("proveBoatAccount", ({ params }) => proveBoatAccount(params.boatAccountId))
       .handle("removeBoatAccount", ({ params }) => removeBoatAccount(params.boatAccountId)),
 );

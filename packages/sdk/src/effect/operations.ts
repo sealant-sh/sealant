@@ -349,6 +349,11 @@ export const checkBoatAccountOp = (boatAccountId: string) =>
     client.boatAccounts.checkBoatAccount({ params: { boatAccountId } }),
   );
 
+export const proveBoatAccountOp = (boatAccountId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.boatAccounts.proveBoatAccount({ params: { boatAccountId } }),
+  );
+
 export const getBoatInstallKeyOp = () =>
   Effect.flatMap(SealantApiClient, (client) => client.boatAccounts.getBoatInstallKey({}));
 

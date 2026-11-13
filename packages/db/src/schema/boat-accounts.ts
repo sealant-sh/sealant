@@ -7,6 +7,7 @@ import {
   snakeCase,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -115,3 +116,41 @@ export const boatLaunchReports = snakeCase.table("boat_launch_reports", {
   resourceGateway: boolean().notNull(),
   observedAt: instant().notNull(),
 });
+
+/**
+ * Each full check of a Boat key (`prove`): a throwaway VM, a command, a published port and a saved
+ * snapshot, all deleted again. The row is written before anything is created in Boat and names
+ * what may be created (the VM's idempotency key and label, the snapshot's name), so whatever an
+ * interrupted check made is found and deleted by the worker's sweep. `claimed_until`: while it is
+ * ahead, the check is running and a second one of the same account is refused; once it has passed,
+ * the sweep takes the check over. `cleanup_pending`: Boat may still hold the VM or the snapshot; a
+ * second check of the account is refused until the sweep has removed them.
+ */
+export const boatKeyProofs = snakeCase.table(
+  "boat_key_proofs",
+  {
+    id: uuid().primaryKey(),
+    /** A stored account's id, or `default` for the install's own key. */
+    account: text().notNull(),
+    /** The `Idempotency-Key` of the VM create, and the value of its `sealant-key-proof` label. */
+    createKey: uuid().notNull(),
+    snapshotName: text().notNull(),
+    startedAt: instant().notNull(),
+    claimedUntil: instant().notNull(),
+    /** Set just before the VM create is sent: from then on Boat may hold a VM of this check. */
+    createIssuedAt: instant(),
+    sandboxId: text(),
+    /** Set just before the snapshot save is sent: from then on Boat may hold the snapshot. */
+    saveIssuedAt: instant(),
+    vmDeletedAt: instant(),
+    snapshotDeletedAt: instant(),
+    finishedAt: instant(),
+    cleanupPending: boolean().notNull().default(false),
+    result: jsonb(),
+  },
+  (table) => [
+    uniqueIndex("boat_key_proofs_one_running")
+      .on(table.account)
+      .where(sql`${table.finishedAt} is null or ${table.cleanupPending}`),
+  ],
+);

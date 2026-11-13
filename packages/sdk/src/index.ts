@@ -37,7 +37,11 @@ export {
   type BoatFailure,
   type BoatFailureKind,
   type BoatKeyNotObserved,
+  type BoatKeyProof,
+  type BoatKeyProofStep,
+  type BoatKeyProofStepName,
   type BoatKeyReport,
+  BOAT_KEY_PROOF_STEPS,
 } from "@sealant/api-contracts";
 export type {
   EnsuredScope,

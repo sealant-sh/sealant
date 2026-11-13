@@ -109,6 +109,56 @@ export const boatKeyReportSchema = Schema.Struct({
 });
 export type BoatKeyReport = typeof boatKeyReportSchema.Type;
 
+/** The steps of a Boat key's full check, in order: the last two are also its cleanup. */
+export const BOAT_KEY_PROOF_STEPS = [
+  "start-vm",
+  "run-command",
+  "publish-port",
+  "save-snapshot",
+  "delete-snapshot",
+  "delete-vm",
+] as const;
+export type BoatKeyProofStepName = (typeof BOAT_KEY_PROOF_STEPS)[number];
+
+/**
+ * One step of a full check. `passed`: Boat did it. `refused`: Boat refused it, `boat` says why.
+ * `no-answer`: Boat did not answer (the step may have happened; cleanup assumes it did).
+ * `not-reached`: an earlier step stopped the check, and this one was not tried.
+ */
+export const boatKeyProofStepSchema = Schema.Struct({
+  step: Schema.Literals(BOAT_KEY_PROOF_STEPS),
+  outcome: Schema.Literals(["passed", "refused", "no-answer", "not-reached"]),
+  boat: Schema.optional(boatFailureSchema),
+});
+export type BoatKeyProofStep = typeof boatKeyProofStepSchema.Type;
+
+/**
+ * A full check of a Boat key: Core started the smallest VM, ran a command in it, published a port,
+ * saved a snapshot, then deleted the snapshot and the VM, and says how far it got. `outcome`:
+ * `passed` (every step), `refused` (Boat refused a step; the first refused or unanswered step
+ * says why), or `interrupted` (the check stopped before it finished; what it made was removed by
+ * the sweep). `starts`: how many VM starts it asked Boat for (0 or 1). `leftBehind`: what Boat
+ * may still hold of it when the answer was given. `removalConfirmed` true: Core saw Boat delete
+ * everything it made. False: the worker's sweep owns what is left and keeps deleting it, with
+ * `vm` (an id) and `snapshot` (a name) naming what is known; `vm` is null when a VM may exist
+ * whose id Boat never answered (the sweep finds it by its label). Until the sweep has finished,
+ * the account's key is neither rotated nor removed.
+ */
+export const boatKeyProofSchema = Schema.Struct({
+  proofId: Schema.String,
+  startedAt: Schema.String,
+  finishedAt: Schema.String,
+  outcome: Schema.Literals(["passed", "refused", "interrupted"]),
+  steps: Schema.Array(boatKeyProofStepSchema),
+  starts: Schema.Int,
+  leftBehind: Schema.Struct({
+    vm: Schema.NullOr(Schema.String),
+    snapshot: Schema.NullOr(Schema.String),
+    removalConfirmed: Schema.Boolean,
+  }),
+});
+export type BoatKeyProof = typeof boatKeyProofSchema.Type;
+
 export const boatAccountSchema = Schema.Struct({
   boatAccountId: BoatAccountId,
   label: NonEmptyString,
@@ -121,6 +171,8 @@ export const boatAccountSchema = Schema.Struct({
   organization: Schema.optional(Schema.NullOr(Schema.String)),
   /** The key's last report, with when it was observed; null until the key is checked. */
   report: Schema.optional(Schema.NullOr(boatKeyReportSchema)),
+  /** The account's last full check (`prove`), kept beside its report; null until it is proven. */
+  lastProof: Schema.optional(Schema.NullOr(boatKeyProofSchema)),
 });
 export type BoatAccountWire = typeof boatAccountSchema.Type;
 
@@ -204,7 +256,9 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * now (`unseen`), so it is most likely another Boat account's key. `boat-account-removing`: the
  * account's removal was asked. `boat-account-changed`: another rotation won; read and try again.
  * `boat-account-environment`: the install's own key (`default`) is set in its environment, not
- * through this API.
+ * through this API. `boat-proof-running`: a full check of the account is running, or Boat may
+ * still hold what one made (the message names the VM and the snapshot): a second check, a key
+ * rotation and a removal wait until Core has deleted it.
  */
 export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConflictError>()(
   "BoatAccountConflictError",
@@ -216,6 +270,7 @@ export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConf
       "boat-account-removing",
       "boat-account-changed",
       "boat-account-environment",
+      "boat-proof-running",
     ]),
     liveRuns: Schema.optional(Schema.Int),
     buildsInFlight: Schema.optional(Schema.Int),
@@ -301,6 +356,20 @@ export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
       error: [
         BoatAccountKeyRefusedError,
         BoatAccountNotFoundError,
+        BoatAccountServiceUnavailableError,
+        BoatAccountInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // A full check: a throwaway VM is started, used and deleted, with a snapshot saved and
+    // deleted; whatever it made is removed on every path. One per account at a time.
+    HttpApiEndpoint.post("proveBoatAccount", "/:boatAccountId/prove", {
+      params: Schema.Struct({ boatAccountId: BoatAccountId }),
+      success: boatKeyProofSchema,
+      error: [
+        BoatAccountNotFoundError,
+        BoatAccountConflictError,
         BoatAccountServiceUnavailableError,
         BoatAccountInternalServerError,
       ],

@@ -565,3 +565,10 @@ export {
   boatTunnelRepoLayer,
   type BoatTunnelRepoService,
 } from "./repositories/boat-tunnels.js";
+export {
+  BoatKeyProofRepo,
+  BoatKeyProofRepoLive,
+  BoatKeyProofStoreError,
+  type BoatKeyProofRecord,
+  type BoatKeyProofRepoService,
+} from "./repositories/boat-key-proofs.js";

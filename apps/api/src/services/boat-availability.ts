@@ -14,6 +14,7 @@ import {
   boatLaunchSupportOf,
   loadBoatCredential,
   type BoatKeyCheckClient,
+  type BoatKeyProofClient,
   type BoatResult,
   type BoatSecret,
 } from "@sealant/workspaces";
@@ -92,7 +93,9 @@ export const boatResourceGateway = Effect.map(boatLaunchSupport, (support) =>
 export const boatLaunchable = Effect.map(boatLaunchRefusalNow, (refusal) => refusal === undefined);
 
 /** The reads the API asks of Boat with a key: its check, and what a rotation must still see. */
-export type BoatKeyClient = BoatKeyCheckClient & Pick<HttpBoatApi, "get" | "getSnapshot">;
+export type BoatKeyClient = BoatKeyCheckClient &
+  BoatKeyProofClient &
+  Pick<HttpBoatApi, "get" | "getSnapshot">;
 
 /**
  * How the API opens a Boat key into a client, naming the organization it bills when the account

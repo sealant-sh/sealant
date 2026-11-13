@@ -287,11 +287,21 @@ export {
 export {
   BOAT_KEY_REFRESH_MS,
   boatReopenableReasons,
+  openStoredBoatKey,
   refreshBoatKeyReports,
   reopenBoatQuarantine,
   type BoatKeyRefreshOptions,
   type BoatKeyRefreshOutcome,
 } from "./boat/key-refresh.js";
+export {
+  BOAT_KEY_PROOF_CLAIM_MS,
+  BOAT_KEY_PROOF_LISTING_LAG_MS,
+  proveBoatKey,
+  sweepBoatKeyProofs,
+  type BoatKeyProofClient,
+  type BoatKeyProofOptions,
+  type BoatKeyProofSweepOutcome,
+} from "./boat/key-proof.js";
 export {
   BOAT_LAUNCH_REPORT_FRESH_MS,
   boatLaunchRefusal,
