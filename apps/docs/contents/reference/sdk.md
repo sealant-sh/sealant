@@ -214,6 +214,15 @@ plan, the image is as old as its build: its base image and packages are not refr
 These call the live API and work end-to-end:
 
 - **Workspaces:** `sealant.workspaces.create()`, `.get()`, `.list()`
+- **Runtimes:** `sealant.workspaces.runtimes()` answers, before any create, which runtimes the
+  control plane launches workspaces on (`default` first) and what each supports: `os` per family,
+  `customImage`, `hostDirectories`, `docker`, `gvisor`, `clusterEnv`, `gitSource`,
+  `dotfilesArchives`, `screen` (with its CPU `architectures`), `reservedPorts`, `resources` (with
+  `attach`: `live` or `next-start`) and `idleCost` (`{ charged, message }`). Each item is
+  `{ supported: true }` or `{ supported: false, message }`, a union a TypeScript client switches on
+  exhaustively, and `message` is the sentence to show a person. A create that asks a runtime for an
+  unsupported item is refused with the same sentence; see
+  [Runtimes](/docs/reference/http-api#runtimes).
 - **Workspace handle:** `workspace.status()`, `workspace.ready()`, `workspace.phase()`,
   `workspace.events()` (poll-backed status and launch-phase stream); see
   [Waiting for a workspace](#waiting-for-a-workspace)
