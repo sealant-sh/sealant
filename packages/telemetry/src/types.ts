@@ -123,6 +123,8 @@ export interface TimelineEntry {
   readonly summary: string;
   readonly ref: Record<string, unknown> | null;
   readonly processId: string | null;
+  /** The execution the daemon stamped on the event (the run that started its process), if any. */
+  readonly executionId: string | null;
   readonly captureMethod: number;
   readonly confidence: number;
 }

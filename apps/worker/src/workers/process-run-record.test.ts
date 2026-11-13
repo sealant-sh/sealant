@@ -17,6 +17,7 @@ import {
   daemonEvent,
   execAccepted,
   healthReport,
+  isChangesReading,
 } from "@sealant/telemetry/testing";
 import {
   SealantRuntime,
@@ -64,7 +65,7 @@ const world = () => {
       return Stream.make(
         exited(
           `proc_${String(execs.length)}`,
-          last?.executionId === RUN ? 3 : 1,
+          last === undefined || isChangesReading(last) ? 1 : 3,
           last?.executionId,
         ),
       );
@@ -122,7 +123,9 @@ describe("an exec run whose record cannot take one of its events", () => {
   it("fails saying why, with the changes reading, and runs no further command", async () => {
     const w = world();
     await w.run();
-    expect(w.execs.filter((options) => options.executionId === RUN)).toHaveLength(1);
+    expect(
+      w.execs.filter((options) => options.executionId === RUN && !isChangesReading(options)),
+    ).toHaveLength(1);
     expect(w.outcomes).toEqual([
       {
         status: "failed",

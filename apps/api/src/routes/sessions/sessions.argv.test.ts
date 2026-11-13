@@ -237,6 +237,7 @@ const harness = (daemon: Daemon) => {
                     summary: "",
                     ref: { exitCode: 0 },
                     processId: LEADER.processId,
+                    executionId: null,
                     captureMethod: 1,
                     confidence: 1,
                   },
