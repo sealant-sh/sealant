@@ -298,3 +298,28 @@ export const boatKeyRefusedReport = (
     snapshots: refused,
   };
 };
+
+/**
+ * A re-check's outcome, for the key of an account already stored: `report`, what to store now (a key
+ * Boat refuses, or one that lacks a permission, is reported, not refused); `kept`, Boat did not
+ * answer, so the last report stays. What `POST /v1/boat-accounts/:id/check` and the scheduled
+ * refresh both do.
+ */
+export type BoatKeyObservation =
+  | { readonly kind: "report"; readonly report: BoatKeyReport }
+  | { readonly kind: "kept"; readonly failure?: BoatFailure };
+
+export const observeBoatKey = async (
+  client: BoatKeyCheckClient,
+  options: { readonly organization: string | null; readonly now?: () => Date },
+): Promise<BoatKeyObservation> => {
+  const check = await checkBoatKey(client, options).catch(
+    (): BoatKeyCheck => ({ kind: "unverified" }),
+  );
+  if (check.kind === "unverified")
+    return { kind: "kept", ...(check.failure === undefined ? {} : { failure: check.failure }) };
+  return {
+    kind: "report",
+    report: check.kind === "refused" ? boatKeyRefusedReport(check.failure, options) : check.report,
+  };
+};

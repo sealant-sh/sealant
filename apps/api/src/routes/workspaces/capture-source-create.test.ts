@@ -394,8 +394,20 @@ const makeRecordingLayer = (
 
   return Layer.mergeAll(
     Layer.mock(ConnectedAccountRepo, {}),
-    // No spec here names a Boat account.
-    Layer.mock(BoatAccountRepo, {}),
+    // No spec here names a Boat account. A worker launches Boat, with the install's own key and
+    // the resource gateway, wherever the API is configured for it.
+    Layer.mock(BoatAccountRepo, {
+      launchReports: () =>
+        Effect.succeed([
+          {
+            worker: "worker-test",
+            launches: true,
+            defaultAccount: true,
+            resourceGateway: true,
+            observedAt: new Date(),
+          },
+        ]),
+    }),
     Layer.mock(GitHubInstallationRepo, {}),
     Layer.mock(GitHubInstallationRepositoryCacheRepo, {}),
     Layer.mock(GitHubSourceIntegrationService, {
@@ -1350,7 +1362,7 @@ describe("Boat runtime selection", () => {
       ).toMatchObject({
         _tag: "WorkspaceServiceUnavailableError",
         code: "unsupported-runtime",
-        message: "No runtime adapter is registered for target.runtime.family 'boat'.",
+        message: expect.stringContaining("SEALANT_CREDENTIALS_KEY"),
       });
       expect(denied.state.job, principal.kind).toBeUndefined();
       expect(denied.state.reservations?.size ?? 0, principal.kind).toBe(0);
@@ -1358,9 +1370,30 @@ describe("Boat runtime selection", () => {
   });
 });
 
-/** The runtime report as the API answers it, with Boat configured or not. */
-const readRuntimes = (configured: boolean) =>
-  Effect.runPromise(listWorkspaceRuntimes.pipe(Effect.provideService(BoatConfigured, configured)));
+/**
+ * The runtime report as the API answers it, with Boat configured or not, and what the workers
+ * reported (by default one launching worker with the install's own key and the gateway).
+ */
+const readRuntimes = (configured: boolean, resourceGateway = true) =>
+  Effect.runPromise(
+    listWorkspaceRuntimes.pipe(
+      Effect.provide(
+        Layer.mock(BoatAccountRepo, {
+          launchReports: () =>
+            Effect.succeed([
+              {
+                worker: "worker-test",
+                launches: true,
+                defaultAccount: true,
+                resourceGateway,
+                observedAt: new Date(),
+              },
+            ]),
+        }),
+      ),
+      Effect.provideService(BoatConfigured, configured),
+    ),
+  );
 
 describe("createWorkspace · the runtime table (GET /v1/workspaces/runtimes)", () => {
   const harnessHome = "/workspace/harness-home";
@@ -1536,5 +1569,13 @@ describe("createWorkspace · the runtime table (GET /v1/workspaces/runtimes)", (
       runtimeSupport("boat", install),
     ]);
     expect((await readRuntimes(false)).runtimes.map((each) => each.runtime)).toEqual(["docker"]);
+  });
+
+  it("says Boat reaches no resources where no launching worker has the gateway", async () => {
+    const boat = (await readRuntimes(true, false)).runtimes.find((each) => each.runtime === "boat");
+    expect(boat?.resources).toEqual({
+      supported: false,
+      message: expect.stringContaining("its worker has no resource gateway"),
+    });
   });
 });

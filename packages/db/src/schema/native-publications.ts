@@ -38,6 +38,11 @@ export const nativePublications = snakeCase.table(
     reason: text(),
     createdAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
     readyAt: timestamp({ mode: "date", withTimezone: true }),
+    /**
+     * Set on a quarantine whose Boat reason a person may have fixed, once the cause may have
+     * cleared (a key rotation, a check that can start): the next launch replaces it with one build.
+     */
+    reopenedAt: timestamp({ mode: "date", withTimezone: true }),
   },
   (table) => [
     uniqueIndex("native_publications_key_active")

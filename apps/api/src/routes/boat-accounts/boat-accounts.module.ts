@@ -25,13 +25,15 @@ import {
 } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import { BoatAccountRepo, type BoatAccountRecord } from "@sealant/db";
+import type { NativeReopenReason } from "@sealant/validators";
 import {
   BoatSecret,
-  boatKeyRefusedReport,
   boatOrganizationSchema,
   boatSandboxIdSchema,
   boatSnapshotNameSchema,
   checkBoatKey,
+  boatReopenableReasons,
+  observeBoatKey,
   type BoatKeyCheck,
 } from "@sealant/workspaces";
 import { Effect, Option, Schema } from "effect";
@@ -40,6 +42,7 @@ import { env } from "../../runtime-env.js";
 import {
   BoatConfigured,
   BoatDefaultKey,
+  BoatDefaultOrganization,
   BoatKeyClients,
   type BoatKeyClient,
 } from "../../services/boat-availability.js";
@@ -74,14 +77,12 @@ const environmentKey = (verb: string) =>
 
 const internal = (message: string) => () => new BoatAccountInternalServerError({ message });
 
-/** Stored accounts need Boat itself (the env key) and somewhere to seal keys. */
+/**
+ * Stored accounts need somewhere to seal keys, and nothing else: an install runs Boat from them
+ * with or without a key of its own in its environment.
+ */
 const requireBoatAccounts = Effect.gen(function* () {
-  if (!(yield* BoatConfigured))
-    return yield* new BoatAccountServiceUnavailableError({
-      message:
-        "Boat accounts need Boat configured on this install: SEALANT_BOAT_API_KEY (or SEALANT_BOAT_API_KEY_FILE) and SEALANT_BOAT_DEPLOYMENT_ID.",
-    });
-  const key = env.SEALANT_CREDENTIALS_KEY?.trim();
+  const key = (yield* BoatConfigured) ? env.SEALANT_CREDENTIALS_KEY?.trim() : undefined;
   if (key === undefined || key.length === 0)
     return yield* new BoatAccountServiceUnavailableError({
       message: "Boat accounts require SEALANT_CREDENTIALS_KEY to be configured.",
@@ -167,6 +168,29 @@ const acceptedKey = (credential: BoatSecret, organization: string | null, outcom
     return { client, report: check.report };
   });
 
+/**
+ * The account's quarantined builds a person may have fixed are tried again on the next launch:
+ * every one after a rotation, and after a check only those whose own cause the report shows
+ * cleared (`boatReopenableReasons`). A failure to reopen loses nothing but the reopen; the next
+ * check tries again.
+ */
+const reopenQuarantine = (deploymentId: string, reasons?: readonly NativeReopenReason[]) =>
+  Effect.flatMap(BoatAccountRepo, (repo) =>
+    repo.reopenQuarantined({
+      deploymentId,
+      at: new Date(),
+      ...(reasons === undefined ? {} : { reasons }),
+    }),
+  ).pipe(Effect.orElseSucceed(() => 0));
+
+/** The install's own deployment label, as the worker names its VMs and images with it. */
+const installDeployment = Effect.flatMap(BoatAccountRepo, (repo) =>
+  repo.installDeployment(env.SEALANT_BOAT_DEPLOYMENT_ID),
+).pipe(
+  Effect.map((stored) => env.SEALANT_BOAT_DEPLOYMENT_ID ?? stored),
+  Effect.mapError(internal("Failed to read the install's Boat deployment.")),
+);
+
 const saveReport = (account: string, report: BoatKeyReport) =>
   Effect.flatMap(BoatAccountRepo, (repo) =>
     repo.saveReport({ account, report, observedAt: new Date(report.observedAt) }),
@@ -230,10 +254,18 @@ export const listBoatAccounts = () =>
     return { items: accounts.map((account) => toWire(account, reportOf(account.id))) };
   });
 
+/** An install that runs Boat from stored keys alone has no key of its own to show or check. */
+const noInstallKey = () =>
+  new BoatAccountServiceUnavailableError({
+    message:
+      "This install has no Boat key of its own (SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE); it runs Boat from its stored accounts.",
+  });
+
 /** `GET /v1/boat-accounts/install-key`: the install's own key's last report; never the key. */
 export const getBoatInstallKey = () =>
   Effect.gen(function* () {
     yield* requireBoatAccounts;
+    if ((yield* BoatDefaultKey)() === undefined) return yield* noInstallKey();
     const reports = yield* (yield* BoatAccountRepo)
       .reports()
       .pipe(Effect.mapError(internal("Failed to read the Boat keys' reports.")));
@@ -256,15 +288,12 @@ const removing = (boatAccountId: string) =>
 const recheck = (credential: BoatSecret, organization: string | null, account: string) =>
   Effect.gen(function* () {
     const client = yield* openClient(credential, organization);
-    const check = yield* runCheck(client, organization);
-    if (check.kind === "unverified")
-      return yield* unverified(check.failure, "the last report was kept.");
-    const report =
-      check.kind === "refused"
-        ? boatKeyRefusedReport(check.failure, { organization })
-        : check.report;
-    yield* saveReport(account, report);
-    return report;
+    // The same observation as the scheduled refresh (`observeBoatKey`).
+    const observed = yield* Effect.promise(() => observeBoatKey(client, { organization }));
+    if (observed.kind === "kept")
+      return yield* unverified(observed.failure, "the last report was kept.");
+    yield* saveReport(account, observed.report);
+    return observed.report;
   });
 
 /** `POST /v1/boat-accounts/:id/check`: checks a stored account's key again (read-only). */
@@ -289,6 +318,7 @@ export const checkBoatAccount = (boatAccountId: string) =>
         message: "The Boat account's stored key is not a Boat key.",
       });
     const report = yield* recheck(parsed.value, account.organization, account.id);
+    yield* reopenQuarantine(account.deploymentId, boatReopenableReasons(report));
     return toWire(account, report);
   });
 
@@ -297,11 +327,17 @@ export const checkBoatInstallKey = () =>
   Effect.gen(function* () {
     yield* requireBoatAccounts;
     const key = (yield* BoatDefaultKey)();
+    if (key === undefined) return yield* noInstallKey();
     if (!key.ok)
       return yield* new BoatAccountServiceUnavailableError({
         message: "The install's own Boat key could not be read from its environment.",
       });
-    return installKeyWire(yield* recheck(key.value, null, BOAT_DEFAULT_ACCOUNT_ID));
+    // The organization the install's own key bills, named on the check as on every request.
+    const organization = (yield* BoatDefaultOrganization) ?? null;
+    const report = yield* recheck(key.value, organization, BOAT_DEFAULT_ACCOUNT_ID);
+    const cleared = boatReopenableReasons(report);
+    if (cleared.length > 0) yield* reopenQuarantine(yield* installDeployment, cleared);
+    return installKeyWire(report);
   });
 
 /**
@@ -420,6 +456,8 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
         ),
       );
     yield* saveReport(rotated.id, report);
+    // A new key may be what a quarantined build was waiting for.
+    yield* reopenQuarantine(rotated.deploymentId);
     return toWire(rotated, report);
   });
 

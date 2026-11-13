@@ -282,6 +282,12 @@ describe("the runtime table", () => {
     expect(runtimeSupport("boat", install({ resourceHost: "none" })).resources.supported).toBe(
       false,
     );
+    // Boat reaches resources only through a launching worker's gateway.
+    expect(runtimeSupport("boat", install({ boatGateway: false })).resources.supported).toBe(false);
+    expect(runtimeSupport("boat", install({ boatGateway: true })).resources).toEqual({
+      supported: true,
+      attach: "live",
+    });
     expect(runtimeSupport("k8s", install({ resourceHost: "kubernetes" })).resources.supported).toBe(
       false,
     );

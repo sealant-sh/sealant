@@ -37,9 +37,12 @@ import {
 } from "@sealant/validators";
 import { parseWorkerEnv } from "@sealant/validators/env";
 import {
+  BOAT_LAUNCH_REPORT_FRESH_MS,
   BoatAccountDirectory,
   BoatApiError,
   HttpBoatApi,
+  boatLaunchRefusal,
+  boatLaunchSupportOf,
   boatSandboxIdSchema,
   type BoatClientFactory,
 } from "@sealant/workspaces";
@@ -227,6 +230,10 @@ interface Context {
     effect: Effect.Effect<A, E, BoatAccountRepo | BoatRunRepo | NativePublicationRepo>,
   ) => Promise<A>;
   readonly clientFor: BoatClientFactory;
+  /** Assembles another worker's Boat on the same database, with these settings beside the cipher. */
+  readonly assemble: (
+    env: Record<string, string>,
+  ) => Promise<NonNullable<Awaited<ReturnType<typeof assembleBoat>>>>;
   readonly owner: string;
   /**
    * One Boat run of an account with its VM in that account's Boat, as a launch leaves it: bound,
@@ -244,7 +251,18 @@ interface Context {
   }) => Promise<{ readonly runId: string; readonly sandboxId: string }>;
 }
 
-const withAccounts = async (run: (context: Context) => Promise<void>) => {
+/** The settings of an install that set every Boat name itself, as installs did before. */
+const EXPLICIT_ENV = {
+  SEALANT_BOAT_API_KEY: DEFAULT_KEY,
+  SEALANT_BOAT_DEPLOYMENT_ID: DEFAULT_DEPLOYMENT,
+  SEALANT_BOAT_BUILDER_OWNER: "11111111-2222-4333-8444-555555555555",
+};
+
+const withAccounts = async (
+  run: (context: Context) => Promise<void>,
+  /** The worker's Boat settings beside the cipher and the state directory. */
+  settings: Record<string, string> = EXPLICIT_ENV,
+) => {
   if (DATABASE_URL === undefined) throw new Error("SEALANT_TEST_DATABASE_URL required");
   await withWorkspaceJobTestDatabase(DATABASE_URL, async (url) => {
     const scope = await Effect.runPromise(Scope.make());
@@ -253,6 +271,7 @@ const withAccounts = async (run: (context: Context) => Promise<void>) => {
     const b = new RecordedBoat();
     const state = await mkdtemp(join(tmpdir(), "boat-accounts-"));
     let boat: Context["boat"] | undefined;
+    const others: Context["boat"][] = [];
     try {
       const built = await Effect.runPromise(Layer.buildWithScope(makeSealantDBLayer(url), scope));
       const db = Context.get(built, SealantDB);
@@ -295,24 +314,31 @@ const withAccounts = async (run: (context: Context) => Promise<void>) => {
       const accountA = await store("Organization A", KEY_A);
       const accountB = await store("Organization B", KEY_B);
       const builders: MadeBuilder[] = [];
-      boat = await assembleBoat({
-        env: parseWorkerEnv({
-          SEALANT_BOAT_API_KEY: DEFAULT_KEY,
-          SEALANT_BOAT_DEPLOYMENT_ID: DEFAULT_DEPLOYMENT,
-          SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
-          SEALANT_BOAT_BUILDER_OWNER: "11111111-2222-4333-8444-555555555555",
-          SEALANT_BOAT_STATE_DIRECTORY: state,
-          DOCKER_RUNTIME_ENABLED: "false",
-        }),
-        db,
-        credentialCipher: cipher,
-        docker: undefined,
-        snapshotBuilder: recordingBuilders(builders),
-        clientFor,
-        // Every call reads the key's revision: a rotation is seen at once.
-        revisionCheckMs: 0,
-      });
-      if (boat === undefined) throw new Error("Boat is not assembled");
+      const assembleWith = async (env: Record<string, string>) => {
+        const assembled = await assembleBoat({
+          env: parseWorkerEnv({
+            SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+            SEALANT_BOAT_STATE_DIRECTORY: state,
+            DOCKER_RUNTIME_ENABLED: "false",
+            ...env,
+          }),
+          db,
+          credentialCipher: cipher,
+          docker: undefined,
+          snapshotBuilder: recordingBuilders(builders),
+          clientFor,
+          // Every call reads the key's revision: a rotation is seen at once.
+          revisionCheckMs: 0,
+        });
+        if (assembled === undefined) throw new Error("Boat is not assembled");
+        return assembled;
+      };
+      boat = await assembleWith(settings);
+      const assemble: Context["assemble"] = async (env) => {
+        const other = await assembleWith(env);
+        others.push(other);
+        return other;
+      };
       const owner = `usr_${randomUUID()}`;
       await Effect.runPromise(
         db.insert(user).values({ id: owner, email: `${owner}@example.invalid`, name: "accounts" }),
@@ -398,11 +424,13 @@ const withAccounts = async (run: (context: Context) => Promise<void>) => {
         boat,
         repo,
         clientFor,
+        assemble,
         owner,
         seedRun,
       });
     } finally {
       await boat?.dispose();
+      for (const other of others) await other.dispose();
       await Promise.all([fallback.close(), a.close(), b.close()]);
       await Effect.runPromise(Scope.close(scope, Exit.void));
       await rm(state, { recursive: true, force: true });
@@ -710,5 +738,128 @@ describe.skipIf(DATABASE_URL === undefined)(
         expect((await provider?.api.get(id))?.ok).toBe(true);
         expect(c.boats.a.bearers.slice(before)).toEqual([KEY_A, KEY_A_ROTATED]);
       }));
+
+    it("launches in a stored account with no Boat key in its environment, and says the install's own account is not there", () =>
+      withAccounts(async (c) => {
+        const registration = c.boat.registration;
+        if (registration === undefined) throw new Error("Boat not registered");
+        expect(c.boat.launchReport).toEqual({
+          launches: true,
+          defaultAccount: false,
+          resourceGateway: false,
+        });
+        // No default account: nothing was built at start.
+        expect(c.builders).toEqual([]);
+        const acquire = (boatAccountId?: string) =>
+          Effect.gen(function* () {
+            const runId = randomUUID();
+            yield* c.db.insert(workspaceAttempts).values({ id: runId, ownerUserId: c.owner });
+            return yield* registration.artifacts.acquire({
+              spec: boatWorkspace(boatAccountId),
+              scope: { kind: "owner", ownerUserId: c.owner },
+              consumer: nativeArtifactConsumerSchema.parse({ runId, runtimeInstanceId: runId }),
+            });
+          });
+        const inA = await Effect.runPromise(acquire(c.accounts.a));
+        expect(inA.snapshot.owner).toBe(boatAccountBuilderOwner(c.accounts.a));
+        const inDefault = await Effect.runPromise(Effect.result(acquire()));
+        expect(Result.isFailure(inDefault) && inDefault.failure.message).toContain(
+          "boat-account-unavailable",
+        );
+        // The API reads what the worker wrote, and gives the worker's answer.
+        await c.boat.reportLaunch("worker-stored-only");
+        const reports = await c.repo(
+          Effect.flatMap(BoatAccountRepo, (repo) =>
+            repo.launchReports(BOAT_LAUNCH_REPORT_FRESH_MS),
+          ),
+        );
+        const support = boatLaunchSupportOf(reports);
+        expect(support).toMatchObject({ launches: true, defaultAccount: false });
+        expect(boatLaunchRefusal(support, { namesAccount: true, resources: "none" })).toBe(
+          undefined,
+        );
+        expect(boatLaunchRefusal(support, { namesAccount: false, resources: "none" })).toContain(
+          "must name a stored Boat account",
+        );
+        expect(boatLaunchRefusal(support, { namesAccount: true, resources: undefined })).toContain(
+          "no resource gateway",
+        );
+        // A worker that stopped reporting is not counted after five minutes.
+        await c.boat.reportLaunch(
+          "worker-stored-only",
+          new Date(Date.now() - BOAT_LAUNCH_REPORT_FRESH_MS - 1_000),
+        );
+        const stale = boatLaunchSupportOf(
+          await c.repo(
+            Effect.flatMap(BoatAccountRepo, (repo) =>
+              repo.launchReports(BOAT_LAUNCH_REPORT_FRESH_MS),
+            ),
+          ),
+        );
+        expect(stale).toMatchObject({ launches: false, observedAt: undefined });
+        expect(boatLaunchRefusal(stale, { namesAccount: true, resources: "none" })).toContain(
+          "No worker of this install has reported launching Boat workspaces",
+        );
+      }, {}));
+
+    it("keeps an install's own names when it set them, after the settings are dropped, and sees its labelled VMs as its own", () =>
+      withAccounts(async (c) => {
+        // The explicit settings were adopted by the install's row when the worker started.
+        const stored = await c.repo(
+          Effect.flatMap(BoatAccountRepo, (repo) =>
+            Effect.all([repo.installDeployment(undefined), repo.installBuilderOwner(undefined)]),
+          ),
+        );
+        expect(stored).toEqual([DEFAULT_DEPLOYMENT, EXPLICIT_ENV.SEALANT_BOAT_BUILDER_OWNER]);
+        // The same install, its operator having dropped both settings.
+        const after = await c.assemble({ SEALANT_BOAT_API_KEY: DEFAULT_KEY });
+        const [fallback] = await after.sweptStacks();
+        expect(fallback).toMatchObject({ accountId: null, deploymentId: DEFAULT_DEPLOYMENT });
+        // Its default catalog was built at start, under the owner it always had.
+        expect(c.builders.map((builder) => builder.owner)).toEqual([
+          EXPLICIT_ENV.SEALANT_BOAT_BUILDER_OWNER,
+          EXPLICIT_ENV.SEALANT_BOAT_BUILDER_OWNER,
+        ]);
+        // A create issued before, its VM carrying the old label, is resolved as this install's.
+        const issued = await c.seedRun({
+          deploymentId: DEFAULT_DEPLOYMENT,
+          boat: c.boats.fallback,
+          issuedOnly: true,
+        });
+        await fallback?.reconcileAllocations({ limit: 20 });
+        const resolved = await c.repo(
+          Effect.flatMap(BoatRunRepo, (runs) => runs.get(issued.runId)),
+        );
+        expect(resolved?.sandboxId).not.toBeNull();
+        expect(
+          c.boats.fallback.vms.get(resolved?.sandboxId ?? "")?.labels["sealant-deployment"],
+        ).toBe(DEFAULT_DEPLOYMENT);
+      }));
+
+    it("makes the install's own names once when none is set, and every process reads the same", () =>
+      withAccounts(
+        async (c) => {
+          const [fallback] = await c.boat.sweptStacks();
+          const deployment = fallback?.deploymentId ?? "";
+          expect(deployment).toMatch(/^sealant-install-[0-9a-f-]{36}$/);
+          const owner = c.builders[0]?.owner ?? "";
+          expect(owner).toMatch(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          );
+          // Another worker, or this one restarted, gets the same names.
+          const again = await c.assemble({ SEALANT_BOAT_API_KEY: DEFAULT_KEY });
+          const [second] = await again.sweptStacks();
+          expect(second?.deploymentId).toBe(deployment);
+          expect(c.builders[1]?.owner).toBe(owner);
+          // The API's control connections read the same row.
+          const names = await c.repo(
+            Effect.flatMap(BoatAccountRepo, (repo) => repo.installDeployment(undefined)),
+          );
+          expect(names).toBe(deployment);
+          // No stored account can carry it.
+          expect(deployment).not.toBe(c.deployments.a);
+        },
+        { SEALANT_BOAT_API_KEY: DEFAULT_KEY },
+      ));
   },
 );

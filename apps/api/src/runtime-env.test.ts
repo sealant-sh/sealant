@@ -46,7 +46,7 @@ describe("API Boat environment", () => {
     expect(env.SEALANT_BOAT_DEPLOYMENT_ID).toBeUndefined();
   });
 
-  it("takes the Boat key, or its file, with the deployment and the credential cipher", () => {
+  it("takes the Boat key, or its file, with the credential cipher and an optional deployment", () => {
     expect(
       parseAppEnv({
         SEALANT_BOAT_API_KEY: "test-key-for-local-only",
@@ -64,29 +64,45 @@ describe("API Boat environment", () => {
       "exactly one",
     );
     expect(() => parseAppEnv({ ...file, SEALANT_BOAT_API_KEY_FILE: "relative" })).toThrow();
-    for (const key of Object.keys(file))
-      expect(() =>
-        parseAppEnv(Object.fromEntries(Object.entries(file).filter(([name]) => name !== key))),
-      ).toThrow("Boat requires its key");
-  });
-
-  it("is on with the Boat deployment, and then refuses to start without the key, naming it", () => {
-    // No Boat settings: Boat is off and the API starts (it refuses Boat requests at create).
-    expect(parseAppEnv({ SEALANT_CREDENTIALS_KEY: cipher }).SEALANT_BOAT_DEPLOYMENT_ID).toBe(
-      undefined,
-    );
-    // Boat on, with its key: the API opens Boat runs' control itself.
+    // The deployment is optional (the install keeps a name of its own); the cipher is not.
     expect(
       parseAppEnv({
-        SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
-        SEALANT_BOAT_DEPLOYMENT_ID: "test",
+        SEALANT_BOAT_API_KEY_FILE: file.SEALANT_BOAT_API_KEY_FILE,
         SEALANT_CREDENTIALS_KEY: cipher,
       }).SEALANT_BOAT_DEPLOYMENT_ID,
-    ).toBe("test");
-    // Boat on, the key forgotten: startup fails and says which settings to give it.
+    ).toBeUndefined();
     expect(() =>
-      parseAppEnv({ SEALANT_BOAT_DEPLOYMENT_ID: "test", SEALANT_CREDENTIALS_KEY: cipher }),
-    ).toThrow(/SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE/);
+      parseAppEnv({ SEALANT_BOAT_API_KEY_FILE: file.SEALANT_BOAT_API_KEY_FILE }),
+    ).toThrow("SEALANT_CREDENTIALS_KEY");
+  });
+
+  it("starts with no Boat key, for an install that runs Boat from stored keys alone", () => {
+    expect(parseAppEnv({ SEALANT_CREDENTIALS_KEY: cipher }).SEALANT_BOAT_API_KEY).toBeUndefined();
+    // A deployment name alone is harmless: it names what the install's own key would make.
+    expect(
+      parseAppEnv({ SEALANT_BOAT_DEPLOYMENT_ID: "test", SEALANT_CREDENTIALS_KEY: cipher })
+        .SEALANT_BOAT_DEPLOYMENT_ID,
+    ).toBe("test");
+  });
+
+  it("names the organization the install's own key bills, only beside that key", () => {
+    expect(
+      parseAppEnv({
+        SEALANT_BOAT_API_KEY: "test-key-for-local-only",
+        SEALANT_BOAT_ORGANIZATION: "team_acme",
+        SEALANT_CREDENTIALS_KEY: cipher,
+      }).SEALANT_BOAT_ORGANIZATION,
+    ).toBe("team_acme");
+    expect(() =>
+      parseAppEnv({ SEALANT_BOAT_ORGANIZATION: "team_acme", SEALANT_CREDENTIALS_KEY: cipher }),
+    ).toThrow("names the Boat organization the install's own key bills");
+    expect(() =>
+      parseAppEnv({
+        SEALANT_BOAT_API_KEY: "test-key-for-local-only",
+        SEALANT_BOAT_ORGANIZATION: " team",
+        SEALANT_CREDENTIALS_KEY: cipher,
+      }),
+    ).toThrow();
   });
 
   it("starts with the retired Boat owner list still set, and ignores it", () => {

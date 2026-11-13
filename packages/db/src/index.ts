@@ -550,6 +550,7 @@ export {
   type BoatAccountRemovalRequest,
   type BoatAccountRepoService,
   type BoatAccountSealedKey,
+  type BoatLaunchReportRecord,
   type BoatKeyReportRecord,
 } from "./repositories/boat-accounts.js";
 export {

@@ -38,6 +38,12 @@ export interface RuntimeInstall {
   readonly containerArchitecture: RuntimeArchitecture;
   /** Resources run on this install's Docker host, so a workspace may be linked to them. */
   readonly resourceHost: "docker" | "kubernetes" | "none";
+  /**
+   * Whether a worker that launches Boat workspaces has the resource gateway, the only way a Boat
+   * workspace reaches resources (`boat_launch_reports`). Absent: not known here, and Boat follows
+   * `resourceHost` alone.
+   */
+  readonly boatGateway?: boolean | undefined;
 }
 
 const SUPPORTED = { supported: true } as const;
@@ -81,6 +87,10 @@ const resourcesFor = (
   runtime: RuntimeAdapterId,
   install: RuntimeInstall,
 ): RuntimeSupport["resources"] => {
+  if (runtime === "boat" && install.boatGateway === false)
+    return no(
+      "This install's Boat workspaces cannot reach project resources: its worker has no resource gateway. Create the workspace with runtime.resources: \"none\", or ask the install's operator to configure the gateway (SEALANT_BOAT_GATEWAY_HOST_ID).",
+    );
   if (install.resourceHost === "docker" && (runtime === "docker" || runtime === "boat"))
     return { supported: true, attach: "live" };
   if (install.resourceHost === "kubernetes")

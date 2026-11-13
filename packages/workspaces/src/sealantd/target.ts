@@ -229,7 +229,7 @@ export const describeUnaddressableRuntimeInstance = (
   }
   if (instance.adapter === "boat")
     return options.boatConnectMaterial === undefined
-      ? "the Boat instance needs Boat control access (SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE, SEALANT_BOAT_DEPLOYMENT_ID and SEALANT_CREDENTIALS_KEY) which is not configured"
+      ? "the Boat instance needs Boat control access (SEALANT_CREDENTIALS_KEY) which is not configured"
       : "the Boat instance has no wss:// endpoint or Boat VM id recorded";
   if (instance.adapter === "cloudflare") {
     return options.controlBearerToken === undefined

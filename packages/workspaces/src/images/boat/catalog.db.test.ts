@@ -33,6 +33,7 @@ import { z } from "zod";
 
 import { BOAT_REFUSALS } from "../../../boat-harness/refusals.js";
 import { boatFailureInMessage } from "../../runtime/boat/failure.js";
+import { reopenBoatQuarantine } from "../../runtime/boat/key-refresh.js";
 import { nativeBuilderFixture } from "./builder.fixture.js";
 import {
   BoatNativeCatalog,
@@ -212,6 +213,124 @@ describe.skipIf(!enabled)("a Boat refusal of a build's VM (SLNT-782 review)", ()
         );
       }),
     ),
+  );
+});
+
+describe.skipIf(!enabled)("a quarantine a person fixed is built again (SLNT-783)", () => {
+  it.live(
+    "billing required at the first build; once the wallet is funded and the account re-checked, the next launch builds",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const owner = yield* seed(db);
+          // Boat refuses the build's create and its cleanup's replay: no wallet yet.
+          const f = yield* Effect.promise(() =>
+            nativeBuilderFixture("normal", {
+              refuseCreate: { refusal: BOAT_REFUSALS["billing-required"], times: 2 },
+            }),
+          );
+          const [first, second, third] = [
+            yield* consumer(db, owner),
+            yield* consumer(db, owner),
+            yield* consumer(db, owner),
+          ];
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+              yield* Effect.flip(catalog.acquire({ ...input, consumer: first }));
+              const pin = (yield* nativeConsumerRows(db, first.runId))[0];
+              if (pin === undefined) throw new Error("missing pin");
+              expect(yield* repo.get(pin.publicationId)).toMatchObject({
+                state: "quarantined",
+                reason: "native-cleanup-pending-boat-billing-required",
+              });
+              // Unpaid, a launch reads the kind back and asks Boat for nothing.
+              const blocked = yield* Effect.flip(catalog.acquire({ ...input, consumer: second }));
+              expect(blocked).toMatchObject({ code: "publication-quarantined" });
+              expect(boatFailureInMessage(blocked.message)).toMatchObject({
+                kind: "billing-required",
+              });
+              expect(f.refusedCreates()).toBe(2);
+              // A check that clears another cause (a free snapshot slot) does not reopen it.
+              yield* Effect.promise(() =>
+                reopenBoatQuarantine(db, "local-stage2a", new Date(), [
+                  "native-boat-snapshot-allowance-full",
+                ]),
+              );
+              expect((yield* repo.get(pin.publicationId))?.reopenedAt).toBeNull();
+              // The wallet is funded, and a check of the account says it can start: reopened.
+              expect(
+                yield* Effect.promise(() =>
+                  reopenBoatQuarantine(db, "local-stage2a", new Date(), [
+                    "native-boat-billing-required",
+                  ]),
+                ),
+              ).toBeGreaterThanOrEqual(1);
+              expect((yield* repo.get(pin.publicationId))?.reopenedAt).toBeInstanceOf(Date);
+              // A second check reopens nothing more: one rebuild per event, never a loop.
+              expect(
+                yield* Effect.promise(() =>
+                  reopenBoatQuarantine(db, "local-stage2a", new Date(), [
+                    "native-boat-billing-required",
+                  ]),
+                ),
+              ).toBe(0);
+              // The sweep finishes the cleanup Boat refused; the reason is the plain kind now.
+              yield* catalog.reconcile({ limit: 100 }).pipe(Effect.result);
+              expect(yield* repo.get(pin.publicationId)).toMatchObject({
+                state: "quarantined",
+                reason: "native-boat-billing-required",
+              });
+              // The next launch builds, and its image is ready to start from.
+              const rebuilt = yield* catalog.acquire({ ...input, consumer: third });
+              expect(yield* repo.get(rebuilt.publicationId)).toMatchObject({
+                state: "ready",
+                buildAttempt: 2,
+                replacesPublicationId: pin.publicationId,
+              });
+              expect(yield* repo.get(pin.publicationId)).toMatchObject({ state: "superseded" });
+            }),
+          );
+        }),
+      ),
+  );
+
+  it.live(
+    "a reopened build whose cleanup Boat still refuses is not rebuilt, and asks Boat for no create",
+    () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const owner = yield* seed(db);
+          const f = yield* Effect.promise(() =>
+            nativeBuilderFixture("normal", {
+              refuseCreate: { refusal: BOAT_REFUSALS["key-expired"] },
+            }),
+          );
+          const consumers = [
+            yield* consumer(db, owner),
+            yield* consumer(db, owner),
+            yield* consumer(db, owner),
+          ];
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+              yield* Effect.flip(catalog.acquire({ ...input, consumer: consumers[0]! }));
+              const pin = (yield* nativeConsumerRows(db, consumers[0]!.runId))[0];
+              if (pin === undefined) throw new Error("missing pin");
+              // Its cleanup is still pending: reopened, but not replaced until the cleanup is done.
+              yield* Effect.promise(() => reopenBoatQuarantine(db, "local-stage2a"));
+              expect((yield* repo.get(pin.publicationId))?.reopenedAt).toBeInstanceOf(Date);
+              const refused = f.refusedCreates();
+              const blocked = yield* Effect.flip(
+                catalog.acquire({ ...input, consumer: consumers[1]! }),
+              );
+              expect(blocked).toMatchObject({ code: "publication-quarantined" });
+              expect(f.refusedCreates()).toBe(refused);
+              expect(yield* repo.get(pin.publicationId)).toMatchObject({ state: "quarantined" });
+            }),
+          );
+        }),
+      ),
   );
 });
 

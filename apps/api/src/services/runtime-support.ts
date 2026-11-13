@@ -13,7 +13,7 @@ import { AGENT_DEFAULT_PORT, processImagePlatform } from "@sealant/workspaces";
 import { Effect } from "effect";
 
 import { env } from "../runtime-env.js";
-import { boatLaunchable } from "./boat-availability.js";
+import { boatLaunchable, boatResourceGateway } from "./boat-availability.js";
 
 /**
  * What this install knows that changes the runtime table, read from the API's environment. The
@@ -44,8 +44,9 @@ export const runtimeInstall = Effect.try({
 
 /**
  * The runtimes this install launches workspaces on, as far as the API can tell: the default
- * runtime (what `auto` resolves to), then Boat where it is configured. Boat is listed only where
- * the create would not refuse it as unregistered, the default included. A runtime the worker
+ * runtime (what `auto` resolves to), then Boat where a worker reports launching it and an account
+ * can run it (`boatLaunchable`). Boat is listed only where the create would not refuse it, the
+ * default included. A runtime the worker
  * registers beside the default, which the API cannot see, is not listed.
  */
 export const launchableRuntimes = Effect.gen(function* () {
@@ -56,8 +57,11 @@ export const launchableRuntimes = Effect.gen(function* () {
 
 /** `GET /v1/workspaces/runtimes`: the runtime table for every runtime this install launches. */
 export const listWorkspaceRuntimes = Effect.gen(function* () {
-  const install = yield* runtimeInstall;
   const runtimes = yield* launchableRuntimes;
+  // Boat reaches resources only through a launching worker's gateway, as its reports say.
+  const install: RuntimeInstall = runtimes.includes(BOAT_RUNTIME_ID)
+    ? { ...(yield* runtimeInstall), boatGateway: yield* boatResourceGateway }
+    : yield* runtimeInstall;
   return {
     default: env.DEFAULT_RUNTIME_ADAPTER,
     runtimes: runtimes.map((runtime) => runtimeSupport(runtime, install)),

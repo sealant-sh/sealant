@@ -279,9 +279,25 @@ export {
 export {
   boatKeyRefusedReport,
   checkBoatKey,
+  observeBoatKey,
   type BoatKeyCheck,
   type BoatKeyCheckClient,
+  type BoatKeyObservation,
 } from "./boat/key-check.js";
+export {
+  BOAT_KEY_REFRESH_MS,
+  boatReopenableReasons,
+  refreshBoatKeyReports,
+  reopenBoatQuarantine,
+  type BoatKeyRefreshOptions,
+  type BoatKeyRefreshOutcome,
+} from "./boat/key-refresh.js";
+export {
+  BOAT_LAUNCH_REPORT_FRESH_MS,
+  boatLaunchRefusal,
+  boatLaunchSupportOf,
+  type BoatLaunchSupport,
+} from "./boat/launch-support.js";
 export {
   BoatApiError,
   BoatSecret,

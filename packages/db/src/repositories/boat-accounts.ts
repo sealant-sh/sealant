@@ -1,10 +1,17 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import { and, asc, count, eq, exists, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { NATIVE_REOPEN_BOAT_FAILURES } from "@sealant/validators";
+import { and, asc, count, eq, exists, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
-import { boatAccounts, boatKeyReports, type BoatAccountRow } from "../schema/boat-accounts.js";
+import {
+  boatAccounts,
+  boatInstall,
+  boatKeyReports,
+  boatLaunchReports,
+  type BoatAccountRow,
+} from "../schema/boat-accounts.js";
 import { boatRuns } from "../schema/boat-runs.js";
 import { nativePublications } from "../schema/native-publications.js";
 
@@ -54,6 +61,19 @@ export interface BoatKeyReportRecord {
   readonly observedAt: Date;
 }
 
+/** What one worker said it does for Boat, and when. */
+export interface BoatLaunchReportRecord {
+  /** The worker's id (`WORKER_ID`). */
+  readonly worker: string;
+  /** It launches Boat workspaces: its Boat adapter is registered. */
+  readonly launches: boolean;
+  /** It has the install's own Boat key, so a workspace that names no stored account can run. */
+  readonly defaultAccount: boolean;
+  /** It has the resource gateway, so a Boat workspace can reach its project's resources. */
+  readonly resourceGateway: boolean;
+  readonly observedAt: Date;
+}
+
 /** What a removal request found: done, or refused for what the account still has in Boat. */
 export type BoatAccountRemovalRequest =
   | { readonly kind: "requested"; readonly account: BoatAccountRecord }
@@ -96,6 +116,40 @@ export interface BoatAccountRepoService {
   }) => Failing<BoatAccountRecord>;
   /** Replaces the key's last check report (`account`: an account id, or `default`). */
   readonly saveReport: (input: BoatKeyReportRecord) => Failing<void>;
+  /**
+   * The `sealant-deployment` label of the install's own account. Set once, the first time it is
+   * asked for: to `preferred` (the operator's setting) when given, otherwise to a name Core makes.
+   * Never changed afterwards; a caller with a setting uses its setting.
+   */
+  readonly installDeployment: (preferred: string | undefined) => Failing<string>;
+  /** The same, for the `sealant-owner` of the saved images built in the install's own account. */
+  readonly installBuilderOwner: (preferred: string | undefined) => Failing<string>;
+  /** Replaces a worker's launch report, and forgets reports no worker renewed for a day. */
+  /**
+   * Replaces a worker's launch report, stamped with the database's own clock (or `observedAt`, for a
+   * test), and forgets reports no worker renewed for a day.
+   */
+  readonly reportLaunch: (
+    input: Omit<BoatLaunchReportRecord, "observedAt"> & { readonly observedAt?: Date },
+  ) => Failing<void>;
+  /** Every worker's launch report observed at or after `since`, newest first. */
+  /**
+   * Every worker's launch report observed within the last `withinMs`, by the database's own clock,
+   * newest first: hosts with skewed clocks neither drop a live worker nor keep a dead one.
+   */
+  readonly launchReports: (withinMs: number) => Failing<readonly BoatLaunchReportRecord[]>;
+  /**
+   * The cause of a deployment's quarantined builds may have cleared (its account's key was rotated,
+   * or a check of it can start): each one quarantined for a Boat reason a person fixes
+   * (`NATIVE_REOPEN_BOAT_FAILURES`), not reopened yet, is reopened, so the next launch builds it once
+   * more. Answers how many.
+   */
+  readonly reopenQuarantined: (input: {
+    readonly deploymentId: string;
+    readonly at: Date;
+    /** Only these reasons (what a check shows cleared); absent: every one (a key rotation). */
+    readonly reasons?: readonly (typeof NATIVE_REOPEN_BOAT_FAILURES)[number][];
+  }) => Failing<number>;
   /** Every stored check report, by account (`default` for the env key). */
   readonly reports: () => Failing<ReadonlyMap<string, BoatKeyReportRecord>>;
   /** The account whatever its state, removed included; never its key. */
@@ -432,8 +486,107 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     const rows = yield* db.select().from(boatKeyReports);
     return new Map(rows.map((row) => [row.account, row]));
   });
+  const installDeployment = Effect.fn("BoatAccountRepo.installDeployment")(function* (
+    preferred: string | undefined,
+  ) {
+    const [row] = yield* db
+      .insert(boatInstall)
+      .values({ id: "install", deploymentId: preferred ?? `sealant-install-${randomUUID()}` })
+      .onConflictDoUpdate({
+        target: boatInstall.id,
+        set: { deploymentId: sql`coalesce(${boatInstall.deploymentId}, excluded.deployment_id)` },
+      })
+      .returning({ value: boatInstall.deploymentId });
+    if (row?.value == null) return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+    return row.value;
+  });
+  const installBuilderOwner = Effect.fn("BoatAccountRepo.installBuilderOwner")(function* (
+    preferred: string | undefined,
+  ) {
+    const [row] = yield* db
+      .insert(boatInstall)
+      .values({ id: "install", builderOwner: preferred ?? randomUUID() })
+      .onConflictDoUpdate({
+        target: boatInstall.id,
+        set: { builderOwner: sql`coalesce(${boatInstall.builderOwner}, excluded.builder_owner)` },
+      })
+      .returning({ value: boatInstall.builderOwner });
+    if (row?.value == null) return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
+    return row.value;
+  });
+  const reportLaunch = Effect.fn("BoatAccountRepo.reportLaunch")(function* (
+    input: Omit<BoatLaunchReportRecord, "observedAt"> & { readonly observedAt?: Date },
+  ) {
+    const values = {
+      launches: input.launches,
+      defaultAccount: input.defaultAccount,
+      resourceGateway: input.resourceGateway,
+      observedAt: input.observedAt ?? sql`now()`,
+    };
+    yield* db
+      .insert(boatLaunchReports)
+      .values({ worker: input.worker, ...values })
+      .onConflictDoUpdate({ target: boatLaunchReports.worker, set: values });
+    yield* db
+      .delete(boatLaunchReports)
+      .where(lt(boatLaunchReports.observedAt, sql`now() - interval '1 day'`));
+  });
+  const launchReports = Effect.fn("BoatAccountRepo.launchReports")(function* (withinMs: number) {
+    const rows = yield* db
+      .select()
+      .from(boatLaunchReports)
+      .where(
+        gte(
+          boatLaunchReports.observedAt,
+          sql`now() - (${Math.max(0, Math.round(withinMs))} * interval '1 millisecond')`,
+        ),
+      )
+      .orderBy(sql`${boatLaunchReports.observedAt} desc`);
+    return rows.map(
+      (row): BoatLaunchReportRecord => ({
+        worker: row.worker,
+        launches: row.launches,
+        defaultAccount: row.defaultAccount,
+        resourceGateway: row.resourceGateway,
+        observedAt: row.observedAt,
+      }),
+    );
+  });
+  const reopenQuarantined = Effect.fn("BoatAccountRepo.reopenQuarantined")(function* (input: {
+    readonly deploymentId: string;
+    readonly at: Date;
+    readonly reasons?: readonly (typeof NATIVE_REOPEN_BOAT_FAILURES)[number][];
+  }) {
+    const reasons = input.reasons ?? NATIVE_REOPEN_BOAT_FAILURES;
+    if (reasons.length === 0) return 0;
+    const rows = yield* db
+      .update(nativePublications)
+      .set({ reopenedAt: input.at })
+      .where(
+        and(
+          eq(nativePublications.deploymentId, input.deploymentId),
+          eq(nativePublications.state, "quarantined"),
+          isNull(nativePublications.publication),
+          isNull(nativePublications.claimToken),
+          isNull(nativePublications.reopenedAt),
+          // A build whose cleanup is still pending for the same cause is marked too: once its
+          // sweep finishes the cleanup, the reason is the plain kind and the next launch builds.
+          inArray(nativePublications.reason, [
+            ...reasons,
+            ...reasons.map((reason) => `native-cleanup-pending-${reason.slice("native-".length)}`),
+          ]),
+        ),
+      )
+      .returning({ id: nativePublications.id });
+    return rows.length;
+  });
   return BoatAccountRepo.of({
     create: (input) => boundary(create(input)),
+    reopenQuarantined: (input) => boundary(reopenQuarantined(input)),
+    installDeployment: (preferred) => boundary(installDeployment(preferred)),
+    installBuilderOwner: (preferred) => boundary(installBuilderOwner(preferred)),
+    reportLaunch: (input) => boundary(reportLaunch(input)),
+    launchReports: (withinMs) => boundary(launchReports(withinMs)),
     saveReport: (input) => boundary(saveReport(input)),
     reports: () => boundary(reports()),
     get: (id) => boundary(get(id)),

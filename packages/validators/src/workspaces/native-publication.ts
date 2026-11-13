@@ -155,6 +155,29 @@ export const NATIVE_REBUILD_BOAT_FAILURES = [
   "native-boat-refused",
 ] as const satisfies readonly `native-boat-${BoatFailureKind}`[];
 
+/**
+ * The Boat failure kinds a person fixes in Boat (a new key, a permission, paying, a plan, a freed
+ * snapshot slot). A build quarantined for one stays so, reading its kind back to every launch,
+ * until the cause may have cleared: the account's key is rotated, or a check of it (on demand or
+ * the daily refresh) reports the wallet can start. Then it is reopened, and the next launch tries
+ * it once more; a fresh refusal quarantines the new build with the fresh reason, until the next
+ * such event.
+ */
+export const NATIVE_REOPEN_BOAT_FAILURES = [
+  "native-boat-key-refused",
+  "native-boat-key-expired",
+  "native-boat-permission-missing",
+  "native-boat-sandbox-outside-key",
+  "native-boat-organization-mismatch",
+  "native-boat-account-suspended",
+  "native-boat-billing-required",
+  "native-boat-member-cap",
+  "native-boat-trial-restricted",
+  "native-boat-snapshot-allowance-full",
+] as const satisfies readonly `native-boat-${BoatFailureKind}`[];
+export const nativeReopenReasonSchema = z.enum(NATIVE_REOPEN_BOAT_FAILURES);
+export type NativeReopenReason = (typeof NATIVE_REOPEN_BOAT_FAILURES)[number];
+
 /** Only completed construction failures may spend one fresh reservation. Integrity and cleanup stay closed. */
 export const nativeBuildRetryReasonSchema = z.enum([
   "native-provider-transport_error",
@@ -174,18 +197,21 @@ const reservation = z.object({
   createdAt: z.date(),
   readyAt: z.date().nullable(),
   reason: z.string().nullable(),
+  /** When a quarantine a person may have fixed was reopened (`NATIVE_REOPEN_BOAT_FAILURES`). */
+  reopenedAt: z.date().nullable().default(null),
 });
 /** Parsed lifecycle states keep incomplete publications out of ready/removal paths. */
 export const nativeCatalogRecordSchema = z
   .discriminatedUnion("state", [
     reservation.extend({ state: z.literal("reserved"), publication: z.null() }),
     reservation.extend({ state: z.literal("building"), publication: z.null() }),
+    // Replaced by the next launch's build: a first build that failed for a retryable reason, or a
+    // quarantine a person may have fixed, reopened (either attempt).
     reservation.extend({
       state: z.literal("superseded"),
       publication: z.null(),
       claim: z.null(),
-      reason: nativeBuildRetryReasonSchema,
-      buildAttempt: z.literal(1),
+      reason: z.union([nativeBuildRetryReasonSchema, nativeReopenReasonSchema]),
     }),
     reservation.extend({ state: z.literal("ready"), publication: nativePublicationSchema }),
     reservation.extend({ state: z.literal("retiring"), publication: nativePublicationSchema }),
@@ -197,7 +223,15 @@ export const nativeCatalogRecordSchema = z
   ])
   .refine((record) => (record.buildAttempt === 1) === (record.replacesPublicationId === null), {
     message: "Replacement builds require their exact predecessor",
-  });
+  })
+  .refine(
+    (record) =>
+      record.state !== "superseded" ||
+      (nativeReopenReasonSchema.safeParse(record.reason).success
+        ? record.reopenedAt !== null
+        : record.buildAttempt === 1),
+    { message: "Only a first build, or a reopened quarantine, is superseded" },
+  );
 /** Exact durable consumer binding, unchanged by retries. */
 export type NativeArtifactConsumer = z.infer<typeof nativeArtifactConsumerSchema>;
 /** Parsed reservation; editable ORM rows never leave the repository. */

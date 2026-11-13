@@ -86,6 +86,20 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
     configured = true,
   ) => run(Effect.flip(effect), configured);
 
+  /** A worker of this install launches Boat, in the install's own account and with the gateway. */
+  const workerLaunches = () =>
+    run(
+      Effect.flatMap(BoatAccountRepo, (repo) =>
+        repo.reportLaunch({
+          worker: "worker-boat-accounts-test",
+          launches: true,
+          defaultAccount: true,
+          resourceGateway: true,
+          observedAt: new Date(),
+        }),
+      ),
+    );
+
   /** A live run of the account, with its VM in `boat`. */
   const liveRun = async (accountId: string, boat: RecordedBoat) => {
     const account = await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.get(accountId)));
@@ -246,6 +260,7 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
       await refusal(routes.rotateBoatAccountKey(created.boatAccountId, { apiKey: KEY_A_NEXT })),
     ).toMatchObject({ code: "boat-account-removing" });
     const spec = { runtime: { boatAccountId: created.boatAccountId } };
+    await workerLaunches();
     expect(await refusal(availability.requireBoatAccount(spec, "boat"))).toMatchObject({
       _tag: "WorkspaceConflictError",
     });
@@ -253,6 +268,7 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
 
   it("refuses a workspace that names an unknown account, or one not on Boat", async () => {
     const created = await run(routes.createBoatAccount({ label: "Named", apiKey: KEY_A }));
+    await workerLaunches();
     expect(
       await refusal(
         availability.requireBoatAccount({ runtime: { boatAccountId: randomUUID() } }, "boat"),

@@ -6,6 +6,7 @@ import {
   nativeArtifactConsumerSchema,
   nativeCatalogRecordSchema,
   nativeBuildRetryReasonSchema,
+  nativeReopenReasonSchema,
   nativePublicationKeySchema,
   nativePublicationSchema,
   nativeConsumerStateSchema,
@@ -165,6 +166,7 @@ const parseRow = (
         createdAt: row.createdAt,
         readyAt: row.readyAt,
         reason: row.reason,
+        reopenedAt: row.reopenedAt,
         buildAttempt: row.buildAttempt,
         replacesPublicationId: row.replacesPublicationId,
       });
@@ -352,12 +354,16 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           let record = row === undefined ? undefined : yield* parseRow(row);
           if (record !== undefined && !isDeepStrictEqual(record.ownership.key, key))
             return yield* Effect.fail(new NativeCatalogStoreError("reserve", "malformed-state"));
+          // A first build that failed for a retryable reason is tried once more; a quarantine a
+          // person may have fixed is tried once more each time it is reopened.
           const replace =
             record?.state === "quarantined" &&
             record.publication === null &&
             record.claim === null &&
-            record.buildAttempt === 1 &&
-            nativeBuildRetryReasonSchema.safeParse(record.reason).success;
+            ((record.buildAttempt === 1 &&
+              nativeBuildRetryReasonSchema.safeParse(record.reason).success) ||
+              (record.reopenedAt !== null &&
+                nativeReopenReasonSchema.safeParse(record.reason).success));
           if (row === undefined || replace) {
             const predecessor = replace ? row : undefined;
             if (predecessor !== undefined) {

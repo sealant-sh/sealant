@@ -1,5 +1,14 @@
 import { sql } from "drizzle-orm";
-import { check, integer, jsonb, snakeCase, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  integer,
+  jsonb,
+  snakeCase,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 const instant = () => timestamp({ mode: "date", withTimezone: true });
 
@@ -73,3 +82,36 @@ export const boatKeyReports = snakeCase.table(
     ),
   ],
 );
+
+/**
+ * The names Core gives everything it makes in the install's own Boat account (the env key's): the
+ * `sealant-deployment` label and the `sealant-owner` of its saved images. One row (`id` is
+ * `install`). Each name is set the first time a process needs it and never changes: to the value
+ * the operator set (`SEALANT_BOAT_DEPLOYMENT_ID`, `SEALANT_BOAT_BUILDER_OWNER`) when there is one,
+ * so an install that set them keeps them even after the settings are dropped, otherwise to one Core
+ * makes. The API and the worker read the same row, so they always agree.
+ */
+export const boatInstall = snakeCase.table(
+  "boat_install",
+  {
+    id: text().primaryKey(),
+    deploymentId: text(),
+    builderOwner: uuid(),
+    createdAt: instant().notNull().defaultNow(),
+  },
+  (table) => [check("boat_install_one", sql`${table.id} = 'install'`)],
+);
+
+/**
+ * What each worker says it does for Boat, written when it starts and again every minute: whether
+ * it launches Boat workspaces, whether it has the install's own key (so a workspace that names no
+ * stored account can run), and whether it has the resource gateway. The API answers "can this
+ * install launch Boat" from the reports observed recently, so the two never disagree.
+ */
+export const boatLaunchReports = snakeCase.table("boat_launch_reports", {
+  worker: text().primaryKey(),
+  launches: boolean().notNull(),
+  defaultAccount: boolean().notNull(),
+  resourceGateway: boolean().notNull(),
+  observedAt: instant().notNull(),
+});

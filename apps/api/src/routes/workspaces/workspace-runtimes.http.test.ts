@@ -4,6 +4,7 @@
  * the wire schema's.
  */
 import { workspaceRuntimesResponseSchema } from "@sealant/api-contracts";
+import { BoatAccountRepo } from "@sealant/db";
 import { runtimeAdapterIds, runtimeSupport } from "@sealant/validators";
 import { Effect, Layer, Schema } from "effect";
 import { afterAll, describe, expect, it } from "vitest";
@@ -34,7 +35,23 @@ describe("GET /v1/workspaces/runtimes", () => {
     };
     expect(Schema.decodeUnknownSync(workspaceRuntimesResponseSchema)(every)).toEqual(every);
     const answered = await Effect.runPromise(
-      listWorkspaceRuntimes.pipe(Effect.provideService(BoatConfigured, true)),
+      listWorkspaceRuntimes.pipe(
+        Effect.provide(
+          Layer.mock(BoatAccountRepo, {
+            launchReports: () =>
+              Effect.succeed([
+                {
+                  worker: "worker-test",
+                  launches: true,
+                  defaultAccount: true,
+                  resourceGateway: true,
+                  observedAt: new Date(),
+                },
+              ]),
+          }),
+        ),
+        Effect.provideService(BoatConfigured, true),
+      ),
     );
     expect(Schema.encodeSync(workspaceRuntimesResponseSchema)(answered)).toEqual(answered);
   });
