@@ -850,6 +850,93 @@ export const inspectWorkspaceImageResponseSchema = Schema.Struct({
 });
 export type InspectWorkspaceImageResponse = typeof inspectWorkspaceImageResponseSchema.Type;
 
+/** What a runtime does not do, with the sentence a person choosing an environment reads. */
+export const runtimeUnsupportedSchema = Schema.Struct({
+  supported: Schema.Literal(false),
+  message: NonEmptyString,
+});
+export type RuntimeUnsupported = typeof runtimeUnsupportedSchema.Type;
+
+/** Whether a runtime does one thing. A create that asks for an unsupported one is refused. */
+export const runtimeCapabilitySchema = Schema.Union([
+  Schema.Struct({ supported: Schema.Literal(true) }),
+  runtimeUnsupportedSchema,
+]);
+export type RuntimeCapability = typeof runtimeCapabilitySchema.Type;
+
+/** The CPU architectures a runtime's workspaces run on. */
+export const runtimeArchitectures = ["x86_64", "aarch64"] as const;
+export const runtimeArchitectureSchema = Schema.Literals(runtimeArchitectures);
+export type RuntimeArchitecture = typeof runtimeArchitectureSchema.Type;
+
+/** The managed OS families a workspace image is built from. */
+export const runtimeOsFamilies = ["ubuntu", "nix", "arch", "fedora"] as const;
+export type RuntimeOsFamily = (typeof runtimeOsFamilies)[number];
+
+/**
+ * What one runtime supports, from the same rules a create is refused by: a create that asks a
+ * runtime for an item it marks unsupported is refused with that item's `message`.
+ */
+export const runtimeSupportSchema = Schema.Struct({
+  runtime: Schema.Literals(runtimeAdapterIds),
+  /** The managed OS families that run on this runtime (`target.os.family`). */
+  os: Schema.Struct({
+    ubuntu: runtimeCapabilitySchema,
+    nix: runtimeCapabilitySchema,
+    arch: runtimeCapabilitySchema,
+    fedora: runtimeCapabilitySchema,
+  }),
+  /** A workspace built from a base image of its own (`target.os.family: "custom"`). */
+  customImage: runtimeCapabilitySchema,
+  /** Directories of the deployment's own servers bound into the workspace (mount sources). */
+  hostDirectories: runtimeCapabilitySchema,
+  /** Docker inside the workspace (`tooling.services.docker`). */
+  docker: runtimeCapabilitySchema,
+  /** The workspace run under gVisor (`runtime.ociRuntime: "runsc"`). */
+  gvisor: runtimeCapabilitySchema,
+  /** Kubernetes Secrets, ConfigMaps and a service account (`runtime.envFrom`, `kubernetes`). */
+  clusterEnv: runtimeCapabilitySchema,
+  /** A workspace started by cloning a repository (a `git` source), not from a capture. */
+  gitSource: runtimeCapabilitySchema,
+  /** Dotfiles sent with the create as archives (`runtime.dotfilesArchives`). */
+  dotfilesArchives: runtimeCapabilitySchema,
+  /** A screen (an X display) inside the workspace, and the CPU architectures it runs on. */
+  screen: Schema.Union([
+    Schema.Struct({
+      supported: Schema.Literal(true),
+      architectures: Schema.Array(runtimeArchitectureSchema),
+    }),
+    runtimeUnsupportedSchema,
+  ]),
+  /** Ports inside the workspace the runtime holds for itself: nothing else can listen on them. */
+  reservedPorts: Schema.Array(Schema.Number),
+  /**
+   * A project's resources linked to the workspace: `live` reaches a running workspace when it is
+   * linked, `next-start` only once the workspace starts again.
+   */
+  resources: Schema.Union([
+    Schema.Struct({
+      supported: Schema.Literal(true),
+      attach: Schema.Literals(["live", "next-start"]),
+    }),
+    runtimeUnsupportedSchema,
+  ]),
+  /** Whether a workspace that sits idle costs money, and the sentence that says so. */
+  idleCost: Schema.Struct({ charged: Schema.Boolean, message: NonEmptyString }),
+});
+export type RuntimeSupport = typeof runtimeSupportSchema.Type;
+
+/**
+ * The runtimes this install launches workspaces on, and what each supports. `default` is the one
+ * a create that names no runtime (`target.runtime.family: "auto"`) runs on; it is listed first.
+ * A runtime that is not listed is one this install cannot launch.
+ */
+export const workspaceRuntimesResponseSchema = Schema.Struct({
+  default: Schema.Literals(runtimeAdapterIds),
+  runtimes: Schema.Array(runtimeSupportSchema),
+});
+export type WorkspaceRuntimesResponse = typeof workspaceRuntimesResponseSchema.Type;
+
 /**
  * Stable codes of a refused connected account, carried with the account's `provider` by the error
  * that refuses it (a create's or a credentials put's): `connected-account-missing`
@@ -1827,9 +1914,19 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceConflictError,
         WorkspaceBadGatewayError,
         WorkspaceServiceUnavailableError,
+        // The recorded spec asks for what its runtime does not support (now), as a create would.
         WorkspaceRuntimeRequirementUnsupportedError,
+        WorkspaceRuntimeEnvReferencesUnsupportedError,
+        WorkspaceDockerServiceUnsupportedError,
         WorkspaceInternalServerError,
       ],
+    }),
+  )
+  .add(
+    // A read, before any create: the runtimes this install launches and what each supports.
+    HttpApiEndpoint.get("listWorkspaceRuntimes", "/runtimes", {
+      success: workspaceRuntimesResponseSchema,
+      error: [WorkspaceInternalServerError],
     }),
   )
   .add(

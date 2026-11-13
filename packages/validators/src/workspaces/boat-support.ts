@@ -1,9 +1,10 @@
+import { runtimeRefusal, runtimeSupport, type RuntimeRequirement } from "./runtime-support.js";
 import type { WorkspaceBlueprint } from "./workspace-blueprint.js";
 
 /** The Boat runtime family, served where the deployment configures Boat. */
 export const BOAT_RUNTIME_ID = "boat";
 
-/** Shared preflight result for create and the Boat adapter. */
+/** Shared preflight result for the Boat image builder and the Boat adapter. */
 export type BoatSupport =
   | { readonly supported: true }
   | {
@@ -13,48 +14,45 @@ export type BoatSupport =
       readonly message: string;
     };
 
-const refuse = (
-  reason: Extract<BoatSupport, { supported: false }>["reason"],
-  detail: string,
-  message: string,
-): BoatSupport => ({ supported: false, reason, detail, message });
+/**
+ * Boat's items in the runtime table do not depend on the install, save for resources, which no
+ * Boat check reads; this install stands in for any.
+ */
+const BOAT_SUPPORT = runtimeSupport(BOAT_RUNTIME_ID, {
+  kubernetesDocker: false,
+  microvmDocker: false,
+  microvmAgentPort: 8080,
+  containerArchitecture: "x86_64",
+  resourceHost: "none",
+});
 
-/** Pure native requirements. Scope authorization and runtime availability belong to their owners. */
-export const boatSupport = (spec: WorkspaceBlueprint): BoatSupport => {
-  const family = spec.target.os.family;
-  if (family === "arch" || family === "fedora")
-    return refuse(
-      "runtime-os-unsupported",
-      "native-unsupported-os",
-      `Boat supports Ubuntu and Nix; ${family} is unsupported.`,
-    );
-  if (family === "custom" || spec.target.os.baseImage !== undefined)
-    return refuse(
-      "runtime-requirement-unsupported",
-      "native-custom-base-unsupported",
-      "Boat cannot boot a custom OCI base image.",
-    );
-  if (spec.runtime.ociRuntime === "runsc")
-    return refuse(
-      "runtime-requirement-unsupported",
-      "native-oci-runtime-unsupported",
-      "Boat cannot supply the runsc OCI runtime.",
-    );
-  if (
-    spec.sources.workspace.kind === "mount" ||
-    spec.sources.workspace.kind === "standby" ||
-    spec.sources.mounts.length > 0
-  )
-    return refuse(
-      "runtime-requirement-unsupported",
-      "native-host-bind-unsupported",
-      "Boat cannot bind directories from the control-plane host.",
-    );
-  if (spec.runtime.envFrom.length > 0 || spec.runtime.kubernetes.serviceAccountName !== undefined)
-    return refuse(
-      "runtime-requirement-unsupported",
-      "native-cluster-env-unsupported",
-      "Boat cannot resolve Kubernetes environment references.",
-    );
-  return { supported: true };
+/** What shapes a Boat image; the source a workspace starts from is the launch's business. */
+const IMAGE_REQUIREMENTS: readonly RuntimeRequirement[] = [
+  "os",
+  "customImage",
+  "gvisor",
+  "hostDirectories",
+  "clusterEnv",
+];
+
+const toBoatSupport = (refusal: ReturnType<typeof runtimeRefusal>): BoatSupport => {
+  if (refusal === undefined) return { supported: true };
+  // Boat refuses with these two codes only: it serves Docker, and its cluster env item is a
+  // runtime requirement.
+  const reason =
+    refusal.code === "runtime-os-unsupported"
+      ? "runtime-os-unsupported"
+      : "runtime-requirement-unsupported";
+  return { supported: false, reason, detail: refusal.detail, message: refusal.message };
 };
+
+/**
+ * Pure native image requirements, from the runtime table. Scope authorization and runtime
+ * availability belong to their owners.
+ */
+export const boatSupport = (spec: WorkspaceBlueprint): BoatSupport =>
+  toBoatSupport(runtimeRefusal(BOAT_SUPPORT, spec, IMAGE_REQUIREMENTS));
+
+/** Everything a Boat launch requires of its blueprint, its source and dotfiles included. */
+export const boatLaunchSupport = (spec: WorkspaceBlueprint): BoatSupport =>
+  toBoatSupport(runtimeRefusal(BOAT_SUPPORT, spec));
