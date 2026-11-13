@@ -260,7 +260,7 @@ const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value
 const agentFailureTail = async (
   response: Response,
   redactions: readonly string[],
-  body: Redacted.Redacted<string> | undefined,
+  body: Redacted.Redacted | undefined,
 ) => {
   const reader = response.body?.getReader();
   if (reader === undefined) return "";
@@ -314,7 +314,7 @@ export interface BoatGuestTransport {
     access: BoatHostedControl,
     bearer: BoatSecret,
     route: BoatAgentRoute,
-    body?: Redacted.Redacted<string>,
+    body?: Redacted.Redacted,
     signal?: AbortSignal,
   ) => Promise<BoatAgentReply>;
   /** Round-trips daemon health through the agent's control relay. */
@@ -673,7 +673,7 @@ export interface BoatReadyReceipt {
 /** Private key stays redacted until the authenticated HTTPS body is serialized. */
 export interface BoatGuestNetworkInput {
   readonly network: BoatNetworkIntent;
-  readonly privateKey: Redacted.Redacted<string>;
+  readonly privateKey: Redacted.Redacted;
   readonly publicKey: string;
   readonly gatewayKey: string;
 }
@@ -880,7 +880,7 @@ const make: Effect.Effect<
   const call = (
     connection: { hosted: BoatHostedControl; bearer: BoatSecret },
     route: BoatAgentRoute,
-    body?: Redacted.Redacted<string>,
+    body?: Redacted.Redacted,
   ) => io((signal) => transport.request(connection.hosted, connection.bearer, route, body, signal));
   /** A 409 whose body names a reason is the agent's refusal; typed, so it reads as one. */
   const refusal = (

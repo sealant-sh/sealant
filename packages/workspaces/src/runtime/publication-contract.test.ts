@@ -28,7 +28,7 @@ const legacy = {
 describe("publication contracts", () => {
   it("correlates launch and registration with the publication kind", () => {
     expectTypeOf<RuntimeLaunch<NativePublication>>().not.toExtend<
-      Parameters<RuntimeAdapter<OciPublication>["launch"]>[0]
+      Parameters<RuntimeAdapter["launch"]>[0]
     >();
     expectTypeOf<RuntimeLaunch<OciPublication>>().not.toExtend<
       Parameters<RuntimeAdapter<NativePublication>["launch"]>[0]
@@ -39,7 +39,7 @@ describe("publication contracts", () => {
     expectTypeOf<{
       kind: "boat-native";
       artifacts: BoatNativeCatalogService;
-      adapter: RuntimeAdapter<OciPublication>;
+      adapter: RuntimeAdapter;
     }>().not.toExtend<RegisteredRuntime>();
   });
 

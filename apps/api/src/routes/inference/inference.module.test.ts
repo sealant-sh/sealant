@@ -253,18 +253,17 @@ const stubEngine = (
   };
 };
 
-const run = <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect);
+const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> => Effect.runPromise(effect);
 
-const runFlipped = async (effect: Effect.Effect<unknown, unknown, never>): Promise<unknown> =>
+const runFlipped = async (effect: Effect.Effect<unknown, unknown>): Promise<unknown> =>
   run(Effect.flip(effect));
 
-const newExchange = (overrides: Partial<InferenceRespondRequest>): InferenceRespondRequest =>
-  ({
-    ownerUserId: "usr_1",
-    prompt: "name this session",
-    credentials: { codex: "cacc_codex" },
-    ...overrides,
-  }) as InferenceRespondRequest;
+const newExchange = (overrides: Partial<InferenceRespondRequest>): InferenceRespondRequest => ({
+  ownerUserId: "usr_1",
+  prompt: "name this session",
+  credentials: { codex: "cacc_codex" },
+  ...overrides,
+});
 
 const continuation = (ownerUserId: string): InferenceRespondRequest => ({
   ownerUserId,

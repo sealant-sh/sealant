@@ -150,7 +150,7 @@ function getLayers(manifest: unknown): OciLayer[] {
     typeof manifest === "object" &&
     manifest !== null &&
     "layers" in manifest &&
-    Array.isArray((manifest as { layers: unknown }).layers)
+    Array.isArray(manifest.layers)
   ) {
     return (manifest as { layers: OciLayer[] }).layers;
   }

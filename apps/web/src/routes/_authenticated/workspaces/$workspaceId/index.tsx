@@ -761,7 +761,7 @@ function isPrivateOrLocalSshHost(host: string): boolean {
 
   const parts = host.split(".");
 
-  if (parts.length !== 4 || parts.some((part) => /^\d+$/.test(part) === false)) {
+  if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part))) {
     return false;
   }
 

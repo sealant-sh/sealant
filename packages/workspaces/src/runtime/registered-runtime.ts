@@ -8,7 +8,7 @@ import type { RuntimeAdapter } from "./runtime-adapter.js";
 export type RegisteredRuntime =
   | {
       readonly kind: "oci";
-      readonly adapter: RuntimeAdapter<OciPublication>;
+      readonly adapter: RuntimeAdapter;
       readonly imageBuilder: WorkspaceImageBuilder;
     }
   | {

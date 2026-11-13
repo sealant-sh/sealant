@@ -154,7 +154,7 @@ const githubSourceIntegrationStub = (): GitHubSourceIntegration => {
     ),
     getInstallation: vi.fn(() => Effect.die("not implemented")),
     listInstallationRepositories: vi.fn(() => Effect.succeed([])),
-  } as unknown as GitHubSourceIntegration;
+  };
 };
 
 const createRuntimeAdapterStub = (
@@ -2114,7 +2114,7 @@ describe("processWorkspaceBuildJobEffect", () => {
               registryClient: {
                 ...successRegistryClient(),
                 headManifest: vi.fn(async () => "sha256:prior"),
-              } as unknown as RegistryClient,
+              },
             }),
           );
           expect(compileWorkspaceSpec).toHaveBeenCalledTimes(rebuilds ? 1 : 0);

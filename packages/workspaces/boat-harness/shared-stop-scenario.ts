@@ -67,7 +67,7 @@ const vmLive = (stack: HarnessStack, sandbox: string) =>
  */
 const discharged = (view: RuntimeView) =>
   view.allocation === "deleted" &&
-  (view.has_tunnel !== true || view.tunnel_released === true) &&
+  (!view.has_tunnel || view.tunnel_released === true) &&
   view.pin === "released" &&
   view.status !== null &&
   view.status !== "ready";

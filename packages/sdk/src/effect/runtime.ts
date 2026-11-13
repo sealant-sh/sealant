@@ -43,7 +43,7 @@ export const makeSdkRuntime = (config: SealantInternalConfig): SdkRuntime => {
           const scope = yield* Scope.make();
           const context = yield* Layer.buildWithScope(appLayer, scope);
           // The layer provides a superset of SdkServices; narrow to the surfaced services.
-          return { context: context as Context.Context<SdkServices>, scope } satisfies BuiltRuntime;
+          return { context, scope } satisfies BuiltRuntime;
         }),
       ).then((exit) => {
         if (Exit.isSuccess(exit)) {

@@ -596,7 +596,7 @@ const settleUnsettledExecutors = (
     instance: WorkspaceRuntimeInstance,
     resourceId: string,
     removal: RemovalBasis,
-  ) => Effect.Effect<void, never, never>,
+  ) => Effect.Effect<void, never>,
 ) =>
   Effect.gen(function* () {
     const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;

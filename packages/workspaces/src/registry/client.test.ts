@@ -12,7 +12,7 @@ const neverFetched = () => {
   const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
   const client = createZotRegistryClient({
     baseUrl: "http://127.0.0.1:5000/registry",
-    fetch: fetchMock as unknown as typeof fetch,
+    fetch: fetchMock,
   });
   return { client, fetchMock };
 };
@@ -23,7 +23,7 @@ describe("ZotRegistryClient", () => {
     const fetchMock = vi.fn(async () => new Response("unavailable", { status: 503 }));
     const client = createZotRegistryClient({
       baseUrl: `http://robot:${SECRET}@127.0.0.1:5000`,
-      fetch: fetchMock as typeof fetch,
+      fetch: fetchMock,
     });
 
     const failure = await client.ping().catch((error: unknown) => error);
@@ -48,7 +48,7 @@ describe("ZotRegistryClient", () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
     const client = createZotRegistryClient({
       baseUrl: "http://127.0.0.1:5000",
-      fetch: fetchMock as typeof fetch,
+      fetch: fetchMock,
     });
 
     await client.ping();
@@ -223,10 +223,8 @@ describe("ZotRegistryClient", () => {
     const client = createZotRegistryClient({
       baseUrl: "http://zot:5000",
       pushRegistry: "127.0.0.1:5000",
-      fetch: fetchMock as typeof fetch,
-      commandRunner: commandRunner as NonNullable<
-        Parameters<typeof createZotRegistryClient>[0]["commandRunner"]
-      >,
+      fetch: fetchMock,
+      commandRunner,
     });
 
     await expect(
@@ -283,7 +281,7 @@ describe("ZotRegistryClient", () => {
       "Upper/case",
       "a b",
       "a/b:tag",
-      `${"a".repeat(256)}`,
+      "a".repeat(256),
     ])("refuses repository %j without a request", async (repository) => {
       const { client, fetchMock } = neverFetched();
       await expect(client.listTags(repository)).rejects.toBeInstanceOf(RegistryNameError);
@@ -351,7 +349,7 @@ describe("ZotRegistryClient", () => {
       );
       const client = createZotRegistryClient({
         baseUrl: "http://127.0.0.1:5000",
-        fetch: fetchMock as unknown as typeof fetch,
+        fetch: fetchMock,
       });
       await expect(client.listTags("sealant/ws")).rejects.toMatchObject({ status: 307 });
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -361,11 +359,11 @@ describe("ZotRegistryClient", () => {
       const client = createZotRegistryClient({
         baseUrl: "http://127.0.0.1:5000",
         maxResponseBytes: 16,
-        fetch: (async () =>
+        fetch: async () =>
           new Response("{}", {
             status: 200,
             headers: { "content-length": "1000000" },
-          })) as unknown as typeof fetch,
+          }),
       });
       await expect(client.listTags("sealant/ws")).rejects.toBeInstanceOf(
         RegistryResponseTooLargeError,
@@ -383,7 +381,7 @@ describe("ZotRegistryClient", () => {
       const client = createZotRegistryClient({
         baseUrl: "http://127.0.0.1:5000",
         maxResponseBytes: 64,
-        fetch: (async () => new Response(endless, { status: 200 })) as unknown as typeof fetch,
+        fetch: async () => new Response(endless, { status: 200 }),
       });
       await expect(client.listTags("sealant/ws")).rejects.toBeInstanceOf(
         RegistryResponseTooLargeError,

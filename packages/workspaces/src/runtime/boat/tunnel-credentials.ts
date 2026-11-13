@@ -29,8 +29,8 @@ export interface BoatTunnelCredentials {
   readonly binding: BoatTunnelBinding;
   readonly reservationId: string;
   readonly listenPort: number;
-  readonly gateway: { readonly publicKey: string; readonly privateKey: Redacted.Redacted<string> };
-  readonly guest: { readonly publicKey: string; readonly privateKey: Redacted.Redacted<string> };
+  readonly gateway: { readonly publicKey: string; readonly privateKey: Redacted.Redacted };
+  readonly guest: { readonly publicKey: string; readonly privateKey: Redacted.Redacted };
 }
 /** Preparation persists custody before exposing keys. It does not configure a peer or authorize admission. */
 export interface BoatTunnelCredentialsService {

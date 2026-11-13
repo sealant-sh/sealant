@@ -108,7 +108,7 @@ export const normalizeDigest = (digest: string): string => {
 };
 
 const joinRegistryUrl = (baseUrl: URL, path: string): URL => {
-  const base = `${baseUrl.toString().replace(/\/?$/, "/")}`;
+  const base = baseUrl.toString().replace(/\/?$/, "/");
   const joined = new URL(path.replace(/^\//, ""), base);
   // Belt and braces behind the name grammar: the request stays on the registry's origin and under
   // its /v2/ API, whatever a path segment turned out to contain.

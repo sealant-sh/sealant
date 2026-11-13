@@ -363,7 +363,7 @@ export class GuestFixture implements BoatGuestTransport {
     _host: unknown,
     bearer: BoatSecret,
     route: BoatAgentRoute,
-    body?: Redacted.Redacted<string>,
+    body?: Redacted.Redacted,
   ): Promise<BoatAgentReply> {
     this.actions.push(route);
     expect(bearer.reveal()).toBe("a".repeat(64));

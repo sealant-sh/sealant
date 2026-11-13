@@ -704,7 +704,7 @@ const unwrapEffectCause = (cause: unknown): unknown => {
     const name = (cause as { name?: unknown }).name;
 
     if (name === "UnknownError" || name === "UnknownException") {
-      return (cause as { cause: unknown }).cause;
+      return cause.cause;
     }
   }
 

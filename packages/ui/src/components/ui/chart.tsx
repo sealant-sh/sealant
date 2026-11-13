@@ -127,9 +127,7 @@ function ChartTooltipContent({
     const key = `${labelKey || item?.dataKey || item?.name || "value"}`;
     const itemConfig = getPayloadConfigFromPayload(config, item, key);
     const value =
-      !labelKey && typeof label === "string"
-        ? config[label as keyof typeof config]?.label || label
-        : itemConfig?.label;
+      !labelKey && typeof label === "string" ? config[label]?.label || label : itemConfig?.label;
 
     if (labelFormatter) {
       return (
@@ -301,16 +299,16 @@ function getPayloadConfigFromPayload(config: ChartConfig, payload: unknown, key:
   let configLabelKey: string = key;
 
   if (key in payload && typeof payload[key as keyof typeof payload] === "string") {
-    configLabelKey = payload[key as keyof typeof payload] as string;
+    configLabelKey = payload[key as keyof typeof payload];
   } else if (
     payloadPayload &&
     key in payloadPayload &&
     typeof payloadPayload[key as keyof typeof payloadPayload] === "string"
   ) {
-    configLabelKey = payloadPayload[key as keyof typeof payloadPayload] as string;
+    configLabelKey = payloadPayload[key as keyof typeof payloadPayload];
   }
 
-  return configLabelKey in config ? config[configLabelKey] : config[key as keyof typeof config];
+  return configLabelKey in config ? config[configLabelKey] : config[key];
 }
 
 export {
