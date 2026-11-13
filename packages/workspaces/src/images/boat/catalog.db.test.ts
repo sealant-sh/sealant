@@ -31,6 +31,8 @@ import { Arbitrary, Effect, Layer, Result, Schema } from "effect";
 import { beforeAll, describe, expect } from "vitest";
 import { z } from "zod";
 
+import { BOAT_REFUSALS } from "../../../boat-harness/refusals.js";
+import { boatFailureInMessage } from "../../runtime/boat/failure.js";
 import { nativeBuilderFixture } from "./builder.fixture.js";
 import {
   BoatNativeCatalog,
@@ -114,6 +116,104 @@ const throughCatalog = <A, E>(
       ),
     ),
   );
+
+describe.skipIf(!enabled)("a Boat refusal of a build's VM (SLNT-782 review)", () => {
+  for (const { name, refusal, kind } of [
+    { name: "no machine now", refusal: BOAT_REFUSALS["no-machine"], kind: "no-machine" },
+    {
+      name: "an upper-case Boat code",
+      refusal: { status: 429, code: "IP_RATE_LIMIT_EXCEEDED", fields: { retryAfter: 30 } },
+      kind: "rate-limited",
+    },
+  ] as const)
+    it.live(`${name}: quarantined with its kind, rebuilt on the next launch`, () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const owner = yield* seed(db);
+          // Every create of the first build is refused (the builder tries three times); then Boat
+          // has a machine again.
+          const f = yield* Effect.promise(() =>
+            nativeBuilderFixture("normal", { refuseCreate: { refusal, times: 3 } }),
+          );
+          const first = yield* consumer(db, owner);
+          const second = yield* consumer(db, owner);
+          yield* throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+              const failed = yield* Effect.flip(catalog.acquire({ ...input, consumer: first }));
+              expect(failed).toMatchObject({
+                code: "mechanism-failed",
+                detail: `native-boat-${kind}`,
+                providerFailure: { operation: "create", boat: { kind, retryable: true } },
+              });
+              expect(boatFailureInMessage(failed.message)).toMatchObject({
+                kind,
+                code: refusal.code,
+              });
+              expect(f.refusedCreates()).toBe(3);
+              const pin = (yield* nativeConsumerRows(db, first.runId))[0];
+              if (pin === undefined) throw new Error("missing pin");
+              expect(yield* repo.get(pin.publicationId)).toMatchObject({
+                state: "quarantined",
+                reason: `native-boat-${kind}`,
+              });
+              // The next launch spends the one fresh reservation, and Boat now answers.
+              const rebuilt = yield* catalog.acquire({ ...input, consumer: second });
+              expect(yield* repo.get(rebuilt.publicationId)).toMatchObject({
+                state: "ready",
+                buildAttempt: 2,
+                replacesPublicationId: pin.publicationId,
+              });
+            }),
+          );
+        }),
+      ),
+    );
+
+  it.live("a key Boat refused: not retried, quarantined, and the next launch reads why", () =>
+    test((repo, db) =>
+      Effect.gen(function* () {
+        const owner = yield* seed(db);
+        const f = yield* Effect.promise(() =>
+          nativeBuilderFixture("normal", {
+            refuseCreate: { refusal: BOAT_REFUSALS["key-expired"] },
+          }),
+        );
+        const first = yield* consumer(db, owner);
+        const second = yield* consumer(db, owner);
+        yield* throughCatalog(db, f, (catalog) =>
+          Effect.gen(function* () {
+            const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+            const failed = yield* Effect.flip(catalog.acquire({ ...input, consumer: first }));
+            expect(failed).toMatchObject({
+              code: "mechanism-failed",
+              // Its cleanup replays the create to find any VM, which Boat refuses too: the
+              // cleanup stays pending, with the refusal's kind in its reason.
+              detail: "native-cleanup-pending-boat-key-expired",
+              providerFailure: { boat: { kind: "key-expired", code: "api_key_expired" } },
+            });
+            // The build's one create and its cleanup's replay; neither retried.
+            expect(f.refusedCreates()).toBe(2);
+            // No rebuild: only a person can fix the key. The launch says which kind.
+            const blocked = yield* Effect.flip(catalog.acquire({ ...input, consumer: second }));
+            expect(blocked).toMatchObject({
+              code: "publication-quarantined",
+              detail: "native-cleanup-pending-boat-key-expired",
+            });
+            expect(boatFailureInMessage(blocked.message)).toEqual({
+              kind: "key-expired",
+              retryable: false,
+            });
+            expect(f.refusedCreates()).toBe(2);
+            const pin = (yield* nativeConsumerRows(db, second.runId))[0];
+            if (pin === undefined) throw new Error("missing pin");
+            expect((yield* repo.get(pin.publicationId))?.buildAttempt).toBe(1);
+          }),
+        );
+      }),
+    ),
+  );
+});
 
 describe.skipIf(!enabled)("native publication ownership in migrated disposable Postgres", () => {
   it.live(
@@ -889,7 +989,8 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
               ).toContainEqual({
                 id: oldest.id,
                 outcome: "obligation",
-                code: "native-provider-provider_error",
+                // Boat answered 503: its kind, not a catch-all.
+                code: "native-boat-no-answer",
               });
               expect((yield* repo.get(oldest.id))?.state).toBe("quarantined");
               expect(yield* repo.claim(oldest.id, "reconcile", 60000)).toBeUndefined();

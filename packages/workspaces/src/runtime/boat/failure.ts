@@ -322,5 +322,13 @@ export const boatFailureInMessage = (message: unknown): BoatFailure | undefined 
       at = message.indexOf(marker, at + marker.length);
     }
   }
+  if (found !== undefined) return found;
+  // A build quarantined for Boat's reason keeps only its kind (`native-boat-key-expired`, or
+  // `native-cleanup-pending-boat-key-expired` while its cleanup waits on the same refusal): a
+  // later launch on it reads that kind, without the first refusal's code or request id.
+  for (const match of message.matchAll(/\bnative-(?:cleanup-pending-)?boat-([a-z-]+)/g)) {
+    const kind = BOAT_FAILURE_KINDS.find((known) => known === match[1]);
+    if (kind !== undefined) found = { kind, retryable: BOAT_RETRYABLE_FAILURE_KINDS.has(kind) };
+  }
   return found;
 };

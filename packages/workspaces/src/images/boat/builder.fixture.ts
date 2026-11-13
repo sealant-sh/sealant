@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { afterEach, expect } from "vitest";
 
+import { boatErrorEnvelope, type FakeBoatRefusal } from "../../../boat-harness/fake-boat.js";
 import { createWorkspaceBuildSpec } from "../../buildkit/docker-parity.fixture.js";
 import { HttpBoatApi, type BoatApi } from "../../runtime/boat/api.js";
 import { BoatSecret } from "../../runtime/boat/config.js";
@@ -60,7 +61,15 @@ export const nativeBuilderFixture = async (
     | "provider-http-failed"
     | "status-http-failed"
     | "agent-manifest-mismatch",
+  options: {
+    /**
+     * Boat refuses the build VM's create with this refusal, in its error envelope, for the first
+     * `times` creates (default: every one).
+     */
+    readonly refuseCreate?: { readonly refusal: FakeBoatRefusal; readonly times?: number };
+  } = {},
 ) => {
+  let refusedCreates = 0;
   if (!directory) throw new Error("exact runtime bundle required");
   const bundle = VerifiedRuntimeBundle.parse({
     sourceIndex: await readFile(join(directory, "source-index.json")),
@@ -114,6 +123,17 @@ export const nativeBuilderFixture = async (
           sandboxes: marker && !deleted ? [{ id, state: "ready", labels: allocationLabels }] : [],
           pageInfo: { hasMore: false, nextCursor: null, limit: 200 },
         });
+      } else if (
+        path === "/api/v1/sandboxes" &&
+        request.method === "POST" &&
+        options.refuseCreate !== undefined &&
+        refusedCreates < (options.refuseCreate.times ?? Number.POSITIVE_INFINITY)
+      ) {
+        refusedCreates++;
+        respond(
+          boatErrorEnvelope(options.refuseCreate.refusal),
+          options.refuseCreate.refusal.status,
+        );
       } else if (path === "/api/v1/sandboxes" && request.method === "POST") {
         expect(body).toMatchObject({
           ttlSeconds: 900,
@@ -334,6 +354,7 @@ export const nativeBuilderFixture = async (
     mutations,
     cancellation,
     deleted: () => deleted,
+    refusedCreates: () => refusedCreates,
     posts: () => savedPosts,
     failSnapshotRemoval: () => {
       removalFailures++;
