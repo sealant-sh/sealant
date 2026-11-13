@@ -1631,7 +1631,8 @@ describe.skipIf(DATABASE_URL === undefined)(
           expect(c.fake.heldIn("personal").sandboxes).toEqual([]);
           await stopSession(c, gone.sandboxId);
           expect(await c.runOf(gone.runId)).toMatchObject({ absentBasis: "unreachable" });
-          // The key gains account.read (or the account is rotated to one that has it).
+          // A key that has account.read takes its place, as a rotation does (Boat adds no permission
+          // to an existing key).
           c.fake.faults = {};
           expect(await c.worker.resolveWallets()).toEqual([
             { accountId: account.id, outcome: "pinned" },

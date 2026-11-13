@@ -324,7 +324,7 @@ export const createBoatAccount = (payload: CreateBoatAccountRequest) =>
       return yield* new BoatAccountKeyRefusedError({
         code: "boat-key-unverified",
         message:
-          "Boat did not show which wallet the key bills, so sealant cannot pin the account to it (sealant reads it with the key's account.read permission); nothing was stored. Give the key account.read, or try again.",
+          "Boat did not show which wallet the key bills, so sealant cannot pin the account to it (sealant reads it with the key's account.read permission); nothing was stored. Use a key that has account.read, or try again.",
         ...(!report.wallet.observed && report.wallet.boat !== undefined
           ? { boat: report.wallet.boat }
           : {}),
@@ -410,7 +410,7 @@ export const getBoatInstallKey = () =>
 const unpinned = (boatAccountId: string) =>
   new BoatAccountConflictError({
     code: "boat-account-in-use",
-    message: `sealant has not pinned Boat account ${boatAccountId} to a Boat wallet yet, so nothing new is started with its key; nothing was changed. Give the key the account.read permission in Boat (or rotate the account to a key that has it), and sealant pins it to the wallet the key bills within a minute.`,
+    message: `sealant has not pinned Boat account ${boatAccountId} to a Boat wallet yet, so nothing new is started with its key; nothing was changed. Replace the account's key with one that has the account.read permission (rotate it), and sealant pins the account to the wallet that key bills.`,
   });
 
 const notFound = (boatAccountId: string) =>

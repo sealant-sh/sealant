@@ -323,9 +323,10 @@ instead.
   each sweep tick, to the wallet its key bills now (an organization's key: its only wallet). That
   needs Boat's `account.read` permission on the key. Until then, a workspace naming the account and
   a full check are refused: the workspace with `409` code `boat-account-wallet-unresolved`, the
-  check with `409` `boat-account-in-use`, each with a sentence that says to give the key
-  `account.read` or rotate to a key that has it. Its running sessions are not touched: stop, capture
-  and resume go to Boat as before. A rotation (`PUT …/key`) is allowed and pins it from the new key.
+  check with `409` `boat-account-in-use`, each with a sentence that says to replace the key with one
+  that has `account.read` (Boat adds no permission to an existing key). Its running sessions are not
+  touched: stop, capture and resume go to Boat as before. A rotation (`PUT …/key`) is allowed and
+  pins it from the new key.
 
   What an account made before sealant recorded wallets has no wallet on record. A request about one
   of these objects names no wallet, as before. If Boat does not find it there, sealant looks for it

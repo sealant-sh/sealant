@@ -211,6 +211,6 @@ export const requireBoatAccount = (
       return yield* new WorkspaceConflictError({
         code: "boat-account-wallet-unresolved",
         message:
-          "The Boat account this workspace names was connected before sealant pinned accounts to a Boat wallet, and sealant has not seen yet which wallet its key bills: no new workspace starts in it until then, usually within a minute of an upgrade. If the key lacks Boat's account.read permission, sealant cannot see it: give the key account.read in Boat, or rotate the account to a key that has it. Its workspaces already running are not affected.",
+          "The Boat account this workspace names was connected before sealant pinned accounts to a Boat wallet, and sealant has not seen yet which wallet its key bills: no new workspace starts in it until then, usually within a minute of an upgrade. If the key lacks Boat's account.read permission, sealant cannot see it: replace the account's key with one that has account.read (rotate it). Its workspaces already running are not affected.",
       });
   });

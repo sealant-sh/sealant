@@ -54,7 +54,7 @@ export const boatLaunchRefusal = (
       ? "No worker of this install has reported launching Boat workspaces in the last five minutes, so a Boat workspace cannot be started. The install's operator can turn Boat on for the worker (SEALANT_BOAT_STATE_DIRECTORY with SEALANT_CREDENTIALS_KEY) or start the worker."
       : "This install's worker runs without Boat (SEALANT_BOAT_STATE_DIRECTORY is not set), so a Boat workspace cannot be started. The install's operator can turn it on.";
   if (!spec.namesAccount && !support.defaultAccount)
-    return "This install has no Boat key of its own, or sealant has not yet seen which Boat wallet that key bills (its check needs the key's account.read permission, or SEALANT_BOAT_ORGANIZATION set), so a Boat workspace must name a stored Boat account (spec.runtime.boatAccountId). Name one, or ask the install's operator to set SEALANT_BOAT_API_KEY, give it account.read, or set SEALANT_BOAT_ORGANIZATION.";
+    return "This install has no Boat key of its own, or sealant has not yet seen which Boat wallet that key bills (its check needs the key's account.read permission, or SEALANT_BOAT_ORGANIZATION set), so a Boat workspace must name a stored Boat account (spec.runtime.boatAccountId). Name one, or ask the install's operator to set SEALANT_BOAT_API_KEY to a key that has account.read, or set SEALANT_BOAT_ORGANIZATION.";
   if (spec.resources !== "none" && !support.resourceGateway)
     return "This install's Boat workspaces cannot reach project resources: its worker has no resource gateway. Create the workspace with runtime.resources: \"none\", or ask the install's operator to configure the gateway (SEALANT_BOAT_GATEWAY_HOST_ID).";
   return undefined;
