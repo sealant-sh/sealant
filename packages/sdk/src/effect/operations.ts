@@ -165,6 +165,10 @@ export const restartWorkspaceOp = (workspaceId: string, payload: RestartWorkspac
     client.workspaces.restartWorkspace({ params: { workspaceId }, payload }),
   ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
 
+/** The runtimes this install launches and what each supports (`GET /v1/workspaces/runtimes`). */
+export const listWorkspaceRuntimesOp = () =>
+  Effect.flatMap(SealantApiClient, (client) => client.workspaces.listWorkspaceRuntimes({}));
+
 export const inspectWorkspaceImageOp = (payload: InspectWorkspaceImageRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.inspectWorkspaceImage({ payload }),

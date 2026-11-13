@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { BoatRunRepo, WorkspaceCaptureDrainRepo, WorkspaceRuntimeInstanceRepo } from "@sealant/db";
 import {
-  boatSupport,
+  boatLaunchSupport,
   nativeArtifactConsumerSchema,
   nativeImageScopeSchema,
   type NativePublication,
@@ -137,17 +137,9 @@ export const boatAdapterSupports = (
   input: Parameters<RuntimeAdapter<NativePublication>["supports"]>[0],
   resourceGateway: boolean,
 ) => {
-  const support = boatSupport(input.blueprint);
+  // The create refuses all of these first; a blueprint recorded before it did reaches this.
+  const support = boatLaunchSupport(input.blueprint);
   if (!support.supported) return support;
-  if (
-    input.blueprint.sources.workspace.kind !== "capture" ||
-    input.blueprint.runtime.dotfilesArchives.length > 0
-  )
-    return {
-      supported: false as const,
-      reason: "runtime-requirement-unsupported" as const,
-      message: "Boat currently requires a capture source without inline dotfiles archives.",
-    };
   if (!resourceGateway && input.blueprint.runtime.resources !== "none")
     return {
       supported: false as const,

@@ -64,6 +64,15 @@ export const boatLaunchRefusalNow = Effect.gen(function* () {
     : "This install has no Boat key of its own and stores no Boat account, so no Boat workspace can be started. Store one (POST /v1/boat-accounts), or ask the install's operator to set SEALANT_BOAT_API_KEY.";
 });
 
+/**
+ * Whether a worker that launches Boat workspaces has the resource gateway: what the runtime report
+ * says of Boat's `resources`, from the same reports the create reads.
+ */
+export const boatResourceGateway = Effect.map(
+  boatLaunchSupport,
+  (support) => support.resourceGateway,
+);
+
 /** `boatLaunchable`: true when a Boat workspace can be launched here (see `boatLaunchRefusalNow`). */
 export const boatLaunchable = Effect.map(boatLaunchRefusalNow, (refusal) => refusal === undefined);
 
