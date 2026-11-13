@@ -37,9 +37,18 @@ export const BoatKeyClients = Context.Reference<
   defaultValue: () => (credential) => HttpBoatApi.create({ credential }),
 });
 
+/**
+ * Whether this install can launch Boat, as the API answers it today: it was given the Boat key.
+ * The create's refusal and the runtime report (`GET /v1/workspaces/runtimes`) both read this one
+ * answer, so a better one replaces it here.
+ */
+export const boatLaunchable = Effect.gen(function* () {
+  return yield* BoatConfigured;
+});
+
 /** Boat on a deployment that did not configure it is refused like any unregistered runtime. */
 export const requireBoatConfigured = Effect.gen(function* () {
-  if (yield* BoatConfigured) return;
+  if (yield* boatLaunchable) return;
   return yield* new WorkspaceServiceUnavailableError(unregisteredRuntimeRefusal(BOAT_RUNTIME_ID));
 });
 

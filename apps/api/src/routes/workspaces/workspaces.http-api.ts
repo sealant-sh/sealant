@@ -1,6 +1,7 @@
 import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { HttpApiBuilder } from "effect/http-api";
 
+import { listWorkspaceRuntimes } from "../../services/runtime-support.js";
 import {
   listWorkspaceCredentials,
   pruneWorkspaceCredentials,
@@ -119,6 +120,7 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
         }),
       )
       .handle("inspectWorkspaceImage", ({ payload }) => inspectWorkspaceImage({ payload }))
+      .handle("listWorkspaceRuntimes", () => listWorkspaceRuntimes)
       .handle("putWorkspaceCredentials", ({ params, payload }) =>
         putWorkspaceCredentials({ workspaceId: params.workspaceId, payload }),
       )

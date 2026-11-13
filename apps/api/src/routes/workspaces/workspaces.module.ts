@@ -107,6 +107,9 @@ import {
   nativeImageScopeSchema,
   BOAT_RUNTIME_ID,
   type RuntimeAdapterId,
+  type RuntimeRequest,
+  runtimeRefusal,
+  runtimeSupport,
   newWorkspaceSchema,
   workspaceBindSchema,
   workspaceDotfilesArchiveSchema,
@@ -165,6 +168,7 @@ import {
 } from "../../services/control-plane-capabilities.js";
 import { requireLiveWorkspaceRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
 import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
+import { runtimeInstall } from "../../services/runtime-support.js";
 import {
   checkProcessUser,
   processUserNameRefusal,
@@ -1517,83 +1521,34 @@ class CreateReservationLost extends Error {
 }
 
 /**
- * Pure create-time gate for Kubernetes-only requests (cluster-env-sources design): cluster env
- * sources and a workspace service account only resolve where workspaces run as Pods. The refusal
- * happens HERE, synchronously — no workspace row, no build job, no failure minutes later — and
- * the adapters keep their own refusal as belt. Returns the refusal message naming every
- * unresolvable input, or null when the request is fine.
+ * A create's (and a restart's) runtime refusals, from the table `GET /v1/workspaces/runtimes`
+ * answers with: what the request asks of its runtime that the runtime does not support is refused
+ * here, before anything is reserved, with the sentence the report gives for it. The adapters keep
+ * their own refusal as a second check.
  */
-export const runtimeEnvReferencesRefusal = (
-  spec: {
-    readonly runtime: {
-      readonly envFrom: readonly { readonly kind: string; readonly name: string }[];
-      readonly kubernetes: { readonly serviceAccountName?: string | undefined };
-    };
-    readonly target: { readonly runtime: { readonly family: string } };
-  },
-  defaultAdapterFamily: string,
-): string | null => {
-  const bindings = spec.runtime.envFrom;
-  const serviceAccount = spec.runtime.kubernetes.serviceAccountName;
-  if (bindings.length === 0 && serviceAccount === undefined) {
-    return null;
-  }
-  const family =
-    spec.target.runtime.family === "auto" ? defaultAdapterFamily : spec.target.runtime.family;
-  if (family === "k8s" || family === "k3s") {
-    return null;
-  }
-  const names = [
-    ...bindings.map((binding) => `${binding.kind}/${binding.name}`),
-    ...(serviceAccount === undefined ? [] : [`serviceAccount ${serviceAccount}`]),
-  ].join(", ");
-  return `This deployment runs workspaces on the '${family}' runtime, which cannot resolve cluster env references: ${names}. Remove them, or run against a Kubernetes deployment.`;
-};
-
-/**
- * Pure create-time gate for `tooling.services.docker`. Docker always serves it. Kubernetes needs
- * its rootless sidecar enabled. MicroVM needs the operator to allow it, because the image built for
- * such a workspace is created with the elevated OS capability. Refuse here synchronously and keep the
- * adapter's own refusal as a second check.
- */
-export const dockerServiceRefusal = (
-  spec: {
-    readonly tooling: {
-      readonly services?:
-        | { readonly docker?: { readonly enabled: boolean } | undefined }
-        | undefined;
-    };
-    readonly target: { readonly runtime: { readonly family: string } };
-  },
-  install: {
-    readonly defaultAdapterFamily: string;
-    readonly kubernetesDockerEnabled: boolean;
-    readonly microvmDockerEnabled: boolean;
-  },
-): string | null => {
-  if (spec.tooling.services?.docker?.enabled !== true) {
-    return null;
-  }
-  const family =
-    spec.target.runtime.family === "auto"
-      ? install.defaultAdapterFamily
-      : spec.target.runtime.family;
-  // Boat's VM is the workspace: its image carries the engine when the blueprint asks for it.
-  if (family === "docker" || family === "boat") {
-    return null;
-  }
-  if (family === "k8s" || family === "k3s") {
-    return install.kubernetesDockerEnabled
-      ? null
-      : "This deployment runs workspaces on Kubernetes without workspace-scoped Docker enabled (SEALANT_K8S_DOCKER_ENABLED / chart value workspaces.docker.enabled). Turn Docker off for this workspace, or ask the operator to enable it.";
-  }
-  if (family === "microvm") {
-    return install.microvmDockerEnabled
-      ? null
-      : "This deployment runs workspaces on Lambda MicroVMs without workspace-scoped Docker enabled (SEALANT_MICROVM_DOCKER_ENABLED). Turn Docker off for this workspace, or ask the operator to enable it.";
-  }
-  return `This deployment runs workspaces on the '${family}' runtime, which has no workspace-scoped Docker. Turn Docker off for this workspace.`;
-};
+const refuseUnsupportedRuntimeRequest = (runtime: RuntimeAdapterId, request: RuntimeRequest) =>
+  Effect.gen(function* () {
+    const refusal = runtimeRefusal(runtimeSupport(runtime, yield* runtimeInstall), request);
+    if (refusal === undefined) return;
+    switch (refusal.code) {
+      case "workspace-docker-unsupported":
+        return yield* new WorkspaceDockerServiceUnsupportedError({
+          message: refusal.message,
+          code: refusal.code,
+        });
+      case "runtime-env-references-unsupported":
+        return yield* new WorkspaceRuntimeEnvReferencesUnsupportedError({
+          message: refusal.message,
+          code: refusal.code,
+        });
+      case "runtime-os-unsupported":
+      case "runtime-requirement-unsupported":
+        return yield* new WorkspaceRuntimeRequirementUnsupportedError({
+          message: refusal.message,
+          code: refusal.code,
+        });
+    }
+  });
 
 const authorizeImageScope = (input: {
   readonly ownerUserId: string;
@@ -1666,15 +1621,14 @@ export const createWorkspace = (input: {
       parsedSpec.target.runtime.family === "auto"
         ? env.DEFAULT_RUNTIME_ADAPTER
         : parsedSpec.target.runtime.family;
-    if (runtimeFamily === BOAT_RUNTIME_ID) {
-      const support = boatSupport(parsedSpec);
-      if (!support.supported)
-        return yield* new WorkspaceRuntimeRequirementUnsupportedError({
-          message: support.message,
-          code: support.reason,
-        });
-      yield* requireBoatConfigured;
-    }
+    // A source selection becomes a git source once it is resolved below.
+    yield* refuseUnsupportedRuntimeRequest(
+      runtimeFamily,
+      body.sourceSelection === undefined
+        ? parsedSpec
+        : { ...parsedSpec, sources: { ...parsedSpec.sources, workspace: { kind: "git" } } },
+    );
+    if (runtimeFamily === BOAT_RUNTIME_ID) yield* requireBoatConfigured;
     yield* requireBoatAccount(parsedSpec, runtimeFamily);
     if (idempotencyKey !== undefined) {
       const reservation = yield* withInternalError(
@@ -1733,29 +1687,6 @@ export const createWorkspace = (input: {
           message: new UnsupportedWorkspacePackageError(osFamily, unsupportedPackages).message,
         });
       }
-    }
-
-    const envReferencesRefusal = runtimeEnvReferencesRefusal(
-      parsedSpec,
-      env.DEFAULT_RUNTIME_ADAPTER,
-    );
-    if (envReferencesRefusal !== null) {
-      return yield* new WorkspaceRuntimeEnvReferencesUnsupportedError({
-        message: envReferencesRefusal,
-        code: "runtime-env-references-unsupported",
-      });
-    }
-
-    const dockerRefusal = dockerServiceRefusal(parsedSpec, {
-      defaultAdapterFamily: env.DEFAULT_RUNTIME_ADAPTER,
-      kubernetesDockerEnabled: env.SEALANT_K8S_DOCKER_ENABLED,
-      microvmDockerEnabled: env.SEALANT_MICROVM_DOCKER_ENABLED,
-    });
-    if (dockerRefusal !== null) {
-      return yield* new WorkspaceDockerServiceUnsupportedError({
-        message: dockerRefusal,
-        code: "workspace-docker-unsupported",
-      });
     }
 
     // Validate BEFORE the selection resolvers so what we check is exactly what the caller sent;
@@ -3910,15 +3841,8 @@ export const restartWorkspace = (input: {
       recordedSpec.target.runtime.family === "auto"
         ? env.DEFAULT_RUNTIME_ADAPTER
         : recordedSpec.target.runtime.family;
-    if (runtimeFamily === BOAT_RUNTIME_ID) {
-      const support = boatSupport(recordedSpec);
-      if (!support.supported)
-        return yield* new WorkspaceRuntimeRequirementUnsupportedError({
-          message: support.message,
-          code: support.reason,
-        });
-      yield* requireBoatConfigured;
-    }
+    yield* refuseUnsupportedRuntimeRequest(runtimeFamily, recordedSpec);
+    if (runtimeFamily === BOAT_RUNTIME_ID) yield* requireBoatConfigured;
     // A restart runs in the account the workspace was created in: one removed since is refused.
     yield* requireBoatAccount(recordedSpec, runtimeFamily);
 
