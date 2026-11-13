@@ -6,7 +6,11 @@ import type { CredentialCipherService } from "@sealant/credentials";
 import { createSealantDB, type DB } from "@sealant/db";
 import { newWorkspaceSchema } from "@sealant/validators";
 import { parseWorkerEnv } from "@sealant/validators/env";
-import { selectRuntimeAdapter, type BoatNativeCatalogOptions } from "@sealant/workspaces";
+import {
+  BoatApiError,
+  selectRuntimeAdapter,
+  type BoatNativeCatalogOptions,
+} from "@sealant/workspaces";
 import { Effect } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -68,6 +72,10 @@ const boatWorkspace = (resources?: "none") =>
     ...(resources === undefined ? {} : { runtime: { resources } }),
   });
 
+/** A client factory Boat never answers: every call is refused. */
+const refused = () =>
+  ({ ok: false, error: new BoatApiError("credential", 401, "unauthorized") }) as const;
+
 describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgres)", () => {
   let db: DB;
   let state: string;
@@ -88,7 +96,17 @@ describe.skipIf(DATABASE_URL === undefined)("the worker's Boat assembly (Postgre
   ) => {
     // The same parse the worker's start runs: a refused environment never reaches the assembly.
     const env = parseWorkerEnv(settings);
-    const boat = await assembleBoat({ env, db, credentialCipher: cipher, docker, snapshotBuilder });
+    // No Boat answers here: every client is refused, so nothing reaches Boat's real API (the
+    // worker checks the install's own key at start to find its wallet).
+    const boat = await assembleBoat({
+      env,
+      db,
+      credentialCipher: cipher,
+      docker,
+      snapshotBuilder,
+      clientFor: refused,
+      keyClientFor: refused,
+    });
     if (boat !== undefined) assembled.push(boat);
     return boat;
   };

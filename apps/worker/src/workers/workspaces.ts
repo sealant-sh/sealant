@@ -1161,6 +1161,16 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     if (boatAssembly === undefined || boatSweepRunning) return;
     boatSweepRunning = true;
     try {
+      // Where the things of accounts Core has not pinned are, first: until it knows, such an
+      // account makes no Boat request and takes no new workspace.
+      const resolved = await boatAssembly.resolveWallets().catch(() => []);
+      const pinned = resolved
+        .filter((each) => each.outcome === "pinned")
+        .map((each) => each.accountId);
+      if (pinned.length > 0) {
+        console.log("Boat accounts pinned to the wallet their things are in", { accounts: pinned });
+        await boatAssembly.refreshKeyReports({ force: pinned }).catch(() => []);
+      }
       for (const stack of await boatAssembly.sweptStacks()) {
         await sweepBoatAccount(stack).catch(() => {
           console.error("Boat allocation reconciliation tick failed", {
@@ -1176,18 +1186,11 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         console.warn("Boat full checks still hold something in Boat; the next tick tries again", {
           proofs: pending.map((each) => each.proofId),
         });
-      // A change of the organization an account bills: its images are deleted from the old
-      // wallet first; once it has switched, its key is checked under the new one.
-      const changes = await boatAssembly.reconcileOrganizationChanges?.();
-      const changed = (changes ?? [])
-        .filter((change) => change.outcome === "changed")
-        .map((change) => change.accountId);
-      if (changed.length > 0) {
-        console.log("Boat accounts bill another wallet now; their old images are deleted", {
-          accounts: changed,
-        });
-        await boatAssembly.refreshKeyReports({ force: changed }).catch(() => []);
-      }
+      // Saved images an account made in a wallet it no longer names: removed there.
+      const elsewhere = await boatAssembly.removeImagesElsewhere?.().catch(() => []);
+      for (const each of elsewhere ?? [])
+        if (each.removed > 0)
+          console.log("Boat images removed from a wallet their account no longer names", each);
       const removals = await boatAssembly.reconcileRemovals?.();
       for (const removal of removals ?? [])
         if (removal.outcome === "removed")

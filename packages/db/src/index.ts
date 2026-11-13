@@ -550,6 +550,9 @@ export {
   boatAccountDeploymentId,
   type BoatAccountRecord,
   type BoatAccountOrganizationChange,
+  type BoatUnknownObjects,
+  type BoatWalletOwner,
+  type BoatWalletResolution,
   type BoatAccountRemovalRequest,
   type BoatAccountRepoService,
   type BoatAccountSealedKey,
@@ -575,3 +578,7 @@ export {
   type BoatKeyProofRecord,
   type BoatKeyProofRepoService,
 } from "./repositories/boat-key-proofs.js";
+export {
+  createWalletOf as createBoatWalletOf,
+  type BoatCreateWallet,
+} from "./repositories/boat-wallets.js";

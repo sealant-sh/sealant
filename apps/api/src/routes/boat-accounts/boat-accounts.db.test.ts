@@ -168,7 +168,9 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
       sealedKey: `sealed:${KEY_A}`,
       keyId: "k-test",
       keyRevision: 1,
-      organization: null,
+      // A personal key is pinned at connect to the wallet it bills (the recorded Boat's own).
+      organization: "personal",
+      keyKind: "personal",
     });
     const record = await run(
       Effect.flatMap(BoatAccountRepo, (repo) => repo.get(created.boatAccountId)),
@@ -226,7 +228,9 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
       sealedKey: `sealed:${KEY_A_NEXT}`,
       keyId: "k-test",
       keyRevision: 2,
-      organization: null,
+      // A personal key is pinned at connect to the wallet it bills (the recorded Boat's own).
+      organization: "personal",
+      keyKind: "personal",
     });
     expect(
       await refusal(routes.rotateBoatAccountKey(randomUUID(), { apiKey: KEY_A })),

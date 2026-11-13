@@ -2570,16 +2570,11 @@ export interface BoatAccount {
    */
   readonly organization: string | null;
   /**
-   * A change of `organization` asked with `setOrganization` and not finished; null when none is.
-   * The control plane deletes the account's saved images from the wallet it bills now
-   * (`imagesLeft` of them are still there), then switches. Until then `organization` is unchanged
-   * and no new workspace runs in the account.
+   * What the account made in Boat that the control plane cannot reach: Boat has it in none of the
+   * wallets the key can bill. It stays recorded and is never removed by the control plane; look
+   * for it under Saved snapshots in Boat. Null: nothing.
    */
-  readonly organizationChange: {
-    readonly organization: string | null;
-    readonly requestedAt: string;
-    readonly imagesLeft: number;
-  } | null;
+  readonly unreachable: { readonly savedImages: readonly string[] } | null;
   /**
    * What the last check observed of the key, and when (`report.observedAt`); null until checked.
    * Each fact is `observed: true` with its value, or `observed: false` with Boat's reason.
@@ -2628,26 +2623,23 @@ export interface BoatAccountsNamespace {
   /** Every stored account not removed, oldest first. */
   list(): Promise<readonly BoatAccount[]>;
   /**
-   * Points an account with a personal key at the wallet it bills from now on, without its key:
-   * an organization's id (or name) from `report.wallets`, `personal` for the key's own Boat
-   * account, or null to name none (the key then bills whichever wallet its Boat account has
-   * active). The key is checked with Boat under the new wallet first.
+   * Points an account with a personal key at another wallet, without its key: an organization's
+   * id (or name) from `report.wallets`, or `personal` for the key's own Boat account. Every
+   * personal key is pinned (at `create`, to the wallet it bills then unless one is named), so
+   * `null` is refused (400): there is no unpin. The key is checked with Boat under the new wallet
+   * first.
    *
-   * VMs and saved images belong to the wallet that paid for them, so the call rejects (409,
-   * `reason` `boat-account-in-use`, the message counting them) while the account has workspaces
-   * whose VMs Boat may hold, runs still being settled, or image builds in flight, and
-   * `boat-proof-running` while a full check's leftovers may be there. An account that holds
-   * nothing switches at once, and so does one whose every VM and saved image is in the new wallet
-   * already (an unpinned account pinned to the wallet it bills): nothing is deleted. One that holds
-   * saved images elsewhere answers with `organizationChange` set: the control plane deletes each
-   * from the wallet it found it in, then switches, and they are built again in the new one at the
-   * next launch; meanwhile a create, `rotateKey` and `prove` reject
-   * (`boat-account-changing-organization`). A saved image Boat shows in none of the key's wallets
-   * rejects (`boat-account-images-unlocated`, the message naming it). Naming the organization it
-   * bills calls an unfinished change off. An organization's Boat key rejects (409,
-   * `boat-key-organization`): it bills its own organization only. A wallet the key cannot bill
-   * rejects (400). The control plane's own key is set in its environment
-   * (`SEALANT_BOAT_ORGANIZATION`; 409, `boat-account-environment`).
+   * What the account made in Boat stays recorded in the wallet it was made in, and every request
+   * about it names that wallet. So the call rejects (409, `reason` `boat-account-in-use`, the message
+   * counting them) only while the account has workspaces whose VMs Boat may hold, runs still being
+   * settled, or image builds in flight, and `boat-proof-running` while a full check's leftovers may be
+   * there. Otherwise it names the new wallet at once: new workspaces are never refused for it, the
+   * next launch builds its image in the new wallet, and the images made in the old one are removed
+   * there by the control plane. An account connected before accounts were pinned rejects
+   * (`boat-account-wallet-unresolved`) until the control plane has pinned it, within a minute of an
+   * upgrade. An organization's Boat key rejects (409, `boat-key-organization`): it bills its own
+   * organization only. A wallet the key cannot bill rejects (400). The control plane's own key is
+   * set in its environment (`SEALANT_BOAT_ORGANIZATION`; 409, `boat-account-environment`).
    */
   setOrganization(boatAccountId: string, organization: string | null): Promise<BoatAccount>;
   /**

@@ -27,6 +27,7 @@ import {
   workspaceRuntimeInstances,
   workspaceRuntimeInstanceStatusValues,
 } from "../schema/workspace-build-jobs.js";
+import { createWalletOf, installCreateWallet, recordedWallet } from "./boat-wallets.js";
 
 /** Safe failure codes: no ciphertext, provider body or launch material. */
 export class BoatRunStoreError extends Error {
@@ -278,7 +279,8 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
         error instanceof BoatRunStoreError ? error : new BoatRunStoreError("unavailable"),
       ),
     );
-  const parsed = (row: BoatRunRow) =>
+  // The wallet a run was made in is the account's to read (`boat-wallets.ts`), not the run's.
+  const parsed = ({ boatWallet: _wallet, boatWalletState: _state, ...row }: BoatRunRow) =>
     Effect.try({
       try: () => boatRunSchema.parse(row),
       catch: () => new BoatRunStoreError("invalid-record"),
@@ -527,6 +529,8 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
             .select({
               deploymentId: boatAccounts.deploymentId,
               removalRequestedAt: boatAccounts.removalRequestedAt,
+              organization: boatAccounts.boatOrganization,
+              keyKind: boatAccounts.keyKind,
             })
             .from(boatAccounts)
             .where(eq(boatAccounts.id, input.accountId))
@@ -538,6 +542,24 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
           )
             return yield* Effect.fail(new BoatRunStoreError("account-unavailable"));
         }
+        // The wallet the run's VM is created in, and that every request about it names: the
+        // account's pin, read under the row its wallet change takes `for update` (the install's own
+        // key's from `boat_install`). An account whose wallet Core has not resolved creates nothing.
+        const wallet =
+          input.accountId === undefined
+            ? yield* installCreateWallet(db)
+            : yield* Effect.map(
+                db
+                  .select({
+                    organization: boatAccounts.boatOrganization,
+                    keyKind: boatAccounts.keyKind,
+                  })
+                  .from(boatAccounts)
+                  .where(eq(boatAccounts.id, input.accountId)),
+                ([row]) => createWalletOf(row?.organization ?? null, row?.keyKind ?? null),
+              );
+        if (wallet.kind === "unresolved")
+          return yield* Effect.fail(new BoatRunStoreError("account-unavailable"));
         // The catalog uses this same lock order for release and retirement.
         const [owner] = yield* db
           .select()
@@ -572,6 +594,15 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
           )
         )
           return yield* Effect.fail(new BoatRunStoreError("pin-unavailable"));
+        // The VM is created from the image's snapshot, which Boat finds only in the wallet the image
+        // was made in: an image of another wallet (the account's changed since it was acquired) is
+        // not this run's; the launch acquires one in the run's wallet.
+        if (
+          owner.boatWalletState === "known" &&
+          wallet.kind === "known" &&
+          owner.boatWallet !== wallet.wallet
+        )
+          return yield* Effect.fail(new BoatRunStoreError("pin-unavailable"));
         yield* db
           .insert(boatRuns)
           .values({
@@ -586,6 +617,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
             resources: input.resources ?? null,
             idempotencyKey: randomUUID(),
             diskLineage: randomUUID(),
+            ...recordedWallet(wallet),
           })
           .onConflictDoNothing();
         const saved = yield* get(consumer.runId);

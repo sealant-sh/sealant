@@ -82,7 +82,8 @@ export type BoatKeyWalletChoice = typeof boatKeyWalletChoiceSchema.Type;
  * `organization` (an organization's id or name, or `personal`), so the bill never follows the key's
  * active wallet. `key-organization`: an organization's Boat key, which bills that organization and
  * nothing else; there is nothing to choose. `active-wallet`: a personal key with no pin, which bills
- * whichever wallet its Boat account has active, and that the person can change in Boat at any time;
+ * whichever wallet its Boat account has active, and that the person can change in Boat at any time
+ * (a stored account is in it only until Core pins it, right after an upgrade);
  * `walletChanged` says the wallet it bills now is not the one an earlier report saw (`from`), first
  * seen at `observedAt`, and stays while the wallet stays.
  */
@@ -218,26 +219,26 @@ export const boatAccountSchema = Schema.Struct({
   createdAt: Schema.String,
   /** When its key was last replaced; null when it still has the key it was created with. */
   keyRotatedAt: Schema.NullOr(Schema.String),
-  /** The Boat organization the account bills, sent on every request for it; null: none named. */
+  /**
+   * The wallet the account bills, named (`X-Boat-Org`) on every request it makes: an
+   * organization's id, or `personal`. Every personal key is pinned (to the wallet it billed when it
+   * was connected, unless the caller named another). Null: an organization's key, which has one
+   * wallet, or an account connected before Core pinned accounts that the worker has not pinned yet.
+   */
   organization: Schema.optional(Schema.NullOr(Schema.String)),
   /** The key's last report, with when it was observed; null until the key is checked. */
   report: Schema.optional(Schema.NullOr(boatKeyReportSchema)),
   /** The account's last full check (`prove`), kept beside its report; null until it is proven. */
   lastProof: Schema.optional(Schema.NullOr(boatKeyProofSchema)),
   /**
-   * A change of the organization the account bills that was asked and is not finished; null when
-   * none is. Core first deletes the saved images the account has in the wallet it bills now, with
-   * requests that still name that wallet, then switches: `imagesLeft` is how many are still there.
-   * Until then `organization` is unchanged and no new workspace runs in the account.
+   * What the account made in Boat that Core cannot reach: Core looked under every wallet the key
+   * can bill and Boat has it in none (it was made before Core recorded wallets, and since deleted
+   * in Boat, or left in an organization the key's account has left). Core keeps it recorded and
+   * never removes it; look for it under Saved snapshots in Boat, in each organization the key's
+   * account has been in. Null or absent: nothing.
    */
-  organizationChange: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({
-        organization: Schema.NullOr(Schema.String),
-        requestedAt: Schema.String,
-        imagesLeft: Schema.Int,
-      }),
-    ),
+  unreachable: Schema.optional(
+    Schema.NullOr(Schema.Struct({ savedImages: Schema.Array(Schema.String) })),
   ),
 });
 export type BoatAccountWire = typeof boatAccountSchema.Type;
@@ -270,8 +271,8 @@ export type CreateBoatAccountRequest = typeof createBoatAccountRequestSchema.Typ
 export const setBoatAccountOrganizationRequestSchema = Schema.Struct({
   /**
    * The wallet to bill from now on: an organization's id (or name) from the key report's
-   * `wallets`, or `personal` for the key's own Boat account; null to name none, so a personal key
-   * bills its active wallet. Only a personal key can be pointed at a wallet.
+   * `wallets`, or `personal` for the key's own Boat account. Only a personal key can be pointed at
+   * a wallet. Null is refused: a personal key's account is never unpinned.
    */
   organization: Schema.NullOr(NonEmptyString),
 });
@@ -336,11 +337,10 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * still hold what one made (the message names the VM and the snapshot): a second check, a key
  * rotation, a removal and a change of organization wait until Core has deleted it.
  * `boat-key-organization`: a change of organization for an organization's Boat key, which bills
- * its own organization and nothing else. `boat-account-images-unlocated`: a change of organization
- * for an account with no pin, one of whose saved images Boat shows in none of the wallets its key
- * can bill, so Core cannot delete it where it is (the message names it).
- * `boat-account-changing-organization`: a key rotation or a full check while a change of
- * organization is unfinished. A change of organization is also refused
+ * its own organization and nothing else. `boat-account-wallet-unresolved`: a change of organization
+ * for an account connected before Core pinned accounts, while Core is still finding where its
+ * VMs and images are (a key rotation or a full check then answers `boat-account-in-use`). A change
+ * of organization is also refused
  * `boat-account-in-use` while the account has runs whose VMs Boat may hold (`liveRuns`), runs
  * still being settled (`unsettledRuns`) or image builds in flight or being cleaned up
  * (`buildsInFlight`).
@@ -357,8 +357,7 @@ export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConf
       "boat-account-environment",
       "boat-proof-running",
       "boat-key-organization",
-      "boat-account-images-unlocated",
-      "boat-account-changing-organization",
+      "boat-account-wallet-unresolved",
     ]),
     liveRuns: Schema.optional(Schema.Int),
     unsettledRuns: Schema.optional(Schema.Int),
@@ -420,8 +419,8 @@ export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
     }),
   )
   .add(
-    // Points the account at the wallet it bills (or at none), without its key: the saved images
-    // it has in the wallet it bills now are deleted first, with requests that still name it.
+    // Points the account at another wallet, without its key. What it made stays recorded in the
+    // wallet it was made in; its saved images there are removed with requests that name it.
     HttpApiEndpoint.put("setBoatAccountOrganization", "/:boatAccountId/organization", {
       params: boatAccountRefParams,
       payload: setBoatAccountOrganizationRequestSchema,

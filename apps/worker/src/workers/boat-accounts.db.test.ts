@@ -311,6 +311,8 @@ const withAccounts = async (
               label,
               sealedKey: `sealed:${key}`,
               keyId: "k-test",
+              // The recorded Boat keeps no wallets apart: an organization's key, one wallet.
+              keyKind: "organization",
             }),
           ),
         );
@@ -330,6 +332,14 @@ const withAccounts = async (
           docker: undefined,
           snapshotBuilder: recordingBuilders(builders),
           clientFor,
+          // The key checks a worker makes (an install's wallet, its reports) reach the recorded
+          // Boats too, never Boat's real API.
+          keyClientFor: (credential) => {
+            const baseUrl = urls.get(credential.reveal());
+            return baseUrl === undefined
+              ? { ok: false, error: new BoatApiError("credential", 401, "unauthorized") }
+              : HttpBoatApi.create({ credential, baseUrl, timeoutMs: 5_000 });
+          },
           // Every call reads the key's revision: a rotation is seen at once.
           revisionCheckMs: 0,
         });
@@ -874,7 +884,7 @@ describe.skipIf(DATABASE_URL === undefined)(
  * how many removals die before they finish, as a worker that stops halfway would.
  */
 const walletBuilders =
-  (faults: { crashes: number }): BoatSnapshotBuilderFactory =>
+  (faults: { crashes: number; gate?: Promise<void> }): BoatSnapshotBuilderFactory =>
   async (options) => ({
     plan: async () => ({
       ok: true,
@@ -886,6 +896,8 @@ const walletBuilders =
       },
     }),
     build: async (input) => {
+      // A test holds a build here, in flight, to change the account's wallet meanwhile.
+      await faults.gate;
       const image = builtImage(
         options.owner,
         input.ownership?.buildId ?? randomUUID(),
@@ -933,12 +945,36 @@ const walletBuilders =
   });
 
 describe.skipIf(DATABASE_URL === undefined)(
-  "a stored account's change of wallet on the worker (Postgres, fake Boat)",
-  { timeout: 60_000 },
+  "Boat wallets on the worker: every object recorded where it was made (Postgres, fake Boat)",
+  { timeout: 90_000 },
   () => {
     const KEY = "boat_live_fixture_wallet_worker_0007";
 
-    it("deletes the account's images from the wallet it billed before it switches, through lost replies and a crash, and every later request names the new one", () =>
+    /** One worker on a fresh database and a fake Boat whose account bills `personal` now. */
+    const withWallets = (
+      run: (c: {
+        readonly db: DB;
+        readonly fake: FakeBoat;
+        readonly worker: NonNullable<Awaited<ReturnType<typeof assembleBoat>>>;
+        readonly faults: { crashes: number; gate?: Promise<void> };
+        readonly store: (
+          organization: string | null,
+          keyKind: "personal" | "organization" | null,
+        ) => Promise<{ readonly id: string; readonly deploymentId: string }>;
+        readonly launchImage: (accountId: string) => Promise<NativePublication>;
+        readonly account: (id: string) => Promise<{
+          readonly organization: string | null;
+          readonly keyRevision: number;
+        }>;
+        readonly change: (id: string, from: string | null, to: string) => Promise<string>;
+        readonly walletOf: (publicationId: string) => Promise<unknown>;
+        readonly stateOf: (publicationId: string) => Promise<string | undefined>;
+        readonly sql: (statement: string) => Promise<void>;
+        readonly building: (deploymentId: string) => Promise<boolean>;
+        readonly mark: () => { readonly sent: number; readonly named: number };
+        readonly namedSince: (from: { readonly sent: number; readonly named: number }) => string[];
+      }) => Promise<void>,
+    ) =>
       withWorkspaceJobTestDatabase(DATABASE_URL ?? "", async (url) => {
         const scope = await Effect.runPromise(Scope.make());
         const fake = new FakeBoat({
@@ -956,228 +992,275 @@ describe.skipIf(DATABASE_URL === undefined)(
         fake.account = { activeWallet: "personal" };
         await fake.start();
         const state = await mkdtemp(join(tmpdir(), "boat-wallet-"));
-        const workers: NonNullable<Awaited<ReturnType<typeof assembleBoat>>>[] = [];
+        let worker: NonNullable<Awaited<ReturnType<typeof assembleBoat>>> | undefined;
         try {
           const built = await Effect.runPromise(
             Layer.buildWithScope(makeSealantDBLayer(url), scope),
           );
           const db = Context.get(built, SealantDB);
-          const repo = <A, E>(effect: Effect.Effect<A, E, BoatAccountRepo>) =>
+          const repo = <A, E>(
+            effect: Effect.Effect<A, E, BoatAccountRepo | BoatRunRepo | NativePublicationRepo>,
+          ) =>
             Effect.runPromise(
               effect.pipe(
-                Effect.provide(BoatAccountRepoLive),
+                Effect.provide(
+                  Layer.mergeAll(BoatAccountRepoLive, BoatRunRepoLive, NativePublicationRepoLive),
+                ),
                 Effect.provideService(SealantDB, db),
               ),
             );
-          const account = await repo(
-            Effect.flatMap(BoatAccountRepo, (accounts) =>
-              accounts.create({
-                id: randomUUID(),
-                label: "Moves wallet",
-                sealedKey: `sealed:${KEY}`,
-                keyId: "k-test",
-              }),
-            ),
-          );
-          const faults = { crashes: 0 };
-          // Every worker reads a key's revision at most every 10 s, as in production.
-          const assemble = async () => {
-            const assembled = await assembleBoat({
-              env: parseWorkerEnv({
-                SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
-                SEALANT_BOAT_STATE_DIRECTORY: state,
-                DOCKER_RUNTIME_ENABLED: "false",
-              }),
-              db,
-              credentialCipher: cipher,
-              docker: undefined,
-              snapshotBuilder: walletBuilders(faults),
-              clientFor: (credential, options) =>
-                HttpBoatApi.create({
-                  credential,
-                  baseUrl: fake.baseUrl,
-                  timeoutMs: 5_000,
-                  ...(options?.organization === undefined
-                    ? {}
-                    : { organization: options.organization }),
-                }),
+          const faults: { crashes: number; gate?: Promise<void> } = { crashes: 0 };
+          const clientFor: BoatClientFactory = (credential, options) =>
+            HttpBoatApi.create({
+              credential,
+              baseUrl: fake.baseUrl,
+              timeoutMs: 5_000,
+              ...(options?.organization === undefined
+                ? {}
+                : { organization: options.organization }),
             });
-            if (assembled === undefined) throw new Error("Boat is not assembled");
-            workers.push(assembled);
-            return assembled;
-          };
-          const worker = await assemble();
+          worker = await assembleBoat({
+            env: parseWorkerEnv({
+              SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+              SEALANT_BOAT_STATE_DIRECTORY: state,
+              DOCKER_RUNTIME_ENABLED: "false",
+            }),
+            db,
+            credentialCipher: cipher,
+            docker: undefined,
+            snapshotBuilder: walletBuilders(faults),
+            clientFor,
+            keyClientFor: (credential, options) =>
+              HttpBoatApi.create({
+                credential,
+                baseUrl: fake.baseUrl,
+                timeoutMs: 5_000,
+                ...(options?.organization === undefined
+                  ? {}
+                  : { organization: options.organization }),
+              }),
+          });
+          if (worker === undefined) throw new Error("Boat is not assembled");
+          const assembled = worker;
           const owner = `usr_${randomUUID()}`;
           await Effect.runPromise(
             db
               .insert(user)
               .values({ id: owner, email: `${owner}@example.invalid`, name: "wallet" }),
           );
-          const launchImage = async (scopeOwner: string) => {
-            const registration = worker.registration;
-            if (registration === undefined) throw new Error("Boat not registered");
-            const runId = randomUUID();
-            await Effect.runPromise(
-              db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner }),
-            );
-            const consumer = nativeArtifactConsumerSchema.parse({
-              runId,
-              runtimeInstanceId: runId,
-            });
-            const image = await Effect.runPromise(
-              registration.artifacts.acquire({
-                spec: boatWorkspace(account.id),
-                scope: { kind: "owner", ownerUserId: scopeOwner },
-                consumer,
-              }),
-            );
-            await Effect.runPromise(registration.artifacts.release(consumer, image.publicationId));
-            return image;
-          };
-          const current = () =>
-            repo(Effect.flatMap(BoatAccountRepo, (accounts) => accounts.get(account.id)));
-
-          // Unpinned, on the personal wallet: its first launch built one image there.
-          const old = await launchImage(owner);
-          expect(fake.heldIn("personal")).toEqual({
-            sandboxes: [],
-            snapshots: [old.snapshot.identity.name],
-          });
-          expect(fake.organizationHeaders).toEqual([]);
-
-          // Another process that read the account's key before the switch, and reads its revision
-          // only once a minute.
-          const stale = await new BoatAccountDirectory({
+          await run({
             db,
-            cipher,
-            revisionCheckMs: 60_000,
-            clientFor: (credential, options) =>
-              HttpBoatApi.create({
-                credential,
-                baseUrl: fake.baseUrl,
-                ...(options?.organization === undefined
-                  ? {}
-                  : { organization: options.organization }),
-              }),
-          }).provider(account.id);
-          const oldName = boatSnapshotNameSchema.parse(old.snapshot.identity.name);
-          expect((await stale?.api.getSnapshot(oldName))?.ok).toBe(true);
-
-          // The owner switches their active wallet in Boat for their own use: a request that names
-          // no wallet no longer sees the image, which is still in `personal`.
-          fake.account = { ...fake.account, activeWallet: "team_acme" };
-          expect((await stale?.api.getSnapshot(oldName))?.ok).toBe(false);
-
-          // Then pins the account to the wallet active now. The route found the image in
-          // `personal` (boat-account-organization.db.test.ts); the change keeps where.
-          const asked = await repo(
-            Effect.flatMap(BoatAccountRepo, (accounts) =>
-              accounts.requestOrganizationChange(account.id, {
-                organization: "team_acme",
-                expected: null,
-                unsettled: [],
-                locations: { [oldName]: "personal" },
-              }),
-            ),
-          );
-          const apiCalls = () => fake.events.filter((event) => event.kind === "api").length;
-          const beforeRemoval = { sent: apiCalls(), named: fake.organizationHeaders.length };
-          expect(asked).toMatchObject({ kind: "pending", imagesLeft: 1 });
-          /** The account is on exactly one wallet, and nothing of its own is in the other. */
-          const onOneWallet = async (wallet: "personal" | "team_acme") => {
-            const now = await current();
-            expect(now?.organization).toBe(wallet === "personal" ? null : "team_acme");
-            const other = wallet === "personal" ? "team_acme" : "personal";
-            expect(fake.heldIn(other)).toEqual({ sandboxes: [], snapshots: [] });
-          };
-
-          // Boat does not answer the delete: the change waits, and nothing moved.
-          fake.faults = {
-            refuse: ({ method, path }) =>
-              method === "DELETE" && path.startsWith("/saved-snapshots/") ? "no-answer" : undefined,
-          };
-          expect(await worker.reconcileOrganizationChanges?.()).toEqual([
-            { accountId: account.id, outcome: "pending" },
-          ]);
-          await onOneWallet("personal");
-          expect(fake.heldIn("personal").snapshots).toEqual([old.snapshot.identity.name]);
-
-          // The worker stops halfway through the removal.
-          fake.faults = {};
-          faults.crashes = 1;
-          expect(await worker.reconcileOrganizationChanges?.()).toEqual([
-            { accountId: account.id, outcome: "pending" },
-          ]);
-          await onOneWallet("personal");
-
-          // Boat deletes the snapshot and its answer is lost: the change still waits.
-          fake.faults = { snapshotDeleteReply: () => "lose" };
-          expect(await worker.reconcileOrganizationChanges?.()).toEqual([
-            { accountId: account.id, outcome: "pending" },
-          ]);
-          await onOneWallet("personal");
-          expect(fake.heldIn("personal")).toEqual({ sandboxes: [], snapshots: [] });
-          expect((await current())?.organizationChange).toMatchObject({
-            organization: "team_acme",
+            fake,
+            worker: assembled,
+            faults,
+            store: async (organization, keyKind) => {
+              const created = await repo(
+                Effect.flatMap(BoatAccountRepo, (accounts) =>
+                  accounts.create({
+                    id: randomUUID(),
+                    label: "Wallets",
+                    sealedKey: `sealed:${KEY}`,
+                    keyId: "k-test",
+                    keyKind,
+                    ...(organization === null ? {} : { organization }),
+                  }),
+                ),
+              );
+              return { id: created.id, deploymentId: created.deploymentId };
+            },
+            launchImage: async (accountId) => {
+              const registration = assembled.registration;
+              if (registration === undefined) throw new Error("Boat not registered");
+              const runId = randomUUID();
+              await Effect.runPromise(
+                db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner }),
+              );
+              const consumer = nativeArtifactConsumerSchema.parse({
+                runId,
+                runtimeInstanceId: runId,
+              });
+              const image = await Effect.runPromise(
+                registration.artifacts.acquire({
+                  spec: boatWorkspace(accountId),
+                  scope: { kind: "owner", ownerUserId: owner },
+                  consumer,
+                }),
+              );
+              await Effect.runPromise(
+                registration.artifacts.release(consumer, image.publicationId),
+              );
+              return image;
+            },
+            account: async (id) => {
+              const found = await repo(
+                Effect.flatMap(BoatAccountRepo, (accounts) => accounts.get(id)),
+              );
+              if (found === undefined) throw new Error("no account");
+              return found;
+            },
+            change: async (id, from, to) => {
+              const changed = await repo(
+                Effect.flatMap(BoatAccountRepo, (accounts) =>
+                  accounts.changeOrganization(
+                    { accountId: id },
+                    { organization: to, expected: from, unsettled: [] },
+                  ),
+                ),
+              );
+              return changed.kind;
+            },
+            walletOf: (publicationId) =>
+              repo(
+                Effect.flatMap(NativePublicationRepo, (catalog) => catalog.wallet(publicationId)),
+              ),
+            stateOf: async (publicationId) =>
+              (
+                await repo(
+                  Effect.flatMap(NativePublicationRepo, (catalog) => catalog.get(publicationId)),
+                )
+              )?.state,
+            sql: async (statement) => {
+              await Effect.runPromise(db.execute(statement));
+            },
+            building: async (deploymentId) =>
+              (
+                await repo(
+                  Effect.flatMap(NativePublicationRepo, (catalog) =>
+                    catalog.heldByDeployment({ deploymentId, limit: 50 }),
+                  ),
+                )
+              ).some((record) => record.state === "reserved" || record.state === "building"),
+            mark: () => ({
+              sent: fake.events.filter((event) => event.kind === "api").length,
+              named: fake.organizationHeaders.length,
+            }),
+            namedSince: (from) => {
+              const sent = fake.events.filter((event) => event.kind === "api").length - from.sent;
+              const named = fake.organizationHeaders.slice(from.named);
+              // Every request since `from` named a wallet: none went to "whatever is active".
+              expect(named).toHaveLength(sent);
+              return named.map((each) => each.organization);
+            },
           });
-
-          // A worker started afterwards finishes it from the record: the snapshot is gone from
-          // the wallet the account billed (read there, with no wallet named), then it switches.
-          fake.faults = {};
-          const restarted = await assemble();
-          expect(await restarted.reconcileOrganizationChanges?.()).toEqual([
-            { accountId: account.id, outcome: "changed" },
-          ]);
-          await onOneWallet("team_acme");
-          expect(await current()).toMatchObject({ organizationChange: null, keyRevision: 2 });
-          // Every request the removal made named `personal`, where the image was; none asked the
-          // wallet active now, where Boat would have answered 404.
-          const removal = fake.organizationHeaders.slice(beforeRemoval.named);
-          expect(removal).toHaveLength(apiCalls() - beforeRemoval.sent);
-          expect(new Set(removal.map((each) => each.organization))).toEqual(new Set(["personal"]));
-          expect(removal).toContainEqual({
-            method: "DELETE",
-            path: `/saved-snapshots/${oldName}`,
-            organization: "personal",
-          });
-          expect(await restarted.reconcileOrganizationChanges?.()).toEqual([]);
-
-          // The first worker still holds a client opened before the switch; its next launch builds
-          // the image again, in the new wallet, and every request names it.
-          const sent = apiCalls();
-          const namedBefore = fake.organizationHeaders.length;
-          const fresh = await launchImage(owner);
-          expect(fresh.publicationId).not.toBe(old.publicationId);
-          expect(fake.heldIn("team_acme").snapshots).toEqual([fresh.snapshot.identity.name]);
-          expect(fake.heldIn("personal")).toEqual({ sandboxes: [], snapshots: [] });
-          const after = apiCalls() - sent;
-          const launched = fake.organizationHeaders.slice(namedBefore);
-          expect(after).toBeGreaterThanOrEqual(3);
-          expect(launched).toHaveLength(after);
-          expect(launched.map((each) => `${each.method} ${each.path}`)).toEqual(
-            expect.arrayContaining([
-              "POST /sandboxes",
-              "POST /saved-snapshots",
-              expect.stringMatching(/^DELETE \/sandboxes\/bx_/),
-            ]),
-          );
-          expect(new Set(launched.map((each) => each.organization))).toEqual(
-            new Set(["team_acme"]),
-          );
-          // The other process still holds the client that names no wallet, and the owner switches
-          // back to `personal`: Boat not finding the new image there makes it read the key's
-          // revision again, and find it in the wallet the account names now.
-          fake.account = { ...fake.account, activeWallet: "personal" };
-          const seen = await stale?.api.getSnapshot(
-            boatSnapshotNameSchema.parse(fresh.snapshot.identity.name),
-          );
-          expect(seen?.ok).toBe(true);
         } finally {
-          for (const each of workers) await each.dispose();
+          await worker?.dispose();
           await fake.stop();
           await Effect.runPromise(Scope.close(scope, Exit.void));
           await rm(state, { recursive: true, force: true });
         }
+      });
+
+    /** Retention as the hourly pass runs it, with every image unused since long ago. */
+    const retention = { stoppedSince: new Date(0), unusedSince: new Date(Date.now() + 86_400_000) };
+
+    it("records a connect-pinned key's first image in its wallet, resolves a legacy account found after a wallet switch, and moves between wallets leaving nothing stranded", () =>
+      withWallets(async (c) => {
+        // As connect stores a personal key: pinned to the wallet it bills.
+        const pinned = await c.store("personal", "personal");
+        const first = await c.launchImage(pinned.id);
+        expect(await c.walletOf(first.publicationId)).toEqual({
+          state: "known",
+          wallet: "personal",
+        });
+        expect(c.fake.heldIn("personal").snapshots).toEqual([first.snapshot.identity.name]);
+
+        // As the migration leaves an account Mend connected before Core pinned accounts.
+        await c.sql(
+          `update boat_accounts set boat_organization = null, key_kind = null where id = '${pinned.id}'`,
+        );
+        await c.sql(
+          `update native_publications set boat_wallet = null, boat_wallet_state = 'unknown' where deployment_id = '${pinned.deploymentId}'`,
+        );
+        // The owner switches the active wallet in Boat for their own use.
+        c.fake.account = { ...c.fake.account, activeWallet: "team_acme" };
+        // Retention before Core has found where the image is: nothing is asked, nothing removed.
+        await c.worker.reapImages?.(retention);
+        expect(await c.stateOf(first.publicationId)).toBe("ready");
+        expect(c.fake.heldIn("personal").snapshots).toEqual([first.snapshot.identity.name]);
+
+        // The resolve pass finds the image where it is, and pins the account to the wallet it
+        // bills now (no VM of it runs).
+        const from = c.mark();
+        expect(await c.worker.resolveWallets()).toEqual([
+          { accountId: pinned.id, outcome: "pinned" },
+        ]);
+        // The key check names no wallet (read-only, never read as absence); the image is looked
+        // for under each wallet by name, and found in `personal`.
+        expect(c.fake.organizationHeaders.slice(from.named)).toContainEqual({
+          method: "GET",
+          path: `/saved-snapshots/${first.snapshot.identity.name}`,
+          organization: "personal",
+        });
+        expect(await c.account(pinned.id)).toMatchObject({ organization: "team_acme" });
+        expect(await c.walletOf(first.publicationId)).toEqual({
+          state: "known",
+          wallet: "personal",
+        });
+
+        // The image is removed where it was made, by requests that name that wallet.
+        const removal = c.mark();
+        expect(await c.worker.removeImagesElsewhere?.()).toEqual([
+          { accountId: pinned.id, removed: 1, pending: 0 },
+        ]);
+        expect(new Set(c.namedSince(removal))).toEqual(new Set(["personal"]));
+        expect(c.fake.heldIn("personal")).toEqual({ sandboxes: [], snapshots: [] });
+        expect(await c.stateOf(first.publicationId)).toBe("removed");
+
+        // Pinned to each wallet in turn: each launch builds in the wallet named now; each image
+        // left in the other is removed there.
+        const inAcme = await c.launchImage(pinned.id);
+        expect(c.fake.heldIn("team_acme").snapshots).toEqual([inAcme.snapshot.identity.name]);
+        expect(await c.change(pinned.id, "team_acme", "personal")).toBe("changed");
+        const inPersonal = await c.launchImage(pinned.id);
+        expect(inPersonal.publicationId).not.toBe(inAcme.publicationId);
+        expect(c.fake.heldIn("personal").snapshots).toEqual([inPersonal.snapshot.identity.name]);
+        await c.worker.removeImagesElsewhere?.();
+        expect(c.fake.heldIn("team_acme").snapshots).toEqual([]);
+        expect(await c.change(pinned.id, "personal", "team_acme")).toBe("changed");
+        await c.worker.removeImagesElsewhere?.();
+        expect(c.fake.heldIn("personal").snapshots).toEqual([]);
+        // Nothing recorded removed that Boat still has.
+        for (const image of [first, inAcme, inPersonal])
+          if ((await c.stateOf(image.publicationId)) === "removed")
+            expect(c.fake.snapshots.has(image.snapshot.identity.name)).toBe(false);
+      }));
+
+    it("refuses a change while a build is in flight, records the image where it finished, and removes it there after the change", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        const held = Promise.withResolvers<void>();
+        c.faults.gate = held.promise;
+        const launching = c.launchImage(account.id);
+        // The build is reserved, and held in the builder.
+        for (let poll = 0; poll < 200 && !(await c.building(account.deploymentId)); poll++)
+          await sleep(20);
+        expect(await c.change(account.id, "personal", "team_acme")).toBe("in-use");
+        held.resolve();
+        const image = await launching;
+        expect(await c.walletOf(image.publicationId)).toEqual({
+          state: "known",
+          wallet: "personal",
+        });
+        expect(await c.change(account.id, "personal", "team_acme")).toBe("changed");
+        delete c.faults.gate;
+        const removal = c.mark();
+        await c.worker.removeImagesElsewhere?.();
+        expect(new Set(c.namedSince(removal))).toEqual(new Set(["personal"]));
+        expect(c.fake.heldIn("personal").snapshots).toEqual([]);
+        expect(await c.stateOf(image.publicationId)).toBe("removed");
+      }));
+
+    it("removes a pinned account's image with requests that name its wallet when the owner switches the active wallet between retention passes", () =>
+      withWallets(async (c) => {
+        const account = await c.store("personal", "personal");
+        const image = await c.launchImage(account.id);
+        await c.worker.reapImages?.({ stoppedSince: new Date(0), unusedSince: new Date(0) });
+        c.fake.account = { ...c.fake.account, activeWallet: "team_acme" };
+        const from = c.mark();
+        await c.worker.reapImages?.(retention);
+        expect(new Set(c.namedSince(from))).toEqual(new Set(["personal"]));
+        expect(await c.stateOf(image.publicationId)).toBe("removed");
+        expect(c.fake.heldIn("personal").snapshots).toEqual([]);
       }));
   },
 );

@@ -41,6 +41,18 @@ export const boatRuns = snakeCase.table(
      * existed is.
      */
     accountId: uuid().references(() => boatAccounts.id, { onDelete: "restrict" }),
+    /**
+     * The Boat wallet it was created in, named (`X-Boat-Org`) on every later request about it: an
+     * organization's id or name, or `personal`; null with `boatWalletState` `known`: the key's only
+     * wallet (an organization's key), named by no header. See `boatWalletState`.
+     */
+    boatWallet: text(),
+    /**
+     * `known`: `boatWallet` is where it is. `unknown`: made before Core recorded wallets, by an
+     * account with no pin; no request about it is made until Core has found it. `unreachable`: Core
+     * looked under every wallet the key can bill and Boat has it in none: never removed or used.
+     */
+    boatWalletState: text().notNull().default("unknown"),
     publicationId: uuid()
       .notNull()
       .references(() => nativePublications.id, { onDelete: "restrict" }),
@@ -87,6 +99,10 @@ export const boatRuns = snakeCase.table(
       .default(sql`'[]'::jsonb`),
   },
   (table) => [
+    check(
+      "boat_runs_wallet",
+      sql`${table.boatWalletState} in ('known','unknown','unreachable') and (${table.boatWalletState} = 'known' or ${table.boatWallet} is null)`,
+    ),
     uniqueIndex("boat_runs_sandbox").on(table.deploymentId, table.sandboxId),
     index("boat_runs_deployment").on(table.deploymentId, table.runId),
     index("boat_runs_account").on(table.accountId, table.runId),

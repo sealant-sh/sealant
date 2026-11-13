@@ -43,11 +43,31 @@ export const nativePublications = snakeCase.table(
      * cleared (a key rotation, a check that can start): the next launch replaces it with one build.
      */
     reopenedAt: timestamp({ mode: "date", withTimezone: true }),
+    /**
+     * The Boat wallet it was created in, named (`X-Boat-Org`) on every later request about it: an
+     * organization's id or name, or `personal`; null with `boatWalletState` `known`: the key's only
+     * wallet (an organization's key), named by no header. See `boatWalletState`.
+     */
+    boatWallet: text(),
+    /**
+     * `known`: `boatWallet` is where it is. `unknown`: made before Core recorded wallets, by an
+     * account with no pin; no request about it is made until Core has found it. `unreachable`: Core
+     * looked under every wallet the key can bill and Boat has it in none: never removed or used.
+     */
+    boatWalletState: text().notNull().default("unknown"),
   },
   (table) => [
+    // One image of a recipe per wallet: a launch uses only the one in the account's wallet, and
+    // builds there when there is none. One Core cannot reach is recorded, and in nobody's way.
     uniqueIndex("native_publications_key_active")
-      .on(table.keyHash)
-      .where(sql`${table.state} not in ('removed','superseded')`),
+      .on(table.keyHash, sql`coalesce(${table.boatWallet}, '')`)
+      .where(
+        sql`${table.state} not in ('removed','superseded') and ${table.boatWalletState} <> 'unreachable'`,
+      ),
+    check(
+      "native_publications_wallet",
+      sql`${table.boatWalletState} in ('known','unknown','unreachable') and (${table.boatWalletState} = 'known' or ${table.boatWallet} is null)`,
+    ),
     index("native_publications_scope_retention").on(
       table.deploymentId,
       table.scopeKind,

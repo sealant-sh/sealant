@@ -128,6 +128,13 @@ export class BoatNativeCatalog extends Context.Service<
 export interface BoatNativeCatalogOptions {
   readonly deploymentId: string;
   readonly builder: IBoatSnapshotBuilder;
+  /**
+   * The Boat wallet the builder's client names on every request (`X-Boat-Org`; null: none, the
+   * key's only wallet). The catalog builds, verifies and removes only images recorded in it: Boat
+   * not finding an image is evidence it is gone only when the request named the wallet the image
+   * was made in. Absent: an install with no wallets to tell apart (tests); nothing is skipped.
+   */
+  readonly wallet?: string | null;
 }
 
 const claimMs = 30 * 60 * 1000;
@@ -191,6 +198,17 @@ const make = (
   Effect.gen(function* () {
     const repo = yield* NativePublicationRepo;
     const builder = options.builder;
+    /** Whether the publication is recorded in the wallet this catalog's builder names. */
+    const inThisWallet = (id: string) =>
+      options.wallet === undefined
+        ? Effect.succeed(true)
+        : repo
+            .wallet(id)
+            .pipe(
+              Effect.map(
+                (recorded) => recorded?.state === "known" && recorded.wallet === options.wallet,
+              ),
+            );
     const acquire = Effect.fn("BoatNativeCatalog.acquire")(function* (input: NativeAcquireInput) {
       const plan = yield* mechanism(() => builder.plan(input.spec));
       const key = yield* Effect.try({
@@ -240,6 +258,10 @@ const make = (
         ),
       );
       const id = record.ownership.publicationId;
+      // The account's wallet changed between this catalog's opening and the reservation: the
+      // build or the image is the new wallet's, and a catalog that names it does it next time.
+      if (!(yield* inThisWallet(id)))
+        return yield* Effect.fail(new NativeCatalogError("publication-pending", id));
       if (record.state === "ready") {
         const checked = yield* Effect.result(
           mechanism(
@@ -330,6 +352,8 @@ const make = (
       policy?: NativeRetentionPolicy,
     ) {
       const id = record.ownership.publicationId;
+      // An image recorded in another wallet is removed by a catalog that names that wallet.
+      if (!(yield* inThisWallet(id))) return "retained";
       const retiring = yield* repo.retire(id, policy);
       if (retiring?.state !== "retiring") return "retained";
       const claim = yield* repo.claim(id, "remove", claimMs);
@@ -452,6 +476,9 @@ const make = (
         );
       if (record.state === "removed") return "removed";
       if (record.state === "superseded") return "superseded";
+      // A ready or retiring image of another wallet is verified and removed by a catalog that
+      // names that wallet; asked here, Boat would answer that it has none.
+      if (!(yield* inThisWallet(id))) return "other-wallet";
       if (
         record.state === "quarantined" &&
         record.publication === null &&

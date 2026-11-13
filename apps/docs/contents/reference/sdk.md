@@ -287,15 +287,14 @@ These call the live API and work end-to-end:
   reason; `wallets`, the wallets a personal key can bill with the active one marked; and `billing`,
   whether the account is `pinned`, an organization's key, or follows the key's `active-wallet`, with
   `walletChanged` when that moved). `.setOrganization(boatAccountId, organization)` points an
-  account with a personal key at a wallet (an organization's id from `wallets`, or `personal`) or at
-  none (`null`), without its key. When everything the account holds is in that wallet already (an
-  unpinned account pinned to the wallet it bills, say), it is relabelled at once and nothing is
-  deleted. Otherwise it rejects with `boat-account-in-use` while the account has VMs, runs to settle
-  or builds in Boat, `boat-account-images-unlocated` when a saved image is in none of the key's
-  wallets, and `boat-key-organization` for an organization's key. An account with saved images
-  answers `organizationChange` (`organization`, `requestedAt`, `imagesLeft`): the control plane
-  deletes each from the wallet it found it in before it switches, and meanwhile rejects creates,
-  `rotateKey` and `prove` with `boat-account-changing-organization`. The control plane's own key is
+  account with a personal key at another wallet (an organization's id from `wallets`, or
+  `personal`) without its key. Every personal key is pinned at `create`, so `null` is refused.
+  What the account made stays recorded in the wallet it was made in, and every request about it
+  names that wallet. So the change is immediate, deletes nothing first and refuses no workspace; it
+  rejects with `boat-account-in-use` only while the account has VMs, runs to settle or builds in
+  Boat, and `boat-key-organization` for an organization's key. Images made in the old wallet are
+  removed there by the control plane; `unreachable.savedImages` names any Boat has in none of the
+  key's wallets. The control plane's own key is
   not in `list()`: `.installKey()` reads its last report and `.checkInstallKey()` checks it now
   (`BoatInstallKey`: `label`, `report`). A refused key rejects with `SealantApiError`, whose `boat`,
   `missingPermissions` and `boatKeyReport` say why. `.prove(boatAccountId)` runs a full check with a

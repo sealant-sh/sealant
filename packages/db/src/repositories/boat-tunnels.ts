@@ -21,6 +21,13 @@ import { boatRuns } from "../schema/boat-runs.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
 
 /** Store errors never include SQL, ciphertext or serialized key material. */
+
+/** A run row as the run ledger's schema reads it: its recorded wallet is read apart. */
+const withoutWallet = <R extends { readonly boatWallet: unknown; readonly boatWalletState: unknown }>({
+  boatWallet: _wallet,
+  boatWalletState: _state,
+  ...row
+}: R) => row;
 export class BoatTunnelStoreError extends Error {
   readonly _tag = "BoatTunnelStoreError";
   constructor(
@@ -159,7 +166,7 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
             .where(eq(boatRuns.runId, id))
             .for("update");
           const run = yield* parse(() =>
-            row === undefined ? undefined : boatRunSchema.parse(row),
+            row === undefined ? undefined : boatRunSchema.parse(withoutWallet(row)),
           );
           // A tunnel is reserved only for a run whose bearer is sealed and that is not fenced.
           if (
@@ -430,7 +437,7 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
               .from(boatRuns)
               .where(eq(boatRuns.runId, before.binding.target.runtimeInstanceId));
             const run = yield* parse(() =>
-              row === undefined ? undefined : boatRunSchema.parse(row),
+              row === undefined ? undefined : boatRunSchema.parse(withoutWallet(row)),
             );
             if (
               run === undefined ||

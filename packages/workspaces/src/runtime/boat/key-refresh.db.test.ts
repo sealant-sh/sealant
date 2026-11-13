@@ -67,7 +67,13 @@ describe.skipIf(databaseUrl === undefined)("the scheduled refresh of Boat key re
         const id = randomUUID();
         await repo(
           Effect.flatMap(BoatAccountRepo, (accounts) =>
-            accounts.create({ id, label: "Org R", sealedKey: `sealed:${ACCOUNT_KEY}`, keyId: "k" }),
+            accounts.create({
+              id,
+              label: "Org R",
+              sealedKey: `sealed:${ACCOUNT_KEY}`,
+              keyId: "k",
+              keyKind: null,
+            }),
           ),
         );
         const installKey = BoatSecret.parse(INSTALL_KEY);

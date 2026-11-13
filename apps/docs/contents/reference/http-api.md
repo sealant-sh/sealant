@@ -204,12 +204,14 @@ env key, both `install-key` routes answer `503` and say so.
   Boat's reason in `boat` (see the workspace's `error.boat` below); a key that provably lacks a
   permission Core needs answers `422` with code `boat-key-missing-permissions`, the permissions
   named in `missingPermissions` and the check in `report`; one Boat did not answer for
-  `boat-key-unverified`. For a personal key, `organization` names the Boat organization to bill (its
-  id or name): Core stores it and sends it as `X-Boat-Org` on every request for the account, so
-  billing never follows the key's active wallet. The key is sealed with the install's credential key
-  (`SEALANT_CREDENTIALS_KEY`) and is never returned by any route, logged or named in an error. The
-  answer is
-  `{ boatAccountId, label, state, createdAt, keyRotatedAt, organization, organizationChange, report }`.
+  `boat-key-unverified`. A personal key is pinned at connect: to `organization` when named (an
+  organization's id or name), or else to the wallet the key bills now, as Boat answered. Core keeps
+  Boat's id and sends it as `X-Boat-Org` on every request for the account, so billing never follows
+  the key's active wallet. If Boat does not show which wallet the key bills, nothing is stored
+  (`boat-key-unverified`). An organization's key has one wallet and no pin. The key is sealed with
+  the install's credential key (`SEALANT_CREDENTIALS_KEY`) and is never returned by any route, logged
+  or named in an error. The answer is
+  `{ boatAccountId, label, state, createdAt, keyRotatedAt, organization, unreachable, report }`.
 - `GET /v1/boat-accounts` lists every stored account not removed. `state` is `active` or `removing`.
   Each carries its key's last `report`, null until it is checked.
 - `POST /v1/boat-accounts/:boatAccountId/check` checks a stored account's key again and stores and
@@ -251,7 +253,8 @@ Boat reports but what the account does: `pinned` means every request for it name
 organization's id, or `personal`), so its bill never follows the key's active wallet.
 `key-organization` means the key is an organization's, which bills that organization and nothing
 else. `active-wallet` means a personal key with no pin, which bills whichever wallet its Boat
-account has active, and the person can change that in Boat at any time (`boat org switch`). When the
+account has active, and the person can change that in Boat at any time (`boat org switch`). A
+stored account is in that state only until Core pins it, right after an upgrade. When the
 wallet it bills is not the one an earlier report saw, `walletChanged` says so:
 `{ from, observedAt }`, where `from` is the wallet it billed before and `observedAt` is when Core
 first saw the change. It stays while the wallet stays.
@@ -288,49 +291,44 @@ enough: after a rotation the new key deletes VMs the old key created.
   Boat. `GET /v1/boat-accounts` carries each account's last check as `lastProof` (null until it is
   proven). A check takes a minute or more.
 
-- `PUT /v1/boat-accounts/:boatAccountId/organization { organization }` points a stored account with
-  a personal key at the wallet it bills from now on, without its key. `organization` is an
-  organization's id or name from the report's `wallets`, `personal` for the key's own Boat account,
-  or null to name none. Core checks the key with Boat (read-only) under the wallet the account names
-  now and under the new one, and keeps what Boat lists: the organization's id, or `personal`. A
-  wallet the key's account cannot bill is `400`. An organization's key is `409`
-  `boat-key-organization`: it bills its own organization, so there is nothing to choose. `default`
-  is `409` `boat-account-environment`; the install's own key bills what `SEALANT_BOAT_ORGANIZATION`
-  names, and its report says so in `billing` too.
+- `PUT /v1/boat-accounts/:boatAccountId/organization { organization }` points a stored account with a
+  personal key at another wallet, without its key. `organization` is an organization's id or name
+  from the report's `wallets`, or `personal` for the key's own Boat account. Core checks the key with
+  Boat (read-only) under the wallet the account names now and under the new one, and keeps Boat's id.
+  The refusals:
 
-  VMs and saved snapshots belong to the wallet that paid for them, and a request that names another
-  wallet can neither see nor delete them. So Core first finds where the account's things are:
-  - **A pinned account's** are in the wallet it names, since it named it on every request.
-  - **An unpinned account's** could be in any wallet its key's Boat account had active when they
-    were made. Core looks for each saved image, and each running VM, under each wallet in the
-    report's `wallets`, naming that wallet. An image Boat shows in none of them is `409`
-    `boat-account-images-unlocated`, with a sentence naming it. Core never records as removed
-    something it could not find. Boat not answering while Core looks is `422` `boat-key-unverified`.
+  - `null`: `400`. There is no unpin.
+  - A wallet the key's account cannot bill: `400`.
+  - An organization's key: `409` `boat-key-organization`. It has nothing to choose.
+  - An account Core has not pinned yet: `409` `boat-account-wallet-unresolved`.
+  - `default`: `409` `boat-account-environment`. The install's own key bills what
+    `SEALANT_BOAT_ORGANIZATION` names, or what Core observed at its first check, and its report says
+    so in `billing`.
 
-  Then:
-  - **Everything the account holds is in the new wallet already:** the account is relabelled at
-    once. Nothing is deleted, running workspaces are untouched, and new ones are not refused. This
-    covers an unpinned account pinned to the wallet it bills, and a pin removed while that wallet is
-    active. For an unpinned account it also needs no run still settling, no image build and no full
-    check under way.
-  - **Anything else is a move.** It is refused (`409` `boat-account-in-use`, with `liveRuns`,
-    `unsettledRuns` and `buildsInFlight`, and a sentence counting them) while the account has runs
-    whose VMs Boat may hold, runs still being settled, or image builds in flight or being cleaned
-    up. It is refused `409` `boat-proof-running` while a full check's leftovers may be there.
-    Nothing changes. An account that holds nothing switches at once. One that holds saved images
-    answers with `organizationChange: { organization, requestedAt, imagesLeft }` and still bills
-    what it billed. A worker that builds Boat images deletes each image with requests that name the
-    wallet Core found it in, through the recorded removal that image retention and an account's
-    removal use. Boat not finding it there means it is gone. The account switches once none is left,
-    and the images are built again in the new wallet at the next launch. Meanwhile a workspace
-    create or restart naming the account is `409` with code `boat-account-changing-organization`,
-    and so are a key rotation and a full check. A deletion Boat does not answer, or a worker that
-    stops halfway, leaves the change pending and the account on the old wallet, and the next pass
-    goes on from the record. Naming the organization it bills calls an unfinished change off, and so
-    does removing the account.
+  Every object Core creates in Boat (a run's VM, a saved image, a full check's VM and snapshot) is
+  recorded with the wallet it was created in, and every later request about it names that wallet.
+  Boat's "not found" counts as evidence that something is gone only when the request named the
+  wallet it was made in.
 
-  After any change, every request for the account names its wallet: the check and its limits read,
-  the worker's creates and image builds, its sweeps and deletes.
+  So a change is refused, with the counts, only while the account has something that lives in the
+  wallet it names now and is reached through the account: runs whose VMs Boat may hold, runs still
+  being settled, image builds in flight or being cleaned up, or a full check's leftovers. Those are
+  `409` `boat-account-in-use` (with `liveRuns`, `unsettledRuns`, `buildsInFlight`) and
+  `409` `boat-proof-running`. Nothing changes.
+
+  Otherwise the account names the new wallet at once. Nothing is deleted first, and no workspace is
+  refused. A launch builds its image in the new wallet, since it uses only an image recorded in the
+  account's wallet. The images made in the old wallet stay recorded there. The worker removes each
+  one with requests that name its own wallet, by the recorded removal image retention uses.
+
+  An account connected before Core pinned accounts makes no Boat request, and a workspace naming it
+  is `409` (code `boat-account-wallet-unresolved`), until the worker has resolved it. That happens
+  when the worker starts and on each sweep tick. The worker checks the key, looks for each of the
+  account's live VMs and saved images under every wallet the key can bill (naming each, in parallel,
+  bounded), and records each where it is found. It then pins the account where its VMs are, or, with
+  none running, to the wallet the key bills now. A saved image Boat has in none of the key's wallets
+  is reported in `unreachable.savedImages`. It is never removed by Core and never used, and it blocks
+  nothing.
 
 - `DELETE /v1/boat-accounts/:boatAccountId` is refused while the account has runs whose VMs Boat may
   still hold, or an image build in flight (`409`, code `boat-account-in-use`, with `liveRuns` and

@@ -128,13 +128,14 @@ describe.skipIf(DATABASE_URL === undefined)(
         ...(at === undefined ? {} : { now: () => at }),
         pollMs: 20,
         waitMs: 2_000,
-        clientFor: async (account) => {
+        clientFor: async (account, wallet) => {
           const key = await openStoredBoatKey({ db, cipher }, account);
           if (key === undefined) return undefined;
           const client = HttpBoatApi.create({
             credential: key.credential,
             baseUrl: boat.baseUrl,
             timeoutMs: 5_000,
+            ...(wallet === null ? {} : { organization: wallet }),
           });
           return client.ok ? client.value : undefined;
         },
@@ -191,10 +192,13 @@ describe.skipIf(DATABASE_URL === undefined)(
         const created = await run(routes.createBoatAccount({ label: "B", apiKey: ACCOUNT_KEY }));
         const key = await openStoredBoatKey({ db, cipher }, created.boatAccountId);
         if (key === undefined) throw new Error("no key");
+        // As the route opens it: naming the wallet the account was pinned to at connect.
+        const wallet = created.organization ?? null;
         const client = HttpBoatApi.create({
           credential: key.credential,
           baseUrl: boat.baseUrl,
           timeoutMs: 5_000,
+          ...(wallet === null ? {} : { organization: wallet }),
         });
         if (!client.ok) throw client.error;
         // The process stops for good once the VM has started.
@@ -203,6 +207,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           proofs: await proofs(),
           account: created.boatAccountId,
           client: client.value,
+          wallet,
           pollMs: 20,
           waitMs: 5_000,
           afterStep: async () => {

@@ -14,6 +14,10 @@ import {
   SealantDB,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
+  createBoatWalletOf,
+  type BoatCreateWallet,
+  type BoatWalletOwner,
+  type BoatWalletResolution,
   type DB,
   type ResourceWorkspaceLink,
 } from "@sealant/db";
@@ -43,9 +47,13 @@ import {
   boatReadinessWorkerLayer,
   boatRemovalWorkerLayer,
   boatResourcesLayer,
+  boatSandboxIdSchema,
   boatSealedExecutionLayer,
+  boatSnapshotNameSchema,
   boatVmWorkerLayer,
-  loadBoatCredential,
+  checkBoatKey,
+  installBoatApi,
+  installWalletApi,
   loadPackagedRuntime,
   makeBoatTunnelCarrierLayer,
   openStoredBoatKey,
@@ -60,6 +68,7 @@ import {
   type BoatAdapterServices,
   type BoatApi,
   type BoatClientFactory,
+  BoatApiError,
   type BoatConvergenceSweep,
   type BoatGatewayHost,
   type BoatKeyProofClient,
@@ -150,6 +159,21 @@ const boatGatewayHost = (
   };
 };
 
+/** Runs `tasks` at most `limit` at a time. */
+const pooled = async <A>(tasks: readonly (() => Promise<A>)[], limit = 8) => {
+  const results: A[] = [];
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+      while (next < tasks.length) {
+        const index = next++;
+        const task = tasks[index];
+        if (task !== undefined) results[index] = await task();
+      }
+    }),
+  );
+  return results;
+};
 /** The production builder: the packaged sealantd runtime, verified against its exact pin, once. */
 const packagedSnapshotBuilder = (): BoatSnapshotBuilderFactory => {
   let bundle: ReturnType<typeof loadPackagedRuntime> | undefined;
@@ -197,15 +221,10 @@ export interface BoatWorkerStack extends BoatAccountStack {
     | ((policy: BoatImageRetention) => Promise<NativeCatalogSweep["entries"] | undefined>)
     | undefined;
   /**
-   * A stored account's catalog whose builder names `organization` on every request, whatever the
-   * account names: what removes an image Core found in that wallet. Disposed by the caller.
+   * The account's catalog whose builder names `wallet` on every request (null: none), whatever the
+   * account names now: what builds, verifies and removes the images recorded in that wallet.
    */
-  readonly catalogIn:
-    | ((organization: string) => Promise<{
-        readonly service: BoatNativeCatalogService;
-        readonly dispose: () => Promise<void>;
-      }>)
-    | undefined;
+  readonly catalogIn: ((wallet: string | null) => Promise<BoatNativeCatalogService>) | undefined;
   /** Where each of the sweeps above stopped last; the next tick starts there. */
   readonly cursors: {
     vm?: string | undefined;
@@ -275,7 +294,7 @@ export const assembleBoat = async (input: {
   ) => BoatResult<BoatKeyProofClient>;
 }) => {
   const { env, db, credentialCipher } = input;
-  const envAccount = boatProviderFromEnv(env, input.clientFor);
+  const envAccount = boatProviderFromEnv(env);
   const gateway = boatGatewayHost(env, input.docker);
   // Boat serves launches where its state directory is set, the way MicroVM does where its build
   // role is: the worker's env schema then holds the cipher beside it.
@@ -296,25 +315,30 @@ export const assembleBoat = async (input: {
           },
           db,
         );
+  // The install's own key names the wallet `boat_install` holds for it on every request; none
+  // until the resolve pass below has found it.
   const defaultProvider =
     envAccount === undefined || names === undefined
       ? undefined
-      : { deploymentId: names.deploymentId, api: envAccount.api, builderOwner: names.builderOwner };
-  // The install's own key once more, for its report's check only: the client above holds the other.
-  const defaultKey = (() => {
-    if (envAccount === undefined) return undefined;
-    const credential = loadBoatCredential({
-      value: env.SEALANT_BOAT_API_KEY,
-      file: env.SEALANT_BOAT_API_KEY_FILE,
-    });
-    return credential.ok
-      ? {
-          credential: credential.value,
+      : {
+          deploymentId: names.deploymentId,
+          api: installBoatApi({
+            db,
+            credential: envAccount.credential,
+            ...(input.clientFor === undefined ? {} : { clientFor: input.clientFor }),
+            ...(input.revisionCheckMs === undefined ? {} : { checkMs: input.revisionCheckMs }),
+          }),
+          builderOwner: names.builderOwner,
+        };
+  // The install's own key, for its report's check and its full checks' sweep.
+  const defaultKey =
+    envAccount === undefined
+      ? undefined
+      : {
+          credential: envAccount.credential,
           organization: envAccount.organization,
           ...(names === undefined ? {} : { deploymentId: names.deploymentId }),
-        }
-      : undefined;
-  })();
+        };
   const directory = new BoatAccountDirectory({
     db,
     cipher: credentialCipher,
@@ -326,6 +350,34 @@ export const assembleBoat = async (input: {
     Layer.succeed(SealantDB, db),
     Layer.succeed(CredentialCipher, credentialCipher),
   );
+  const accountRepo = <A, E>(effect: Effect.Effect<A, E, BoatAccountRepo>) =>
+    Effect.runPromise(
+      effect.pipe(Effect.provide(BoatAccountRepoLive), Effect.provideService(SealantDB, db)),
+    );
+  /** The wallet an account creates in now (the install's own key's: `null`). */
+  const createWallet = async (accountId: BoatAccountId): Promise<BoatCreateWallet> => {
+    if (accountId === null) {
+      const stored = await accountRepo(
+        Effect.flatMap(BoatAccountRepo, (repo) => repo.installWallet()),
+      );
+      return createBoatWalletOf(stored?.organization ?? null, stored?.keyKind ?? null);
+    }
+    const account = await directory.account(accountId);
+    return account === undefined
+      ? { kind: "unresolved" }
+      : createBoatWalletOf(account.organization, account.keyKind);
+  };
+  /** A client for an account's key that names `wallet` on every request (null: none). */
+  const walletClient = (accountId: BoatAccountId, wallet: string | null): BoatApi | undefined => {
+    if (accountId !== null) return directory.walletApi(accountId, wallet);
+    if (envAccount === undefined) return undefined;
+    const opened = installWalletApi({
+      credential: envAccount.credential,
+      ...(input.clientFor === undefined ? {} : { clientFor: input.clientFor }),
+      organization: wallet,
+    });
+    return opened.ok ? opened.value : undefined;
+  };
   /** The repositories the routing reads: which account a run, a VM or an image belongs to. */
   const repos = ManagedRuntime.make(
     Layer.mergeAll(BoatRunRepoLive, NativePublicationRepoLive).pipe(Layer.provide(Infra)),
@@ -425,43 +477,49 @@ export const assembleBoat = async (input: {
     // The account's image catalog and builder, made on first use: a stored account builds its
     // images in its own Boat account on its first launch, and never before.
     const journals = journalDirectory(accountId);
-    let catalogRuntime: ManagedRuntime.ManagedRuntime<BoatNativeCatalog, never> | undefined;
-    let catalog: Promise<BoatNativeCatalogService | undefined> | undefined;
-    const catalogOf = () => {
-      catalog ??= (async () => {
-        const owner = provider.builderOwner;
-        if (!launches || journals === undefined || owner === undefined) return undefined;
-        const builder = await makeBuilder({ api, journalDirectory: journals, owner });
-        catalogRuntime = ManagedRuntime.make(
-          boatNativeCatalogLayer({ deploymentId, builder }).pipe(Layer.provide(Infra)),
-        );
-        return catalogRuntime.runPromise(BoatNativeCatalog);
-      })();
-      catalog.catch(() => {
-        // A failed construction is tried again by the next caller.
-        catalog = undefined;
-      });
-      return catalog;
-    };
-    const catalogIn =
-      accountId === null || !launches || journals === undefined
-        ? undefined
-        : async (organization: string) => {
-            const owner = provider.builderOwner;
-            if (owner === undefined) throw new Error("The account builds no images here.");
-            const builder = await makeBuilder({
-              api: directory.walletApi(accountId, organization),
-              journalDirectory: journals,
-              owner,
-            });
-            const scoped = ManagedRuntime.make(
-              boatNativeCatalogLayer({ deploymentId, builder }).pipe(Layer.provide(Infra)),
-            );
-            return {
-              service: await scoped.runPromise(BoatNativeCatalog),
-              dispose: () => scoped.dispose(),
-            };
+    // One catalog per wallet, its builder's client naming that wallet on every request: it builds,
+    // verifies and removes only images recorded there. `catalogOf` is the one of the wallet the
+    // account creates in now; `catalogIn` any other, for the images recorded in it.
+    const catalogs = new Map<
+      string,
+      Promise<{
+        readonly service: BoatNativeCatalogService;
+        readonly runtime: ManagedRuntime.ManagedRuntime<BoatNativeCatalog, never>;
+      }>
+    >();
+    const catalogIn = async (wallet: string | null) => {
+      const owner = provider.builderOwner;
+      if (!launches || journals === undefined || owner === undefined)
+        throw new Error("This worker builds no images for the account.");
+      const key = wallet ?? "";
+      let made = catalogs.get(key);
+      if (made === undefined) {
+        made = (async () => {
+          const walletApi = walletClient(accountId, wallet);
+          if (walletApi === undefined) throw new Error("The account's key cannot be opened.");
+          const builder = await makeBuilder({ api: walletApi, journalDirectory: journals, owner });
+          const catalogRuntime = ManagedRuntime.make(
+            boatNativeCatalogLayer({ deploymentId, builder, wallet }).pipe(Layer.provide(Infra)),
+          );
+          return {
+            service: await catalogRuntime.runPromise(BoatNativeCatalog),
+            runtime: catalogRuntime,
           };
+        })();
+        catalogs.set(key, made);
+        made.catch(() => {
+          // A failed construction is tried again by the next caller.
+          if (catalogs.get(key) === made) catalogs.delete(key);
+        });
+      }
+      return (await made).service;
+    };
+    const catalogOf = async () => {
+      if (!launches || journals === undefined || provider.builderOwner === undefined)
+        return undefined;
+      const wallet = await createWallet(accountId);
+      return wallet.kind === "unresolved" ? undefined : catalogIn(wallet.wallet);
+    };
     /** Whether this account ever built here: its journals exist. */
     const hasJournals = async () =>
       journals !== undefined &&
@@ -475,7 +533,7 @@ export const assembleBoat = async (input: {
       adapter,
       control,
       catalog: catalogOf,
-      catalogIn,
+      catalogIn: launches && journals !== undefined ? catalogIn : undefined,
       reconcileAllocations: (page) =>
         runtime.runPromise(Effect.flatMap(BoatVm, (vms) => vms.reconcile(page))),
       reconcileConvergence: (page) =>
@@ -489,7 +547,7 @@ export const assembleBoat = async (input: {
         : async () => {
             // The default account's journals are always read; a stored account's only once it
             // has built here (or its catalog is already in use).
-            if (accountId !== null && catalog === undefined && !(await hasJournals()))
+            if (accountId !== null && catalogs.size === 0 && !(await hasJournals()))
               return undefined;
             const service = await catalogOf();
             if (service === undefined) return undefined;
@@ -505,7 +563,7 @@ export const assembleBoat = async (input: {
       reapImages: !launches
         ? undefined
         : async (policy) => {
-            if (accountId !== null && catalog === undefined && !(await hasJournals()))
+            if (accountId !== null && catalogs.size === 0 && !(await hasJournals()))
               return undefined;
             const service = await catalogOf();
             if (service === undefined) return undefined;
@@ -543,7 +601,8 @@ export const assembleBoat = async (input: {
       cursors,
       dispose: async () => {
         await runtime.dispose();
-        await catalogRuntime?.dispose();
+        for (const made of catalogs.values())
+          await made.then((each) => each.runtime.dispose()).catch(() => undefined);
       },
     };
   };
@@ -623,7 +682,7 @@ export const assembleBoat = async (input: {
   const router = new BoatAccountRouterAdapter({ stacks, resourceGateway: gateway !== undefined });
   // The default account's catalog is made at start, as it always was: its builder's runtime is
   // checked before the worker serves anything. Pins are the catalog repository's, any account's.
-  await fallback?.catalog();
+
   const publications = await repos.runPromise(NativePublicationRepo);
   const registration = !launches
     ? undefined
@@ -646,8 +705,7 @@ export const assembleBoat = async (input: {
     for (const account of await directory.listRemoving()) {
       const outcome = await (async () => {
         const stack = await stackOf(account.id);
-        const service = await stack?.catalog();
-        if (stack === undefined || service === undefined) return "pending" as const;
+        if (stack?.catalogIn === undefined) return "pending" as const;
         const held = await runRepo(
           Effect.flatMap(NativePublicationRepo, (catalog) =>
             catalog.heldByDeployment({ deploymentId: account.deploymentId, limit: 50 }),
@@ -659,6 +717,19 @@ export const assembleBoat = async (input: {
             remaining += 1;
             continue;
           }
+          // Removed with requests that name the wallet it was made in. One Core has not found
+          // yet waits for the resolve pass; one Boat has in no wallet is reported, not removed.
+          const recorded = await runRepo(
+            Effect.flatMap(NativePublicationRepo, (catalog) =>
+              catalog.wallet(record.ownership.publicationId),
+            ),
+          );
+          if (recorded?.state === "unreachable") continue;
+          if (recorded?.state !== "known") {
+            remaining += 1;
+            continue;
+          }
+          const service = await stack.catalogIn(recorded.wallet);
           const withdrawn = await Effect.runPromise(
             Effect.result(service.withdraw(record.ownership)),
           );
@@ -682,62 +753,309 @@ export const assembleBoat = async (input: {
     return report;
   };
 
+  /** Every owner of Boat objects here: the install's own key, and each stored account. */
+  const owners = async () => {
+    const accounts = await directory.list();
+    return [
+      ...(fallback === undefined
+        ? []
+        : [
+            {
+              accountId: null,
+              owner: { install: { deploymentId: fallback.deploymentId } } as BoatWalletOwner,
+            },
+          ]),
+      ...accounts.map((account) => ({
+        accountId: account.id as BoatAccountId,
+        owner: { accountId: account.id } as BoatWalletOwner,
+      })),
+    ];
+  };
+
   /**
-   * One pass of the changes of organization asked for (`PUT /v1/boat-accounts/:id/organization`):
-   * each such account's saved images are deleted from the wallet it bills now, through its catalog
-   * (the recorded removal that retention and an account's removal use), with requests that still
-   * name that wallet. Once it holds nothing there, it switches to the new organization; every
-   * process then opens a client that names it. A deletion Boat does not answer, or a crash, leaves
-   * the change pending and the account on the old wallet; the next pass goes on from the record.
+   * One pass over the saved images recorded in a wallet other than the one their account creates
+   * in now (it was pointed at another wallet since they were made): each is removed through the
+   * catalog whose builder names the wallet it was made in, by the recorded removal that retention
+   * uses. A launch never uses one (it builds in the account's wallet); this frees its slot.
    */
-  const reconcileOrganizationChanges = async () => {
-    const report: { accountId: string; outcome: "changed" | "pending" }[] = [];
-    for (const account of await directory.listChangingOrganization()) {
+  const removeImagesElsewhere = async () => {
+    const report: { accountId: string; removed: number; pending: number }[] = [];
+    for (const { accountId, owner } of await owners()) {
       const outcome = await (async () => {
-        const change = account.organizationChange;
-        const stack = await stackOf(account.id);
-        if (change === null || stack?.catalogIn === undefined) return "pending" as const;
-        const held = await runRepo(
-          Effect.flatMap(NativePublicationRepo, (catalog) =>
-            catalog.heldByDeployment({ deploymentId: account.deploymentId, limit: 50 }),
+        const elsewhere = await accountRepo(
+          Effect.flatMap(BoatAccountRepo, (repo) => repo.imagesElsewhere(owner)),
+        );
+        if (elsewhere.length === 0) return undefined;
+        const stack = await stackOf(accountId);
+        if (stack?.catalogIn === undefined) return { removed: 0, pending: elsewhere.length };
+        let removed = 0;
+        let pending = 0;
+        for (const image of elsewhere) {
+          const record = await runRepo(
+            Effect.flatMap(NativePublicationRepo, (catalog) => catalog.get(image.publicationId)),
+          );
+          if (record === undefined) continue;
+          const service = await stack.catalogIn(image.wallet);
+          const withdrawn = await Effect.runPromise(
+            Effect.result(service.withdraw(record.ownership)),
+          );
+          if (Result.isFailure(withdrawn)) pending += 1;
+          else removed += 1;
+        }
+        return { removed, pending };
+      })().catch(() => ({ removed: 0, pending: 1 }));
+      if (outcome !== undefined) report.push({ accountId: accountId ?? "default", ...outcome });
+    }
+    return report;
+  };
+
+  /** A check client for a key; probes name each wallet explicitly, with a bounded wait. */
+  const probeClient = (credential: BoatSecret, wallet: string | null) =>
+    (
+      input.clientFor ??
+      ((key, options) => HttpBoatApi.create({ credential: key, timeoutMs: 10_000, ...options }))
+    )(credential, wallet === null ? undefined : { organization: wallet });
+  /**
+   * The key check's client: Boat's real API only in production, where no client factory is given.
+   * A process given its own (`clientFor`, a test's fake) checks only through `keyClientFor`, and
+   * without one resolves nothing: it never reaches Boat's real API by default.
+   */
+  const checkClient = (
+    credential: BoatSecret,
+  ): ReturnType<NonNullable<typeof input.keyClientFor>> =>
+    input.keyClientFor !== undefined
+      ? input.keyClientFor(credential)
+      : input.clientFor === undefined
+        ? HttpBoatApi.create({ credential, timeoutMs: 10_000 })
+        : { ok: false, error: new BoatApiError("credential", null, "check_client_missing") };
+  type Seen = "found" | "absent" | "unanswered";
+  /** Where something is: the one wallet that has it, nowhere (every wallet said so), or unknown. */
+  const locate = async (
+    wallets: readonly string[],
+    read: (api: BoatApi) => Promise<Seen>,
+    credential: BoatSecret,
+  ): Promise<{ readonly in: string } | "nowhere" | "unanswered"> => {
+    const seen = await Promise.all(
+      wallets.map(async (wallet) => {
+        const api = probeClient(credential, wallet);
+        return [
+          wallet,
+          api.ok ? await read(api.value).catch((): Seen => "unanswered") : "unanswered",
+        ] as const;
+      }),
+    );
+    const found = seen.filter(([, each]) => each === "found");
+    if (found.length === 1 && found[0] !== undefined) return { in: found[0][0] };
+    return found.length === 0 && seen.every(([, each]) => each === "absent")
+      ? "nowhere"
+      : "unanswered";
+  };
+
+  /**
+   * One pass that resolves where things are, for every owner Core has not pinned (accounts
+   * connected before Core pinned them, the install's own key without a setting) and every object
+   * whose wallet Core does not know. The key is checked (read-only); an organization's key has one
+   * wallet, so everything is in it. For a personal key, each unknown live VM, saved image and full
+   * check is looked for under every wallet the key can bill, naming each, in parallel and bounded;
+   * what is found is recorded there, an image Boat has in none is `unreachable`. The owner is pinned
+   * where its live VMs all are, or, with none, to the wallet the key bills now (or the setting).
+   * Until then it makes no Boat request and takes no new workspace. Then the install's setting is
+   * applied, once nothing of the install is in the wallet it named before.
+   */
+  const resolveWallets = async () => {
+    const report: { accountId: string; outcome: string }[] = [];
+    const targets: {
+      readonly accountId: BoatAccountId;
+      readonly owner: BoatWalletOwner;
+      readonly deploymentId: string;
+      readonly credential: () => Promise<BoatSecret | undefined>;
+      readonly desired: string | undefined;
+    }[] = [
+      ...(fallback === undefined || envAccount === undefined
+        ? []
+        : [
+            {
+              accountId: null,
+              owner: { install: { deploymentId: fallback.deploymentId } },
+              deploymentId: fallback.deploymentId,
+              credential: () => Promise.resolve(envAccount.credential),
+              desired: envAccount.organization,
+            },
+          ]),
+      ...(await directory.listUnresolved()).map((account) => ({
+        accountId: account.id,
+        owner: { accountId: account.id },
+        deploymentId: account.deploymentId,
+        credential: async () =>
+          (await openStoredBoatKey({ db, cipher: credentialCipher }, account.id))?.credential,
+        desired: undefined,
+      })),
+    ];
+    for (const target of targets) {
+      const outcome = await (async () => {
+        const current = await createWallet(target.accountId);
+        const unknown = await accountRepo(
+          Effect.flatMap(BoatAccountRepo, (repo) => repo.unknownObjects(target.owner)),
+        );
+        const nothingUnknown =
+          unknown.liveRuns.length === 0 &&
+          unknown.images.length === 0 &&
+          unknown.buildsInFlight === 0 &&
+          unknown.proofs.length === 0;
+        if (current.kind === "known" && nothingUnknown) return "resolved";
+        const credential = await target.credential();
+        if (credential === undefined) return "unavailable";
+        const client = checkClient(credential);
+        if (!client.ok) return "unavailable";
+        const check = await checkBoatKey(client.value, { organization: null }).catch(
+          () => undefined,
+        );
+        if (check?.kind !== "checked") return "unavailable";
+        const observed = check.report;
+        if (observed.keyKind.observed && observed.keyKind.kind === "organization") {
+          const all: BoatWalletResolution = {
+            runs: unknown.liveRuns.map((run) => ({ runId: run.runId, wallet: null })),
+            images: unknown.images.map((image) => ({
+              publicationId: image.publicationId,
+              wallet: null,
+            })),
+            proofs: unknown.proofs.map((proof) => ({ id: proof.id, wallet: null })),
+            pin: { organization: null, keyKind: "organization" },
+          };
+          return accountRepo(
+            Effect.flatMap(BoatAccountRepo, (repo) => repo.resolveWallets(target.owner, all)),
+          );
+        }
+        const wallets =
+          observed.wallets?.observed === true
+            ? observed.wallets.choices.map((choice) => choice.id)
+            : undefined;
+        const billed = !observed.wallet.observed
+          ? undefined
+          : observed.wallet.kind === "personal"
+            ? "personal"
+            : observed.wallet.organizationId;
+        if (wallets === undefined || billed === undefined) return "unavailable";
+        const runs = await pooled(
+          unknown.liveRuns.map((run) => async () => {
+            if (run.sandboxId === null) return undefined;
+            const id = boatSandboxIdSchema.safeParse(run.sandboxId);
+            if (!id.success) return undefined;
+            const found = await locate(
+              wallets,
+              async (api) => {
+                const read = await api.get(id.data);
+                if (read.ok)
+                  return read.value.labels?.["sealant-deployment"] === target.deploymentId
+                    ? "found"
+                    : "absent";
+                return read.error.status === 404 ? "absent" : "unanswered";
+              },
+              credential,
+            );
+            return typeof found === "object" ? { runId: run.runId, wallet: found.in } : undefined;
+          }),
+        );
+        const images = await pooled(
+          unknown.images.map((image) => async () => {
+            const name = boatSnapshotNameSchema.safeParse(image.name);
+            if (!name.success) return undefined;
+            const found = await locate(
+              wallets,
+              async (api) => {
+                const read = await api.getSnapshot(name.data);
+                return read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered";
+              },
+              credential,
+            );
+            return typeof found === "object"
+              ? { publicationId: image.publicationId, wallet: found.in }
+              : found === "nowhere"
+                ? { publicationId: image.publicationId, unreachable: true as const }
+                : undefined;
+          }),
+        );
+        const proofs = await pooled(
+          unknown.proofs.map((proof) => async () => {
+            const found = await locate(
+              wallets,
+              async (api): Promise<Seen> => {
+                const vm = boatSandboxIdSchema.safeParse(proof.sandboxId);
+                const snapshot = boatSnapshotNameSchema.safeParse(proof.snapshotName);
+                const reads: Seen[] = [];
+                if (vm.success) {
+                  const read = await api.get(vm.data);
+                  reads.push(
+                    read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered",
+                  );
+                }
+                if (snapshot.success) {
+                  const read = await api.getSnapshot(snapshot.data);
+                  reads.push(
+                    read.ok ? "found" : read.error.status === 404 ? "absent" : "unanswered",
+                  );
+                }
+                return reads.includes("found")
+                  ? "found"
+                  : reads.includes("unanswered")
+                    ? "unanswered"
+                    : "absent";
+              },
+              credential,
+            );
+            return typeof found === "object"
+              ? { id: proof.id, wallet: found.in }
+              : found === "nowhere"
+                ? { id: proof.id, unreachable: true as const }
+                : undefined;
+          }),
+        );
+        const located = runs.filter((each) => each !== undefined);
+        const where = new Set(located.map((run) => run.wallet));
+        const pin =
+          located.length !== unknown.liveRuns.length || where.size > 1
+            ? undefined
+            : ([...where][0] ?? target.desired ?? billed);
+        return accountRepo(
+          Effect.flatMap(BoatAccountRepo, (repo) =>
+            repo.resolveWallets(target.owner, {
+              runs: located,
+              images: images.filter((each) => each !== undefined),
+              proofs: proofs.filter((each) => each !== undefined),
+              ...(pin === undefined ? {} : { pin: { organization: pin, keyKind: "personal" } }),
+            }),
           ),
         );
-        let remaining = 0;
-        // Each image is removed with requests that name the wallet it was found in when the change
-        // was asked (a pinned account's: the one it names), never the wallet active now.
-        const byWallet = new Map<string, (typeof held)[number][]>();
-        for (const record of held) {
-          // A build is never started under an account with a change under way (the API refuses
-          // its creates), and the change was refused while one was in flight; one queued before
-          // it is waited for.
-          const name = record.publication?.snapshot.identity.name;
-          const wallet =
-            name === undefined ? undefined : (change.locations[name] ?? account.organization);
-          if (record.state === "reserved" || record.state === "building" || wallet == null) {
-            remaining += 1;
-            continue;
-          }
-          byWallet.set(wallet, [...(byWallet.get(wallet) ?? []), record]);
-        }
-        for (const [wallet, records] of byWallet) {
-          const catalog = await stack.catalogIn(wallet);
-          try {
-            for (const record of records) {
-              const withdrawn = await Effect.runPromise(
-                Effect.result(catalog.service.withdraw(record.ownership)),
-              );
-              if (Result.isFailure(withdrawn)) remaining += 1;
-            }
-          } finally {
-            await catalog.dispose();
-          }
-        }
-        if (remaining > 0 || held.length === 50) return "pending" as const;
-        return (await directory.finishOrganizationChange(account.id)) === "changed"
-          ? ("changed" as const)
-          : ("pending" as const);
-      })().catch(() => "pending" as const);
-      report.push({ accountId: account.id, outcome });
+      })().catch(() => "unavailable");
+      if (outcome === "pinned" && target.accountId !== null) directory.forget(target.accountId);
+      if (outcome !== "resolved")
+        report.push({ accountId: target.accountId ?? "default", outcome });
+    }
+    // The install's setting, once nothing of the install is in the wallet it names now.
+    const desired = envAccount?.organization;
+    if (desired !== undefined && fallback !== undefined) {
+      const applied = await accountRepo(
+        Effect.flatMap(BoatAccountRepo, (repo) => repo.installWallet()),
+      );
+      if (applied?.organization != null && applied.organization !== desired) {
+        const unsettled = await runRepo(
+          Effect.flatMap(BoatRunRepo, (runs) =>
+            runs.listUnsettled({ deploymentId: fallback.deploymentId, limit: 100 }),
+          ),
+        ).catch(() => undefined);
+        const changed =
+          unsettled === undefined
+            ? undefined
+            : await accountRepo(
+                Effect.flatMap(BoatAccountRepo, (repo) =>
+                  repo.changeOrganization(
+                    { install: { deploymentId: fallback.deploymentId } },
+                    { organization: desired, expected: applied.organization, unsettled },
+                  ),
+                ),
+              ).catch(() => undefined);
+        report.push({ accountId: "default", outcome: `setting-${changed?.kind ?? "unavailable"}` });
+      }
     }
     return report;
   };
@@ -778,6 +1096,18 @@ export const assembleBoat = async (input: {
     }
     return report;
   };
+
+  // At start, where unpinned owners' things are: bounded, so a Boat that does not answer delays
+  // nothing for long; the sweep tick goes on from there.
+  let startTimer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    resolveWallets().catch(() => []),
+    new Promise((done) => {
+      startTimer = setTimeout(done, 30_000);
+    }),
+  ]);
+  clearTimeout(startTimer);
+  await fallback?.catalog();
 
   const launchReport = {
     launches: registration !== undefined,
@@ -849,8 +1179,10 @@ export const assembleBoat = async (input: {
         },
     reconcileRemovals: registration === undefined ? undefined : reconcileRemovals,
     /** One pass of the changes of organization (`reconcileOrganizationChanges` above). */
-    reconcileOrganizationChanges:
-      registration === undefined ? undefined : reconcileOrganizationChanges,
+    /** One pass that finds where unknown objects are and pins the owners Core has not pinned. */
+    resolveWallets,
+    /** One pass removing saved images recorded in another wallet than their account's now. */
+    removeImagesElsewhere: registration === undefined ? undefined : removeImagesElsewhere,
     /** One image retention pass (`reapImages` above); only a worker that builds images has one. */
     reapImages: registration === undefined ? undefined : reapImages,
     /**
@@ -878,7 +1210,8 @@ export const assembleBoat = async (input: {
       return sweepBoatKeyProofs({
         proofs,
         ...(now === undefined ? {} : { now: () => now }),
-        clientFor: async (account) => {
+        // The wallet each check was recorded in, never the account's current one.
+        clientFor: async (account, wallet) => {
           const key =
             account === "default"
               ? defaultKey
@@ -886,7 +1219,7 @@ export const assembleBoat = async (input: {
           if (key === undefined) return undefined;
           const client = open(
             key.credential,
-            key.organization === undefined ? undefined : { organization: key.organization },
+            wallet === null ? undefined : { organization: wallet },
           );
           return client.ok ? client.value : undefined;
         },

@@ -31,6 +31,7 @@ import {
   nativePublications as publications,
 } from "../schema/native-publications.js";
 import { ociImageBuildJobs, workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
+import { deploymentCreateWallet, inWallet, recordedWallet } from "./boat-wallets.js";
 
 /** Persistence failures never imply a publication was absent or a consumer was released. */
 export class NativeCatalogStoreError extends Error {
@@ -176,6 +177,18 @@ export interface NativePublicationRepoService {
     readonly limit: number;
     readonly after?: string;
   }) => Effect.Effect<ReadonlyArray<NativeStartableWorkspace>, NativeCatalogStoreError>;
+  /**
+   * The wallet a publication was recorded in: `known` with the wallet (null: the key's only one),
+   * `unknown`, or `unreachable`; undefined for no such publication.
+   */
+  readonly wallet: (
+    publicationId: string,
+  ) => Effect.Effect<
+    | { readonly state: "known"; readonly wallet: string | null }
+    | { readonly state: "unknown" | "unreachable" }
+    | undefined,
+    NativeCatalogStoreError
+  >;
   /** Explicit operator withdrawal of an exact unused build, independent of cache retention. */
   readonly withdraw: (
     ownership: NativeBuildOwnership,
@@ -323,6 +336,9 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         try: () => nativePublicationKeySchema.parse(input),
         catch: () => new NativeCatalogStoreError("getActive", "invalid-input"),
       });
+      // Only an image in the wallet the account creates in now: one elsewhere is not its to use.
+      const current = (yield* deploymentCreateWallet(db, key.deploymentId)).wallet;
+      if (current.kind === "unresolved") return undefined;
       const [row] = yield* db
         .select()
         .from(publications)
@@ -330,6 +346,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           and(
             eq(publications.keyHash, digest(key)),
             sql`${publications.state} not in ('removed','superseded')`,
+            inWallet(publications, current.wallet),
           ),
         );
       if (row === undefined) return undefined;
@@ -360,18 +377,16 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       const { key, consumer } = parsed;
       return yield* db.transaction(() =>
         Effect.gen(function* () {
-          // A stored Boat account's images are reserved under its row, the row its removal takes
-          // `for update`: none is reserved, or built, once its removal was asked. The install's
-          // default account has no row.
-          const [account] = yield* db
-            .select({ removalRequestedAt: boatAccounts.removalRequestedAt })
-            .from(boatAccounts)
-            .where(eq(boatAccounts.deploymentId, key.deploymentId))
-            .for("share");
-          if (account !== undefined && account.removalRequestedAt !== null)
+          // A stored Boat account's images are reserved under its row, the row its removal and its
+          // wallet change take `for update`: none is reserved, or built, once its removal was
+          // asked, and each is recorded in the wallet the account creates in now. An account whose
+          // wallet Core has not resolved creates nothing. The install's own account has no row.
+          const owner = yield* deploymentCreateWallet(db, key.deploymentId);
+          if (owner.removing || owner.wallet.kind === "unresolved")
             return yield* Effect.fail(
               new NativeCatalogStoreError("reserve", "account-unavailable"),
             );
+          const wallet = owner.wallet;
           // Serialize only this recipe. Publication locks still precede consumer locks,
           // as they do in release/retirement. Redelivery keeps its original binding.
           yield* db.execute(
@@ -405,6 +420,8 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
               );
             return record;
           }
+          // The recipe's image in this wallet: one recorded in another wallet, or one Core cannot
+          // reach, is never used here; a launch builds its own.
           const [active] = yield* db
             .select()
             .from(publications)
@@ -412,6 +429,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
               and(
                 eq(publications.keyHash, digest(key)),
                 sql`${publications.state} not in ('removed','superseded')`,
+                inWallet(publications, wallet.wallet),
               ),
             )
             .for("update");
@@ -454,6 +472,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
                 recipeHash: key.recipeHash,
                 buildAttempt: predecessor === undefined ? 1 : 2,
                 replacesPublicationId: predecessor?.id ?? null,
+                ...recordedWallet(wallet),
               })
               .returning();
             row = fresh;
@@ -813,6 +832,11 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           !nativePublicationSchema.shape.publicationId.safeParse(input.after).success)
       )
         return yield* Effect.fail(new NativeCatalogStoreError("images", "invalid-input"));
+      // Retention removes an image with requests that name the wallet the account creates in now,
+      // so it reads only the images recorded there. One recorded in another wallet is removed by a
+      // client that names its own; one whose wallet is unknown or unreachable is never removed.
+      const current = (yield* deploymentCreateWallet(db, input.deploymentId)).wallet;
+      if (current.kind === "unresolved") return [];
       const rows = yield* db
         .select()
         .from(publications)
@@ -821,11 +845,24 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             eq(publications.deploymentId, input.deploymentId),
             input.after === undefined ? undefined : gt(publications.id, input.after),
             sql`(${publications.state} in ('ready','retiring') or (${publications.state} = 'quarantined' and ${publications.reason} = 'native-removal-pending'))`,
+            inWallet(publications, current.wallet),
           ),
         )
         .orderBy(asc(publications.id))
         .limit(input.limit);
       return yield* Effect.forEach(rows, parseRow);
+    });
+    const wallet = Effect.fn("NativePublicationRepo.wallet")(function* (id: string) {
+      const [row] = yield* db
+        .select({ wallet: publications.boatWallet, state: publications.boatWalletState })
+        .from(publications)
+        .where(eq(publications.id, id));
+      if (row === undefined) return undefined;
+      return row.state === "known"
+        ? ({ state: "known", wallet: row.wallet } as const)
+        : row.state === "unreachable"
+          ? ({ state: "unreachable" } as const)
+          : ({ state: "unknown" } as const);
     });
     const startable = Effect.fn("NativePublicationRepo.startable")(function* (input: {
       readonly deploymentId: string;
@@ -995,6 +1032,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
       retire: (id, policy) => boundary("retire", retire(id, policy)),
       images: (input) => boundary("images", images(input)),
       startable: (input) => boundary("startable", startable(input)),
+      wallet: (id) => boundary("wallet", wallet(id)),
       withdraw: (ownership) => boundary("withdraw", withdraw(ownership)),
       removed: (claim) => boundary("removed", removed(claim)),
       heldByDeployment: (input) =>

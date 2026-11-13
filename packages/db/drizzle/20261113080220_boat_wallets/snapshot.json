@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "5a3e0024-f87b-46b1-91f6-701b5a355d97",
+  "id": "7df3461a-e751-41ee-9f23-5f9e4925db5a",
   "prevIds": ["057c9038-c594-4925-9b44-237e0dd33e1b"],
   "ddl": [
     {
@@ -7326,6 +7326,32 @@
       "table": "native_publications"
     },
     {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "boat_wallet",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "native_publications"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'unknown'",
+      "generated": null,
+      "identity": null,
+      "name": "boat_wallet_state",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "native_publications"
+    },
+    {
       "type": "uuid",
       "typeSchema": null,
       "notNull": true,
@@ -7430,19 +7456,6 @@
       "table": "boat_accounts"
     },
     {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "organization_change_requested_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "boat_accounts"
-    },
-    {
       "type": "text",
       "typeSchema": null,
       "notNull": false,
@@ -7450,20 +7463,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "organization_change_target",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "boat_accounts"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "organization_change_locations",
+      "name": "key_kind",
       "entityType": "columns",
       "schema": "public",
       "table": "boat_accounts"
@@ -7555,6 +7555,32 @@
       "generated": null,
       "identity": null,
       "name": "builder_owner",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "boat_install"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "organization",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "boat_install"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "key_kind",
       "entityType": "columns",
       "schema": "public",
       "table": "boat_install"
@@ -7757,6 +7783,32 @@
     {
       "type": "text",
       "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "boat_wallet",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "boat_key_proofs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'unknown'",
+      "generated": null,
+      "identity": null,
+      "name": "boat_wallet_state",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "boat_key_proofs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
       "default": null,
@@ -7893,6 +7945,32 @@
       "generated": null,
       "identity": null,
       "name": "account_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "boat_runs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "boat_wallet",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "boat_runs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'unknown'",
+      "generated": null,
+      "identity": null,
+      "name": "boat_wallet_state",
       "entityType": "columns",
       "schema": "public",
       "table": "boat_runs"
@@ -11937,10 +12015,17 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
+        },
+        {
+          "value": "coalesce(\"boat_wallet\", '')",
+          "isExpression": true,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
         }
       ],
       "isUnique": true,
-      "where": "\"state\" not in ('removed','superseded')",
+      "where": "\"state\" not in ('removed','superseded') and \"boat_wallet_state\" <> 'unreachable'",
       "with": "",
       "method": "btree",
       "concurrently": false,
@@ -14326,6 +14411,13 @@
       "table": "native_publication_consumers"
     },
     {
+      "value": "\"boat_wallet_state\" in ('known','unknown','unreachable') and (\"boat_wallet_state\" = 'known' or \"boat_wallet\" is null)",
+      "name": "native_publications_wallet",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "native_publications"
+    },
+    {
       "value": "\"state\" in ('reserved','building','ready','retiring','removed','quarantined','superseded')",
       "name": "native_publications_state",
       "entityType": "checks",
@@ -14389,8 +14481,8 @@
       "table": "boat_accounts"
     },
     {
-      "value": "\"organization_change_target\" is null or \"organization_change_requested_at\" is not null",
-      "name": "boat_accounts_organization_change",
+      "value": "\"key_kind\" in ('personal','organization')",
+      "name": "boat_accounts_key_kind",
       "entityType": "checks",
       "schema": "public",
       "table": "boat_accounts"
@@ -14403,11 +14495,25 @@
       "table": "boat_install"
     },
     {
+      "value": "\"boat_wallet_state\" in ('known','unknown','unreachable') and (\"boat_wallet_state\" = 'known' or \"boat_wallet\" is null)",
+      "name": "boat_key_proofs_wallet",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "boat_key_proofs"
+    },
+    {
       "value": "\"account\" = 'default' or \"account\" ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'",
       "name": "boat_key_reports_account",
       "entityType": "checks",
       "schema": "public",
       "table": "boat_key_reports"
+    },
+    {
+      "value": "\"boat_wallet_state\" in ('known','unknown','unreachable') and (\"boat_wallet_state\" = 'known' or \"boat_wallet\" is null)",
+      "name": "boat_runs_wallet",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "boat_runs"
     },
     {
       "value": "\"resources\" is null or \"resources\" = 'none'",

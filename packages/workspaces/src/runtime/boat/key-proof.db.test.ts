@@ -128,6 +128,7 @@ describe.skipIf(databaseUrl === undefined)(
         const proven = await proveBoatKey({
           proofs: c.proofs,
           account: c.account,
+          wallet: null,
           client: c.client,
           ...fast,
         });
@@ -166,6 +167,7 @@ describe.skipIf(databaseUrl === undefined)(
           const proven = await proveBoatKey({
             proofs: c.proofs,
             account: c.account,
+            wallet: null,
             client: c.client,
             ...fast,
           });
@@ -205,6 +207,7 @@ describe.skipIf(databaseUrl === undefined)(
           const proven = await proveBoatKey({
             proofs: c.proofs,
             account: c.account,
+            wallet: null,
             client: c.client,
             ...fast,
           });
@@ -220,7 +223,13 @@ describe.skipIf(databaseUrl === undefined)(
           ).not.toBeNull();
           // While it is left, a second check of the account is refused.
           expect(
-            await proveBoatKey({ proofs: c.proofs, account: c.account, client: c.client, ...fast }),
+            await proveBoatKey({
+              proofs: c.proofs,
+              account: c.account,
+              wallet: null,
+              client: c.client,
+              ...fast,
+            }),
           ).toEqual({ kind: "running" });
           // Boat lets the key delete again: the sweep removes it.
           c.boat.faults = {};
@@ -237,6 +246,7 @@ describe.skipIf(databaseUrl === undefined)(
           void proveBoatKey({
             proofs: c.proofs,
             account: c.account,
+            wallet: null,
             client: c.client,
             ...fast,
             afterStep: async (reached) => {
@@ -257,7 +267,13 @@ describe.skipIf(databaseUrl === undefined)(
           await made();
           // A second check of the same account is refused while the first holds it.
           expect(
-            await proveBoatKey({ proofs: c.proofs, account: c.account, client: c.client, ...fast }),
+            await proveBoatKey({
+              proofs: c.proofs,
+              account: c.account,
+              wallet: null,
+              client: c.client,
+              ...fast,
+            }),
           ).toEqual({ kind: "running" });
           // Within its claim the sweep leaves it alone.
           expect(await c.sweep()).toEqual([]);
@@ -279,6 +295,7 @@ describe.skipIf(databaseUrl === undefined)(
         const proven = await proveBoatKey({
           proofs: c.proofs,
           account: c.account,
+          wallet: null,
           client: c.client,
           ...fast,
         });
@@ -301,6 +318,7 @@ describe.skipIf(databaseUrl === undefined)(
         const proven = await proveBoatKey({
           proofs: c.proofs,
           account: c.account,
+          wallet: null,
           client: c.client,
           ...fast,
         });
@@ -323,6 +341,7 @@ describe.skipIf(databaseUrl === undefined)(
         const proven = await proveBoatKey({
           proofs: c.proofs,
           account: c.account,
+          wallet: null,
           client: c.client,
           ...fast,
         });

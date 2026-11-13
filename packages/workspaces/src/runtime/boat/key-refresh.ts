@@ -190,6 +190,11 @@ export const refreshBoatKeyReports = async (
           repo.saveReport({ account, report, observedAt: new Date(report.observedAt) }),
         ),
       );
+      // What the key is decides whether it is pinned (personal) or needs no pin (organization).
+      if (report.keyKind.observed) {
+        const kind = report.keyKind.kind;
+        await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.setKeyKind(account, kind)));
+      }
       const cleared = boatReopenableReasons(report);
       if (deploymentId !== undefined && cleared.length > 0)
         await reopenBoatQuarantine(options.db, deploymentId, now(), cleared).catch(() => 0);
@@ -203,7 +208,16 @@ export const refreshBoatKeyReports = async (
   const defaultKey = options.defaultKey;
   if (defaultKey !== undefined)
     outcomes.push(
-      await refresh(DEFAULT_ACCOUNT, defaultKey.deploymentId, () => Promise.resolve(defaultKey)),
+      // Under the wallet the install's key names now (`boat_install`), as its every request does.
+      // Read-only: a report is never read as an object's absence.
+      await refresh(DEFAULT_ACCOUNT, defaultKey.deploymentId, async () => {
+        const wallet = await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.installWallet()));
+        // Not applied yet (the worker's resolve pass applies it): observed under the setting.
+        return {
+          credential: defaultKey.credential,
+          organization: wallet?.organization ?? defaultKey.organization,
+        };
+      }),
     );
   for (const account of accounts) {
     // An account being removed is going away: its key is not checked again.

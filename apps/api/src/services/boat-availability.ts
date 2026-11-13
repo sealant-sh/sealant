@@ -5,7 +5,7 @@ import {
   WorkspaceNotFoundError,
   WorkspaceServiceUnavailableError,
 } from "@sealant/api-contracts";
-import { BoatAccountRepo } from "@sealant/db";
+import { BoatAccountRepo, createBoatWalletOf } from "@sealant/db";
 import { BOAT_RUNTIME_ID } from "@sealant/validators";
 import {
   BOAT_LAUNCH_REPORT_FRESH_MS,
@@ -203,12 +203,12 @@ export const requireBoatAccount = (
       return yield* new WorkspaceConflictError({
         message: `Boat account ${accountId} is being removed: no new workspace runs in it.`,
       });
-    // Its saved images are being deleted from the wallet it bills now; a launch would build them
-    // there again, and hold the change up until its workspace stopped.
-    if (account.organizationChange !== null)
+    // Connected before Core pinned accounts, and not pinned yet: it creates nothing until the
+    // worker has found where its things are (right after an upgrade).
+    if (createBoatWalletOf(account.organization, account.keyKind).kind === "unresolved")
       return yield* new WorkspaceConflictError({
-        code: "boat-account-changing-organization",
+        code: "boat-account-wallet-unresolved",
         message:
-          "The Boat account this workspace names is changing the Boat wallet it bills, and Core is deleting its saved images from the old one: no new workspace starts in it until that is done, usually within a few minutes. Try again then.",
+          "The Boat account this workspace names was connected before Core pinned accounts to a wallet, and Core is still finding which Boat wallet its VMs and saved images are in: no new workspace starts in it until it is pinned, usually within a minute of an upgrade. Try again then.",
       });
   });

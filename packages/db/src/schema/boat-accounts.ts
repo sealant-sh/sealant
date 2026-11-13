@@ -47,21 +47,13 @@ export const boatAccounts = snakeCase.table(
      */
     boatOrganization: text(),
     /**
-     * A change of `boat_organization` to `organization_change_target` (null: none named) was
-     * asked and is not finished: the worker is deleting the account's saved images from the wallet
-     * it bills now, with requests that still name it, and switches once none is left. Null: no
-     * change is under way.
+     * What the key is, as a check observed it: `personal` (a person's key, which bills the wallet a
+     * request names, so the account is always pinned), `organization` (an organization's key, one
+     * wallet by construction: no pin), or null: not observed. An account with a personal or
+     * unobserved key and no pin was connected before Core pinned accounts; it makes no Boat request
+     * until the worker has found where its things are and pinned it.
      */
-    organizationChangeRequestedAt: instant(),
-    organizationChangeTarget: text(),
-    /**
-     * Where each saved image the change deletes is, by its snapshot name: the wallet to name
-     * (`X-Boat-Org`: an organization's id or name, or `personal`) on every request that removes it.
-     * Found by looking for each image under each wallet the key can bill when the change was asked,
-     * so a removal never asks the wallet that happens to be active, and Boat not finding an image
-     * there is evidence it is gone.
-     */
-    organizationChangeLocations: jsonb().$type<Readonly<Record<string, string>>>(),
+    keyKind: text(),
     createdAt: instant().notNull().defaultNow(),
     keyRotatedAt: instant(),
     removalRequestedAt: instant(),
@@ -77,10 +69,7 @@ export const boatAccounts = snakeCase.table(
       sql`${table.removedAt} is null or ${table.removalRequestedAt} is not null`,
     ),
     check("boat_accounts_label", sql`length(${table.label}) between 1 and 200`),
-    check(
-      "boat_accounts_organization_change",
-      sql`${table.organizationChangeTarget} is null or ${table.organizationChangeRequestedAt} is not null`,
-    ),
+    check("boat_accounts_key_kind", sql`${table.keyKind} in ('personal','organization')`),
   ],
 );
 
@@ -120,6 +109,15 @@ export const boatInstall = snakeCase.table(
     id: text().primaryKey(),
     deploymentId: text(),
     builderOwner: uuid(),
+    /**
+     * The wallet the install's own key bills (`X-Boat-Org` on its every request): what
+     * `SEALANT_BOAT_ORGANIZATION` names, applied once nothing of the install's runs, builds or full
+     * checks is in the wallet it named before; or, without the setting, what Core observed at its
+     * first check. Null with `key_kind` `organization`: an organization's key. Null otherwise: not
+     * resolved yet, and the install's own account makes no Boat request.
+     */
+    organization: text(),
+    keyKind: text(),
     createdAt: instant().notNull().defaultNow(),
   },
   (table) => [check("boat_install_one", sql`${table.id} = 'install'`)],
@@ -169,8 +167,24 @@ export const boatKeyProofs = snakeCase.table(
     finishedAt: instant(),
     cleanupPending: boolean().notNull().default(false),
     result: jsonb(),
+    /**
+     * The Boat wallet it was created in, named (`X-Boat-Org`) on every later request about it: an
+     * organization's id or name, or `personal`; null with `boatWalletState` `known`: the key's only
+     * wallet (an organization's key), named by no header. See `boatWalletState`.
+     */
+    boatWallet: text(),
+    /**
+     * `known`: `boatWallet` is where it is. `unknown`: made before Core recorded wallets, by an
+     * account with no pin; no request about it is made until Core has found it. `unreachable`: Core
+     * looked under every wallet the key can bill and Boat has it in none: never removed or used.
+     */
+    boatWalletState: text().notNull().default("unknown"),
   },
   (table) => [
+    check(
+      "boat_key_proofs_wallet",
+      sql`${table.boatWalletState} in ('known','unknown','unreachable') and (${table.boatWalletState} = 'known' or ${table.boatWallet} is null)`,
+    ),
     uniqueIndex("boat_key_proofs_one_running")
       .on(table.account)
       .where(sql`${table.finishedAt} is null or ${table.cleanupPending}`),

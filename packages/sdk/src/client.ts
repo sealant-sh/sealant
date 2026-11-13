@@ -115,7 +115,7 @@ const mapBoatAccount = (wire: BoatAccountWire): BoatAccount => ({
   organization: wire.organization ?? null,
   report: wire.report ?? null,
   lastProof: wire.lastProof ?? null,
-  organizationChange: wire.organizationChange ?? null,
+  unreachable: wire.unreachable ?? null,
 });
 
 const mapConnectedAccount = (wire: ConnectedAccountSummary): ConnectedAccount => ({

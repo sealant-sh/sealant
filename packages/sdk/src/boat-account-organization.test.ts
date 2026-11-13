@@ -1,8 +1,9 @@
 /**
- * `boatAccounts.setOrganization`: it sends the wallet to bill, or null, to
- * `PUT /v1/boat-accounts/:id/organization` without a key; it answers an unfinished change; it reads
- * a report's wallets and billing; and a refusal's reason reaches `SealantApiError`. Against a
- * stubbed `fetch`, in a file of its own: the SDK's HTTP client keeps the first `fetch` it sees.
+ * `boatAccounts.setOrganization`: it sends the wallet to bill to
+ * `PUT /v1/boat-accounts/:id/organization` without a key; it reads a report's wallets and billing
+ * and what the control plane cannot reach; and a refusal's reason reaches `SealantApiError`.
+ * Against a stubbed `fetch`, in a file of its own: the SDK's HTTP client keeps the first `fetch` it
+ * sees.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -22,7 +23,7 @@ const account = {
 };
 const report = {
   observedAt: "2026-11-13T12:00:00.000Z",
-  organization: null,
+  organization: "team_acme",
   identity: { observed: true, accountStatus: "active" },
   keyKind: { observed: true, kind: "personal" },
   wallet: { observed: true, kind: "organization", organizationId: "team_acme" },
@@ -33,10 +34,7 @@ const report = {
       { id: "team_acme", kind: "organization", name: "acme", role: "admin", active: true },
     ],
   },
-  billing: {
-    mode: "active-wallet",
-    walletChanged: { from: { kind: "personal" }, observedAt: "2026-11-13T12:00:00.000Z" },
-  },
+  billing: { mode: "pinned", organization: "team_acme" },
   requiredPermissions: ["sandbox.create"],
   permissions: { observed: false, reason: "not-listed" },
   expiry: { observed: false, reason: "not-listed" },
@@ -45,7 +43,7 @@ const report = {
 };
 
 describe("a Boat account's organization", () => {
-  it("is set and unset without a key, answers an unfinished change, and reads a refusal", async () => {
+  it("is changed without a key, reads what the control plane cannot reach, and reads a refusal", async () => {
     const seen: Array<{ readonly path: string; readonly method: string; readonly body: unknown }> =
       [];
     let refuse = false;
@@ -64,40 +62,34 @@ describe("a Boat account's organization", () => {
               liveRuns: 1,
               unsettledRuns: 0,
               buildsInFlight: 0,
-              message: `Boat account ${account.boatAccountId} still has 1 run whose VM Boat may still hold in the wallet it bills now, which its requests could no longer reach once they name another; nothing was changed. Stop its workspaces and try again.`,
+              message: `Boat account ${account.boatAccountId} still has 1 run whose VM Boat may still hold in the wallet it names now; nothing was changed. Stop its workspaces and try again.`,
             }),
             { status: 409, headers: { "content-type": "application/json" } },
           );
-        const pinned =
+        const named =
           typeof body === "object" && body !== null && "organization" in body
-            ? body.organization !== null
-            : false;
+            ? body.organization
+            : null;
         return new Response(
           JSON.stringify({
             ...account,
-            organization: null,
+            organization: named === "acme" ? "team_acme" : named,
             report,
-            organizationChange: pinned
-              ? {
-                  organization: "team_acme",
-                  requestedAt: "2026-11-13T12:01:00.000Z",
-                  imagesLeft: 2,
-                }
-              : null,
+            unreachable: { savedImages: ["sealant-lost"] },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }),
     );
     const sealant = new Sealant({ baseUrl: "http://stub.invalid", ownerUserId: "usr_owner" });
-    const pending = await sealant.boatAccounts.setOrganization(account.boatAccountId, "acme");
-    expect(pending).toMatchObject({
-      organization: null,
-      organizationChange: { organization: "team_acme", imagesLeft: 2 },
-      report: { wallets: { observed: true }, billing: { mode: "active-wallet" } },
+    const pinned = await sealant.boatAccounts.setOrganization(account.boatAccountId, "acme");
+    expect(pinned).toMatchObject({
+      organization: "team_acme",
+      unreachable: { savedImages: ["sealant-lost"] },
+      report: { wallets: { observed: true }, billing: { mode: "pinned" } },
     });
-    const unpinned = await sealant.boatAccounts.setOrganization(account.boatAccountId, null);
-    expect(unpinned.organizationChange).toBeNull();
+    const personal = await sealant.boatAccounts.setOrganization(account.boatAccountId, "personal");
+    expect(personal.organization).toBe("personal");
     refuse = true;
     const error: unknown = await sealant.boatAccounts
       .setOrganization(account.boatAccountId, "personal")
@@ -107,22 +99,18 @@ describe("a Boat account's organization", () => {
       reason: "boat-account-in-use",
       message: expect.stringContaining("1 run whose VM Boat may still hold"),
     });
-    expect(seen).toEqual([
-      {
-        path: `/v1/boat-accounts/${account.boatAccountId}/organization`,
-        method: "PUT",
-        body: { organization: "acme" },
-      },
-      {
-        path: `/v1/boat-accounts/${account.boatAccountId}/organization`,
-        method: "PUT",
-        body: { organization: null },
-      },
-      {
-        path: `/v1/boat-accounts/${account.boatAccountId}/organization`,
-        method: "PUT",
-        body: { organization: "personal" },
-      },
+    expect(seen.map((each) => [each.method, each.path, each.body])).toEqual([
+      ["PUT", `/v1/boat-accounts/${account.boatAccountId}/organization`, { organization: "acme" }],
+      [
+        "PUT",
+        `/v1/boat-accounts/${account.boatAccountId}/organization`,
+        { organization: "personal" },
+      ],
+      [
+        "PUT",
+        `/v1/boat-accounts/${account.boatAccountId}/organization`,
+        { organization: "personal" },
+      ],
     ]);
     await sealant.close();
   });

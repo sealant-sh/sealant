@@ -61,7 +61,7 @@ describe("Boat accounts", () => {
       organization: null,
       report: null,
       lastProof: null,
-      organizationChange: null,
+      unreachable: null,
     };
     expect(created).toEqual(read);
     expect(await sealant.boatAccounts.list()).toEqual([read]);

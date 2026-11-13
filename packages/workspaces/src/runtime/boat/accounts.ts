@@ -3,6 +3,7 @@ import {
   BoatAccountRepo,
   BoatAccountRepoLive,
   SealantDB,
+  createBoatWalletOf,
   type BoatAccountRecord,
   type DB,
 } from "@sealant/db";
@@ -46,13 +47,20 @@ export const httpBoatClientFactory: BoatClientFactory = (credential, options) =>
 /** A stored account's key could not be opened: removed, unreadable, or not a Boat key. */
 const keyUnavailable = (operation: string) =>
   new BoatApiError(operation, null, "account_key_unavailable");
+/**
+ * The account's wallet is not resolved (no pin, a key not known to be an organization's): no
+ * request is made, since Boat's answer would depend on whichever wallet its owner has active, and
+ * a "not found" from it would prove nothing. The worker resolves it, then every call goes through.
+ */
+const walletUnresolved = (operation: string) =>
+  new BoatApiError(operation, null, "account_wallet_unresolved");
 
 /**
  * A stored account's client: every call opens the account's current key first, so a rotation
  * reaches every Boat owner that holds this client without rebuilding any of them. The key is read
  * again when its revision changes, which is checked at most once per `revisionCheckMs`.
  */
-class StoredAccountApi implements BoatApi {
+export class StoredAccountApi implements BoatApi {
   readonly #resolve: (fresh: boolean) => Promise<BoatResult<BoatApi>>;
   constructor(resolve: (fresh: boolean) => Promise<BoatResult<BoatApi>>) {
     this.#resolve = resolve;
@@ -233,7 +241,7 @@ export class BoatAccountDirectory {
    * organization's id or name, or `personal`), whatever the account names: what removes something
    * Core found in that wallet. The key is opened on first use and kept for the client's life.
    */
-  walletApi(accountId: string, organization: string): BoatApi {
+  walletApi(accountId: string, organization: string | null): BoatApi {
     let opened: Promise<BoatResult<BoatApi>> | undefined;
     return new StoredAccountApi(() => {
       opened ??= this.#openIn(accountId, organization);
@@ -241,7 +249,7 @@ export class BoatAccountDirectory {
     });
   }
 
-  async #openIn(accountId: string, organization: string): Promise<BoatResult<BoatApi>> {
+  async #openIn(accountId: string, organization: string | null): Promise<BoatResult<BoatApi>> {
     const sealed = await this.#run(
       Effect.flatMap(BoatAccountRepo, (repo) => repo.sealedKey(accountId)),
     );
@@ -252,25 +260,20 @@ export class BoatAccountDirectory {
     if (Option.isNone(opened)) return { ok: false, error: keyUnavailable("credential") };
     const credential = BoatSecret.parse(opened.value);
     if (!credential.ok) return { ok: false, error: keyUnavailable("credential") };
-    return (this.#options.clientFor ?? httpBoatClientFactory)(credential.value, { organization });
-  }
-
-  /** The accounts with a change of the organization they bill under way. */
-  listChangingOrganization(): Promise<readonly BoatAccountRecord[]> {
-    return this.#run(Effect.flatMap(BoatAccountRepo, (repo) => repo.listChangingOrganization()));
-  }
-
-  /**
-   * A change of organization's end, once Boat holds nothing Core made under the account: from now
-   * on every request for it names the new one (the client is opened again). `held`: something is
-   * still there; nothing changed.
-   */
-  async finishOrganizationChange(accountId: string): Promise<"changed" | "held" | "none"> {
-    const outcome = await this.#run(
-      Effect.flatMap(BoatAccountRepo, (repo) => repo.finishOrganizationChange(accountId)),
+    return (this.#options.clientFor ?? httpBoatClientFactory)(
+      credential.value,
+      organization === null ? undefined : { organization },
     );
-    if (outcome === "changed") this.#clients.delete(accountId);
-    return outcome;
+  }
+
+  /** Accounts the worker resolves: no pin and a personal or unobserved key, or unknown objects. */
+  listUnresolved(): Promise<readonly BoatAccountRecord[]> {
+    return this.#run(Effect.flatMap(BoatAccountRepo, (repo) => repo.listUnresolved()));
+  }
+
+  /** Forgets the account's client: its pin changed, and the next call opens one that names it. */
+  forget(accountId: string): void {
+    this.#clients.delete(accountId);
   }
 
   /**
@@ -329,13 +332,16 @@ export class BoatAccountDirectory {
       Effect.flatMap(BoatAccountRepo, (repo) => repo.sealedKey(accountId)),
     );
     if (sealed === undefined) return { ok: false, error: keyUnavailable("credential") };
+    if (createBoatWalletOf(sealed.organization, sealed.keyKind).kind === "unresolved")
+      return { ok: false, error: walletUnresolved("credential") };
     const opened = await Effect.runPromise(
       this.#options.cipher.decrypt(sealed.sealedKey).pipe(Effect.option),
     );
     if (Option.isNone(opened)) return { ok: false, error: keyUnavailable("credential") };
     const credential = BoatSecret.parse(opened.value);
     if (!credential.ok) return { ok: false, error: keyUnavailable("credential") };
-    // The organization the account was stored with: every request for it bills that one.
+    // The wallet the account names: every object it makes is recorded there, and every request
+    // about one names it (a wallet change is refused while any but its saved images exists).
     const api = (this.#options.clientFor ?? httpBoatClientFactory)(
       credential.value,
       sealed.organization === null ? undefined : { organization: sealed.organization },
@@ -345,3 +351,56 @@ export class BoatAccountDirectory {
     return api;
   }
 }
+
+/**
+ * The install's own key's client: every request names the wallet `boat_install` holds for it
+ * (`SEALANT_BOAT_ORGANIZATION` once applied, or what Core observed at its first check; none for an
+ * organization's key), read again at most every `checkMs` and at once when Boat refuses or does not
+ * find something. While it is not resolved, no request is made.
+ */
+export const installBoatApi = (options: {
+  readonly db: DB;
+  readonly credential: BoatSecret;
+  readonly clientFor?: BoatClientFactory;
+  readonly checkMs?: number;
+}): BoatApi => {
+  let cached:
+    | { readonly organization: string | null; readonly api: BoatApi; checkedAt: number }
+    | undefined;
+  const open = async (fresh: boolean): Promise<BoatResult<BoatApi>> => {
+    const now = Date.now();
+    if (!fresh && cached !== undefined && now - cached.checkedAt < (options.checkMs ?? 10_000))
+      return { ok: true, value: cached.api };
+    const stored = await Effect.runPromise(
+      Effect.flatMap(BoatAccountRepo, (repo) => repo.installWallet()).pipe(
+        Effect.provide(BoatAccountRepoLive),
+        Effect.provideService(SealantDB, options.db),
+      ),
+    );
+    const wallet = createBoatWalletOf(stored?.organization ?? null, stored?.keyKind ?? null);
+    if (wallet.kind === "unresolved") return { ok: false, error: walletUnresolved("credential") };
+    if (cached !== undefined && cached.organization === wallet.wallet) {
+      cached.checkedAt = now;
+      return { ok: true, value: cached.api };
+    }
+    const api = (options.clientFor ?? httpBoatClientFactory)(
+      options.credential,
+      wallet.wallet === null ? undefined : { organization: wallet.wallet },
+    );
+    if (!api.ok) return api;
+    cached = { organization: wallet.wallet, api: api.value, checkedAt: now };
+    return api;
+  };
+  return new StoredAccountApi(open);
+};
+
+/** The install's own key's client that names `organization` (null: none), whatever it names. */
+export const installWalletApi = (options: {
+  readonly credential: BoatSecret;
+  readonly clientFor?: BoatClientFactory;
+  readonly organization: string | null;
+}): BoatResult<BoatApi> =>
+  (options.clientFor ?? httpBoatClientFactory)(
+    options.credential,
+    options.organization === null ? undefined : { organization: options.organization },
+  );
