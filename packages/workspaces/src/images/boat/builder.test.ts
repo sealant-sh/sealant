@@ -343,7 +343,11 @@ describe("attempt-owned durable native cleanup", () => {
     f.hideSandbox();
     expect(await f.builder.cleanup(f.path)).toMatchObject({
       ok: false,
-      error: { code: "native-provider-not_found" },
+      // Boat's 404 is a refusal the builder does not classify; its code stays on the failure.
+      error: {
+        code: "native-boat-refused",
+        providerFailure: { status: 404, boat: { kind: "refused", code: "not_found" } },
+      },
     });
     expect(f.requests.some((r) => r.method === "DELETE")).toBe(false);
   });
@@ -432,7 +436,7 @@ describe("attempt-owned durable native cleanup", () => {
     expect(result).toMatchObject({
       ok: false,
       error: {
-        code: "native-provider-api_key_expired",
+        code: "native-boat-key-expired",
         providerFailure: {
           operation: "create",
           status: 403,
@@ -625,16 +629,20 @@ describe("attempt-owned durable native cleanup", () => {
         },
       });
       f.failSnapshotRead(failure);
-      const code =
-        failure === "html"
-          ? "invalid_response"
-          : failure === "wrong-resource"
-            ? "sandbox_not_found"
-            : // Boat's own code, not a catch-all.
-              "unknown_route";
+      // The failure's code is Boat's kind; Boat's own code stays on its provider failure.
       expect(await f.builder.remove(artifact)).toMatchObject({
         ok: false,
-        error: { code: `native-provider-${code}` },
+        error:
+          failure === "html"
+            ? { code: "native-boat-no-answer", providerFailure: { status: 404 } }
+            : {
+                code: "native-boat-refused",
+                providerFailure: {
+                  boat: {
+                    code: failure === "wrong-resource" ? "sandbox_not_found" : "unknown_route",
+                  },
+                },
+              },
       });
       expect(await f.read()).not.toHaveProperty("removal");
       expect(f.requests.some((request) => request.method === "DELETE")).toBe(false);
