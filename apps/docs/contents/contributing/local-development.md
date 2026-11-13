@@ -84,6 +84,11 @@ Follow the repo-wide agent defaults in
 [`AGENTS.md`](https://github.com/sealant-sh/sealant/blob/main/AGENTS.md): run `pnpm format:fix`, use
 `pnpm typecheck` (TypeScript 7's `tsc`), and never hand-edit `pnpm-lock.yaml`.
 
+A pull request merges once two checks pass: `checks`, the roll-up of every CI job, and `e2e checks`,
+the roll-up of every Kubernetes e2e job.
+[`DEVELOPMENT.md`](https://github.com/sealant-sh/sealant/blob/main/DEVELOPMENT.md#ci-and-merging)
+says what they require and how the Version Packages pull request gets them.
+
 ## Releasing
 
 Packaging, image builds, and the self-host installer flow are covered in

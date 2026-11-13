@@ -7,8 +7,9 @@ Flow:
 
 1. With a change worth releasing, run `pnpm changeset` and commit the generated file.
 2. On merge to `main`, the Version workflow opens/updates a "Version Packages" PR.
-3. Merge that PR, then push a `vX.Y.Z` tag — the Release workflow publishes to npm (the tag is the
-   version authority; package.json versions are synced from it at publish time) and ships the
-   Docker/self-host release.
+3. Dispatch CI and Kubernetes e2e on its branch, merge that PR once `checks` and `e2e checks` pass
+   on its head (DEVELOPMENT.md, "CI and merging"), then push a `vX.Y.Z` tag — the Release workflow
+   publishes to npm (the tag is the version authority; package.json versions are synced from it at
+   publish time) and ships the Docker/self-host release.
 
 See <https://github.com/changesets/changesets> for details.

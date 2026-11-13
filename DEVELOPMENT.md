@@ -90,6 +90,33 @@ authorize you into SDK-created workspaces. Two options:
   **all** your connections to `usr_local`. (`SEALANT_DEV_SSH_PUBLIC_KEY_FILE` on the seed does the
   DB-side equivalent for automation.)
 
+## CI and merging
+
+Branch protection on `main` requires two checks, each the roll-up of one workflow:
+
+- `checks`, from CI (`.github/workflows/ci.yml`), needs every other job in CI.
+- `e2e checks`, from Kubernetes e2e (`.github/workflows/kubernetes-e2e.yml`), needs both e2e jobs.
+
+A roll-up passes only when every job it needs succeeded. It fails on a failed or cancelled job, and
+on a skipped one unless that job is on the roll-up's `MAY_SKIP` list, which is empty today. The
+roll-ups exist because a required check that is skipped or renamed stays pending forever, so
+protection names them and never a job. A new job goes in its workflow's roll-up `needs`:
+`tooling/scripts/workflow-checks.test.mjs`, which Lint runs, fails until it does.
+
+The Version Packages pull request gets no `pull_request` runs. The Version workflow opens it with
+its own `GITHUB_TOKEN`, and GitHub starts no workflow for an event that token causes. Before merging
+it, the owner dispatches both workflows on its branch and waits for `checks` and `e2e checks` to
+pass on its head commit:
+
+```bash
+gh workflow run ci.yml --ref changeset-release/main
+gh workflow run kubernetes-e2e.yml --ref changeset-release/main
+```
+
+A dispatched run reports its checks on the head commit of the branch it ran on, which is the commit
+the pull request merges, so protection counts them. Every merge to `main` rewrites the branch; after
+it moves, dispatch again.
+
 ## Releasing (packaged self-host)
 
 Users install with `curl -fsSL …/install.sh | sh` (see README) — prebuilt images, no source build.
@@ -250,9 +277,10 @@ The pieces:
   run reports a prerelease and refuses a missing digest.
 - **Releasing** follows one order across the three repositories (sealant-sh/mend
   `docs/operations/next-channel.md`). For sealant: pin sealantd's release, merge, merge the Version
-  Packages pull request, and **freeze main until the tag**; Mend proves that commit's next build;
-  then tag it. The release refuses while an npm prerelease of the version came from a commit the tag
-  leaves out, which is what a merge during the freeze produces.
+  Packages pull request once its dispatched checks pass ([CI and merging](#ci-and-merging)), and
+  **freeze main until the tag**; Mend proves that commit's next build; then tag it. The release
+  refuses while an npm prerelease of the version came from a commit the tag leaves out, which is
+  what a merge during the freeze produces.
 - **Migrations in the packaged path** run from the api image (`node dist/migrate.js`, programmatic
   drizzle migrator + seed) — same journal table as dev `pnpm db:migrate`, so the histories are
   interchangeable.

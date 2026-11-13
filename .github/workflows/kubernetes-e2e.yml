@@ -166,3 +166,32 @@ jobs:
           for p in $(kubectl -n sealant get pods -o name 2>/dev/null); do
             echo "== $p"; kubectl -n sealant logs "$p" --all-containers --tail=200 || true
           done
+
+  # The one result branch protection requires from this workflow, as ci.yml's `checks`: it reads
+  # every other job's result, so a skipped or renamed job never leaves a required check pending.
+  # tooling/scripts/workflow-checks.test.mjs fails when a job is missing from `needs`.
+  e2e-checks:
+    name: e2e checks
+    needs: [docker, kubernetes]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Reads only `needs`: no checkout, and the runner image's Node runs it.
+      - name: Require every e2e job
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          # The jobs allowed to be skipped on purpose (a path filter, a condition). None is today, so
+          # every job must succeed.
+          MAY_SKIP: "[]"
+        run: |
+          node --input-type=module <<'NODE'
+          const results = JSON.parse(process.env.RESULTS);
+          const maySkip = new Set(JSON.parse(process.env.MAY_SKIP));
+          const refused = Object.entries(results).filter(
+            ([job, { result }]) => !(result === "success" || (result === "skipped" && maySkip.has(job))),
+          );
+          for (const [job, { result }] of refused) console.log(`::error::${job}: ${result}`);
+          if (refused.length > 0 || Object.keys(results).length === 0) process.exit(1);
+          console.log(`Every job passed: ${Object.keys(results).join(", ")}`);
+          NODE
