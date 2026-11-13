@@ -1664,6 +1664,73 @@ export interface WorkspaceImageInspection {
   readonly personLayout: WorkspaceImagePersonLayout;
 }
 
+/** A runtime family a workspace runs on (`CreateOptions.runtime`). */
+export type WorkspaceRuntimeKind = WorkspaceRuntimeInfo["kind"];
+
+/** Something a runtime does not do, and the sentence to show a person who asks for it. */
+export interface RuntimeUnsupported {
+  readonly supported: false;
+  readonly message: string;
+}
+
+/**
+ * Whether a runtime does one thing. A create that asks a runtime for an unsupported item is
+ * refused (422) with the same `message`.
+ */
+export type RuntimeCapability = { readonly supported: true } | RuntimeUnsupported;
+
+/** A CPU architecture workspaces run on. */
+export type RuntimeArchitecture = "x86_64" | "aarch64";
+
+/** What one runtime supports (see `workspaces.runtimes`). */
+export interface RuntimeSupport {
+  readonly runtime: WorkspaceRuntimeKind;
+  /** The managed OS families that run on this runtime (`CreateOptions` image `os`). */
+  readonly os: {
+    readonly ubuntu: RuntimeCapability;
+    readonly nix: RuntimeCapability;
+    readonly arch: RuntimeCapability;
+    readonly fedora: RuntimeCapability;
+  };
+  /** A workspace built from a base image of its own. */
+  readonly customImage: RuntimeCapability;
+  /** Directories of the deployment's own servers bound into the workspace (`mount` sources). */
+  readonly hostDirectories: RuntimeCapability;
+  /** Docker inside the workspace. */
+  readonly docker: RuntimeCapability;
+  /** The workspace run under gVisor (`runsc`). */
+  readonly gvisor: RuntimeCapability;
+  /** Kubernetes Secrets, ConfigMaps and a service account read into the workspace. */
+  readonly clusterEnv: RuntimeCapability;
+  /** A workspace started by cloning a repository rather than from a capture. */
+  readonly gitSource: RuntimeCapability;
+  /** Dotfiles sent with the create as archives. */
+  readonly dotfilesArchives: RuntimeCapability;
+  /** A screen (an X display) inside the workspace, and the CPU architectures it runs on. */
+  readonly screen:
+    | { readonly supported: true; readonly architectures: readonly RuntimeArchitecture[] }
+    | RuntimeUnsupported;
+  /** Ports inside the workspace the runtime holds for itself; nothing else can listen on them. */
+  readonly reservedPorts: readonly number[];
+  /**
+   * A project's resources linked to the workspace: `live` reaches a running workspace when it is
+   * linked, `next-start` only once the workspace starts again.
+   */
+  readonly resources:
+    | { readonly supported: true; readonly attach: "live" | "next-start" }
+    | RuntimeUnsupported;
+  /** Whether a workspace that sits idle costs money, and the sentence that says so. */
+  readonly idleCost: { readonly charged: boolean; readonly message: string };
+}
+
+/** The runtimes this control plane launches workspaces on (see `workspaces.runtimes`). */
+export interface WorkspaceRuntimes {
+  /** The runtime a create that names none runs on. It is listed first. */
+  readonly default: WorkspaceRuntimeKind;
+  /** One entry per runtime this install launches; a runtime not listed is one it cannot. */
+  readonly runtimes: readonly RuntimeSupport[];
+}
+
 /** Where a launch writes its logins (see {@link CreateOptions.credentialsHome}). */
 export interface WorkspaceCredentialsHomeOptions {
   /** Absolute path of the home inside the executor, e.g. `/home/m4lice000`. */

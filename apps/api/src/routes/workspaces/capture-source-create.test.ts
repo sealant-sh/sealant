@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { WorkspaceSshOwnerRefusedError, type CreateWorkspaceRequest } from "@sealant/api-contracts";
+import {
+  WorkspaceRuntimeEnvReferencesUnsupportedError,
+  WorkspaceRuntimeRequirementUnsupportedError,
+  WorkspaceSshOwnerRefusedError,
+  type CreateWorkspaceRequest,
+} from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import {
   BoatAccountRepo,
@@ -39,7 +44,14 @@ import {
   setImageScopeState,
 } from "@sealant/db/testing/workspace-publications";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
-import type { NativePublicationKey, NewWorkspace } from "@sealant/validators";
+import {
+  runtimeAdapterIds,
+  runtimeSupport,
+  type NativePublicationKey,
+  type NewWorkspace,
+  type RuntimeAdapterId,
+  type RuntimeSupport,
+} from "@sealant/validators";
 import {
   createPackageStandardizer,
   planWorkspaceImageBuild,
@@ -54,6 +66,7 @@ import {
   PackageStandardizerService,
   WorkspaceBuildJobPublisherService,
 } from "../../services/control-plane-capabilities.js";
+import { listWorkspaceRuntimes, runtimeInstall } from "../../services/runtime-support.js";
 import { CurrentPrincipal, type RequestPrincipal } from "../../services/service-principals.js";
 import { cancelWorkspaceCreate, createWorkspace, getWorkspaceCreate } from "./workspaces.module.js";
 
@@ -1093,7 +1106,12 @@ const nativeCreateRequest = (spec: Record<string, unknown>): CreateWorkspaceRequ
   idempotencyKey: "key_native",
   spec: {
     sources: {
-      workspace: { kind: "git", provider: "generic", url: "https://example.invalid/repo.git" },
+      workspace: {
+        kind: "capture",
+        endpoint: "https://mend.example.com/session/s1",
+        worktreeId: "wt_1",
+        harnessHome: "/workspace/harness-home",
+      },
     },
     ...spec,
   },
@@ -1125,6 +1143,21 @@ describe("createWorkspace image scope and Boat refusals", () => {
       nativeRequirements("ubuntu", {
         sources: { workspace: { kind: "mount", hostPath: "/tmp/native-owner" } },
       }),
+      "runtime-requirement-unsupported",
+    ],
+    // Refused by the Boat worker only, until the create refused them too.
+    [
+      "a git source",
+      nativeRequirements("ubuntu", {
+        sources: {
+          workspace: { kind: "git", provider: "generic", url: "https://example.invalid/repo.git" },
+        },
+      }),
+      "runtime-requirement-unsupported",
+    ],
+    [
+      "dotfiles archives",
+      nativeRequirements("ubuntu", { runtime: { dotfilesArchives: [{ data: "aGVsbG8=" }] } }),
       "runtime-requirement-unsupported",
     ],
     // Docker is no refusal on Boat: the VM's image carries the engine. What stops these is the
@@ -1184,7 +1217,16 @@ describe("createWorkspace image scope and Boat refusals", () => {
           Effect.result(
             createWorkspace({
               payload: {
-                ...nativeCreateRequest({ harness: { id: "opencode" } }),
+                ...nativeCreateRequest({
+                  harness: { id: "opencode" },
+                  sources: {
+                    workspace: {
+                      kind: "git",
+                      provider: "generic",
+                      url: "https://example.invalid/repo.git",
+                    },
+                  },
+                }),
                 ownerUserId: owner,
                 imageScopeId: selectedDomainId,
               },
@@ -1209,7 +1251,16 @@ describe("createWorkspace image scope and Boat refusals", () => {
       await Effect.runPromise(
         createWorkspace({
           payload: {
-            ...nativeCreateRequest({ harness: { id: "opencode" } }),
+            ...nativeCreateRequest({
+              harness: { id: "opencode" },
+              sources: {
+                workspace: {
+                  kind: "git",
+                  provider: "generic",
+                  url: "https://example.invalid/repo.git",
+                },
+              },
+            }),
             ...(imageScopeId === undefined ? {} : { imageScopeId }),
           },
           headers: {},
@@ -1304,5 +1355,186 @@ describe("Boat runtime selection", () => {
       expect(denied.state.job, principal.kind).toBeUndefined();
       expect(denied.state.reservations?.size ?? 0, principal.kind).toBe(0);
     }
+  });
+});
+
+/** The runtime report as the API answers it, with Boat configured or not. */
+const readRuntimes = (configured: boolean) =>
+  Effect.runPromise(listWorkspaceRuntimes.pipe(Effect.provideService(BoatConfigured, configured)));
+
+describe("createWorkspace · the runtime table (GET /v1/workspaces/runtimes)", () => {
+  const harnessHome = "/workspace/harness-home";
+  const captureSource = {
+    kind: "capture",
+    endpoint: "https://mend.example.com/session/s1",
+    worktreeId: "wt_1",
+    harnessHome,
+  };
+  /**
+   * Every way a create asks a runtime for one item of the report, as the spec it sends. `accepts`
+   * is false where a supported item is still refused for a reason of its own (a mount must name a
+   * path this install allows).
+   */
+  const ASKS: ReadonlyArray<{
+    readonly name: string;
+    readonly item: (support: RuntimeSupport) => RuntimeSupport["customImage"];
+    readonly spec: (runtime: RuntimeAdapterId) => Record<string, unknown>;
+    readonly accepts?: false;
+  }> = [
+    ...(["ubuntu", "nix", "arch", "fedora"] as const).map((family) => ({
+      name: `the ${family} family`,
+      item: (support: RuntimeSupport) => support.os[family],
+      spec: (runtime: RuntimeAdapterId) => ({
+        target: { os: { family }, runtime: { family: runtime, mode: "require" } },
+      }),
+    })),
+    {
+      name: "a custom base image",
+      item: (support) => support.customImage,
+      spec: (runtime) => ({
+        target: {
+          os: { family: "custom", baseImage: "ubuntu:24.04" },
+          runtime: { family: runtime, mode: "require" },
+        },
+      }),
+    },
+    {
+      name: "gVisor",
+      item: (support) => support.gvisor,
+      spec: () => ({ runtime: { ociRuntime: "runsc", network: { cloudMetadata: true } } }),
+    },
+    {
+      name: "a mount source",
+      item: (support) => support.hostDirectories,
+      spec: () => ({ sources: { workspace: { kind: "mount", hostPath: "/srv/work" } } }),
+      accepts: false,
+    },
+    {
+      name: "an extra host mount",
+      item: (support) => support.hostDirectories,
+      spec: () => ({
+        sources: {
+          workspace: captureSource,
+          mounts: [{ hostPath: "/srv/ref", mountPath: "/ref" }],
+        },
+      }),
+      accepts: false,
+    },
+    {
+      name: "a Kubernetes Secret",
+      item: (support) => support.clusterEnv,
+      spec: () => ({ runtime: { envFrom: [{ kind: "secret", name: "app-env" }] } }),
+    },
+    {
+      name: "a git source",
+      item: (support) => support.gitSource,
+      spec: () => ({
+        sources: {
+          workspace: { kind: "git", provider: "generic", url: "https://example.invalid/repo.git" },
+        },
+      }),
+    },
+    {
+      name: "dotfiles archives",
+      item: (support) => support.dotfilesArchives,
+      spec: () => ({ runtime: { dotfilesArchives: [{ data: "aGVsbG8=" }] } }),
+    },
+    {
+      name: "Docker inside",
+      item: (support) => support.docker,
+      spec: () => ({ tooling: { services: { docker: { enabled: true } } } }),
+    },
+  ];
+
+  const createOn = (runtime: RuntimeAdapterId, extra: Record<string, unknown>) => {
+    const state: RecordingState = {};
+    // A capture token goes only with a capture source.
+    const { captureToken, ...uncaptured } = capturePayload(harnessHome);
+    const spec = z.record(z.string(), z.unknown()).parse(uncaptured.spec);
+    const target = extra["target"] ?? { runtime: { family: runtime, mode: "require" } };
+    const sources = z
+      .object({ workspace: z.object({ kind: z.string() }) })
+      .safeParse(extra["sources"]);
+    const kind = sources.success ? sources.data.workspace.kind : "capture";
+    return Effect.runPromise(
+      createWorkspace({
+        payload: {
+          ...uncaptured,
+          ...(kind === "capture" ? { captureToken } : {}),
+          spec: { ...spec, ...extra, target },
+        },
+        headers: {},
+      }).pipe(
+        Effect.result,
+        Effect.provide(makeRecordingLayer(state)),
+        Effect.provideService(BoatConfigured, true),
+      ),
+    ).then((result) => ({ state, result }));
+  };
+
+  for (const runtime of runtimeAdapterIds)
+    for (const ask of ASKS)
+      it(`${runtime}: refuses ${ask.name} with the report's sentence where it reports it unsupported`, async () => {
+        const support = runtimeSupport(runtime, await Effect.runPromise(runtimeInstall));
+        const item = ask.item(support);
+        const { state, result } = await createOn(runtime, ask.spec(runtime));
+        if (item.supported) {
+          if (ask.accepts !== false) expect(Result.isSuccess(result)).toBe(true);
+          else
+            expect(Result.isFailure(result) && result.failure).not.toBeInstanceOf(
+              WorkspaceRuntimeRequirementUnsupportedError,
+            );
+          return;
+        }
+        expect(Result.isFailure(result)).toBe(true);
+        const failure = Result.isFailure(result) ? result.failure : undefined;
+        const message = failure !== undefined && "message" in failure ? failure.message : "";
+        if (failure instanceof WorkspaceRuntimeEnvReferencesUnsupportedError)
+          expect(message.startsWith(`${item.message} This workspace names `)).toBe(true);
+        else expect(message).toBe(item.message);
+        expect(state.reservations?.size ?? 0).toBe(0);
+        expect(state.job).toBeUndefined();
+      });
+
+  it("refuses a GitHub source selection on Boat as the git source it becomes, before resolving it", async () => {
+    const state: RecordingState = {};
+    const payload = capturePayload(harnessHome);
+    const result = await Effect.runPromise(
+      createWorkspace({
+        payload: {
+          ...payload,
+          sourceSelection: {
+            provider: "github",
+            installationId: "i",
+            installationRepositoryId: "r",
+          },
+          spec: {
+            ...z.record(z.string(), z.unknown()).parse(payload.spec),
+            target: { runtime: { family: "boat", mode: "require" } },
+          },
+        },
+        headers: {},
+      }).pipe(
+        Effect.result,
+        Effect.provide(makeRecordingLayer(state)),
+        Effect.provideService(BoatConfigured, true),
+      ),
+    );
+    const boat = runtimeSupport("boat", await Effect.runPromise(runtimeInstall));
+    expect(Result.isFailure(result) && result.failure).toMatchObject({
+      code: "runtime-requirement-unsupported",
+      message: boat.gitSource.supported ? "" : boat.gitSource.message,
+    });
+  });
+
+  it("lists the default runtime, then Boat only where the create would launch it", async () => {
+    const install = await Effect.runPromise(runtimeInstall);
+    const withBoat = await readRuntimes(true);
+    expect(withBoat.default).toBe("docker");
+    expect(withBoat.runtimes).toEqual([
+      runtimeSupport("docker", install),
+      runtimeSupport("boat", install),
+    ]);
+    expect((await readRuntimes(false)).runtimes.map((each) => each.runtime)).toEqual(["docker"]);
   });
 });
