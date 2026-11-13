@@ -43,7 +43,7 @@ export interface RuntimeInstall {
    * workspace reaches resources (`boat_launch_reports`). Absent: not known here, and Boat follows
    * `resourceHost` alone.
    */
-  readonly boatGateway?: boolean;
+  readonly boatGateway?: boolean | undefined;
 }
 
 const SUPPORTED = { supported: true } as const;

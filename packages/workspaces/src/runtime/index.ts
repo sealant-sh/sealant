@@ -286,7 +286,7 @@ export {
 } from "./boat/key-check.js";
 export {
   BOAT_KEY_REFRESH_MS,
-  boatReportCanStart,
+  boatReopenableReasons,
   openStoredBoatKey,
   refreshBoatKeyReports,
   reopenBoatQuarantine,

@@ -770,7 +770,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         await c.boat.reportLaunch("worker-stored-only");
         const reports = await c.repo(
           Effect.flatMap(BoatAccountRepo, (repo) =>
-            repo.launchReports(new Date(Date.now() - BOAT_LAUNCH_REPORT_FRESH_MS)),
+            repo.launchReports(BOAT_LAUNCH_REPORT_FRESH_MS),
           ),
         );
         const support = boatLaunchSupportOf(reports);
@@ -792,7 +792,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         const stale = boatLaunchSupportOf(
           await c.repo(
             Effect.flatMap(BoatAccountRepo, (repo) =>
-              repo.launchReports(new Date(Date.now() - BOAT_LAUNCH_REPORT_FRESH_MS)),
+              repo.launchReports(BOAT_LAUNCH_REPORT_FRESH_MS),
             ),
           ),
         );

@@ -26,13 +26,14 @@ import {
 } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import { BoatAccountRepo, BoatKeyProofRepo, type BoatAccountRecord } from "@sealant/db";
+import type { NativeReopenReason } from "@sealant/validators";
 import {
   BoatSecret,
   boatOrganizationSchema,
   boatSandboxIdSchema,
   boatSnapshotNameSchema,
   checkBoatKey,
-  boatReportCanStart,
+  boatReopenableReasons,
   observeBoatKey,
   proveBoatKey,
   type BoatKeyCheck,
@@ -171,12 +172,17 @@ const acceptedKey = (credential: BoatSecret, organization: string | null, outcom
 
 /**
  * The account's quarantined builds a person may have fixed are tried again on the next launch:
- * after a rotation, and after a check that says the wallet can start (`reopenBoatQuarantine`). A
- * failure to reopen loses nothing but the reopen; the next check tries again.
+ * every one after a rotation, and after a check only those whose own cause the report shows
+ * cleared (`boatReopenableReasons`). A failure to reopen loses nothing but the reopen; the next
+ * check tries again.
  */
-const reopenQuarantine = (deploymentId: string) =>
+const reopenQuarantine = (deploymentId: string, reasons?: readonly NativeReopenReason[]) =>
   Effect.flatMap(BoatAccountRepo, (repo) =>
-    repo.reopenQuarantined({ deploymentId, at: new Date() }),
+    repo.reopenQuarantined({
+      deploymentId,
+      at: new Date(),
+      ...(reasons === undefined ? {} : { reasons }),
+    }),
   ).pipe(Effect.orElseSucceed(() => 0));
 
 /** The install's own deployment label, as the worker names its VMs and images with it. */
@@ -376,7 +382,7 @@ export const checkBoatAccount = (boatAccountId: string) =>
         message: "The Boat account's stored key is not a Boat key.",
       });
     const report = yield* recheck(parsed.value, account.organization, account.id);
-    if (boatReportCanStart(report)) yield* reopenQuarantine(account.deploymentId);
+    yield* reopenQuarantine(account.deploymentId, boatReopenableReasons(report));
     return toWire(account, report);
   });
 
@@ -393,7 +399,8 @@ export const checkBoatInstallKey = () =>
     // The organization the install's own key bills, named on the check as on every request.
     const organization = (yield* BoatDefaultOrganization) ?? null;
     const report = yield* recheck(key.value, organization, BOAT_DEFAULT_ACCOUNT_ID);
-    if (boatReportCanStart(report)) yield* reopenQuarantine(yield* installDeployment);
+    const cleared = boatReopenableReasons(report);
+    if (cleared.length > 0) yield* reopenQuarantine(yield* installDeployment, cleared);
     return installKeyWire(report);
   });
 

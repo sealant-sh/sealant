@@ -91,6 +91,8 @@ describe.skipIf(DATABASE_URL === undefined)(
               Layer.provideMerge(Layer.succeed(CredentialCipher, cipher)),
             ),
           ),
+          // The API started long ago: a missing worker report is an answer, not a start-up gap.
+          Effect.provideService(availability.BoatApiStartedAt, 0),
           Effect.provideService(availability.BoatKeyClients, (credential, options) =>
             HttpBoatApi.create({
               credential,
@@ -243,6 +245,25 @@ describe.skipIf(DATABASE_URL === undefined)(
         expect(await refusal(routes.proveBoatAccount(randomUUID()))).toMatchObject({
           _tag: "BoatAccountNotFoundError",
         });
+      }),
+    );
+
+    it(
+      "accepts a Boat create while the API has just started and no worker has reported yet",
+      fresh(async () => {
+        const justStarted = <A, E>(
+          effect: Effect.Effect<
+            A,
+            E,
+            BoatAccountRepo | BoatKeyProofRepo | CredentialCipher | SealantDB
+          >,
+        ) => run(effect.pipe(Effect.provideService(availability.BoatApiStartedAt, Date.now())));
+        // No report yet, as after an upgrade: accepted, and the worker decides, as before.
+        await justStarted(boatCreate({ resources: "none" }));
+        // A report that says the worker cannot launch is still an answer.
+        await report({ worker: `w-${randomUUID()}`, launches: false });
+        const off = await justStarted(Effect.flip(boatCreate({ resources: "none" })));
+        expect(off.message).toContain("SEALANT_BOAT_STATE_DIRECTORY is not set");
       }),
     );
 

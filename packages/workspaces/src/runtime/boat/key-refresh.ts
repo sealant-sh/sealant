@@ -8,6 +8,7 @@ import type { BoatKeyReport } from "@sealant/api-contracts";
  */
 import type { CredentialCipherService } from "@sealant/credentials";
 import { BoatAccountRepo, BoatAccountRepoLive, SealantDB, type DB } from "@sealant/db";
+import type { NativeReopenReason } from "@sealant/validators";
 import { Effect, Option } from "effect";
 
 import { HttpBoatApi } from "./api.js";
@@ -17,20 +18,54 @@ import { observeBoatKey, type BoatKeyCheckClient } from "./key-check.js";
 /** Once a day: enough to see an expiry approaching or an account suspended. */
 export const BOAT_KEY_REFRESH_MS = 24 * 3_600_000;
 
-/** The wallet a report observed can start a VM now: a cause a person fixed may have cleared. */
-export const boatReportCanStart = (report: BoatKeyReport): boolean =>
-  report.start.observed && report.start.canStart;
+/**
+ * The quarantine reasons (`NATIVE_REOPEN_BOAT_FAILURES`) whose cause a report shows cleared, each by
+ * what Boat itself answered: the key is accepted now (Boat showed who it is); the permissions Core
+ * needs are all held and the key reaches every VM; the account is active; the wallet can start a
+ * VM; a saved snapshot slot is free. A cause the report did not observe is not cleared. A key
+ * rotation reopens every reason (`reopenBoatQuarantine` with no `reasons`).
+ */
+export const boatReopenableReasons = (report: BoatKeyReport): readonly NativeReopenReason[] => {
+  const reasons: NativeReopenReason[] = [];
+  const { identity, permissions, start, snapshots } = report;
+  if (identity.observed)
+    reasons.push(
+      "native-boat-key-refused",
+      "native-boat-key-expired",
+      "native-boat-organization-mismatch",
+    );
+  if (permissions.observed && !permissions.limitedToSandboxes)
+    reasons.push("native-boat-sandbox-outside-key");
+  if (permissions.observed && permissions.missing.length === 0)
+    reasons.push("native-boat-permission-missing");
+  if (identity.observed && identity.accountStatus === "active")
+    reasons.push("native-boat-account-suspended");
+  if (start.observed && start.canStart)
+    reasons.push(
+      "native-boat-billing-required",
+      "native-boat-member-cap",
+      "native-boat-trial-restricted",
+    );
+  if (snapshots.observed && snapshots.used < snapshots.included)
+    reasons.push("native-boat-snapshot-allowance-full");
+  return reasons;
+};
 
 /**
  * Reopens the deployment's quarantined builds whose Boat reason a person fixes, so the next launch
- * tries each once more. Answers how many were reopened.
+ * tries each once more: those of `reasons` (what a report shows cleared), or every such reason (a
+ * key rotation). Answers how many were reopened.
  */
-export const reopenBoatQuarantine = (db: DB, deploymentId: string, at: Date = new Date()) =>
+export const reopenBoatQuarantine = (
+  db: DB,
+  deploymentId: string,
+  at: Date = new Date(),
+  reasons?: readonly NativeReopenReason[],
+) =>
   Effect.runPromise(
-    Effect.flatMap(BoatAccountRepo, (repo) => repo.reopenQuarantined({ deploymentId, at })).pipe(
-      Effect.provide(BoatAccountRepoLive),
-      Effect.provideService(SealantDB, db),
-    ),
+    Effect.flatMap(BoatAccountRepo, (repo) =>
+      repo.reopenQuarantined({ deploymentId, at, ...(reasons === undefined ? {} : { reasons }) }),
+    ).pipe(Effect.provide(BoatAccountRepoLive), Effect.provideService(SealantDB, db)),
   );
 
 /** The account id of the install's own key in `boat_key_reports`. */
@@ -154,8 +189,9 @@ export const refreshBoatKeyReports = async (
           repo.saveReport({ account, report, observedAt: new Date(report.observedAt) }),
         ),
       );
-      if (deploymentId !== undefined && boatReportCanStart(report))
-        await reopenBoatQuarantine(options.db, deploymentId, now()).catch(() => 0);
+      const cleared = boatReopenableReasons(report);
+      if (deploymentId !== undefined && cleared.length > 0)
+        await reopenBoatQuarantine(options.db, deploymentId, now(), cleared).catch(() => 0);
       return { account, outcome: "refreshed" };
     } catch {
       return { account, outcome: "unavailable" };

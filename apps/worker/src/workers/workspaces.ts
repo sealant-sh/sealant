@@ -413,6 +413,20 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     docker: resourceAssembly,
   });
   boatResourceReach = boatAssembly?.reach;
+  // What this worker does for Boat, written as soon as it knows (before any job consumer starts)
+  // and every minute after: the API answers "can this install launch Boat" from it, so a create
+  // no worker can serve is refused at create, and a restarted worker is counted again at once.
+  const reportBoatLaunch = async () => {
+    try {
+      await boatAssembly?.reportLaunch(env.WORKER_ID);
+    } catch {
+      console.error("Boat launch report could not be written; the next minute tries again");
+    }
+  };
+  await reportBoatLaunch();
+  const boatLaunchReportTimer =
+    boatAssembly === undefined ? undefined : setInterval(reportBoatLaunch, 60_000);
+  boatLaunchReportTimer?.unref();
   const targetOptions = {
     ...baseTargetOptions,
     ...(boatAssembly?.control === undefined
@@ -1237,19 +1251,6 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     }
   };
   void verifyBoatBearers();
-  // What this worker does for Boat, written now and every minute: the API answers "can this
-  // install launch Boat" from it, so a create no worker can serve is refused at create.
-  const reportBoatLaunch = async () => {
-    try {
-      await boatAssembly?.reportLaunch(env.WORKER_ID);
-    } catch {
-      console.error("Boat launch report could not be written; the next minute tries again");
-    }
-  };
-  void reportBoatLaunch();
-  const boatLaunchReportTimer =
-    boatAssembly === undefined ? undefined : setInterval(reportBoatLaunch, 60_000);
-  boatLaunchReportTimer?.unref();
   // Every Boat key's report kept fresh: the install's own key checked now, at start, and every
   // key whose report is a day old checked again (looked at hourly). Read-only calls to Boat.
   let boatKeyRefreshRunning = false;

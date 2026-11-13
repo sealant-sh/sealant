@@ -716,11 +716,15 @@ export const assembleBoat = async (input: {
         },
       });
     },
-    /** Writes this worker's launch report (`launchReport`) as observed now. */
-    reportLaunch: (worker: string, now: Date = new Date()) =>
+    /** Writes this worker's launch report (`launchReport`), stamped by the database's clock. */
+    reportLaunch: (worker: string, observedAt?: Date) =>
       Effect.runPromise(
         Effect.flatMap(BoatAccountRepo, (repo) =>
-          repo.reportLaunch({ worker, ...launchReport, observedAt: now }),
+          repo.reportLaunch({
+            worker,
+            ...launchReport,
+            ...(observedAt === undefined ? {} : { observedAt }),
+          }),
         ).pipe(Effect.provide(BoatAccountRepoLive), Effect.provideService(SealantDB, db)),
       ),
     /**

@@ -251,15 +251,30 @@ describe.skipIf(!enabled)("a quarantine a person fixed is built again (SLNT-783)
                 kind: "billing-required",
               });
               expect(f.refusedCreates()).toBe(2);
+              // A check that clears another cause (a free snapshot slot) does not reopen it.
+              yield* Effect.promise(() =>
+                reopenBoatQuarantine(db, "local-stage2a", new Date(), [
+                  "native-boat-snapshot-allowance-full",
+                ]),
+              );
+              expect((yield* repo.get(pin.publicationId))?.reopenedAt).toBeNull();
               // The wallet is funded, and a check of the account says it can start: reopened.
               expect(
-                yield* Effect.promise(() => reopenBoatQuarantine(db, "local-stage2a")),
+                yield* Effect.promise(() =>
+                  reopenBoatQuarantine(db, "local-stage2a", new Date(), [
+                    "native-boat-billing-required",
+                  ]),
+                ),
               ).toBeGreaterThanOrEqual(1);
               expect((yield* repo.get(pin.publicationId))?.reopenedAt).toBeInstanceOf(Date);
               // A second check reopens nothing more: one rebuild per event, never a loop.
-              expect(yield* Effect.promise(() => reopenBoatQuarantine(db, "local-stage2a"))).toBe(
-                0,
-              );
+              expect(
+                yield* Effect.promise(() =>
+                  reopenBoatQuarantine(db, "local-stage2a", new Date(), [
+                    "native-boat-billing-required",
+                  ]),
+                ),
+              ).toBe(0);
               // The sweep finishes the cleanup Boat refused; the reason is the plain kind now.
               yield* catalog.reconcile({ limit: 100 }).pipe(Effect.result);
               expect(yield* repo.get(pin.publicationId)).toMatchObject({

@@ -283,10 +283,12 @@ create whose outcome is unknown.
 An image build Boat refused for a reason a person fixes in Boat (`key-refused`, `key-expired`,
 `permission-missing`, `sandbox-outside-key`, `organization-mismatch`, `account-suspended`,
 `billing-required`, `member-cap`, `trial-restricted`, `snapshot-allowance-full`) stays quarantined,
-and every launch on it reads the kind back, until the cause may have cleared: the account's key is
-rotated, or a check of it (`check`, `install-key`, or the worker's daily refresh) observes that the
-wallet can start. The next launch then builds it once more; a fresh refusal quarantines the new
-build with the fresh reason until the next such event.
+and every launch on it reads the kind back, until its own cause may have cleared: the account's key
+is rotated, or a check of it (`check`, `install-key`, or the worker's daily refresh) observes that
+this cause is gone: Boat accepts the key again, every permission Core needs is held, the account is
+active, the wallet can start a VM, or a saved snapshot slot is free. A check that clears another
+cause leaves it quarantined. The next launch then builds it once more; a fresh refusal quarantines
+the new build with the fresh reason until the next such event.
 
 A workspace names its account at create in `spec.runtime.boatAccountId`, and every run of it,
 restarts included, stays in that account. Omitted, it runs in the default account. An unknown or
@@ -295,13 +297,15 @@ run on Boat `400`.
 
 Whether a Boat workspace can be launched is the worker's answer, not the API's guess: each worker
 says every minute whether it launches Boat workspaces, whether it has the install's own key, and
-whether it has the resource gateway, and the create reads the reports of the last five minutes. A
-Boat create (or restart) that no worker could serve is refused before anything is reserved, `503`,
-with a sentence that says who can change it: code `unsupported-runtime` when no worker launches
-Boat, or when the install has neither its own key nor a stored account; `boat-account-required` when
-the spec names no account and no launching worker has the install's own key; `gateway-unavailable`
-when the spec reaches project resources (`runtime.resources` other than `"none"`) and no launching
-worker has the resource gateway.
+whether it has the resource gateway, and the create reads the reports of the last five minutes (by
+the database's clock). While the API itself started less than five minutes ago and no worker has
+reported yet, the create is accepted and waits for the worker, as it did before. A Boat create (or
+restart) that no worker could serve is refused before anything is reserved, `503`, with a sentence
+that says who can change it: code `unsupported-runtime` when no worker launches Boat, or when the
+install has neither its own key nor a stored account; `boat-account-required` when the spec names no
+account and no launching worker has the install's own key; `gateway-unavailable` when the spec
+reaches project resources (`runtime.resources` other than `"none"`) and no launching worker has the
+resource gateway.
 
 Each account has its own deployment label and builder owner, derived from its id, so two accounts
 stored over the same real Boat account never read each other's VMs, and each builds its own saved

@@ -176,6 +176,7 @@ export const NATIVE_REOPEN_BOAT_FAILURES = [
   "native-boat-snapshot-allowance-full",
 ] as const satisfies readonly `native-boat-${BoatFailureKind}`[];
 export const nativeReopenReasonSchema = z.enum(NATIVE_REOPEN_BOAT_FAILURES);
+export type NativeReopenReason = (typeof NATIVE_REOPEN_BOAT_FAILURES)[number];
 
 /** Only completed construction failures may spend one fresh reservation. Integrity and cleanup stay closed. */
 export const nativeBuildRetryReasonSchema = z.enum([
