@@ -57,17 +57,26 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
 /**
- * The exec'd command's process: the `processStarted` entry whose recorded executable matches, or the
- * first one when attribution is imprecise (the record contains only processes this run exec'd).
+ * The exec'd command's process, from the run's `processStarted` entries: of the processes this run
+ * started (the daemon stamps the run as their `executionId`), the first whose recorded executable
+ * matches, else the first. A process stamped with another execution is never it: before sealant
+ * kept them out, another exec's changes reading (`sh`, untagged) could sit in this run's record
+ * ahead of the command, and its output was returned as the command's (SLNT-956). Untagged entries
+ * are considered only when no entry carries this run's id: a daemon that ignores execution ids, or
+ * a control plane that does not report them.
  */
 const findCommandProcessId = (
   entries: readonly WireTimelineEntry[],
+  runId: string,
   executable: string,
 ): string | undefined => {
-  const match = entries.find(
+  const own = entries.filter((entry) => entry.executionId === runId);
+  const candidates =
+    own.length > 0 ? own : entries.filter((entry) => entry.executionId === undefined);
+  const match = candidates.find(
     (entry) => isRecord(entry.ref) && entry.ref["executable"] === executable,
   );
-  return (match ?? entries[0])?.processId;
+  return (match ?? candidates[0])?.processId;
 };
 
 const readScrollback = (
@@ -153,7 +162,7 @@ const execWorkspaceEffect = (
       getRunTimelineOp(runId, { ownerUserId, kinds: "processStarted" }),
       { runId, what: "the timeline", deadline },
     );
-    const processId = findCommandProcessId(started, executable);
+    const processId = findCommandProcessId(started, runId, executable);
     // The three reads are independent: one round trip of waiting, not three.
     const [stdout, stderr, wireChanges] = yield* Effect.all(
       [

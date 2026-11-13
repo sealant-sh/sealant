@@ -43,6 +43,7 @@ import {
   type SealantTarget,
   type SyncBackWorkspaceCredentialsInput,
   TransportError,
+  workingTreeChangesScript,
 } from "@sealant/workspaces";
 import { Deferred, Effect, Layer, Stream } from "effect";
 
@@ -129,6 +130,10 @@ const newRow = (input: CreateRunInput): Run => ({
   updatedAt: new Date(0),
 });
 
+/** The exec recorder's reading of what a run changed (`workingTreeChangesScript`). */
+export const isChangesReading = (exec: SealantExecOptions) =>
+  exec.executable === "sh" && exec.args?.[1] === workingTreeChangesScript();
+
 export interface FakeExecWorldOptions {
   /** How many health reads fail before the daemon answers. */
   readonly healthFailures?: number;
@@ -154,8 +159,11 @@ export const fakeExecWorld = (options: FakeExecWorldOptions = {}) => {
   let readsFailed = 0;
   let row: Run | undefined;
 
+  /** Not a run's command: the changes reading (tagged with its run) or an untagged read. */
+  const isRead = (exec: SealantExecOptions) =>
+    exec.executionId === undefined || isChangesReading(exec);
   const outcomeOf = (exec: SealantExecOptions) =>
-    exec.executionId === undefined ? String(options.readExitCode ?? 1) : (exec.args?.[0] ?? "0");
+    isRead(exec) ? String(options.readExitCode ?? 1) : (exec.args?.[0] ?? "0");
 
   const session: SealantSession = {
     health: Effect.suspend(() => {
@@ -168,7 +176,7 @@ export const fakeExecWorld = (options: FakeExecWorldOptions = {}) => {
     exec: (exec) =>
       Effect.suspend((): Effect.Effect<ExecAccepted, SealantError> => {
         sent.push(exec);
-        if (exec.executionId === undefined && readsFailed < (options.readFailures ?? 0)) {
+        if (isRead(exec) && readsFailed < (options.readFailures ?? 0)) {
           readsFailed += 1;
           return Effect.fail(
             new TransportError({ operation: "exec", message: "bridge closed", cause: 0 }),

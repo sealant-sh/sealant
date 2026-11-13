@@ -439,6 +439,9 @@ export const getRunTimeline = (input: {
           summary: entry.summary,
           ...(entry.ref === null || entry.ref === undefined ? {} : { ref: entry.ref }),
           ...(entry.processId === null ? {} : { processId: entry.processId }),
+          ...(entry.executionId === null || entry.executionId === ""
+            ? {}
+            : { executionId: entry.executionId }),
           captureMethod: entry.captureMethod,
           confidence: entry.confidence,
         }),

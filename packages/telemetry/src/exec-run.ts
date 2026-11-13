@@ -89,12 +89,16 @@ const parseNameStatus = (output: string): RunFileChange[] => {
  * on the image's own PATH, which every managed image and the custom-base contract provide, and it
  * prints the same bytes either way. A login shell sources `/etc/profile` and `/etc/profile.d` first:
  * in an Arch workspace image `sh -lc true` took 14 ms against 4 ms for `sh -c true` (2026-10-06),
- * and this runs after every exec, before the run is marked finished.
+ * and this runs after every exec, before the run is marked finished. It runs as part of `runId`:
+ * the daemon stamps the run on its events, so no other run's record takes it for its own.
  */
-const shellExec = (target: SealantTarget, script: string) =>
-  execInWorkspace(target, { executable: "sh", args: ["-c", script], cwd: WORKDIR }).pipe(
-    Effect.retry(IDEMPOTENT_READ_RETRY),
-  );
+const shellExec = (runId: string, target: SealantTarget, script: string) =>
+  execInWorkspace(target, {
+    executable: "sh",
+    args: ["-c", script],
+    cwd: WORKDIR,
+    executionId: runId,
+  }).pipe(Effect.retry(IDEMPOTENT_READ_RETRY));
 
 /**
  * The executor the run reached does not report `exec.user`: a daemon without it ignores `user` and
@@ -150,13 +154,20 @@ export const recordProcess = (input: {
       event.payload.case === "processExited" && event.processId === processId;
     let exitCode: number | undefined;
     const drain = input.session.events.pipe(
-      // Untagged daemon events (boot, heartbeats) are the pre-attribution behavior, and the
-      // compatibility path for daemons that ignore execution_id. Events tagged with a DIFFERENT
-      // execution (a concurrent SSH session) belong to that run; the telemetry worker's
-      // full-stream ingester attributes them there.
+      // The daemon sends every connection every event, so this filter is what keeps the record
+      // the run's own. Events tagged with a DIFFERENT execution (another exec run, an SSH session)
+      // belong to that run; the telemetry worker's full-stream ingester attributes them there.
+      // Untagged events are taken, with `includeUntagged`, only when no process or this one made
+      // them: daemon events (boot, heartbeats), and this process's own on a daemon that ignores
+      // execution_id. An untagged process of someone else's (another exec's changes reading)
+      // never is: in an exec run's record it read as the run's own command, and a caller was
+      // handed its output (SLNT-956).
       Stream.filter(
         (event) =>
-          event.executionId === runId || (input.includeUntagged && event.executionId === undefined),
+          event.executionId === runId ||
+          (input.includeUntagged &&
+            event.executionId === undefined &&
+            (event.processId === undefined || event.processId === processId)),
       ),
       Stream.takeUntil(isExit),
       Stream.tap((event) =>
@@ -272,7 +283,7 @@ export const captureRun = (
  */
 const captureChanges = (runId: string, target: SealantTarget) =>
   Effect.gen(function* () {
-    const output = yield* shellExec(target, workingTreeChangesScript());
+    const output = yield* shellExec(runId, target, workingTreeChangesScript());
     if (output.exitCode !== 0) {
       yield* Effect.logWarning(
         `Run ${runId}: reading its changes failed (the working-tree reading exited ${String(output.exitCode)}); recorded as failed.`,

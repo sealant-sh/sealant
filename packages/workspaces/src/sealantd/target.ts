@@ -264,6 +264,12 @@ export interface ExecInWorkspaceCommand {
   readonly executable: string;
   readonly args?: readonly string[];
   readonly cwd?: string;
+  /**
+   * The run this command is part of. The daemon stamps it on the process's events, so another
+   * run's recorder, which sees every event on its own connection, leaves them out, and the
+   * full-stream ingester files them under this run rather than its own.
+   */
+  readonly executionId?: string;
 }
 
 /**
@@ -291,6 +297,7 @@ export const execInWorkspace = (
         executable: command.executable,
         ...(command.args === undefined ? {} : { args: command.args }),
         ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
+        ...(command.executionId === undefined ? {} : { executionId: command.executionId }),
         stdin: false,
       });
 

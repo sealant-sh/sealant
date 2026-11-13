@@ -74,6 +74,7 @@ export const runTimelineEntrySchema = z.object({
   summary: z.string(),
   ref: z.unknown().optional(),
   processId: z.string().optional(),
+  executionId: z.string().optional(),
   captureMethod: z.number(),
   confidence: z.number(),
 });

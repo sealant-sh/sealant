@@ -5,12 +5,22 @@
  * order, a nonzero exit as data, and an interruption sends no further command and fails the run.
  */
 import { RunRepo, RunRepoUnexpectedError } from "@sealant/db";
-import { Deferred, Duration, Effect, Exit, Fiber, Result } from "effect";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import type { SealantSession } from "@sealant/workspaces";
+import { Deferred, Duration, Effect, Exit, Fiber, Result, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { FAKE_CIPHER, FAKE_TARGET, fakeExecWorld } from "./exec-run.fixture.js";
-import { executeExecRun, produceExecRun } from "./exec-run.js";
-import { TelemetrySink } from "./sink.js";
+import {
+  type DaemonEventInit,
+  daemonEvent,
+  exitedEvent,
+  FAKE_CIPHER,
+  FAKE_TARGET,
+  fakeExecWorld,
+  isChangesReading,
+} from "./exec-run.fixture.js";
+import { executeExecRun, produceExecRun, recordProcess } from "./exec-run.js";
+import { TelemetrySink, type TelemetrySinkService } from "./sink.js";
 
 const RUN = "run_exec";
 
@@ -18,7 +28,13 @@ const commandsOf = (args: readonly string[]) =>
   args.map((arg) => ({ executable: "check", args: [arg] }));
 
 const runCommands = (world: ReturnType<typeof fakeExecWorld>) =>
-  world.sent.filter((exec) => exec.executionId === RUN).map((exec) => exec.args);
+  world.sent
+    .filter((exec) => exec.executionId === RUN && !isChangesReading(exec))
+    .map((exec) => exec.args);
+
+/** The changes readings sent, each with the execution it was sent as. */
+const readings = (world: ReturnType<typeof fakeExecWorld>) =>
+  world.sent.filter(isChangesReading).map((exec) => exec.executionId);
 
 /** A queued run's row, as the worker finds it. */
 const queuedRun = (world: ReturnType<typeof fakeExecWorld>) =>
@@ -97,7 +113,7 @@ describe("a command the daemon refuses after others ran", () => {
     const w = fakeExecWorld({ readExitCode: 0 });
     await produce(w, ["0", "refused", "0"]);
     expect(runCommands(w)).toEqual([["0"], ["refused"]]);
-    expect(w.sent.filter((exec) => exec.executionId === undefined)).toHaveLength(1);
+    expect(readings(w)).toEqual([RUN]);
     expect(w.row()).toMatchObject({
       status: "failed",
       errorMessage: `Run ${RUN}: the workspace refused to start command 2/3 (daemon error 3); nothing was started.`,
@@ -108,7 +124,7 @@ describe("a command the daemon refuses after others ran", () => {
   it("reads nothing when the answer was lost, since the process may still be writing", async () => {
     const w = fakeExecWorld({ readExitCode: 0 });
     await produce(w, ["0", "lost"]);
-    expect(w.sent.filter((exec) => exec.executionId === undefined)).toHaveLength(0);
+    expect(readings(w)).toEqual([]);
     expect(w.row()).toMatchObject({ status: "failed", changedFiles: null });
   });
 });
@@ -177,7 +193,7 @@ describe("the two retry policies", () => {
     const w = fakeExecWorld({ readFailures: 2, readExitCode: 0 });
     await produce(w, ["0"]);
     expect(runCommands(w)).toEqual([["0"]]);
-    expect(w.sent.filter((exec) => exec.executionId === undefined)).toHaveLength(3);
+    expect(readings(w)).toEqual([RUN, RUN, RUN]);
     expect(w.row()).toMatchObject({ status: "completed", exitCode: 0 });
   });
 });
@@ -319,5 +335,80 @@ describe("an exec run in its request whose persistence stalls", () => {
     expect(answered).toMatchObject({
       success: { id: RUN, status: "failed", errorMessage: budgetReason },
     });
+  });
+});
+
+/** The daemon's events on one connection, as sealantd sends them: every process's. */
+const event = (
+  sequence: number,
+  init: {
+    readonly processId?: string;
+    readonly executionId?: string;
+    readonly payload: NonNullable<DaemonEventInit["payload"]>;
+  },
+) =>
+  daemonEvent({
+    schemaVersion: 1,
+    eventId: `evt_${String(sequence)}`,
+    runtimeId: "rt_1",
+    sequence: BigInt(sequence),
+    ...init,
+  });
+const started = (sequence: number, processId: string, executionId?: string) =>
+  event(sequence, {
+    processId,
+    ...(executionId === undefined ? {} : { executionId }),
+    payload: {
+      case: "processStarted",
+      value: { pid: sequence, executable: "sh", args: ["-c", processId] },
+    },
+  });
+
+describe("a process's record (SLNT-956)", () => {
+  const record = (events: readonly ReturnType<typeof daemonEvent>[]) =>
+    Effect.gen(function* () {
+      const recorded: string[] = [];
+      const sink = fakeService<TelemetrySinkService>({
+        appendBatch: (input) =>
+          Effect.sync(() => {
+            recorded.push(...input.batch.map((normalized) => normalized.eventId));
+            return input.batch;
+          }),
+        closeEpoch: () => Effect.void,
+      });
+      const { exitCode } = yield* recordProcess({
+        session: fakeService<SealantSession>({ events: Stream.fromIterable(events) }),
+        runId: RUN,
+        runtimeId: "rt_1",
+        processId: "proc_own",
+        includeUntagged: true,
+      }).pipe(Effect.provideService(TelemetrySink, sink));
+      return { exitCode, recorded };
+    }).pipe(Effect.runPromise);
+
+  it("takes no other process's untagged events: another exec's changes reading is not its own", async () => {
+    const { exitCode, recorded } = await record([
+      event(1, { payload: { case: "runtimeHeartbeat", value: {} } }),
+      // Another exec's changes reading, on a daemon that ran it untagged, before this command.
+      started(2, "proc_reading"),
+      exitedEvent("proc_reading", 0),
+      started(3, "proc_own", RUN),
+      // A third exec's command, tagged with its own run.
+      started(4, "proc_other", "run_other"),
+      { ...exitedEvent("proc_own", 7, RUN), eventId: "evt_own_exit" },
+    ]);
+    expect(exitCode).toBe(7);
+    expect(recorded).toEqual(["evt_1", "evt_3", "evt_own_exit"]);
+  });
+
+  it("still takes its own process's untagged events, from a daemon that ignores execution_id", async () => {
+    const { exitCode, recorded } = await record([
+      started(1, "proc_reading"),
+      started(2, "proc_own"),
+      exitedEvent("proc_reading", 0),
+      { ...exitedEvent("proc_own", 0), eventId: "evt_own_exit" },
+    ]);
+    expect(exitCode).toBe(0);
+    expect(recorded).toEqual(["evt_2", "evt_own_exit"]);
   });
 });
