@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  BOAT_DEFAULT_ACCOUNT_ID,
   BoatAccountBadRequestError,
   BoatAccountConflictError,
   BoatAccountInternalServerError,
@@ -15,6 +16,10 @@ import {
   BoatAccountNotFoundError,
   BoatAccountServiceUnavailableError,
   type BoatAccountWire,
+  type BoatInstallKeyWire,
+  type BoatFailure,
+  type BoatKeyReport,
+  boatKeyReportSchema,
   type CreateBoatAccountRequest,
   type RotateBoatAccountKeyRequest,
 } from "@sealant/api-contracts";
@@ -22,26 +27,50 @@ import { CredentialCipher } from "@sealant/credentials";
 import { BoatAccountRepo, type BoatAccountRecord } from "@sealant/db";
 import {
   BoatSecret,
+  boatKeyRefusedReport,
+  boatOrganizationSchema,
   boatSandboxIdSchema,
   boatSnapshotNameSchema,
-  type BoatApiError,
+  checkBoatKey,
+  type BoatKeyCheck,
 } from "@sealant/workspaces";
-import { Effect } from "effect";
+import { Effect, Option, Schema } from "effect";
 
 import { env } from "../../runtime-env.js";
 import {
   BoatConfigured,
+  BoatDefaultKey,
   BoatKeyClients,
   type BoatKeyClient,
 } from "../../services/boat-availability.js";
 
-const toWire = (account: BoatAccountRecord): BoatAccountWire => ({
+const toWire = (account: BoatAccountRecord, report: BoatKeyReport | null): BoatAccountWire => ({
   boatAccountId: account.id,
   label: account.label,
   state: account.removalRequestedAt === null ? "active" : "removing",
   createdAt: account.createdAt.toISOString(),
   keyRotatedAt: account.keyRotatedAt?.toISOString() ?? null,
+  organization: account.organization,
+  report,
 });
+
+/** The install's own key as `install-key` shows it: never listed, rotated or removed here. */
+const installKeyWire = (report: BoatKeyReport | null): BoatInstallKeyWire => ({
+  label: "This install's Boat key",
+  report,
+});
+
+const decodeReport = Schema.decodeUnknownOption(boatKeyReportSchema);
+const storedReport = (value: unknown): BoatKeyReport | null => {
+  const decoded = decodeReport(value);
+  return Option.isSome(decoded) ? decoded.value : null;
+};
+
+const environmentKey = (verb: string) =>
+  new BoatAccountConflictError({
+    code: "boat-account-environment",
+    message: `The install's own Boat key is set in its environment (SEALANT_BOAT_API_KEY or SEALANT_BOAT_API_KEY_FILE); ${verb} it there, not through this API.`,
+  });
 
 const internal = (message: string) => () => new BoatAccountInternalServerError({ message });
 
@@ -59,49 +88,99 @@ const requireBoatAccounts = Effect.gen(function* () {
     });
 });
 
-/** Boat's answer that the key itself is not accepted, as opposed to Boat not answering. */
-const keyRefusedByBoat = (error: BoatApiError) => error.status === 401 || error.status === 403;
+/** Boat's words for a refused key, by its reason. Never the key or any part of it. */
+const refusedWords = (failure: BoatFailure) =>
+  failure.kind === "key-expired"
+    ? "Boat answered that the key has expired"
+    : failure.kind === "organization-mismatch"
+      ? "Boat answered that the key belongs to another organization than the one named"
+      : failure.kind === "sandbox-outside-key"
+        ? "Boat answered that the key is limited to other VMs"
+        : "Boat refused the key";
 
 /**
- * Opens a key into a client and asks Boat, by one read-only call, whether it accepts it. The key's
- * value never reaches an error: a malformed one is refused by its shape alone.
+ * A pasted key as Core keeps it: whitespace around it trimmed, then refused by its shape alone if
+ * it is not a Boat key. The key's value never reaches an error.
  */
-const checkedClient = (apiKey: string) =>
+const parseKey = (apiKey: string) => {
+  const credential = BoatSecret.parse(apiKey.trim());
+  return credential.ok
+    ? Effect.succeed(credential.value)
+    : Effect.fail(
+        new BoatAccountBadRequestError({
+          message:
+            "apiKey is not a Boat key: it must be 16 to 4096 characters of letters, digits and . _ ~ -.",
+        }),
+      );
+};
+
+/** Opens a key into a client that names the account's organization on every request. */
+const openClient = (credential: BoatSecret, organization: string | null) =>
   Effect.gen(function* () {
-    const credential = BoatSecret.parse(apiKey);
-    if (!credential.ok)
-      return yield* new BoatAccountBadRequestError({
-        message:
-          "apiKey is not a Boat API key: it must be 16 to 4096 characters of letters, digits and . _ ~ -.",
-      });
-    const opened = (yield* BoatKeyClients)(credential.value);
+    const opened = (yield* BoatKeyClients)(
+      credential,
+      organization === null ? undefined : { organization },
+    );
     if (!opened.ok)
       return yield* new BoatAccountInternalServerError({
         message: "Failed to prepare a Boat client.",
       });
-    const client = opened.value;
-    const verified = yield* Effect.promise(() =>
-      client.verifyCredential().catch(() => ({ ok: false as const, error: undefined })),
-    );
-    if (!verified.ok)
-      return yield* new BoatAccountKeyRefusedError(
-        verified.error !== undefined && keyRefusedByBoat(verified.error)
-          ? { code: "boat-key-refused", message: "Boat refused the API key; nothing was stored." }
-          : {
-              code: "boat-key-unverified",
-              message:
-                "Boat did not answer whether it accepts the API key; nothing was stored. Try again.",
-            },
-      );
-    return client;
+    return opened.value;
   });
+
+const runCheck = (client: BoatKeyClient, organization: string | null) =>
+  Effect.promise(
+    (): Promise<BoatKeyCheck> =>
+      checkBoatKey(client, { organization }).catch(() => ({ kind: "unverified" as const })),
+  );
+
+const unverified = (failure: BoatFailure | undefined, outcome: string) =>
+  new BoatAccountKeyRefusedError({
+    code: "boat-key-unverified",
+    message: `Boat did not answer whether it accepts the key; ${outcome} Try again.`,
+    ...(failure === undefined ? {} : { boat: failure }),
+  });
+
+/**
+ * Checks a key with Boat by read-only calls before it is stored: refused when Boat refuses the key
+ * itself, when it provably lacks a permission Core needs (named), or when Boat does not answer.
+ * Otherwise answers the client and the key's report.
+ */
+const acceptedKey = (credential: BoatSecret, organization: string | null, outcome: string) =>
+  Effect.gen(function* () {
+    const client = yield* openClient(credential, organization);
+    const check = yield* runCheck(client, organization);
+    if (check.kind === "unverified") return yield* unverified(check.failure, outcome);
+    if (check.kind === "refused")
+      return yield* new BoatAccountKeyRefusedError({
+        code: "boat-key-refused",
+        message: `${refusedWords(check.failure)} (${check.failure.code ?? check.failure.kind}); ${outcome}`,
+        boat: check.failure,
+      });
+    if (check.missingPermissions.length > 0)
+      return yield* new BoatAccountKeyRefusedError({
+        code: "boat-key-missing-permissions",
+        message: `The key lacks Boat permissions Core needs: ${check.missingPermissions.join(", ")}; ${outcome}`,
+        missingPermissions: check.missingPermissions,
+        report: check.report,
+      });
+    return { client, report: check.report };
+  });
+
+const saveReport = (account: string, report: BoatKeyReport) =>
+  Effect.flatMap(BoatAccountRepo, (repo) =>
+    repo.saveReport({ account, report, observedAt: new Date(report.observedAt) }),
+  ).pipe(Effect.mapError(internal("Failed to store the Boat key's report.")));
 
 const seal = (apiKey: string) =>
   Effect.flatMap(CredentialCipher, (cipher) => cipher.encrypt(apiKey)).pipe(
     Effect.mapError(internal("Failed to seal the Boat API key.")),
   );
 
-/** `POST /v1/boat-accounts`: checks the key with Boat, seals it and stores the account. */
+/**
+ * `POST /v1/boat-accounts`: checks the key with Boat (read-only), seals it and stores the account
+ * with its organization, if named, and the key's report.
+ */
 export const createBoatAccount = (payload: CreateBoatAccountRequest) =>
   Effect.gen(function* () {
     yield* requireBoatAccounts;
@@ -110,22 +189,55 @@ export const createBoatAccount = (payload: CreateBoatAccountRequest) =>
       return yield* new BoatAccountBadRequestError({
         message: "label must be at most 200 characters.",
       });
-    yield* checkedClient(payload.apiKey);
-    const sealed = yield* seal(payload.apiKey);
+    const organization = payload.organization?.trim() ?? null;
+    if (organization !== null && !boatOrganizationSchema.safeParse(organization).success)
+      return yield* new BoatAccountBadRequestError({
+        message:
+          "organization must be a Boat organization's id or name: up to 128 letters, digits, spaces and . _ -.",
+      });
+    const credential = yield* parseKey(payload.apiKey);
+    const { report } = yield* acceptedKey(credential, organization, "nothing was stored.");
+    const sealed = yield* seal(credential.reveal());
     const account = yield* (yield* BoatAccountRepo)
-      .create({ id: randomUUID(), label, sealedKey: sealed.sealed, keyId: sealed.keyId })
+      .create({
+        id: randomUUID(),
+        label,
+        sealedKey: sealed.sealed,
+        keyId: sealed.keyId,
+        ...(organization === null ? {} : { organization }),
+      })
       .pipe(Effect.mapError(internal("Failed to store the Boat account.")));
-    return toWire(account);
+    yield* saveReport(account.id, report);
+    return toWire(account, report);
   });
 
-/** `GET /v1/boat-accounts`: every account not removed; never a key. */
+/**
+ * `GET /v1/boat-accounts`: every stored account not removed, each with its key's last report;
+ * never a key. The install's own key is not listed (`install-key`): every id here is an account's
+ * UUID, as every released client decodes it.
+ */
 export const listBoatAccounts = () =>
   Effect.gen(function* () {
     yield* requireBoatAccounts;
-    const accounts = yield* (yield* BoatAccountRepo)
+    const repo = yield* BoatAccountRepo;
+    const accounts = yield* repo
       .list()
       .pipe(Effect.mapError(internal("Failed to list Boat accounts.")));
-    return { items: accounts.map(toWire) };
+    const reports = yield* repo
+      .reports()
+      .pipe(Effect.mapError(internal("Failed to read the Boat keys' reports.")));
+    const reportOf = (account: string) => storedReport(reports.get(account)?.report);
+    return { items: accounts.map((account) => toWire(account, reportOf(account.id))) };
+  });
+
+/** `GET /v1/boat-accounts/install-key`: the install's own key's last report; never the key. */
+export const getBoatInstallKey = () =>
+  Effect.gen(function* () {
+    yield* requireBoatAccounts;
+    const reports = yield* (yield* BoatAccountRepo)
+      .reports()
+      .pipe(Effect.mapError(internal("Failed to read the Boat keys' reports.")));
+    return installKeyWire(storedReport(reports.get(BOAT_DEFAULT_ACCOUNT_ID)?.report));
   });
 
 const notFound = (boatAccountId: string) =>
@@ -134,6 +246,62 @@ const removing = (boatAccountId: string) =>
   new BoatAccountConflictError({
     code: "boat-account-removing",
     message: `Boat account ${boatAccountId} is being removed.`,
+  });
+
+/**
+ * Checks a key with Boat again and stores the report under `account`. A key Boat now refuses, or
+ * one that lacks a permission, is reported, not refused: nothing changes but the report. Boat not
+ * answering (or asking to wait) keeps the last report.
+ */
+const recheck = (credential: BoatSecret, organization: string | null, account: string) =>
+  Effect.gen(function* () {
+    const client = yield* openClient(credential, organization);
+    const check = yield* runCheck(client, organization);
+    if (check.kind === "unverified")
+      return yield* unverified(check.failure, "the last report was kept.");
+    const report =
+      check.kind === "refused"
+        ? boatKeyRefusedReport(check.failure, { organization })
+        : check.report;
+    yield* saveReport(account, report);
+    return report;
+  });
+
+/** `POST /v1/boat-accounts/:id/check`: checks a stored account's key again (read-only). */
+export const checkBoatAccount = (boatAccountId: string) =>
+  Effect.gen(function* () {
+    yield* requireBoatAccounts;
+    const repo = yield* BoatAccountRepo;
+    const account = yield* repo
+      .get(boatAccountId)
+      .pipe(Effect.mapError(internal("Failed to read the Boat account.")));
+    if (account === undefined || account.removedAt !== null) return yield* notFound(boatAccountId);
+    const sealed = yield* repo
+      .sealedKey(boatAccountId)
+      .pipe(Effect.mapError(internal("Failed to read the Boat account.")));
+    if (sealed === undefined) return yield* notFound(boatAccountId);
+    const opened = yield* Effect.flatMap(CredentialCipher, (cipher) =>
+      cipher.decrypt(sealed.sealedKey),
+    ).pipe(Effect.mapError(internal("Failed to open the Boat account's key.")));
+    const parsed = BoatSecret.parse(opened);
+    if (!parsed.ok)
+      return yield* new BoatAccountInternalServerError({
+        message: "The Boat account's stored key is not a Boat key.",
+      });
+    const report = yield* recheck(parsed.value, account.organization, account.id);
+    return toWire(account, report);
+  });
+
+/** `POST /v1/boat-accounts/install-key`: checks the install's own key with Boat now (read-only). */
+export const checkBoatInstallKey = () =>
+  Effect.gen(function* () {
+    yield* requireBoatAccounts;
+    const key = (yield* BoatDefaultKey)();
+    if (!key.ok)
+      return yield* new BoatAccountServiceUnavailableError({
+        message: "The install's own Boat key could not be read from its environment.",
+      });
+    return installKeyWire(yield* recheck(key.value, null, BOAT_DEFAULT_ACCOUNT_ID));
   });
 
 /**
@@ -185,13 +353,20 @@ const unseenBy = (
 export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatAccountKeyRequest) =>
   Effect.gen(function* () {
     yield* requireBoatAccounts;
+    if (boatAccountId === BOAT_DEFAULT_ACCOUNT_ID) return yield* environmentKey("rotate");
     const repo = yield* BoatAccountRepo;
     const account = yield* repo
       .get(boatAccountId)
       .pipe(Effect.mapError(internal("Failed to read the Boat account.")));
     if (account === undefined || account.removedAt !== null) return yield* notFound(boatAccountId);
     if (account.removalRequestedAt !== null) return yield* removing(boatAccountId);
-    const client = yield* checkedClient(payload.apiKey);
+    const credential = yield* parseKey(payload.apiKey);
+    // The new key bills the organization the account was stored with, like the old one.
+    const { client, report } = yield* acceptedKey(
+      credential,
+      account.organization,
+      "nothing was changed.",
+    );
     // A create whose VM is not on record yet can be found only with the key it was made under.
     const unresolved = yield* repo
       .unresolvedCreates(boatAccountId)
@@ -220,7 +395,7 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
         code: "boat-key-unverified",
         message: `Boat did not answer whether the new key sees everything the account has (${String(unanswered)} reads unanswered); nothing was changed. Try again.`,
       });
-    const sealed = yield* seal(payload.apiKey);
+    const sealed = yield* seal(credential.reveal());
     const rotated = yield* repo
       .rotate(boatAccountId, {
         sealedKey: sealed.sealed,
@@ -244,7 +419,8 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
                   : new BoatAccountInternalServerError({ message: "Failed to store the new key." }),
         ),
       );
-    return toWire(rotated);
+    yield* saveReport(rotated.id, report);
+    return toWire(rotated, report);
   });
 
 /**
@@ -255,6 +431,7 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
 export const removeBoatAccount = (boatAccountId: string) =>
   Effect.gen(function* () {
     yield* requireBoatAccounts;
+    if (boatAccountId === BOAT_DEFAULT_ACCOUNT_ID) return yield* environmentKey("remove");
     const request = yield* (yield* BoatAccountRepo)
       .requestRemoval(boatAccountId)
       .pipe(
@@ -284,5 +461,8 @@ export const removeBoatAccount = (boatAccountId: string) =>
         message: `Boat account ${boatAccountId} still has ${parts.join(" and ")}; stop its workspaces and try again.`,
       });
     }
-    return toWire(request.account);
+    const reports = yield* (yield* BoatAccountRepo)
+      .reports()
+      .pipe(Effect.orElseSucceed(() => new Map()));
+    return toWire(request.account, storedReport(reports.get(request.account.id)?.report));
   });

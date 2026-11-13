@@ -153,6 +153,40 @@ export interface FakeBoatRefusal {
   readonly retryAfter?: number;
 }
 
+/**
+ * The Boat account behind the fake's one key, as the key check reads it (docs.boat.dev account
+ * reference and a read-only probe, 2026-11-13). Every field has a default: a personal `*` key of
+ * an active account whose wallet can start, 0 of 2 VMs running, 7 of 10 snapshot slots used.
+ */
+export interface FakeBoatAccount {
+  /** `GET /me`'s `user`. */
+  readonly user?: Readonly<Record<string, unknown>>;
+  /** `GET /orgs`'s `orgs`. */
+  readonly orgs?: readonly Readonly<Record<string, unknown>>[];
+  /**
+   * The key's own entry in `GET /api-keys` (beside one other key of the account). `organization`:
+   * an organization key, refused the list (`403 api_key_org_forbidden`). `limited`: a key limited
+   * to some VMs, which gets an empty list.
+   */
+  readonly key?:
+    | {
+        readonly actions?: readonly string[];
+        readonly expiresAt?: string | null;
+        readonly expired?: boolean;
+        readonly expiringSoon?: boolean;
+        readonly teamId?: string | null;
+        readonly sandboxes?: "*" | readonly string[];
+      }
+    | "organization"
+    | "limited";
+  /** `GET /limits` for the organization a request names (`X-Boat-Org` or `?org=`), if any. */
+  readonly limits?: (organization: string | undefined) => Readonly<Record<string, unknown>>;
+  /** The saved snapshot allowance `GET /saved-snapshots` reports. */
+  readonly allowance?: { readonly used: number; readonly included: number };
+  /** Boat refuses every request with `403 org_suspended`, as it does a suspended account. */
+  readonly suspended?: boolean;
+}
+
 export interface FakeBoatEvent {
   readonly at: number;
   readonly kind: string;
@@ -311,6 +345,14 @@ export class FakeBoat {
   readonly deletions = new Map<string, FakeDeletion>();
   readonly events: FakeBoatEvent[] = [];
   faults: FakeBoatFaults = {};
+  /** The account the key belongs to (see `FakeBoatAccount`). */
+  account: FakeBoatAccount = {};
+  /** Every request that named an organization (`X-Boat-Org`), in order. */
+  readonly organizationHeaders: Array<{
+    readonly method: string;
+    readonly path: string;
+    readonly organization: string;
+  }> = [];
   /**
    * How long an accepted deletion stays `processing` after the VM is withdrawn (from
    * `deletionWithdrawnMs`); a scenario may change it for the deletions it starts.
@@ -489,6 +531,9 @@ export class FakeBoat {
       const path = url.pathname.replace(/^\/api\/v1/, "");
       const method = request.method ?? "GET";
       this.#record("api", undefined, `${method} ${path}`);
+      const named = request.headers["x-boat-org"];
+      if (typeof named === "string")
+        this.organizationHeaders.push({ method, path, organization: named });
       const refusal = this.faults.refuse?.({
         method,
         path,
@@ -515,6 +560,15 @@ export class FakeBoat {
           refusal.retryAfter === undefined ? {} : { "Retry-After": String(refusal.retryAfter) },
         );
       }
+      if (this.account.suspended === true && path !== "/me")
+        throw new HttpError(403, "org_suspended");
+      const account = this.#accountReads(
+        method,
+        path,
+        url,
+        typeof named === "string" ? named : undefined,
+      );
+      if (account !== undefined) return send(account.status, account.body);
       let match: RegExpMatchArray | null;
       if (method === "POST" && path === "/sandboxes") {
         const key = request.headers["idempotency-key"];
@@ -723,8 +777,8 @@ export class FakeBoat {
           snapshots,
           allowance: {
             org: null,
-            included: 10,
-            used: snapshots.length,
+            included: this.account.allowance?.included ?? 10,
+            used: this.account.allowance?.used ?? snapshots.length,
             extra: Math.max(0, snapshots.length - 10),
             extraDailyDollars: 0,
           },
@@ -761,6 +815,132 @@ export class FakeBoat {
       this.#record("api-error", undefined, String(error));
       return send(500, { ok: false, code: "internal_error" });
     }
+  }
+
+  /** The account reads a key check makes; undefined for any other call. */
+  #accountReads(
+    method: string,
+    path: string,
+    url: URL,
+    named: string | undefined,
+  ): { readonly status: number; readonly body: unknown } | undefined {
+    if (method !== "GET") return undefined;
+    const account = this.account;
+    if (path === "/me")
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          type: "user.info",
+          user: {
+            id: "usr_fake",
+            login: "fake-owner",
+            displayName: "Fake Owner",
+            accountPlan: "user",
+            serviceAccount: false,
+            accountStatus: account.suspended === true ? "suspended" : "active",
+            suspended: account.suspended === true,
+            closed: false,
+            ...account.user,
+          },
+        },
+      };
+    if (path === "/orgs")
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          orgs: account.orgs ?? [
+            { id: "personal", name: "personal", type: "personal", role: "owner", active: true },
+            { id: "team_acme", name: "acme", type: "org", role: "admin", active: false },
+          ],
+          activeWalletChosen: true,
+        },
+      };
+    if (path === "/limits") {
+      const organization = url.searchParams.get("org") ?? named;
+      const team =
+        organization === undefined || organization === "personal"
+          ? undefined
+          : (account.orgs ?? [{ id: "team_acme", name: "acme", role: "admin" }]).find(
+              (org) => org["id"] === organization || org["name"] === organization,
+            );
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          type: "limits.info",
+          canStart: true,
+          blockedReason: null,
+          startBlockedReason: null,
+          billingStatus: "active",
+          accessTier: "paid",
+          activeSandboxes: this.liveSandboxes().length,
+          maxActiveSandboxes: 2,
+          ...(team === undefined ? {} : { teamId: team["id"], teamRole: team["role"] }),
+          ...account.limits?.(organization ?? undefined),
+        },
+      };
+    }
+    if (path === "/api-keys") {
+      const key = account.key ?? {};
+      if (key === "organization")
+        return {
+          status: 403,
+          body: boatErrorEnvelope({ status: 403, code: "api_key_org_forbidden" }),
+        };
+      const credential = this.options.credential;
+      const other = {
+        id: "key_other",
+        name: "laptop",
+        keyPrefix: "boat_live",
+        keyLastFour: "zzzz",
+        teamId: null,
+        expiresAt: null,
+        scope: { actions: ["read-only"], sandboxes: "*", environments: "*" },
+      };
+      const own =
+        key === "limited"
+          ? []
+          : [
+              {
+                id: "key_own",
+                name: "sealant",
+                keyPrefix: credential.slice(0, 9),
+                keyLastFour: credential.slice(-4),
+                teamId: key.teamId ?? null,
+                createdAt: now(),
+                lastUsedAt: now(),
+                expiresAt: key.expiresAt === undefined ? null : key.expiresAt,
+                expired: key.expired ?? false,
+                expiringSoon: key.expiringSoon ?? false,
+                scope: {
+                  expiresAt: key.expiresAt === undefined ? null : key.expiresAt,
+                  actions: key.actions ?? ["*"],
+                  sandboxes: key.sandboxes ?? "*",
+                  environments: "*",
+                },
+              },
+            ];
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          type: "api_key.list",
+          apiKeys: key === "limited" ? [] : [other, ...own],
+          catalog: {
+            actions: ["*"],
+            presets: {
+              "read-only": ["sandbox.read", "snapshot.read", "environment.read", "account.read"],
+              admin: ["*"],
+            },
+            defaultTtl: "90d",
+            maxTtl: "365d",
+          },
+        },
+      };
+    }
+    return undefined;
   }
 
   #inventory(url: URL) {

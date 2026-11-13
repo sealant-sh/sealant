@@ -55,8 +55,10 @@ describe("Boat accounts", () => {
       label: "Organization A",
       apiKey: "fixture-boat-key-not-real",
     });
-    expect(created).toEqual(account);
-    expect(await sealant.boatAccounts.list()).toEqual([account]);
+    // An older control plane sends no organization or report: none named, not checked.
+    const read = { ...account, organization: null, report: null };
+    expect(created).toEqual(read);
+    expect(await sealant.boatAccounts.list()).toEqual([read]);
     expect(
       (await sealant.boatAccounts.rotateKey(account.boatAccountId, "fixture-boat-key-next"))
         .keyRotatedAt,

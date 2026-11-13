@@ -21,6 +21,7 @@ import type {
 } from "node:stream/web";
 
 import type {
+  BoatKeyReport,
   WorkspacePublication as WireWorkspacePublication,
   ConnectedAccountLogin,
   ConnectedAccountLoginClass,
@@ -2561,6 +2562,24 @@ export interface BoatAccount {
   readonly createdAt: string;
   /** When its key was last replaced; null while it has the key it was created with. */
   readonly keyRotatedAt: string | null;
+  /** The Boat organization the account bills, named on every request; null: none named. */
+  readonly organization: string | null;
+  /**
+   * What the last check observed of the key, and when (`report.observedAt`); null until checked.
+   * Each fact is `observed: true` with its value, or `observed: false` with Boat's reason.
+   */
+  readonly report: BoatKeyReport | null;
+}
+
+/**
+ * The control plane's own Boat key (its environment's), which workspaces run in when they name no
+ * account: never the key, only its last report. Not in `list()`; it cannot be rotated or removed
+ * through the API.
+ */
+export interface BoatInstallKey {
+  readonly label: string;
+  /** What the last check observed of the key, and when; null until it is checked. */
+  readonly report: BoatKeyReport | null;
 }
 
 /**
@@ -2570,11 +2589,21 @@ export interface BoatAccount {
  */
 export interface BoatAccountsNamespace {
   /**
-   * Stores a Boat account. The key is checked with Boat by one read-only call first: a key Boat
-   * refuses rejects with a `SealantApiError` (422, `reason` `boat-key-refused`; `boat-key-unverified`
-   * when Boat did not answer) and nothing is stored. No error names the key.
+   * Stores a Boat account. The key (whitespace around it trimmed) is checked with Boat by
+   * read-only calls first: a key Boat refuses rejects with a `SealantApiError` (422, `reason`
+   * `boat-key-refused`, Boat's reason in `boat`), one that lacks permissions Core needs with
+   * `boat-key-missing-permissions` (`missingPermissions`, `boatKeyReport`), and
+   * `boat-key-unverified` when Boat did not answer; nothing is stored. No error names the key.
    */
-  create(options: { readonly label: string; readonly apiKey: string }): Promise<BoatAccount>;
+  create(options: {
+    readonly label: string;
+    readonly apiKey: string;
+    /**
+     * For a personal key: the Boat organization to bill (its id or name). Core stores it and
+     * names it on every request for the account, so billing never follows the key's active wallet.
+     */
+    readonly organization?: string;
+  }): Promise<BoatAccount>;
   /** Every stored account not removed, oldest first. */
   list(): Promise<readonly BoatAccount[]>;
   /**
@@ -2583,6 +2612,16 @@ export interface BoatAccountsNamespace {
    * changes. Running workspaces stay in the account and use the new key from then on.
    */
   rotateKey(boatAccountId: string, apiKey: string): Promise<BoatAccount>;
+  /**
+   * Checks a stored account's key with Boat again (read-only) and answers the new report. A key
+   * Boat now refuses is reported, not refused; Boat not answering, or asking to wait, rejects
+   * (422, `reason` `boat-key-unverified`) and keeps the last report.
+   */
+  check(boatAccountId: string): Promise<BoatAccount>;
+  /** The control plane's own Boat key's last report (`BoatInstallKey`). */
+  installKey(): Promise<BoatInstallKey>;
+  /** Checks the control plane's own Boat key with Boat now, as `check` does a stored one. */
+  checkInstallKey(): Promise<BoatInstallKey>;
   /**
    * Removes the account. Rejects (409, `reason` `boat-account-in-use`, with the count in the
    * message) while it has workspaces whose VMs Boat may still hold, or an image build in flight.

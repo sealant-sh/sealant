@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, integer, snakeCase, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { check, integer, jsonb, snakeCase, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 const instant = () => timestamp({ mode: "date", withTimezone: true });
 
@@ -28,6 +28,12 @@ export const boatAccounts = snakeCase.table(
     sealedKey: text(),
     keyId: text(),
     keyRevision: integer().notNull().default(1),
+    /**
+     * The Boat organization the account bills (its id or name), sent as `X-Boat-Org` on every
+     * request for it; null: none named, so a personal key bills its active wallet. Set when the
+     * account is stored and never changed.
+     */
+    boatOrganization: text(),
     createdAt: instant().notNull().defaultNow(),
     keyRotatedAt: instant(),
     removalRequestedAt: instant(),
@@ -47,3 +53,23 @@ export const boatAccounts = snakeCase.table(
 );
 
 export type BoatAccountRow = typeof boatAccounts.$inferSelect;
+
+/**
+ * The last report of each Boat key's check against Boat: a stored account's (`account` its id) or
+ * the install's own env key's (`account` `default`). One row per key, replaced by every check. The
+ * report holds only what Boat showed of the key, never the key or any part of it.
+ */
+export const boatKeyReports = snakeCase.table(
+  "boat_key_reports",
+  {
+    account: text().primaryKey(),
+    report: jsonb().notNull(),
+    observedAt: instant().notNull(),
+  },
+  (table) => [
+    check(
+      "boat_key_reports_account",
+      sql`${table.account} = 'default' or ${table.account} ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'`,
+    ),
+  ],
+);

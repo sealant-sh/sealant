@@ -4,7 +4,7 @@ import { and, asc, count, eq, exists, inArray, isNotNull, isNull, sql } from "dr
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
-import { boatAccounts, type BoatAccountRow } from "../schema/boat-accounts.js";
+import { boatAccounts, boatKeyReports, type BoatAccountRow } from "../schema/boat-accounts.js";
 import { boatRuns } from "../schema/boat-runs.js";
 import { nativePublications } from "../schema/native-publications.js";
 
@@ -29,6 +29,8 @@ export interface BoatAccountRecord {
   /** The `sealant-owner` of every saved image Core builds under the key. */
   readonly builderOwner: string;
   readonly keyRevision: number;
+  /** The Boat organization the account bills (`X-Boat-Org`); null: none named. */
+  readonly organization: string | null;
   readonly createdAt: Date;
   readonly keyRotatedAt: Date | null;
   readonly removalRequestedAt: Date | null;
@@ -40,6 +42,16 @@ export interface BoatAccountSealedKey {
   readonly sealedKey: string;
   readonly keyId: string;
   readonly keyRevision: number;
+  /** The Boat organization every request for the account names; null: none. */
+  readonly organization: string | null;
+}
+
+/** A key's last check report as stored: Boat's observations, never the key. */
+export interface BoatKeyReportRecord {
+  /** A stored account's id, or `default` for the install's own env key. */
+  readonly account: string;
+  readonly report: unknown;
+  readonly observedAt: Date;
 }
 
 /** What a removal request found: done, or refused for what the account still has in Boat. */
@@ -79,7 +91,13 @@ export interface BoatAccountRepoService {
     readonly label: string;
     readonly sealedKey: string;
     readonly keyId: string;
+    /** The Boat organization to bill on every request for the account. */
+    readonly organization?: string;
   }) => Failing<BoatAccountRecord>;
+  /** Replaces the key's last check report (`account`: an account id, or `default`). */
+  readonly saveReport: (input: BoatKeyReportRecord) => Failing<void>;
+  /** Every stored check report, by account (`default` for the env key). */
+  readonly reports: () => Failing<ReadonlyMap<string, BoatKeyReportRecord>>;
   /** The account whatever its state, removed included; never its key. */
   readonly get: (id: string) => Failing<BoatAccountRecord | undefined>;
   /** The account a deployment label belongs to, removed included. */
@@ -141,6 +159,7 @@ const record = (row: BoatAccountRow): BoatAccountRecord => ({
   deploymentId: row.deploymentId,
   builderOwner: row.builderOwner,
   keyRevision: row.keyRevision,
+  organization: row.boatOrganization,
   createdAt: row.createdAt,
   keyRotatedAt: row.keyRotatedAt,
   removalRequestedAt: row.removalRequestedAt,
@@ -173,6 +192,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         builderOwner: boatAccountBuilderOwner(input.id),
         sealedKey: input.sealedKey,
         keyId: input.keyId,
+        boatOrganization: input.organization ?? null,
       })
       .returning();
     if (row === undefined) return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
@@ -202,11 +222,17 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         sealedKey: boatAccounts.sealedKey,
         keyId: boatAccounts.keyId,
         keyRevision: boatAccounts.keyRevision,
+        organization: boatAccounts.boatOrganization,
       })
       .from(boatAccounts)
       .where(and(eq(boatAccounts.id, id), isNull(boatAccounts.removedAt)));
     if (row === undefined || row.sealedKey === null || row.keyId === null) return undefined;
-    return { sealedKey: row.sealedKey, keyId: row.keyId, keyRevision: row.keyRevision };
+    return {
+      sealedKey: row.sealedKey,
+      keyId: row.keyId,
+      keyRevision: row.keyRevision,
+      organization: row.organization,
+    };
   });
   const keyRevision = Effect.fn("BoatAccountRepo.keyRevision")(function* (id: string) {
     const [row] = yield* db
@@ -391,8 +417,25 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       }),
     );
   });
+  const saveReport = Effect.fn("BoatAccountRepo.saveReport")(function* (
+    input: BoatKeyReportRecord,
+  ) {
+    yield* db
+      .insert(boatKeyReports)
+      .values({ account: input.account, report: input.report, observedAt: input.observedAt })
+      .onConflictDoUpdate({
+        target: boatKeyReports.account,
+        set: { report: input.report, observedAt: input.observedAt },
+      });
+  });
+  const reports = Effect.fn("BoatAccountRepo.reports")(function* () {
+    const rows = yield* db.select().from(boatKeyReports);
+    return new Map(rows.map((row) => [row.account, row]));
+  });
   return BoatAccountRepo.of({
     create: (input) => boundary(create(input)),
+    saveReport: (input) => boundary(saveReport(input)),
+    reports: () => boundary(reports()),
     get: (id) => boundary(get(id)),
     getByDeployment: (deploymentId) => boundary(getByDeployment(deploymentId)),
     list: () => boundary(list()),

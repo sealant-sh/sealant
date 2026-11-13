@@ -130,14 +130,16 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
     return { runId, sandboxId };
   };
 
-  it("stores an account from a key Boat accepts, with one read, and never answers the key", async () => {
+  it("stores an account from a key Boat accepts, with reads only, and never answers the key", async () => {
     const before = boatA.requests.length;
     const created = await run(
       routes.createBoatAccount({ label: " Organization A ", apiKey: KEY_A }),
     );
     expect(created).toMatchObject({ label: "Organization A", state: "active", keyRotatedAt: null });
-    // One read-only call checked the key; nothing was created or changed in Boat.
-    expect(boatA.requests.slice(before)).toEqual(["GET /api/v1/sandboxes"]);
+    // Read-only calls checked the key; nothing was created or changed in Boat.
+    const checked = boatA.requests.slice(before);
+    expect(checked).toContain("GET /api/v1/sandboxes");
+    expect(checked.every((request) => request.startsWith("GET "))).toBe(true);
     const listed = await run(routes.listBoatAccounts());
     const mine = listed.items.find((item) => item.boatAccountId === created.boatAccountId);
     expect(mine).toEqual(created);
@@ -146,7 +148,12 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
     const stored = await run(
       Effect.flatMap(BoatAccountRepo, (repo) => repo.sealedKey(created.boatAccountId)),
     );
-    expect(stored).toEqual({ sealedKey: `sealed:${KEY_A}`, keyId: "k-test", keyRevision: 1 });
+    expect(stored).toEqual({
+      sealedKey: `sealed:${KEY_A}`,
+      keyId: "k-test",
+      keyRevision: 1,
+      organization: null,
+    });
     const record = await run(
       Effect.flatMap(BoatAccountRepo, (repo) => repo.get(created.boatAccountId)),
     );
@@ -199,7 +206,12 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
     expect(rotated.keyRotatedAt).not.toBeNull();
     expect(
       await run(Effect.flatMap(BoatAccountRepo, (repo) => repo.sealedKey(created.boatAccountId))),
-    ).toEqual({ sealedKey: `sealed:${KEY_A_NEXT}`, keyId: "k-test", keyRevision: 2 });
+    ).toEqual({
+      sealedKey: `sealed:${KEY_A_NEXT}`,
+      keyId: "k-test",
+      keyRevision: 2,
+      organization: null,
+    });
     expect(
       await refusal(routes.rotateBoatAccountKey(randomUUID(), { apiKey: KEY_A })),
     ).toMatchObject({ _tag: "BoatAccountNotFoundError" });

@@ -29,10 +29,19 @@ export interface BoatAccountProvider {
 }
 
 /** How a process opens a Boat key into a client: Boat's real API, or a recorded fake in tests. */
-export type BoatClientFactory = (credential: BoatSecret) => BoatResult<BoatApi>;
+export type BoatClientFactory = (
+  credential: BoatSecret,
+  options?: {
+    /** The Boat organization the account bills, sent as `X-Boat-Org` on every request. */
+    readonly organization?: string;
+  },
+) => BoatResult<BoatApi>;
 
-export const httpBoatClientFactory: BoatClientFactory = (credential) =>
-  HttpBoatApi.create({ credential });
+export const httpBoatClientFactory: BoatClientFactory = (credential, options) =>
+  HttpBoatApi.create({
+    credential,
+    ...(options?.organization === undefined ? {} : { organization: options.organization }),
+  });
 
 /** A stored account's key could not be opened: removed, unreadable, or not a Boat key. */
 const keyUnavailable = (operation: string) =>
@@ -273,7 +282,11 @@ export class BoatAccountDirectory {
     if (Option.isNone(opened)) return { ok: false, error: keyUnavailable("credential") };
     const credential = BoatSecret.parse(opened.value);
     if (!credential.ok) return { ok: false, error: keyUnavailable("credential") };
-    const api = (this.#options.clientFor ?? httpBoatClientFactory)(credential.value);
+    // The organization the account was stored with: every request for it bills that one.
+    const api = (this.#options.clientFor ?? httpBoatClientFactory)(
+      credential.value,
+      sealed.organization === null ? undefined : { organization: sealed.organization },
+    );
     if (!api.ok) return api;
     this.#clients.set(accountId, { revision: sealed.keyRevision, api: api.value, checkedAt: now });
     return api;
