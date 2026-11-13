@@ -5,6 +5,7 @@
  * stay in the worker: the API never needs a Docker socket (or, later, kube credentials).
  */
 import { createJobQueueService, defineJobQueue, type JobQueueConsumerMessage } from "@sealant/jobs";
+import { Predicate } from "effect";
 
 export const workspaceLifecycleQueueName = "workspace-lifecycle";
 export const workspaceLifecycleDeadLetterQueueName = "workspace-lifecycle.dlq";
@@ -34,10 +35,10 @@ const stopReasons: readonly WorkspaceStopReason[] = ["user", "expired", "failed"
 export const parseWorkspaceStopRequestedMessage = (
   input: unknown,
 ): WorkspaceStopRequestedMessage => {
-  if (typeof input !== "object" || input === null) {
+  if (!Predicate.isObject(input)) {
     throw new Error("Invalid workspace-lifecycle message: not an object.");
   }
-  const obj = input as Record<string, unknown>;
+  const obj = input;
   if (obj.kind !== workspaceStopRequestedMessageKind) {
     throw new Error(`Invalid workspace-lifecycle message: unexpected kind ${String(obj.kind)}.`);
   }

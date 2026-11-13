@@ -86,11 +86,14 @@ describe.skipIf(DATABASE_URL === undefined)("a worker lost mid-launch (Postgres)
       ConnectedAccountRepoLive,
     ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
-  const run = <A, E, R>(effect: Effect.Effect<A, E, R>, daemon?: Layer.Layer<SealantRuntime>) =>
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof repos>> | SealantRuntime>,
+    daemon?: Layer.Layer<SealantRuntime>,
+  ) =>
     Effect.runPromise(
       effect.pipe(
         Effect.provide(Layer.mergeAll(repos(), daemon ?? fakeCaptureDaemon(["unreachable"]).layer)),
-      ) as Effect.Effect<A, E>,
+      ),
     );
 
   const newRun = async (): Promise<string> => {
@@ -193,6 +196,7 @@ describe.skipIf(DATABASE_URL === undefined)("a worker lost mid-launch (Postgres)
     );
     expect(outcome).toBe("stopped");
     expect(daemon.flushRequests).toContainEqual(expect.objectContaining({ kind: "final" }));
+    // oxlint-disable-next-line typescript/unbound-method -- a vi.fn stub, read to assert on its calls; nothing binds this.
     expect(adapter.stop).toHaveBeenCalledTimes(1);
     expect(await rowOf(runId)).toMatchObject({ status: "stopped" });
   });
@@ -233,6 +237,7 @@ describe.skipIf(DATABASE_URL === undefined)("a worker lost mid-launch (Postgres)
     expect(await rowOf(runId)).toMatchObject({ status: "pending" });
 
     // A runtime that cannot look (no `locate`) never lets it be called lost.
+    // oxlint-disable-next-line typescript/unbound-method -- drops the stub's locate to make a runtime that cannot look; its other members are vi.fn stubs that never use this.
     const { locate: _cannotLook, ...withoutLocate } = adapter;
     const blind: RuntimeAdapter = { ...withoutLocate, id: "k8s" };
     await run(

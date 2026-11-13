@@ -24,6 +24,12 @@ import {
   type SealantTarget,
 } from "../sealantd/runtime.js";
 
+/**
+ * A SealantControlError keeps the daemon's code as a number (a newer daemon may send one this
+ * client does not know), so the code it is compared with is a number too.
+ */
+const PROCESS_NOT_FOUND: number = ControlErrorCode.PROCESS_NOT_FOUND;
+
 /** The providers a home holds logins for. */
 export type HomeCredentialProvider = "claude" | "codex" | "github" | "pi" | "opencode";
 
@@ -742,8 +748,7 @@ export const runHomeScriptInSession = (
     });
     yield* feed.pipe(
       Effect.catchIf(
-        (error) =>
-          error instanceof SealantControlError && error.code === ControlErrorCode.PROCESS_NOT_FOUND,
+        (error) => error instanceof SealantControlError && error.code === PROCESS_NOT_FOUND,
         () => Effect.void,
       ),
     );

@@ -22,11 +22,11 @@ import {
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type DB,
-  type Workspace,
   type WorkspaceCaptureDrainRepoService,
-  type WorkspaceAttemptSnapshot,
-  type WorkspaceRuntimeInstance,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { attemptSnapshotRow, runtimeInstanceRow, workspaceRow } from "@sealant/db/testing/rows";
+import { newWorkspaceSchema } from "@sealant/validators";
 import {
   databaseCaptureDrainLedger,
   decideExecutorDeletion,
@@ -106,13 +106,13 @@ describe.skipIf(DATABASE_URL === undefined)(
       await Effect.runPromise(
         db.insert(workspaceAttempts).values({ id: runId, ownerUserId: owner }),
       );
-      const workspace = {
+      const workspace = workspaceRow({
         id: `ws_${runId}`,
         ownerUserId: owner,
         latestRunId: runId,
         status: "ready",
-      };
-      const spec = {
+      });
+      const spec = newWorkspaceSchema.parse({
         sources: {
           workspace: {
             kind: "capture",
@@ -121,15 +121,15 @@ describe.skipIf(DATABASE_URL === undefined)(
           },
         },
         harness: { id: "claude-code" },
-      };
-      const instance = {
+      });
+      const instance = runtimeInstanceRow({
         runId,
         status: "ready",
         adapter: "docker",
         endpoint: "unix:///run/sealant/evidence.sock",
         resourceId: "container_1",
         reference: "container_1",
-      };
+      });
       const calls: string[] = [];
       let step = 0;
       const next = () => script[Math.min(step++, script.length - 1)] ?? NOT_SAVED;
@@ -147,10 +147,10 @@ describe.skipIf(DATABASE_URL === undefined)(
               )
             : Effect.succeed(scripted);
         });
-      const daemon: Pick<SealantSession, "captureFlush" | "captureStatus"> = {
+      const daemon = fakeService<SealantSession>({
         captureFlush: () => answer("flush"),
         captureStatus: () => answer("status"),
-      };
+      });
       // `unreachable` fails at connect: the connection never opens.
       const connect = () =>
         Effect.suspend(() =>
@@ -162,26 +162,25 @@ describe.skipIf(DATABASE_URL === undefined)(
                   cause: new Error("connection refused"),
                 }),
               ).pipe(Effect.tap(() => Effect.sync(() => (step += 1))))
-            : Effect.succeed(daemon as SealantSession),
+            : Effect.succeed(daemon),
         );
       const layer = Layer.mergeAll(
         Layer.mock(WorkspaceRepo, {
-          getWorkspaceById: () => Effect.succeed(workspace as unknown as Workspace),
-          setWorkspaceStatus: () => Effect.succeed(workspace as unknown as Workspace),
+          getWorkspaceById: () => Effect.succeed(workspace),
+          setWorkspaceStatus: () => Effect.succeed(workspace),
         }),
         Layer.mock(WorkspaceAttemptRepo, {
           getAttemptSnapshotByRunId: () =>
-            Effect.succeed({ resolvedSpecPayload: spec } as unknown as WorkspaceAttemptSnapshot),
+            Effect.succeed(attemptSnapshotRow({ resolvedSpecPayload: spec })),
           getAttemptById: () => Effect.succeed(undefined),
         }),
         Layer.mock(WorkspaceBuildJobRepo, { getLatestJobByRunId: () => Effect.succeed(undefined) }),
         Layer.mock(WorkspaceRuntimeInstanceRepo, {
-          getRuntimeInstanceByRunId: () =>
-            Effect.succeed(instance as unknown as WorkspaceRuntimeInstance),
+          getRuntimeInstanceByRunId: () => Effect.succeed(instance),
           markStopRequested: () => Effect.void,
         }),
         WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
-        Layer.succeed(SealantRuntime, { connect } as unknown as SealantRuntimeService),
+        Layer.succeed(SealantRuntime, fakeService<SealantRuntimeService>({ connect })),
         Layer.succeed(WorkspaceLifecyclePublisherService, {
           publishStopRequested: async () => undefined,
         }),

@@ -14,7 +14,7 @@ import {
   WorkspaceInternalServerError,
   WorkspaceNotFoundError,
 } from "@sealant/api-contracts";
-import type { Run, RunRepoService, Workspace, WorkspaceRuntimeInstance } from "@sealant/db";
+import type { Run, RunRepoService } from "@sealant/db";
 import {
   RunRepo,
   WorkspaceCredentialHomeRepo,
@@ -22,6 +22,8 @@ import {
   WorkspaceRuntimeInstanceRepo,
 } from "@sealant/db";
 import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runtimeInstanceRow, workspaceRow } from "@sealant/db/testing/rows";
 import type {
   DotfilesStageChannel,
   DotfilesStageResult,
@@ -45,15 +47,15 @@ beforeAll(async () => {
 
 const OWNER = "usr_owner";
 const HOME = "/home/m4lice000";
-const workspace = { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_launch" } as Workspace;
-const instance = {
+const workspace = workspaceRow({ id: "wks_1", ownerUserId: OWNER, latestRunId: "run_launch" });
+const instance = runtimeInstanceRow({
   runId: "run_launch",
   status: "ready",
   adapter: "docker",
   resourceId: "container-1",
   reference: "container-1",
   endpoint: "unix:///run/sealant/run_launch.sock",
-} as WorkspaceRuntimeInstance;
+});
 
 const runRow = (input: { readonly id: string; readonly harnessId: string }): Run => ({
   id: input.id,
@@ -102,30 +104,40 @@ const newWorld = (stage: Partial<DotfilesStageResult> | "throw" = {}) => {
   const homes = makeInMemoryCredentialHomes(() => [instance]);
   const layer = Layer.mergeAll(
     Layer.succeed(WorkspaceCredentialHomeRepo, homes.service),
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: (id: string) => Effect.succeed(id === workspace.id ? workspace : undefined),
-    } as never),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      getRuntimeInstanceByRunId: (runId: string) =>
-        Effect.succeed(runId === instance.runId ? instance : undefined),
-    } as never),
-    Layer.succeed(RunRepo, {
-      createRun: (input: {
-        readonly id: string;
-        readonly harnessId: string;
-        readonly metadata?: Record<string, unknown>;
-      }) =>
-        Effect.sync(() => {
-          const row = { ...runRow(input), metadata: input.metadata ?? null };
-          created.push(row);
-          return row;
-        }),
-      markRunFailed: (input: { readonly id: string }) =>
-        Effect.sync(() => {
-          failedRuns.push(input.id);
-          return null;
-        }),
-    } as unknown as RunRepoService),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService({
+        getWorkspaceById: (id: string) =>
+          Effect.succeed(id === workspace.id ? workspace : undefined),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService({
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(runId === instance.runId ? instance : undefined),
+      }),
+    ),
+    Layer.succeed(
+      RunRepo,
+      fakeService<RunRepoService>({
+        createRun: (input: {
+          readonly id: string;
+          readonly harnessId: string;
+          readonly metadata?: Record<string, unknown>;
+        }) =>
+          Effect.sync(() => {
+            const row = { ...runRow(input), metadata: input.metadata ?? null };
+            created.push(row);
+            return row;
+          }),
+        markRunFailed: (input: { readonly id: string }) =>
+          Effect.sync(() => {
+            failedRuns.push(input.id);
+            return null;
+          }),
+      }),
+    ),
     Layer.succeed(RunExecPublisherService, {
       publishRequested: (input) => {
         if (publishFails) return Promise.reject(new Error("queue down"));

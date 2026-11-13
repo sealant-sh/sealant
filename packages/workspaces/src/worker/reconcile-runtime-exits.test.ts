@@ -12,7 +12,10 @@ import {
   type WorkspaceAttemptRepoService,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
+  type DB,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { attemptSnapshotRow, sourceSpec } from "@sealant/db/testing/rows";
 import { Effect, Layer, Logger } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -148,20 +151,16 @@ const makeHarness = (input: {
     markStopRequested: () => Effect.void,
     markRemoved,
   };
-  const attempts = {
+  const attempts = fakeService<WorkspaceAttemptRepoService>({
     getAttemptSnapshotByRunId: () =>
       Effect.succeed(
         input.snapshotMissing === true
           ? undefined
-          : {
-              blueprintPayload: {
-                sources: {
-                  workspace: { kind: input.captureSourced === true ? "capture" : "github" },
-                },
-              },
-            },
+          : attemptSnapshotRow({
+              blueprintPayload: sourceSpec(input.captureSourced === true ? "capture" : "git"),
+            }),
       ),
-  } as unknown as WorkspaceAttemptRepoService;
+  });
   return {
     repo,
     markExited,
@@ -1076,7 +1075,7 @@ describe("watchRuntimeExits", () => {
     const noInspect = stubAdapter({ id: "cloudflare" });
 
     const watch = watchRuntimeExits({
-      db: {} as never,
+      db: fakeService<DB>({}),
       runtimeAdapters: [adapter, noInspect.adapter],
       launchMaterialStager: fakeStager().stager,
       exitGraceMs: 2_000,
@@ -1123,7 +1122,7 @@ describe("watchRuntimeExits", () => {
       adapter: RuntimeAdapter,
       ledger: ReturnType<typeof inMemoryCaptureDrainLedger>,
       targetOptions: SealantTargetDerivationOptions = {},
-      logger: Logger.Logger<unknown, void> | undefined = undefined,
+      logger?: Logger.Logger<unknown, void>,
     ) =>
       Effect.runPromise(
         reconcileRuntimeExitsEffect({
@@ -1342,7 +1341,7 @@ describe("watchRuntimeExits", () => {
     });
 
     const recorded = await reconcileRuntimeExits({
-      db: {} as never,
+      db: fakeService<DB>({}),
       runtimeAdapters: [adapter],
       launchMaterialStager: fakeStager().stager,
     });

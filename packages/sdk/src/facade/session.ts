@@ -9,6 +9,7 @@
  * `from: lastChunk.sequence + 1n` resumes with no gap after any disconnect.
  */
 import type { SessionWire } from "@sealant/api-contracts";
+import { Predicate } from "effect";
 
 import {
   closeSessionOp,
@@ -77,8 +78,8 @@ const openAttachment = (
     ws.addEventListener("message", (event) => {
       if (typeof event.data === "string") {
         try {
-          const frame = JSON.parse(event.data) as { t?: string };
-          if (frame.t === "end") {
+          const frame: unknown = JSON.parse(event.data);
+          if (Predicate.isObject(frame) && frame["t"] === "end") {
             finish("end");
           }
         } catch {
@@ -86,7 +87,8 @@ const openAttachment = (
         }
         return;
       }
-      pending.push(new Uint8Array(event.data as ArrayBuffer));
+      // binaryType is "arraybuffer", so every binary frame arrives as an ArrayBuffer.
+      if (event.data instanceof ArrayBuffer) pending.push(new Uint8Array(event.data));
       wake?.();
     });
     ws.addEventListener("close", () => finish("closed"));

@@ -9,7 +9,7 @@ export const Route = createFileRoute("/_authenticated/repositories/$repoId/setup
 });
 
 function RepositorySetupPage() {
-  const repository = Route.useLoaderData() as ReturnType<typeof getRepositoryById>;
+  const repository = Route.useLoaderData();
 
   return (
     <RepositoryDetailSection

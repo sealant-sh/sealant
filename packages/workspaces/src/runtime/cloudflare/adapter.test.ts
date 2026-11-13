@@ -2,6 +2,7 @@
  * Adapter behavior against an in-memory bridge: support gating, launch payload shape, endpoint
  * pass-through, idempotent stop, and readable failures. No network — fetch is injected.
  */
+import { Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { cases, publishedImage } from "../docker-runtime-adapter.golden-fixture.js";
@@ -26,7 +27,7 @@ const fakeBridge = (respond: (request: RecordedRequest) => Response) => {
   const fetchImpl: typeof fetch = (input, init) => {
     const headers = new Headers(init?.headers);
     const recorded: RecordedRequest = {
-      url: String(input),
+      url: input instanceof Request ? input.url : input.toString(),
       method: init?.method,
       authorization: headers.get("authorization") ?? undefined,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
@@ -192,8 +193,8 @@ describe("CloudflareRuntimeAdapter.launch", () => {
     expect(payload.env).toEqual({ MEND_SESSION_ID: "1", SEALANT_CAPTURE_OWNER_MAP: "" });
     // The wire payload for a git source is unchanged: no `kind` key, the contract defaults it.
     await adapter.launch(cases.gitSource);
-    const gitBody = bridge.requests[1]?.body as { source?: Record<string, unknown> };
-    expect(gitBody.source).not.toHaveProperty("kind");
+    const gitBody = bridge.requests[1]?.body;
+    expect(Predicate.isObject(gitBody) ? gitBody["source"] : undefined).not.toHaveProperty("kind");
   });
 
   it("surfaces the bridge's message on failure", async () => {

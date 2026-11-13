@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_authenticated/repositories/$repoId/works
 });
 
 function RepositoryRunsPage() {
-  const repository = Route.useLoaderData() as ReturnType<typeof getRepositoryById>;
+  const repository = Route.useLoaderData();
   const runs = RUNS.filter((run) => run.repoId === repository?.id);
 
   return (

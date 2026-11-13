@@ -39,7 +39,7 @@ import {
   type Capabilities,
   type CaptureReplanned,
   type CaptureStatusReport,
-  type DotfilesApplied,
+  type CommandResult,
   type EventEnvelope,
   type ExecAccepted,
   type HealthReport,
@@ -685,7 +685,8 @@ const isSdkSealantError = (
   return (
     cause instanceof Error &&
     cause.name === "SealantError" &&
-    typeof (cause as { code?: unknown }).code === "number"
+    "code" in cause &&
+    typeof cause.code === "number"
   );
 };
 
@@ -699,13 +700,11 @@ const unwrapEffectCause = (cause: unknown): unknown => {
     typeof cause === "object" &&
     cause !== null &&
     "cause" in cause &&
-    (cause as { cause?: unknown }).cause !== undefined
+    cause.cause !== undefined &&
+    "name" in cause &&
+    (cause.name === "UnknownError" || cause.name === "UnknownException")
   ) {
-    const name = (cause as { name?: unknown }).name;
-
-    if (name === "UnknownError" || name === "UnknownException") {
-      return (cause as { cause: unknown }).cause;
-    }
+    return cause.cause;
   }
 
   return cause;
@@ -1376,41 +1375,78 @@ export class SealantRuntime extends Context.Service<SealantRuntime, SealantRunti
  * SDK sugar yet, so this mirrors the unwrap the SDK's typed methods perform internally: a daemon
  * `error` outcome becomes a `SealantControlError`, and a result-case mismatch is unexpected.
  */
-const requestResult = (
+type CommandResultOneof = CommandResult["result"];
+
+/** Each result case a control command can answer with, and its value's type. */
+type CommandResultValues = {
+  [Result in CommandResultOneof as Result["case"] extends string
+    ? Result["case"]
+    : never]: Result["value"];
+};
+type CommandResultCase = keyof CommandResultValues;
+
+/** Whether a command's result is the case the command answers with. */
+const isResultCase = <Case extends CommandResultCase>(
+  result: CommandResultOneof,
+  expected: Case,
+): result is CommandResultOneof & { readonly value: CommandResultValues[Case] } =>
+  result.case === expected;
+
+/** Sends a control command and answers its result, throwing its control error or a lost outcome. */
+const sendCommand = async (
+  client: SealantClient,
+  operation: SealantOperation,
+  command: Parameters<SealantClient["request"]>[0],
+): Promise<CommandResultOneof> => {
+  const response = await client.request(command);
+  const outcome = response.outcome?.outcome;
+  if (outcome?.case === "error") {
+    const error = outcome.value;
+    throw new SealantControlError({
+      operation,
+      code: error.code,
+      message: error.message || `control error (${String(error.code)})`,
+      ...(error.detailJson === undefined || error.detailJson === ""
+        ? {}
+        : { detailJson: error.detailJson }),
+    });
+  }
+  if (outcome?.case !== "ok") {
+    throw new Error(`${operation}: control response had no outcome`);
+  }
+  return outcome.value.result;
+};
+
+/** A control command that answers nothing but success. */
+const requestAck = (
   client: SealantClient,
   connection: ControlConnection,
   operation: SealantOperation,
   command: Parameters<SealantClient["request"]>[0],
-  expect: string | undefined,
-): Effect.Effect<unknown, SealantError> =>
+): Effect.Effect<void, SealantError> =>
+  withSealantError(
+    connection,
+    operation,
+    Effect.tryPromise(() => sendCommand(client, operation, command)),
+  ).pipe(Effect.asVoid);
+
+/** A control command and the value of the result case it answers with. */
+const requestResult = <Case extends CommandResultCase>(
+  client: SealantClient,
+  connection: ControlConnection,
+  operation: SealantOperation,
+  command: Parameters<SealantClient["request"]>[0],
+  expect: Case,
+): Effect.Effect<CommandResultValues[Case], SealantError> =>
   withSealantError(
     connection,
     operation,
     Effect.tryPromise(async () => {
-      const response = await client.request(command);
-      const outcome = response.outcome?.outcome;
-      if (outcome?.case === "error") {
-        const error = outcome.value;
-        throw new SealantControlError({
-          operation,
-          code: error.code,
-          message: error.message || `control error (${String(error.code)})`,
-          ...(error.detailJson === undefined || error.detailJson === ""
-            ? {}
-            : { detailJson: error.detailJson }),
-        });
-      }
-      if (outcome?.case !== "ok") {
-        throw new Error(`${operation}: control response had no outcome`);
-      }
-      if (expect === undefined) {
-        return undefined;
-      }
-      const result = outcome.value.result;
-      if (result.case !== expect) {
+      const result = await sendCommand(client, operation, command);
+      if (!isResultCase(result, expect)) {
         throw new Error(`${operation}: expected result ${expect}, got ${String(result.case)}`);
       }
-      return (result as { value: unknown }).value;
+      return result.value;
     }),
   );
 
@@ -1477,7 +1513,7 @@ const makeSession = (client: SealantClient, connection: ControlConnection): Seal
             },
           },
           "execAccepted",
-        ).pipe(Effect.map((value) => value as ExecAccepted)),
+        ),
 
   writeStdin: (processId, data) =>
     withSealantError(
@@ -1487,13 +1523,7 @@ const makeSession = (client: SealantClient, connection: ControlConnection): Seal
     ),
 
   closeStdin: (processId) =>
-    requestResult(
-      client,
-      connection,
-      "closeStdin",
-      { case: "closeStdin", value: { processId } },
-      undefined,
-    ).pipe(Effect.asVoid),
+    requestAck(client, connection, "closeStdin", { case: "closeStdin", value: { processId } }),
 
   signalProcess: (processId, signal) =>
     withSealantError(
@@ -1525,28 +1555,18 @@ const makeSession = (client: SealantClient, connection: ControlConnection): Seal
       "sessionOpened",
     ).pipe(
       Effect.map((value) => {
-        const opened = value as { sessionId: string; processId: string; pid: number };
-        return { sessionId: opened.sessionId, processId: opened.processId, pid: opened.pid };
+        return { sessionId: value.sessionId, processId: value.processId, pid: value.pid };
       }),
     ),
 
   closeSession: (sessionId) =>
-    requestResult(
-      client,
-      connection,
-      "closeSession",
-      { case: "closeSession", value: { sessionId } },
-      undefined,
-    ).pipe(Effect.asVoid),
+    requestAck(client, connection, "closeSession", { case: "closeSession", value: { sessionId } }),
 
   resizePty: (sessionId, cols, rows) =>
-    requestResult(
-      client,
-      connection,
-      "resizePty",
-      { case: "resizePty", value: { sessionId, cols, rows } },
-      undefined,
-    ).pipe(Effect.asVoid),
+    requestAck(client, connection, "resizePty", {
+      case: "resizePty",
+      value: { sessionId, cols, rows },
+    }),
 
   listSessions: requestResult(
     client,
@@ -1556,18 +1576,7 @@ const makeSession = (client: SealantClient, connection: ControlConnection): Seal
     "sessionList",
   ).pipe(
     Effect.map((value) => {
-      const list = value as {
-        sessions: Array<{
-          sessionId: string;
-          processId: string;
-          pid: number;
-          cols: number;
-          rows: number;
-          mode: WireSessionMode;
-          executionId?: string;
-        }>;
-      };
-      return list.sessions.map((s) => ({
+      return value.sessions.map((s) => ({
         sessionId: s.sessionId,
         processId: s.processId,
         pid: s.pid,
@@ -1650,7 +1659,7 @@ const makeSession = (client: SealantClient, connection: ControlConnection): Seal
       "captureStatus",
       { case: "captureStatus", value: {} },
       "captureStatus",
-    ).pipe(Effect.map((value) => captureFlushReportFromWire(value as CaptureStatusReport))),
+    ).pipe(Effect.map(captureFlushReportFromWire)),
   captureReplan: () =>
     withSealantError(
       connection,
@@ -1709,7 +1718,7 @@ const makeSession = (client: SealantClient, connection: ControlConnection): Seal
       "dotfilesApplied",
     ).pipe(
       Effect.map((value) => {
-        const applied = value as DotfilesApplied;
+        const applied = value;
         return {
           user: applied.user,
           home: applied.home,

@@ -1,4 +1,4 @@
-import type { MicrovmPublication, NativePublication, OciPublication } from "@sealant/validators";
+import type { MicrovmPublication, NativePublication } from "@sealant/validators";
 
 import type { BoatNativeCatalogService } from "../images/boat/catalog.js";
 import type { WorkspaceImageBuilder } from "../images/image-builder.js";
@@ -8,7 +8,7 @@ import type { RuntimeAdapter } from "./runtime-adapter.js";
 export type RegisteredRuntime =
   | {
       readonly kind: "oci";
-      readonly adapter: RuntimeAdapter<OciPublication>;
+      readonly adapter: RuntimeAdapter;
       readonly imageBuilder: WorkspaceImageBuilder;
     }
   | {

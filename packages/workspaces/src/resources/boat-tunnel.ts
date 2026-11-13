@@ -103,7 +103,7 @@ export class BoatTunnelError extends Error {
 /** The durable caller freezes the target, key and UDP port before invoking this adapter. */
 export interface BoatTunnelInput {
   readonly target: BoatExecutionTarget;
-  readonly privateKey: Redacted.Redacted<string>;
+  readonly privateKey: Redacted.Redacted;
   readonly peerKey: string;
   readonly listenPort: number;
   readonly link: ResourceWorkspaceLink | undefined;

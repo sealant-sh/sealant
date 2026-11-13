@@ -318,6 +318,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       for (const key of Object.values(rawKeys(first))) {
         expect(JSON.stringify(persisted)).not.toContain(key);
         expect(JSON.stringify(first)).not.toContain(key);
+        // oxlint-disable-next-line typescript/no-base-to-string -- checks what String makes of a Redacted, which defines its own toString at runtime though its type does not say so.
         expect(String(first.gateway.privateKey)).not.toContain(key);
       }
     }));
@@ -340,7 +341,7 @@ describe.runIf(databaseUrl !== undefined)("durable Boat tunnel custody", () => {
       const credentials = await Promise.all(
         bindings.map((binding) => execute(owner.prepare(binding))),
       );
-      expect(credentials.map((value) => value.listenPort).toSorted()).toEqual(
+      expect(credentials.map((value) => value.listenPort).toSorted((a, b) => a - b)).toEqual(
         Array.from({ length: 24 }, (_, n) => BOAT_TUNNEL_PORTS.first + n),
       );
       expect(BOAT_TUNNEL_PORTS.first).toBeGreaterThan(BOAT_TUNNEL_LEGACY_PORTS.last);

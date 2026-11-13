@@ -19,6 +19,7 @@ export const savedStatus = (overrides: Partial<CaptureFlushReport> = {}): Captur
  * the next answer from the script (the last one repeats). `unreachable` fails the connection the
  * way a dead daemon or a dropped bridge does; `refused` answers with a control error.
  */
+import { fakeService } from "@sealant/db/testing/fake-service";
 import { Deferred, Effect, Layer } from "effect";
 import { vi } from "vitest";
 
@@ -134,15 +135,8 @@ export const fakeCaptureDaemon = (script: readonly CaptureDaemonScriptEntry[]) =
         return answer("status");
       },
     };
-    // Only the capture commands are scripted; any other use is a test bug and dies loudly.
-    return Effect.succeed(
-      new Proxy(session, {
-        get: (target, property) =>
-          property in target
-            ? Reflect.get(target, property)
-            : () => Effect.die(`unscripted daemon call ${String(property)}`),
-      }) as unknown as SealantSession,
-    );
+    // Only the capture commands are scripted; any other use is a test bug and fails loudly.
+    return Effect.succeed(fakeService<SealantSession>(session));
   });
 
   return {

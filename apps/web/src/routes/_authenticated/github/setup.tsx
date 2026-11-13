@@ -90,7 +90,7 @@ function GitHubSetupPage() {
 
   const installations = installationsQuery.data?.items ?? [];
 
-  const handleManualImport = async (event: FormEvent<HTMLFormElement>) => {
+  const handleManualImport = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     event.stopPropagation();
 
@@ -101,7 +101,7 @@ function GitHubSetupPage() {
     }
 
     setStatusMessage(null);
-    await importInstallationMutation.mutateAsync({
+    importInstallationMutation.mutate({
       externalInstallationId: normalizedInstallationId,
     });
   };
@@ -291,13 +291,10 @@ const INSTALLATION_STATUS_PRESENTATION = {
   deleted: { dot: "bg-danger-dot", text: "text-danger", label: "Deleted" },
 } as const;
 
-function InstallationStatus(props: { readonly status: string }) {
-  const presentation =
-    INSTALLATION_STATUS_PRESENTATION[props.status as keyof typeof INSTALLATION_STATUS_PRESENTATION];
-
-  if (presentation === undefined) {
-    return <span className="font-mono text-xs text-faint">{props.status}</span>;
-  }
+function InstallationStatus(props: {
+  readonly status: keyof typeof INSTALLATION_STATUS_PRESENTATION;
+}) {
+  const presentation = INSTALLATION_STATUS_PRESENTATION[props.status];
 
   return (
     <span className={`flex items-center gap-1.5 text-xs ${presentation.text}`}>

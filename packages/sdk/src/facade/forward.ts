@@ -5,7 +5,7 @@ import {
   forwardRefusalReasonSchema,
   type ForwardRefusedFrame,
 } from "@sealant/api-contracts";
-import { Option, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 
 import { ForwardDialError } from "../errors.js";
 import { resolveRequestPriority } from "../internal/config.js";
@@ -63,14 +63,15 @@ const bridgeForward = (ws: WebSocket): WorkspaceForward => {
   ws.addEventListener("message", (event) => {
     if (typeof event.data === "string") {
       try {
-        const frame = JSON.parse(event.data) as { t?: string };
-        if (frame.t === "end") {
+        const frame: unknown = JSON.parse(event.data);
+        if (Predicate.isObject(frame) && frame["t"] === "end") {
           finish("end");
         }
       } catch {}
       return;
     }
-    pending.push(new Uint8Array(event.data as ArrayBuffer));
+    // binaryType is "arraybuffer", so every binary frame arrives as an ArrayBuffer.
+    if (event.data instanceof ArrayBuffer) pending.push(new Uint8Array(event.data));
     wake?.();
   });
 

@@ -176,9 +176,14 @@ describe.skipIf(databaseUrl === undefined)(
             outcome: "refused",
             boat: { kind: "permission-missing", code: "api_key_action_forbidden" },
           });
-          const order = ["start-vm", "run-command", "publish-port", "save-snapshot"];
+          const order: ReadonlyArray<typeof step> = [
+            "start-vm",
+            "run-command",
+            "publish-port",
+            "save-snapshot",
+          ];
           for (const later of order.slice(order.indexOf(step) + 1))
-            expect(steps.get(later as typeof step)?.outcome, later).toBe("not-reached");
+            expect(steps.get(later)?.outcome, later).toBe("not-reached");
           // A refused create made no VM: no start was used of the plan's, nothing to delete.
           if (step === "start-vm") {
             expect(steps.get("delete-vm")?.outcome).toBe("not-reached");

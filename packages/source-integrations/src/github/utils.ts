@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+
 import type {
   GitHubInstallationAccessToken,
   GitHubRemoteInstallation,
@@ -30,11 +32,11 @@ export const toAuthorizationHeaders = (token: string) => {
 };
 
 const assertObject = (value: unknown, message: string): Record<string, unknown> => {
-  if (typeof value !== "object" || value === null) {
+  if (!Predicate.isObject(value)) {
     throw new Error(message);
   }
 
-  return value as Record<string, unknown>;
+  return value;
 };
 
 const assertString = (value: unknown, message: string): string => {

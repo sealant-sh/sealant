@@ -42,7 +42,7 @@ import {
   pushCredentialCopy,
   type SealantTargetDerivationOptions,
 } from "@sealant/workspaces";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 
 /** How often the sweeper scans for stale session credentials. */
 export const CLAUDE_SESSION_REFRESH_INTERVAL_MS = 15 * 60 * 1_000;
@@ -131,8 +131,9 @@ const runRefreshPing = async (configDir: string): Promise<void> => {
  * `expiresAt` with a refresh token present makes the CLI refresh before the request.
  */
 const dueForRefresh = (credentialsJson: string, now: number): string => {
-  const document = JSON.parse(credentialsJson) as Record<string, unknown>;
-  const grant = document["claudeAiOauth"] as Record<string, unknown>;
+  const parsed: unknown = JSON.parse(credentialsJson);
+  const document = Predicate.isObject(parsed) ? parsed : {};
+  const grant = Predicate.isObject(document["claudeAiOauth"]) ? document["claudeAiOauth"] : {};
   return JSON.stringify({ ...document, claudeAiOauth: { ...grant, expiresAt: now - 60_000 } });
 };
 

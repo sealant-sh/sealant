@@ -40,13 +40,7 @@ const toAuthorizedKeyEntry = (line: string): AuthorizedKeyEntry | undefined => {
     throw new Error(`Unable to parse authorized_keys entry: ${parsedKey.message}`);
   }
 
-  const key = Array.isArray(parsedKey) ? parsedKey[0] : parsedKey;
-
-  if (key === undefined || typeof key !== "object" || !("verify" in key)) {
-    throw new Error("Unable to parse authorized_keys entry into a verifier.");
-  }
-
-  const verifier = key.verify.bind(key) as VerifyFunction;
+  const verifier = parsedKey.verify.bind(parsedKey);
   const data = Buffer.from(encoded, "base64");
   // A comment names the principal; otherwise fall back to a deterministic key fingerprint so every
   // entry still has a stable, distinct identity the API can authorize.

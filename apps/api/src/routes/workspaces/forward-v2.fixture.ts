@@ -1,7 +1,14 @@
 import { createServer, type Server } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
+import type {
+  AccessTokenRepo,
+  WorkspaceRepo,
+  WorkspaceRuntimeInstanceRepo,
+  WorkspaceSessionRepo,
+} from "@sealant/db";
 import type { ForwardEndpoint } from "@sealant/sdk/internal/forward";
+import type { SealantRuntime } from "@sealant/workspaces";
 import { Effect, Exit, Layer, Scope } from "effect";
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
@@ -31,7 +38,14 @@ const previousReleaseGate = HttpMiddleware.make((app) =>
 );
 
 export const serveForwardRoutes = async (options: {
-  readonly services: Layer.Layer<never>;
+  /** What the forward routes read for each request. */
+  readonly services: Layer.Layer<
+    | AccessTokenRepo
+    | SealantRuntime
+    | WorkspaceRepo
+    | WorkspaceRuntimeInstanceRepo
+    | WorkspaceSessionRepo
+  >;
   readonly release: "current" | "previous";
   readonly requestsPerMinute: number;
 }): Promise<ServedCore> => {
@@ -53,7 +67,7 @@ export const serveForwardRoutes = async (options: {
     requestsPerMinute: options.requestsPerMinute,
   });
   let server: Server | undefined;
-  const layer = HttpRouter.serve(routes as Layer.Layer<never, never, HttpRouter.HttpRouter>, {
+  const layer = HttpRouter.serve(routes, {
     middleware: options.release === "current" ? gate : (app) => previousReleaseGate(gate(app)),
   }).pipe(
     Layer.provideMerge(

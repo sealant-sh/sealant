@@ -320,7 +320,7 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes cross-node workspace", () => {
         podName = result.resourceId;
         target = { kind: "websocket", url: result.endpoint ?? "", tls: clientTls };
         expect(await nodeOf(podName)).toBe(storeNode);
-        const check = await runIn(target!, "cat from-agent.txt && git log --oneline -1");
+        const check = await runIn(target, "cat from-agent.txt && git log --oneline -1");
         expect(check.stdout).toContain("from the agent");
         expect(check.stdout).toContain("checkpoint from store");
       } finally {

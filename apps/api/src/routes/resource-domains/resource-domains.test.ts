@@ -8,7 +8,7 @@ import {
   type ResourceDomainMemberOutcome,
   type ResourceDomainRecord,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Predicate } from "effect";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { RequestPrincipal } from "../../services/service-principals.js";
@@ -116,7 +116,9 @@ const send = async (
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
   );
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  const answer: unknown = await response.json();
+  if (!Predicate.isObject(answer)) throw new Error("expected a JSON object");
+  return { status: response.status, body: answer };
 };
 
 beforeEach(() => {
@@ -185,7 +187,7 @@ describe("resource domains", () => {
   });
 
   it.each([
-    ["into a budget change", "PUT", `/${"rdm:00000000-0000-4000-8000-000000000000"}/budget`, {}],
+    ["into a budget change", "PUT", `/rdm:00000000-0000-4000-8000-000000000000/budget`, {}],
     ["into ensure's budget", "POST", "/", { key: KEY }],
   ] as const)(
     "refuses an owner smuggled %s, instead of dropping it",

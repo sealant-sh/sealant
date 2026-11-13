@@ -1,9 +1,12 @@
 import {
   RunRepo,
   WorkspaceRepo,
+  type Run,
   type RunRepoService,
   type WorkspaceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runRow, workspaceRow } from "@sealant/db/testing/rows";
 import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -17,31 +20,16 @@ import { createRun, getRun, getRunChanges, listRuns, updateRun } from "./runs.mo
  */
 
 const now = new Date("2026-09-17T00:00:00.000Z");
-const runRow = (overrides: Record<string, unknown> = {}) => ({
-  id: "run_1",
-  workspaceId: "ws_a",
-  ownerUserId: "usr_a",
-  harnessId: "claude-code",
-  mode: "one-shot",
-  status: "queued",
-  prompt: null,
-  command: null,
-  metadata: null,
-  attemptId: null,
-  exitCode: null,
-  errorMessage: null,
-  diff: null,
-  changedFiles: null,
-  changesReadFailedAt: null,
-  recordDeletedAt: null,
-  startedAt: null,
-  finishedAt: null,
-  createdAt: now,
-  updatedAt: now,
-  ...overrides,
-});
+const ownedRun = (overrides: Partial<Run> = {}): Run =>
+  runRow({
+    workspaceId: "ws_a",
+    ownerUserId: "usr_a",
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  });
 
-const world = (run = runRow()) => {
+const world = (run = ownedRun()) => {
   const writes: Array<string> = [];
   const lookups: Array<string> = [];
   const wrote = (name: string) =>
@@ -49,7 +37,7 @@ const world = (run = runRow()) => {
       writes.push(name);
       return run;
     });
-  const runs = {
+  const runs = fakeService<RunRepoService>({
     getRunById: (id: string) =>
       Effect.sync(() => {
         lookups.push(id);
@@ -64,20 +52,24 @@ const world = (run = runRow()) => {
       run.status === "queued" || run.status === "running"
         ? wrote("markRunFailed")
         : Effect.succeed(null),
-    setRunCapturedChanges: () => wrote("setRunCapturedChanges"),
-  } as unknown as RunRepoService;
-  const workspaces = {
+  });
+  const workspaces = fakeService<WorkspaceRepoService>({
     getWorkspaceById: (id: string) =>
-      Effect.succeed(id === "ws_a" ? { id: "ws_a", ownerUserId: "usr_a" } : undefined),
-  } as unknown as WorkspaceRepoService;
+      Effect.succeed(
+        id === "ws_a" ? workspaceRow({ id: "ws_a", ownerUserId: "usr_a" }) : undefined,
+      ),
+  });
   const layers = Layer.mergeAll(
     Layer.succeed(RunRepo, runs),
     Layer.succeed(WorkspaceRepo, workspaces),
-    Layer.succeed(RunExecPublisherService, {
-      publishRequested: async () => {
-        writes.push("publishRequested");
-      },
-    } as unknown as RunExecPublisherService["Service"]),
+    Layer.succeed(
+      RunExecPublisherService,
+      fakeService({
+        publishRequested: async () => {
+          writes.push("publishRequested");
+        },
+      }),
+    ),
   );
   const execute = <A, E>(
     effect: Effect.Effect<A, E, RunRepo | WorkspaceRepo | RunExecPublisherService>,
@@ -181,7 +173,7 @@ describe("the SSH gateway's secret is a narrower authority than a service key", 
     expect(Result.isFailure(refused)).toBe(true);
     expect(harnessRun.writes).toEqual([]);
 
-    const sshRun = world(runRow({ harnessId: "ssh", mode: "interactive", status: "running" }));
+    const sshRun = world(ownedRun({ harnessId: "ssh", mode: "interactive", status: "running" }));
     const recorded = await sshRun.run(
       updateRun({ runId: "run_1", payload: { ownerUserId: "usr_a", status: "completed" } }),
       gateway,
@@ -193,7 +185,7 @@ describe("the SSH gateway's secret is a narrower authority than a service key", 
 
 describe("a run's changes say whether they were read", () => {
   const changesOf = async (overrides: Record<string, unknown>) => {
-    const { run } = world(runRow(overrides));
+    const { run } = world(ownedRun(overrides));
     const result = await run(getRunChanges("run_1", "usr_a"));
     if (!Result.isSuccess(result)) throw new Error(String(result));
     return result.success;
@@ -242,7 +234,7 @@ describe("a run's changes say whether they were read", () => {
 
 describe("a failure reported for a run that already settled", () => {
   it("answers with the run as it settled, never as missing", async () => {
-    const { run } = world(runRow({ status: "completed", exitCode: 0 }));
+    const { run } = world(ownedRun({ status: "completed", exitCode: 0 }));
     const result = await run(
       updateRun({ runId: "run_1", payload: { ownerUserId: "usr_a", status: "failed" } }),
     );

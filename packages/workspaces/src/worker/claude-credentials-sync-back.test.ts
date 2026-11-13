@@ -5,7 +5,12 @@ import {
   ConnectedAccountRepo,
   type ConnectedAccount,
   type ConnectedAccountRepoService,
+  type ReplaceConnectedAccountPayloadInput,
+  type UpdateConnectedAccountSyncStateInput,
+  ConnectedAccountRepoUnexpectedError,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { connectedAccountRow } from "@sealant/db/testing/rows";
 import { newWorkspaceSchema, type NewWorkspace } from "@sealant/validators";
 import { Effect, Layer } from "effect";
 import { vi } from "vitest";
@@ -37,7 +42,7 @@ const storedFilePayload = (expiresAt: number = STORED_EXPIRES_AT): string =>
   `sealed:${JSON.stringify({ credentialsJson: credentialsJsonWithExpiry(expiresAt) })}`;
 
 const createClaudeAccount = (overrides: Partial<ConnectedAccount> = {}): ConnectedAccount =>
-  ({
+  connectedAccountRow({
     id: "cacc_claude",
     ownerUserId: "usr_1",
     provider: "claude",
@@ -55,16 +60,18 @@ const createClaudeAccount = (overrides: Partial<ConnectedAccount> = {}): Connect
     invalidAt: null,
     archivedAt: null,
     ...overrides,
-  }) as ConnectedAccount;
+  });
 
 const connectedAccountRepoStub = (account: ConnectedAccount | undefined) => ({
-  getById: vi.fn((_id: string) => Effect.succeed(account)),
-  replacePayload: vi.fn((_input: unknown) => Effect.succeed(account)),
-  updateSyncState: vi.fn((_input: unknown) => Effect.succeed(account)),
+  getById: vi.fn((_id: string) =>
+    Effect.succeed(account === undefined ? undefined : { ...account, isDefault: false }),
+  ),
+  replacePayload: vi.fn((_input: ReplaceConnectedAccountPayloadInput) => Effect.succeed(account)),
+  updateSyncState: vi.fn((_input: UpdateConnectedAccountSyncStateInput) => Effect.succeed(account)),
 });
 
-const provideAccounts = (stub: unknown) =>
-  Layer.succeed(ConnectedAccountRepo, stub as ConnectedAccountRepoService);
+const provideAccounts = (stub: Partial<ConnectedAccountRepoService>) =>
+  Layer.succeed(ConnectedAccountRepo, fakeService(stub));
 
 const claudeBlueprint: NewWorkspace = newWorkspaceSchema.parse({
   sources: { workspace: { url: "https://github.com/example/repo.git" } },
@@ -85,7 +92,10 @@ workspace sync-back orchestration on top of it.
 */
 
 describe("persistClaudeCredentialsIfNewer", () => {
-  const persist = (input: { readonly accounts: unknown; readonly observed: string }) =>
+  const persist = (input: {
+    readonly accounts: Partial<ConnectedAccountRepoService>;
+    readonly observed: string;
+  }) =>
     Effect.runPromise(
       persistClaudeCredentialsIfNewer({
         connectedAccountId: "cacc_claude",
@@ -124,9 +134,7 @@ describe("persistClaudeCredentialsIfNewer", () => {
       mcpOAuth: { "figma:https://figma.com": { refreshToken: "figma-refresh" } },
     });
     expect(await persist({ accounts, observed: rotated })).toBe("synced");
-    const written = accounts.replacePayload.mock.calls[0]?.[0] as
-      | { readonly encryptedPayload: string }
-      | undefined;
+    const written = accounts.replacePayload.mock.calls[0]?.[0];
     expect(written?.encryptedPayload).not.toContain("figma-refresh");
     expect(written?.encryptedPayload).toContain("sk-ant-ort01-rotated");
   });
@@ -195,8 +203,18 @@ describe("persistClaudeCredentialsIfNewer", () => {
 
   it("returns failed (never throws) when the repo write fails", async () => {
     const accounts = {
-      getById: vi.fn((_id: string) => Effect.succeed(createClaudeAccount())),
-      replacePayload: vi.fn((_input: unknown) => Effect.fail(new Error("db down"))),
+      getById: vi.fn((_id: string) =>
+        Effect.succeed({ ...createClaudeAccount(), isDefault: false }),
+      ),
+      replacePayload: vi.fn((_input: unknown) =>
+        Effect.fail(
+          new ConnectedAccountRepoUnexpectedError({
+            operation: "replacePayload",
+            message: "db down",
+            cause: new Error("db down"),
+          }),
+        ),
+      ),
       updateSyncState: vi.fn((_input: unknown) => Effect.succeed(undefined)),
     };
     expect(
@@ -228,6 +246,8 @@ describe("syncBackClaudeCredentials", () => {
           encryptedPayload: `sealed:${expectedPlaintext}`,
           encryptionKeyId: "k-test",
           payloadSha256: sha256Hex(expectedPlaintext),
+          // A stored account always carries its revision, and the write is fenced on it.
+          expectedRevision: 1,
           metadata: expect.objectContaining({
             expiresAt: STORED_EXPIRES_AT + 1_000,
             subscriptionType: "max",
@@ -426,8 +446,18 @@ describe("syncBackClaudeCredentials", () => {
 
   it.effect("degrades to a warning when the repo write fails", () => {
     const accounts = {
-      getById: vi.fn((_id: string) => Effect.succeed(createClaudeAccount())),
-      replacePayload: vi.fn((_input: unknown) => Effect.fail(new Error("db down"))),
+      getById: vi.fn((_id: string) =>
+        Effect.succeed({ ...createClaudeAccount(), isDefault: false }),
+      ),
+      replacePayload: vi.fn((_input: unknown) =>
+        Effect.fail(
+          new ConnectedAccountRepoUnexpectedError({
+            operation: "replacePayload",
+            message: "db down",
+            cause: new Error("db down"),
+          }),
+        ),
+      ),
       updateSyncState: vi.fn((_input: unknown) => Effect.succeed(undefined)),
     };
 

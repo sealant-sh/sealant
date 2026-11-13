@@ -6,6 +6,7 @@
  *     -e POSTGRES_USER=jobs -e POSTGRES_DB=jobs postgres:17-alpine
  *   SEALANT_JOBS_TEST_DATABASE_URL=postgresql://jobs:jobs@127.0.0.1:55432/jobs pnpm vitest run
  */
+import { Schema } from "effect";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createJobQueueService } from "./service.js";
@@ -13,9 +14,10 @@ import { closeJobQueueSingleton, getJobQueueSingleton } from "./singleton.js";
 import { defineJobQueue } from "./topology.js";
 
 const databaseUrl = process.env.SEALANT_JOBS_TEST_DATABASE_URL;
+const decodeIdMessage = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
 
 describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
-  const url = databaseUrl as string;
+  const url = databaseUrl ?? "";
   const suffix = Date.now().toString(36);
 
   afterAll(async () => {
@@ -30,11 +32,7 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
 
     const consumer = await jobs.consumeJson<{ readonly id: string }>({
       queue,
-      parseMessage: (input) => {
-        const obj = input as { readonly id?: unknown };
-        if (typeof obj.id !== "string") throw new Error("bad message");
-        return { id: obj.id };
-      },
+      parseMessage: decodeIdMessage,
       onMessage: async ({ message }) => {
         received.push(message);
         resolveDelivered();
@@ -65,7 +63,7 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
 
     const consumer = await jobs.consumeJson<{ readonly n: number }>({
       queue,
-      parseMessage: (input) => input as { readonly n: number },
+      parseMessage: Schema.decodeUnknownSync(Schema.Struct({ n: Schema.Number })),
       onMessage: async () => {
         handled += 1;
         if (handled === 2) resolveBoth();
@@ -100,7 +98,7 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
 
     const consumer = await jobs.consumeJson<{ readonly id: string }>({
       queue,
-      parseMessage: (input) => input as { readonly id: string },
+      parseMessage: decodeIdMessage,
       onMessage: async () => {
         attempts += 1;
         resolveFailed();
@@ -133,7 +131,7 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
 
     const consumer = await jobs.consumeJson<{ readonly id: string }>({
       queue,
-      parseMessage: (input) => input as { readonly id: string },
+      parseMessage: decodeIdMessage,
       onMessage: async () => {
         // How the run-exec worker failed: a telemetry query error with bigint parameters.
         throw new Error("appendBatch failed", { cause: { params: ["evt_1", 257n] } });
@@ -187,7 +185,7 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     const consumer = await jobs.consumeJson<{ readonly key: string }>({
       queue,
       concurrency: 1,
-      parseMessage: (input) => input as { readonly key: string },
+      parseMessage: Schema.decodeUnknownSync(Schema.Struct({ key: Schema.String })),
       onMessage: async ({ message }) => {
         if (!held) {
           held = true;
@@ -226,7 +224,7 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     const consumer = await jobs.consumeJson<{ readonly args: readonly string[] }>({
       queue,
       deleteOnPickup: true,
-      parseMessage: (input) => input as { readonly args: readonly string[] },
+      parseMessage: Schema.decodeUnknownSync(Schema.Struct({ args: Schema.Array(Schema.String) })),
       onMessage: async ({ message }) => {
         handled += 1;
         if (handled === 2) resolveBoth();

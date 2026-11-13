@@ -41,7 +41,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "lint": "oxlint .",
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "prepublishOnly": "pnpm run build",
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },

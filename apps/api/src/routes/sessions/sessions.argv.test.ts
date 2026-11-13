@@ -15,16 +15,22 @@ import {
   WorkspaceSessionRepo,
   type CreateWorkspaceSessionInput,
   type RunRepoService,
-  type Workspace,
   type WorkspaceRepoService,
+  type WorkspaceSession,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runRow, runtimeInstanceRow, sessionRow, workspaceRow } from "@sealant/db/testing/rows";
 import { TelemetryQuery } from "@sealant/telemetry";
+import { capabilitiesReport } from "@sealant/telemetry/testing";
 import {
   SealantControlError,
   SealantRuntime,
   TransportError,
+  type SealantError,
   type SealantOpenSessionOptions,
+  type SealantSession,
+  type SealantSessionOpened,
   type SealantSessionSummary,
 } from "@sealant/workspaces";
 import { Effect, Exit, Layer, Stream } from "effect";
@@ -40,14 +46,14 @@ beforeAll(async () => {
 
 const OWNER = "usr_alice";
 const HEADERS = { authorization: "Bearer svc-test" };
-const workspace = { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" } as Workspace;
+const workspace = workspaceRow({ id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1" });
 
 const LEADER = { sessionId: "dsess_1", processId: "proc_1", pid: 42 };
 
 interface Row {
   id: string;
   runId: string;
-  status: string;
+  status: WorkspaceSession["status"];
   daemonSessionId: string | null;
   daemonProcessId: string | null;
   argv: readonly string[];
@@ -55,8 +61,12 @@ interface Row {
 
 /** What the daemon does when asked: `list` sees every open it was asked for. */
 interface Daemon {
-  readonly open: (options: SealantOpenSessionOptions) => Effect.Effect<unknown, unknown>;
-  readonly list: (opened: readonly SealantOpenSessionOptions[]) => Effect.Effect<unknown, unknown>;
+  readonly open: (
+    options: SealantOpenSessionOptions,
+  ) => Effect.Effect<SealantSessionOpened, SealantError>;
+  readonly list: (
+    opened: readonly SealantOpenSessionOptions[],
+  ) => Effect.Effect<readonly SealantSessionSummary[], SealantError>;
 }
 
 const transportLost = () =>
@@ -87,30 +97,31 @@ const harness = (daemon: Daemon) => {
     readonly settled: string[];
     row: Row | undefined;
   } = { opened: [], closed: [], runCommands: [], stored: [], settled: [], row: undefined };
-  const rowView = (row: Row) => ({
-    id: row.id,
-    workspaceId: workspace.id,
-    runId: row.runId,
-    ownerUserId: OWNER,
-    status: row.status,
-    argv: row.argv.slice(0, 1),
-    argCount: row.argv.length - 1,
-    argLengths: row.argv.slice(1).map((word) => Buffer.byteLength(word)),
-    cwd: "/workspace/repo",
-    cols: 80,
-    rows: 24,
-    mode: "pty",
-    daemonSessionId: row.daemonSessionId,
-    daemonProcessId: row.daemonProcessId,
-    exitCode: null,
-    exitSignal: null,
-    errorMessage: null,
-    metadata: null,
-    createdAt: new Date(0),
-    endedAt: null,
-  });
-  const live = {
-    capabilities: Effect.succeed({ supports: [] }),
+  const rowView = (row: Row) =>
+    sessionRow({
+      id: row.id,
+      workspaceId: workspace.id,
+      runId: row.runId,
+      ownerUserId: OWNER,
+      status: row.status,
+      argv: row.argv.slice(0, 1),
+      argCount: row.argv.length - 1,
+      argLengths: row.argv.slice(1).map((word) => Buffer.byteLength(word)),
+      cwd: "/workspace/repo",
+      cols: 80,
+      rows: 24,
+      mode: "pty",
+      daemonSessionId: row.daemonSessionId,
+      daemonProcessId: row.daemonProcessId,
+      exitCode: null,
+      exitSignal: null,
+      errorMessage: null,
+      metadata: null,
+      createdAt: new Date(0),
+      endedAt: null,
+    });
+  const live = fakeService<SealantSession>({
+    capabilities: Effect.succeed(capabilitiesReport([])),
     openSession: (options: SealantOpenSessionOptions) =>
       Effect.suspend(() => {
         recorded.opened.push(options);
@@ -121,88 +132,120 @@ const harness = (daemon: Daemon) => {
       Effect.sync(() => {
         recorded.closed.push(daemonSessionId);
       }),
-  };
+  });
   const layer = Layer.mergeAll(
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: () => Effect.succeed(workspace),
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      getRuntimeInstanceByRunId: () =>
-        Effect.succeed({
-          runId: "run_1",
-          status: "ready",
-          adapter: "docker",
-          resourceId: "container-1",
-          reference: "container-1",
-          endpoint: null,
-        }),
-    } as unknown as WorkspaceRuntimeInstanceRepoService),
-    Layer.succeed(WorkspaceAttemptRepo, {
-      getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-    } as never),
-    Layer.succeed(RunRepo, {
-      createRun: (input: { command: unknown }) =>
-        Effect.sync(() => {
-          recorded.runCommands.push(input.command);
-          return {};
-        }),
-      markRunRunning: () => Effect.succeed({}),
-      markRunFailed: (input: { errorMessage: string }) =>
-        Effect.sync(() => {
-          recorded.settled.push(`run failed: ${input.errorMessage}`);
-          return null;
-        }),
-      markRunCompleted: () =>
-        Effect.sync(() => {
-          recorded.settled.push("run completed");
-          return null;
-        }),
-    } as unknown as RunRepoService),
-    Layer.succeed(WorkspaceSessionRepo, {
-      createSession: (input: CreateWorkspaceSessionInput) =>
-        Effect.sync(() => {
-          recorded.stored.push(input);
-          recorded.row = {
-            id: input.id,
-            runId: input.runId,
-            status: "starting",
-            daemonSessionId: null,
-            daemonProcessId: null,
-            argv: input.argv,
-          };
-          return rowView(recorded.row);
-        }),
-      getSessionById: () =>
-        Effect.sync(() => (recorded.row === undefined ? undefined : rowView(recorded.row))),
-      markSessionRunning: (input: { daemonSessionId: string; daemonProcessId: string }) =>
-        Effect.sync(() => {
-          if (recorded.row === undefined) return null;
-          recorded.row.status = "running";
-          recorded.row.daemonSessionId = input.daemonSessionId;
-          recorded.row.daemonProcessId = input.daemonProcessId;
-          return rowView(recorded.row);
-        }),
-      markSessionEnded: (input: { status: string }) =>
-        Effect.sync(() => {
-          recorded.settled.push(`session ${input.status}`);
-          if (recorded.row === undefined) return null;
-          recorded.row.status = input.status;
-          return rowView(recorded.row);
-        }),
-    } as never),
-    Layer.succeed(TelemetryQuery, {
-      hasEpoch: () => Effect.succeed(true),
-      maxSequence: () => Effect.succeed(0n),
-      // A closed leader's exit, once it has been closed.
-      getTimeline: () =>
-        Stream.fromIterable(
-          recorded.closed.length === 0
-            ? []
-            : [{ processId: LEADER.processId, ref: { exitCode: 0 } }],
-        ),
-    } as never),
-    Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(live) } as never),
-    Layer.succeed(AccessTokenRepo, {} as never),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService<WorkspaceRepoService>({
+        getWorkspaceById: () => Effect.succeed(workspace),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepoService>({
+        getRuntimeInstanceByRunId: () =>
+          Effect.succeed(
+            runtimeInstanceRow({
+              runId: "run_1",
+              status: "ready",
+              adapter: "docker",
+              resourceId: "container-1",
+              reference: "container-1",
+              endpoint: null,
+            }),
+          ),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceAttemptRepo,
+      fakeService({
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      }),
+    ),
+    Layer.succeed(
+      RunRepo,
+      fakeService<RunRepoService>({
+        createRun: (input) =>
+          Effect.sync(() => {
+            recorded.runCommands.push(input.command);
+            return runRow();
+          }),
+        markRunRunning: () => Effect.succeed(runRow()),
+        markRunFailed: (input) =>
+          Effect.sync(() => {
+            recorded.settled.push(`run failed: ${input.errorMessage}`);
+            return null;
+          }),
+        markRunCompleted: () =>
+          Effect.sync(() => {
+            recorded.settled.push("run completed");
+            return null;
+          }),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceSessionRepo,
+      fakeService({
+        createSession: (input: CreateWorkspaceSessionInput) =>
+          Effect.sync(() => {
+            recorded.stored.push(input);
+            recorded.row = {
+              id: input.id,
+              runId: input.runId,
+              status: "starting",
+              daemonSessionId: null,
+              daemonProcessId: null,
+              argv: input.argv,
+            };
+            return rowView(recorded.row);
+          }),
+        getSessionById: () =>
+          Effect.sync(() => (recorded.row === undefined ? undefined : rowView(recorded.row))),
+        markSessionRunning: (input) =>
+          Effect.sync(() => {
+            if (recorded.row === undefined) return null;
+            recorded.row.status = "running";
+            recorded.row.daemonSessionId = input.daemonSessionId;
+            recorded.row.daemonProcessId = input.daemonProcessId;
+            return rowView(recorded.row);
+          }),
+        markSessionEnded: (input) =>
+          Effect.sync(() => {
+            recorded.settled.push(`session ${input.status}`);
+            if (recorded.row === undefined) return null;
+            recorded.row.status = input.status;
+            return rowView(recorded.row);
+          }),
+      }),
+    ),
+    Layer.succeed(
+      TelemetryQuery,
+      fakeService({
+        hasEpoch: () => Effect.succeed(true),
+        maxSequence: () => Effect.succeed(0n),
+        // A closed leader's exit, once it has been closed.
+        getTimeline: () =>
+          Stream.fromIterable(
+            recorded.closed.length === 0
+              ? []
+              : [
+                  {
+                    eventId: "evt_exit",
+                    sequence: 1n,
+                    kind: "processExited",
+                    occurredAt: 1n,
+                    summary: "",
+                    ref: { exitCode: 0 },
+                    processId: LEADER.processId,
+                    captureMethod: 1,
+                    confidence: 1,
+                  },
+                ],
+          ),
+      }),
+    ),
+    Layer.succeed(SealantRuntime, fakeService({ connect: () => Effect.succeed(live) })),
+    Layer.succeed(AccessTokenRepo, fakeService({})),
   );
   return { layer, recorded };
 };

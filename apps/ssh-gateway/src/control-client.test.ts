@@ -6,7 +6,7 @@
 import { Buffer } from "node:buffer";
 import { Duplex } from "node:stream";
 
-import { fromBinary } from "@bufbuild/protobuf";
+import { fromBinary, type MessageInitShape } from "@bufbuild/protobuf";
 import {
   create,
   encodeServer,
@@ -14,6 +14,8 @@ import {
   ClientMessageSchema,
   ServerMessageSchema,
   type ClientMessage,
+  type Command,
+  type CommandResultSchema,
 } from "@sealant/runtime-protocol";
 import { describe, expect, it } from "vitest";
 
@@ -37,7 +39,7 @@ class ClientFrameDecoder {
 
 /** Records the commands it received and replies with canned ok-results + optional stream frames. */
 class FakeDaemon extends Duplex {
-  readonly commands: Array<{ requestId: string; case: string; value: unknown }> = [];
+  readonly commands: Array<{ readonly requestId: string } & Command["command"]> = [];
   readonly streamFramesOut: ClientMessage[] = [];
   #decoder = new ClientFrameDecoder();
   #channelCounter = 0;
@@ -49,11 +51,7 @@ class FakeDaemon extends Duplex {
       if (message.message.case === "request") {
         const req = message.message.value;
         const command = req.command?.command;
-        this.commands.push({
-          requestId: req.requestId,
-          case: command?.case ?? "unknown",
-          value: command?.value,
-        });
+        this.commands.push({ requestId: req.requestId, ...(command ?? { case: undefined }) });
         this.#handleRequest(req.requestId, command?.case, command?.value);
       } else if (message.message.case === "stream") {
         this.streamFramesOut.push(message);
@@ -66,7 +64,7 @@ class FakeDaemon extends Duplex {
     this.push(encodeFrame(encodeServer(message)));
   }
 
-  #okResult(requestId: string, result: { result: { case: string; value: unknown } }): void {
+  #okResult(requestId: string, result: MessageInitShape<typeof CommandResultSchema>): void {
     this.#send(
       create(ServerMessageSchema, {
         message: {
@@ -74,8 +72,7 @@ class FakeDaemon extends Duplex {
           value: {
             schemaVersion: 1,
             requestId,
-            // The CommandResult oneof init is validated by the schema at create()-time.
-            outcome: { outcome: { case: "ok", value: result as never } },
+            outcome: { outcome: { case: "ok", value: result } },
           },
         },
       }),
@@ -230,9 +227,9 @@ describe("ControlClient channel->command mapping", () => {
     const writeStdin = lastCommand(daemon);
     expect(writeStdin).toBeDefined();
     expect(writeStdin).toMatchObject({ case: "writeStdin", value: { sessionId: "sess-1" } });
-    const writeStdinValue = writeStdin?.value as { processId?: string; sessionId?: string };
-    expect(writeStdinValue.processId).toBeUndefined();
-    expect(writeStdinValue.sessionId).toBe("sess-1");
+    if (writeStdin?.case !== "writeStdin") throw new Error("expected a writeStdin command");
+    expect(writeStdin.value.processId).toBeUndefined();
+    expect(writeStdin.value.sessionId).toBe("sess-1");
 
     await client.resizePty("sess-1", 100, 30);
     expect(lastCommand(daemon)).toMatchObject({

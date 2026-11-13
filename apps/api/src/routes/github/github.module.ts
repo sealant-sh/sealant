@@ -31,7 +31,7 @@ import {
   type GitHubRemoteInstallation,
   GitHubSourceIntegrationService,
 } from "@sealant/source-integrations";
-import { Clock, Effect } from "effect";
+import { Clock, Effect, Predicate } from "effect";
 
 const gitHubUnavailableMessage = "GitHub integration is not configured.";
 
@@ -50,13 +50,13 @@ const toIsoString = (value: Date | null | undefined): string | undefined => {
 const parseWebhookPayload = (payload: string) => {
   return Effect.try({
     try: () => {
-      const parsed = JSON.parse(payload) as unknown;
+      const parsed: unknown = JSON.parse(payload);
 
-      if (typeof parsed !== "object" || parsed === null) {
+      if (!Predicate.isObject(parsed)) {
         throw new Error("GitHub webhook payload must be a JSON object.");
       }
 
-      return parsed as Record<string, unknown>;
+      return parsed;
     },
     catch: () =>
       new GitHubBadRequestError({

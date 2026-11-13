@@ -70,7 +70,12 @@ export function SetupConnectStep(props: { readonly sshGateway: SetupStateRespons
             {snippet}
           </pre>
           <div className="flex items-center gap-3">
-            <Button type="button" variant="outline" className="h-10 px-4" onClick={copySnippet}>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 px-4"
+              onClick={() => void copySnippet()}
+            >
               {copyState === "copied" ? "Copied" : "Copy"}
             </Button>
             {copyState === "error" ? (

@@ -64,17 +64,14 @@ const makeStub = (handlers: StubHandlers): { client: ControlPlaneClient; calls: 
       return Effect.sync(() => (handlers.getRunChanges ?? (() => CHANGES))());
     },
   };
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
   const client = { runs } as unknown as ControlPlaneClient;
   return { client, calls };
 };
 
 const makeFakeRuntime = (client: ControlPlaneClient): SdkRuntime => ({
-  run: <A, E, R extends SdkServices>(effect: Effect.Effect<A, E, R>): Promise<A> =>
-    // The stub provides all of SdkServices; TS can't reduce Exclude<R, SdkServices> for a generic R
-    // (the live runtime narrows the same way in effect/runtime.ts).
-    Effect.runPromise(
-      Effect.provideService(effect, SealantApiClient, client) as Effect.Effect<A, E>,
-    ),
+  run: <A, E>(effect: Effect.Effect<A, E, SdkServices>): Promise<A> =>
+    Effect.runPromise(Effect.provideService(effect, SealantApiClient, client)),
   dispose: () => Promise.resolve(),
 });
 
@@ -103,10 +100,11 @@ describe("harness.start()", () => {
     // constructs the invocation (the server-side invoke-knowledge migration).
     const seen: Array<Record<string, unknown>> = [];
     const { client } = makeStub({});
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
     const clientWithWorkspace = {
-      ...(client as unknown as Record<string, unknown>),
+      ...client,
       runs: {
-        ...(client as unknown as { runs: Record<string, unknown> }).runs,
+        ...client.runs,
         createRun: ({ payload }: { payload: Record<string, unknown> }) => {
           seen.push(payload);
           return Effect.sync(() => wireRun("queued"));
@@ -137,8 +135,9 @@ describe("harness.start()", () => {
 
   it("rejects when neither the handle nor the workspace spec names a harness", async () => {
     const { client } = makeStub({});
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
     const clientWithSpeclessWorkspace = {
-      ...(client as unknown as Record<string, unknown>),
+      ...client,
       workspaces: {
         getWorkspace: () =>
           Effect.sync(() => ({

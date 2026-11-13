@@ -8,6 +8,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { fakeService } from "@sealant/db/testing/fake-service";
 import type { WorkspaceBuild, WorkspaceImageProbe } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
@@ -41,7 +42,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
       digestReference: "127.0.0.1:5000/sealant/ws@sha256:1",
       digest: "sha256:1",
     }));
-    const registryClient = { publishOciImage } as unknown as RegistryClient;
+    const registryClient = fakeService<RegistryClient>({ publishOciImage });
     const compileWorkspaceSpec = vi.fn(async () => build);
     const builder = createDockerWorkspaceImageBuilder({
       platform: "linux/amd64",
@@ -74,10 +75,10 @@ describe("createDockerWorkspaceImageBuilder", () => {
       digestReference: "sha256:1",
       digest: "sha256:1",
     }));
-    const registryClient = {
+    const registryClient = fakeService<RegistryClient>({
       imageTransport: "engine",
       publishOciImage,
-    } as unknown as RegistryClient;
+    });
     const engineBuild: WorkspaceBuild = {
       ...build,
       artifacts: [
@@ -117,10 +118,10 @@ describe("createDockerWorkspaceImageBuilder", () => {
       digestReference: "sha256:2",
       digest: "sha256:2",
     }));
-    const registryClient = {
+    const registryClient = fakeService<RegistryClient>({
       imageTransport: "engine",
       publishOciImage,
-    } as unknown as RegistryClient;
+    });
     const builder = createDockerWorkspaceImageBuilder({
       platform: "linux/amd64",
       registryClient,
@@ -158,7 +159,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
 
   it("removes the compile's scratch directory once the image is published", async () => {
     const { contextDirectory, build: scratch } = await scratchBuild();
-    const registryClient = {
+    const registryClient = fakeService<RegistryClient>({
       publishOciImage: vi.fn(async () => ({
         repository: "r",
         tag: "t",
@@ -166,7 +167,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
         digestReference: "sha256:3",
         digest: "sha256:3",
       })),
-    } as unknown as RegistryClient;
+    });
     const builder = createDockerWorkspaceImageBuilder({
       platform: "linux/amd64",
       registryClient,
@@ -180,11 +181,11 @@ describe("createDockerWorkspaceImageBuilder", () => {
 
   it("removes the scratch directory even when the publish fails", async () => {
     const { contextDirectory, build: scratch } = await scratchBuild();
-    const registryClient = {
+    const registryClient = fakeService<RegistryClient>({
       publishOciImage: vi.fn(async () => {
         throw new Error("registry down");
       }),
-    } as unknown as RegistryClient;
+    });
     const builder = createDockerWorkspaceImageBuilder({
       platform: "linux/amd64",
       registryClient,
@@ -198,7 +199,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
   });
 
   it("disables the plan-hash short-circuit for a custom compiler without a planner", () => {
-    const registryClient = {} as RegistryClient;
+    const registryClient = fakeService<RegistryClient>({});
     expect(
       createDockerWorkspaceImageBuilder({
         platform: "linux/amd64",
@@ -212,7 +213,7 @@ describe("createDockerWorkspaceImageBuilder", () => {
   });
 
   it("fails when the compiler returns no publishable artifact", async () => {
-    const registryClient = { publishOciImage: vi.fn() } as unknown as RegistryClient;
+    const registryClient = fakeService<RegistryClient>({ publishOciImage: vi.fn() });
     const builder = createDockerWorkspaceImageBuilder({
       platform: "linux/amd64",
       registryClient,
@@ -234,11 +235,11 @@ const engineStore = (digest: string | null) => {
     digest: digest ?? "",
   }));
   const headManifest = vi.fn(async () => digest);
-  const registryClient = {
+  const registryClient = fakeService<RegistryClient>({
     imageTransport: "engine",
     headManifest,
     publishOciImage,
-  } as unknown as RegistryClient;
+  });
   return { registryClient, headManifest, publishOciImage };
 };
 
@@ -355,7 +356,7 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
   });
 
   it("is not offered for a registry store, which has its publishes on record", () => {
-    const registryClient = { publishOciImage: vi.fn() } as unknown as RegistryClient;
+    const registryClient = fakeService<RegistryClient>({ publishOciImage: vi.fn() });
     expect(
       createDockerWorkspaceImageBuilder({ platform: "linux/amd64", registryClient }).findPublished,
     ).toBeUndefined();

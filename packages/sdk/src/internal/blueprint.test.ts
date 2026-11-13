@@ -21,7 +21,7 @@ interface SpecShape {
       readonly kind?: string;
       readonly url?: string;
       readonly ref?: string;
-      readonly hostPath?: string;
+      readonly hostPath?: string | undefined;
       readonly endpoint?: string;
       readonly worktreeId?: string;
       readonly harnessHome?: string;
@@ -58,7 +58,7 @@ describe("buildCreateWorkspaceRequest", () => {
     expect(payload.repository).toBe("billing-service"); // sanitized source tail
     expect(payload.tag).toMatch(/^sdk-/);
 
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.sources.workspace.url).toBe("https://github.com/acme/billing-service.git");
     // No ref requested → none sent; the clone resolves the repository's default branch.
     expect(spec.sources.workspace.ref).toBeUndefined();
@@ -78,7 +78,7 @@ describe("buildCreateWorkspaceRequest", () => {
       config,
     );
 
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.tooling?.services?.docker).toEqual({ enabled: true });
   });
 
@@ -91,7 +91,7 @@ describe("buildCreateWorkspaceRequest", () => {
           ...(network === undefined ? {} : { network }),
         },
         config,
-      ).payload.spec as unknown as { runtime?: { network?: unknown } };
+      ).payload.spec as { runtime?: { network?: unknown } };
 
     expect(build({ cloudMetadata: true }).runtime?.network).toEqual({ cloudMetadata: true });
     // Absent or false sends nothing: the control plane's default refuses the address.
@@ -104,7 +104,7 @@ describe("buildCreateWorkspaceRequest", () => {
       buildCreateWorkspaceRequest(
         { repository: "github.com/acme/billing-service", harness: opencode(), ...options },
         config,
-      ).payload as unknown as { spec: { runtime?: Record<string, unknown> }; resources?: unknown };
+      ).payload;
 
     const asked = build({ resources: "none" });
     expect(asked.spec.runtime).toEqual({ resources: "none" });
@@ -141,7 +141,7 @@ describe("buildCreateWorkspaceRequest", () => {
       { repository: "https://gitlab.com/x/y.git", ref: "master", harness: opencode() },
       config,
     );
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.sources.workspace.url).toBe("https://gitlab.com/x/y.git");
     expect(spec.sources.workspace.ref).toBe("master");
   });
@@ -152,7 +152,7 @@ describe("buildCreateWorkspaceRequest", () => {
       config,
     );
     expect(payload.repository).toBe("session-1");
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.sources.workspace).toEqual({
       kind: "mount",
       hostPath: "/srv/store/worktrees/session-1",
@@ -176,7 +176,7 @@ describe("buildCreateWorkspaceRequest", () => {
       config,
     );
     expect(payload.repository).toBe("wt_1");
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.sources.workspace).toEqual({
       kind: "capture",
       endpoint: "https://mend.example.com/session/s1",
@@ -201,7 +201,7 @@ describe("buildCreateWorkspaceRequest", () => {
       config,
     );
     expect(payload.repository).toBe("workspace");
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.sources.workspace).toEqual({
       kind: "capture",
       endpoint: "https://mend.example.com/session/s1",
@@ -252,7 +252,7 @@ describe("buildCreateWorkspaceRequest", () => {
         { source: { kind: "mount", path: worktree }, harness: opencode() },
         config,
       );
-      const spec = payload.spec as unknown as SpecShape;
+      const spec: SpecShape = payload.spec;
 
       expect(spec.sources.mounts).toEqual([
         { hostPath: repository, mountPath: repository, readOnly: false },
@@ -266,7 +266,7 @@ describe("buildCreateWorkspaceRequest", () => {
         },
         config,
       );
-      const existingSpec = withExistingBind.payload.spec as unknown as SpecShape;
+      const existingSpec: SpecShape = withExistingBind.payload.spec;
       expect(existingSpec.sources.mounts).toHaveLength(1);
 
       expect(() =>
@@ -296,7 +296,7 @@ describe("buildCreateWorkspaceRequest", () => {
       },
       config,
     );
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.sources.mounts).toEqual([
       // No readOnly key: the blueprint default (read-only) applies server-side.
       { hostPath: "/srv/store/_references/effect", mountPath: "/workspace/ref/effect" },
@@ -309,7 +309,7 @@ describe("buildCreateWorkspaceRequest", () => {
       { source: { kind: "mount", path: "/srv/store/worktrees/session-1" }, harness: opencode() },
       config,
     );
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.sources.mounts).toBeUndefined();
   });
 
@@ -340,7 +340,7 @@ describe("buildCreateWorkspaceRequest", () => {
       { repository: "github.com/acme/billing-service", harness: opencode() },
       config,
     );
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.credentials).toBeUndefined();
   });
 
@@ -353,7 +353,7 @@ describe("buildCreateWorkspaceRequest", () => {
       },
       config,
     );
-    const spec = payload.spec as unknown as SpecShape;
+    const spec: SpecShape = payload.spec;
     expect(spec.credentials).toEqual({
       profileId: "prof_123",
       claude: "default",
@@ -404,7 +404,7 @@ describe("dotfiles and shell lowering", () => {
       },
       config,
     );
-    const spec = payload.spec as unknown as DotfilesSpecShape;
+    const spec: DotfilesSpecShape = payload.spec;
     expect(spec.sources.inputs).toEqual([
       {
         id: "dotfiles",
@@ -433,7 +433,7 @@ describe("dotfiles and shell lowering", () => {
       },
       config,
     );
-    const spec = payload.spec as unknown as DotfilesSpecShape;
+    const spec: DotfilesSpecShape = payload.spec;
     expect(spec.runtime?.dotfilesArchives).toEqual([
       { data, manager: "copy", bootstrap: false },
       { data },
@@ -500,7 +500,7 @@ describe("workspace env lowering", () => {
       },
       config,
     );
-    const spec = payload.spec as unknown as EnvSpecShape;
+    const spec: EnvSpecShape = payload.spec;
     expect(spec.runtime?.userEnv).toEqual({ APP_MODE: "review", EMPTY_VALUE: "", ZULU: "last" });
     expect(Object.keys(spec.runtime?.userEnv ?? {})).toEqual(["APP_MODE", "EMPTY_VALUE", "ZULU"]);
   });
@@ -510,7 +510,7 @@ describe("workspace env lowering", () => {
       { repository: "github.com/acme/app", harness: opencode(), env: {} },
       config,
     );
-    const spec = payload.spec as unknown as EnvSpecShape;
+    const spec: EnvSpecShape = payload.spec;
     expect(spec.runtime).toBeUndefined();
   });
 
@@ -525,7 +525,7 @@ describe("workspace env lowering", () => {
       },
       config,
     );
-    const spec = payload.spec as unknown as EnvSpecShape;
+    const spec: EnvSpecShape = payload.spec;
     expect(spec.runtime?.userEnv).toEqual({ APP_MODE: "review" });
     expect(spec.runtime?.dotfilesArchives).toEqual([{ data }]);
   });

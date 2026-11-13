@@ -15,6 +15,8 @@ A copy works until its access token expires and cannot spend, rotate or revoke t
 2026-10-01 against Claude Code 2.1.286 and Codex 0.159.2.
 */
 
+import { Predicate } from "effect";
+
 import type { CodexCredentialPayload } from "./payloads.js";
 
 /** Stands in for Codex's refresh token in every copy; never a token any provider issues. */
@@ -31,20 +33,20 @@ const parseObject = (raw: string, what: string): Record<string, unknown> => {
   } catch {
     throw new CredentialCopyError(`${what} is not JSON`);
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!Predicate.isObject(value)) {
     throw new CredentialCopyError(`${what} is not a JSON object`);
   }
-  return value as Record<string, unknown>;
+  return value;
 };
 
 /** A Claude session file whose holder cannot refresh it: `claudeAiOauth` without `refreshToken`. */
 export const claudeCredentialsCopy = (credentialsJson: string): string => {
   const document = parseObject(credentialsJson, "the Claude credentials file");
   const grant = document["claudeAiOauth"];
-  if (typeof grant !== "object" || grant === null || Array.isArray(grant)) {
+  if (!Predicate.isObject(grant)) {
     throw new CredentialCopyError("the Claude credentials file has no claudeAiOauth grant");
   }
-  const { refreshToken: _refreshToken, ...withoutRefresh } = grant as Record<string, unknown>;
+  const { refreshToken: _refreshToken, ...withoutRefresh } = grant;
   return JSON.stringify({ ...document, claudeAiOauth: withoutRefresh });
 };
 
@@ -86,12 +88,12 @@ export const codexAuthJsonCopy = (authJson: string): string => {
   const tokens = document["tokens"];
   // An API-key login has no tokens and nothing to refresh: it is its own copy.
   if (tokens === null || tokens === undefined) return JSON.stringify(document);
-  if (typeof tokens !== "object" || Array.isArray(tokens)) {
+  if (!Predicate.isObject(tokens)) {
     throw new CredentialCopyError("the Codex auth.json has malformed tokens");
   }
   return JSON.stringify({
     ...document,
-    tokens: { ...(tokens as Record<string, unknown>), refresh_token: CODEX_COPY_REFRESH_TOKEN },
+    tokens: { ...tokens, refresh_token: CODEX_COPY_REFRESH_TOKEN },
   });
 };
 
@@ -137,8 +139,8 @@ export const chatgptLoginEntry = (authJson: string): string => {
 export const claudeCredentialsCanRefresh = (credentialsJson: string): boolean => {
   try {
     const grant = parseObject(credentialsJson, "the Claude credentials file")["claudeAiOauth"];
-    if (typeof grant !== "object" || grant === null) return false;
-    const refreshToken = (grant as Record<string, unknown>)["refreshToken"];
+    if (!Predicate.isObject(grant)) return false;
+    const refreshToken = grant["refreshToken"];
     return typeof refreshToken === "string" && refreshToken !== "";
   } catch {
     return false;
@@ -149,8 +151,8 @@ export const claudeCredentialsCanRefresh = (credentialsJson: string): boolean =>
 export const codexAuthJsonCanRefresh = (authJson: string): boolean => {
   try {
     const tokens = parseObject(authJson, "the Codex auth.json")["tokens"];
-    if (typeof tokens !== "object" || tokens === null) return false;
-    const refreshToken = (tokens as Record<string, unknown>)["refresh_token"];
+    if (!Predicate.isObject(tokens)) return false;
+    const refreshToken = tokens["refresh_token"];
     return (
       typeof refreshToken === "string" &&
       refreshToken !== "" &&

@@ -5,7 +5,7 @@
  *
  *   SEALANT_SMOKE_BASE_URL=http://127.0.0.1:4000 pnpm --filter @sealant/sdk test
  */
-import { Effect } from "effect";
+import { Effect, Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { SealantApiClient } from "./effect/api-client.js";
@@ -31,8 +31,9 @@ const createRunViaApi = async (): Promise<string | undefined> => {
   if (!response.ok) {
     return undefined;
   }
-  const body = (await response.json()) as { readonly runId: string };
-  return body.runId;
+  const body: unknown = await response.json();
+  const runId = Predicate.isObject(body) ? body["runId"] : undefined;
+  return typeof runId === "string" ? runId : undefined;
 };
 
 describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-plane API)", () => {

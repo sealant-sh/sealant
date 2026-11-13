@@ -549,7 +549,13 @@ interface Core {
 const realFetch = globalThis.fetch;
 const core = async (vm: Vm, t: BoatExecutionTarget, agent: Agent): Promise<Core> => {
   vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) =>
-    realFetch(String(input).replace(HOSTED_ORIGIN, `http://127.0.0.1:${String(agent.port)}`), init),
+    realFetch(
+      (input instanceof Request ? input.url : input.toString()).replace(
+        HOSTED_ORIGIN,
+        `http://127.0.0.1:${String(agent.port)}`,
+      ),
+      init,
+    ),
   );
   const probe = { healthy: true };
   const runtime = await Effect.runPromise(

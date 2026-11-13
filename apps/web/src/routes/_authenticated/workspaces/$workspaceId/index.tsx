@@ -44,26 +44,6 @@ interface WorkspaceSummary {
   readonly spec?: NewWorkspace;
 }
 
-interface WorkspaceAttemptSummary {
-  readonly attemptId: string;
-  readonly relation: string;
-  readonly triggerType: string;
-  readonly status: WorkspaceStatus;
-  readonly createdAt: string;
-}
-
-interface WorkspaceEvent {
-  readonly eventId: string;
-  readonly type: string;
-  readonly occurredAt: string;
-  readonly message?: string | undefined;
-}
-
-interface WorkspaceSummaryLoaderData {
-  readonly attempts: readonly WorkspaceAttemptSummary[];
-  readonly events: readonly WorkspaceEvent[];
-}
-
 function toWorkspaceSummary(input: {
   readonly workspaceId: string;
   readonly name: string;
@@ -123,7 +103,7 @@ export const Route = createFileRoute("/_authenticated/workspaces/$workspaceId/")
 
 function WorkspaceSummaryPage() {
   const { workspaceId } = Route.useParams();
-  const { attempts, events } = Route.useLoaderData() as WorkspaceSummaryLoaderData;
+  const { attempts, events } = Route.useLoaderData();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const workspaceQueryOptions = trpc.workspace.byId.queryOptions({ workspaceId });
@@ -761,7 +741,7 @@ function isPrivateOrLocalSshHost(host: string): boolean {
 
   const parts = host.split(".");
 
-  if (parts.length !== 4 || parts.some((part) => /^\d+$/.test(part) === false)) {
+  if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part))) {
     return false;
   }
 

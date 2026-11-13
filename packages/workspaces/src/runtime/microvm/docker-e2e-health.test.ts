@@ -15,7 +15,7 @@ describe("captureAuthenticatedAgentHealthBeforeTermination", () => {
   it("captures strict authenticated Docker failure health without retaining credentials", async () => {
     const events: PreTerminationHealthEvidence[] = [];
     const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
-      expect(String(url)).toBe(
+      expect(url instanceof Request ? url.url : url.toString()).toBe(
         "https://microvm-1.lambda-microvm.eu-central-1.on.aws/sealant/health",
       );
       const headers = new Headers(init?.headers);

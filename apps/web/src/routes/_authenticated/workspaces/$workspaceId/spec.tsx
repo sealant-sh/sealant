@@ -20,14 +20,7 @@ export const Route = createFileRoute("/_authenticated/workspaces/$workspaceId/sp
 });
 
 function WorkspaceSpecPage() {
-  const workspace = Route.useLoaderData() as {
-    workspaceId: string;
-    name: string;
-    status: "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped" | "retained";
-    repository?: string | undefined;
-    tag?: string | undefined;
-    spec?: unknown;
-  };
+  const workspace = Route.useLoaderData();
 
   return (
     <WorkspaceDetailSection

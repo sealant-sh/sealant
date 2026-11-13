@@ -130,7 +130,8 @@ describe("lowerMountIntents", () => {
       lowerMountIntents([intent("/nowhere/a", "/m")], mappings);
     } catch (error) {
       expect(error).toBeInstanceOf(MountLoweringError);
-      expect((error as MountLoweringError).code).toBe("unsupported-runtime-requirement");
+      if (!(error instanceof MountLoweringError)) throw error;
+      expect(error.code).toBe("unsupported-runtime-requirement");
       return;
     }
     throw new Error("expected a MountLoweringError");

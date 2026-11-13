@@ -257,8 +257,8 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
         "h-10 w-10 rounded-md border border-sidebar-border bg-background text-sidebar-foreground transition-colors duration-200 hover:border-input hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
         className,
       )}
-      onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
-        onClick?.(event as Parameters<NonNullable<typeof onClick>>[0]);
+      onClick={(event) => {
+        onClick?.(event);
         toggleSidebar();
       }}
       {...props}

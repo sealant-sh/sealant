@@ -117,7 +117,7 @@ describe.skipIf(DATABASE_URL === undefined)("run-record retention (Postgres)", (
           .select({ value: count() })
           .from(table)
           .where(eq(table.runId, runId));
-        counts.push(Number(row?.value ?? 0));
+        counts.push(row?.value ?? 0);
       }
       return counts;
     });

@@ -15,6 +15,7 @@
  * run's exit observed.
  */
 import { makeSealantDBLayer, runs, SealantDB, user, workspaces } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
 import {
   captureRun,
   ExecutionRunResolverLive,
@@ -23,6 +24,13 @@ import {
   TelemetryIngester,
   TelemetryIngesterLive,
 } from "@sealant/telemetry";
+import {
+  capabilitiesReport,
+  daemonEvent,
+  execAccepted,
+  healthReport,
+  type DaemonEventInit,
+} from "@sealant/telemetry/testing";
 import { SealantRuntime, type SealantSession, type SealantTarget } from "@sealant/workspaces";
 import { Deferred, Effect, Layer, Logger, PubSub, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -44,10 +52,12 @@ const BURST = 256;
 const BURSTS = 40;
 const CHUNKS = BURST * BURSTS;
 
-// The protobuf message type carries `$typeName` brands a plain object cannot; the normalizer reads
-// only these fields.
-const envelope = (runtimeId: string, sequence: number, payload: unknown): EventEnvelope =>
-  ({
+const envelope = (
+  runtimeId: string,
+  sequence: number,
+  payload: NonNullable<DaemonEventInit["payload"]>,
+): EventEnvelope =>
+  daemonEvent({
     schemaVersion: 1,
     eventId: `evt_${runtimeId}_${sequence.toString(16)}`,
     runtimeId,
@@ -59,7 +69,7 @@ const envelope = (runtimeId: string, sequence: number, payload: unknown): EventE
     captureMethod: 1,
     confidence: 1,
     payload,
-  }) as unknown as EventEnvelope;
+  });
 
 /** One exec as the daemon reports it: start, output, exit 0. */
 const execEvents = (runtimeId: string): readonly EventEnvelope[] => [
@@ -95,21 +105,23 @@ const daemonFor = (runtimeId: string) =>
     const runtime = {
       openForwardConnection: () => Effect.die("forwards are unused here"),
       connect: () =>
-        Effect.succeed({
-          health: Effect.succeed({ runtimeId }),
-          capabilities: Effect.succeed({ supports: ["exec.user"] }),
-          exec: () => Effect.succeed({ processId: PROC, pid: 7 }),
-          events: Stream.unwrap(
-            Effect.gen(function* () {
-              const subscription = yield* PubSub.subscribe(pubsub);
-              subscribers += 1;
-              if (subscribers === 2) yield* Deferred.succeed(bothSubscribed, undefined);
-              return Stream.fromSubscription(subscription).pipe(
-                Stream.takeUntil((event) => event.sequence === last),
-              );
-            }),
-          ),
-        } as unknown as SealantSession),
+        Effect.succeed(
+          fakeService<SealantSession>({
+            health: Effect.succeed(healthReport(runtimeId)),
+            capabilities: Effect.succeed(capabilitiesReport(["exec.user"])),
+            exec: () => Effect.succeed(execAccepted(PROC, 7)),
+            events: Stream.unwrap(
+              Effect.gen(function* () {
+                const subscription = yield* PubSub.subscribe(pubsub);
+                subscribers += 1;
+                if (subscribers === 2) yield* Deferred.succeed(bothSubscribed, undefined);
+                return Stream.fromSubscription(subscription).pipe(
+                  Stream.takeUntil((event) => event.sequence === last),
+                );
+              }),
+            ),
+          }),
+        ),
     };
     const publish = Effect.gen(function* () {
       yield* Deferred.await(bothSubscribed);

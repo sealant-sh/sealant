@@ -7,11 +7,22 @@ import { NOT_A_PERSON, RESOURCE_DOMAIN_ID_PREFIX } from "@sealant/api-contracts"
 import {
   AccessTokenRepo,
   WorkspaceRepo,
+  WorkspaceRepoUnexpectedError,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceSessionRepo,
+  WorkspaceSessionRepoUnexpectedError,
+  type WorkspaceSession,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import {
+  accessTokenRow,
+  runtimeInstanceRow,
+  sessionRow,
+  workspaceRow,
+} from "@sealant/db/testing/rows";
 import { ForwardDialError, SealantApiError } from "@sealant/sdk";
 import { openForwardV2 } from "@sealant/sdk/internal/forward";
+import { capabilitiesReport } from "@sealant/telemetry/testing";
 import {
   SealantControlError,
   SealantForwardBindingUnsupported,
@@ -20,6 +31,7 @@ import {
   type SealantForwardConnection,
   type SealantForwardConnectionOptions,
   SealantRuntime,
+  type SealantSession,
   SealantRuntimeLive,
   type SealantTarget,
   SealantTransport,
@@ -223,7 +235,7 @@ const sessions: Record<
   {
     readonly workspaceId: string;
     readonly ownerUserId: string;
-    readonly status: string;
+    readonly status: WorkspaceSession["status"];
     readonly daemonSessionId: string | null;
   }
 > = {
@@ -298,107 +310,142 @@ const slowLookup = Effect.promise(
 );
 
 const fakes = Layer.mergeAll(
-  Layer.succeed(WorkspaceRepo, {
-    getWorkspaceById: (id: string) =>
-      id === "wks_broken"
-        ? Effect.fail(new Error("connection terminated"))
-        : (id === "wks_slow" ? slowLookup : Effect.void).pipe(
-            Effect.as(workspaces[id] === undefined ? undefined : { id, ...workspaces[id] }),
-          ),
-  } as never),
-  Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-    getRuntimeInstanceByRunId: (runId: string) =>
-      Effect.succeed({
-        runId,
-        status: "ready",
-        adapter: runId === "run_k8s" ? "k8s" : "docker",
-        resourceId: runId.replace("run_", "ctr_"),
-        reference: "ctr",
-        endpoint: null,
-      }),
-  } as never),
-  Layer.succeed(AccessTokenRepo, {
-    getTokenByHash: (hash: string) =>
-      Effect.succeed(
-        hash === createHash("sha256").update(TOKEN_WITHOUT_EXEC).digest("hex")
-          ? {
-              ownerUserId: OWNER,
-              workspaceId: null,
-              scopes: ["session:read"],
-              revokedAt: null,
-              expiresAt: null,
-            }
-          : undefined,
-      ),
-  } as never),
-  Layer.succeed(WorkspaceSessionRepo, {
-    getSessionById: (id: string) =>
-      id === "ses_broken"
-        ? Effect.fail(new Error("connection terminated"))
-        : Effect.succeed(sessions[id] === undefined ? undefined : { id, ...sessions[id] }),
-  } as never),
-  Layer.succeed(SealantRuntime, {
-    connect: (target: SealantTarget) =>
-      Effect.succeed({
-        openForward: (port: number) =>
-          Effect.fail(DAEMON_FAILURES[port]?.() ?? controlError(undefined)),
-        capabilities: Effect.sync(() => {
-          const containerId = target.kind === "docker-exec" ? target.containerId : "";
-          capabilitiesAsked.push(containerId);
-          return { supports: containerId === "ctr_old_daemon" ? [] : ["forward.owner"] };
-        }),
-      }),
-    openForwardConnection: (target: SealantTarget, options: SealantForwardConnectionOptions) => {
-      const containerId = target.kind === "docker-exec" ? target.containerId : undefined;
-      if (containerId === "ctr_lost") {
-        return runtimeLosingItsConnection.openForwardConnection(target, options);
-      }
-      if (containerId === "ctr_down") {
-        return Effect.fail(
-          new TransportError({ operation: "open", message: "no such container", cause: null }),
-        );
-      }
-      ownerSessionsAsked.push(options.ownerSessionId);
-      const opened = (
-        channel: SealantForwardChannel,
-      ): Effect.Effect<SealantForwardConnection, SealantForwardBindingUnsupported> =>
-        options.port === DAEMON_WITHOUT_BINDING_PORT && options.ownerSessionId !== undefined
+  Layer.succeed(
+    WorkspaceRepo,
+    fakeService({
+      getWorkspaceById: (id: string) =>
+        id === "wks_broken"
           ? Effect.fail(
-              new SealantForwardBindingUnsupported({ ownerSessionId: options.ownerSessionId }),
+              new WorkspaceRepoUnexpectedError({
+                operation: "getWorkspaceById",
+                message: "connection terminated",
+                cause: new Error("connection terminated"),
+              }),
             )
-          : Effect.succeed({
-              channel,
-              bound:
-                options.ownerSessionId === undefined ||
-                options.port === RUNTIME_THAT_DROPS_THE_ECHO_PORT
-                  ? { kind: "port" }
-                  : { kind: "session", daemonSessionId: options.ownerSessionId },
-            });
-      return Effect.acquireRelease(
-        Effect.sync(() => (daemonConnects += 1)),
-        () => Effect.sync(() => (daemonReleases += 1)),
-      ).pipe(
-        Effect.andThen(
-          (): Effect.Effect<
-            SealantForwardConnection,
-            SealantError | SealantForwardBindingUnsupported
-          > => {
-            if (options.port === SLOW_DIAL_PORT) {
-              dialsStarted += 1;
-              return Effect.never;
-            }
-            if (options.port === STALLED_PORT) return opened(stalledChannel());
-            if (options.port === FLOOD_PORT) return opened(floodChannel());
-            if (options.port === FAILING_PORT) return opened(floodThenFailChannel());
-            if (options.port === BROKEN_PUMP_PORT) return opened(brokenPumpChannel());
-            if (options.port === ENDS_AFTER_UPLOAD_PORT) return opened(endsAfterUploadChannel());
-            const failure = DAEMON_FAILURES[options.port];
-            return failure === undefined ? opened(echoChannel()) : Effect.fail(failure());
-          },
+          : (id === "wks_slow" ? slowLookup : Effect.void).pipe(
+              Effect.as(
+                workspaces[id] === undefined ? undefined : workspaceRow({ id, ...workspaces[id] }),
+              ),
+            ),
+    }),
+  ),
+  Layer.succeed(
+    WorkspaceRuntimeInstanceRepo,
+    fakeService({
+      getRuntimeInstanceByRunId: (runId: string) =>
+        Effect.succeed(
+          runtimeInstanceRow({
+            runId,
+            status: "ready",
+            adapter: runId === "run_k8s" ? "k8s" : "docker",
+            resourceId: runId.replace("run_", "ctr_"),
+            reference: "ctr",
+            endpoint: null,
+          }),
         ),
-      );
-    },
-  } as never),
+    }),
+  ),
+  Layer.succeed(
+    AccessTokenRepo,
+    fakeService({
+      getTokenByHash: (hash: string) =>
+        Effect.succeed(
+          hash === createHash("sha256").update(TOKEN_WITHOUT_EXEC).digest("hex")
+            ? accessTokenRow({
+                ownerUserId: OWNER,
+                workspaceId: null,
+                scopes: ["session:read"],
+                revokedAt: null,
+                expiresAt: null,
+              })
+            : undefined,
+        ),
+    }),
+  ),
+  Layer.succeed(
+    WorkspaceSessionRepo,
+    fakeService({
+      getSessionById: (id: string) =>
+        id === "ses_broken"
+          ? Effect.fail(
+              new WorkspaceSessionRepoUnexpectedError({
+                operation: "getSessionById",
+                message: "connection terminated",
+                cause: new Error("connection terminated"),
+              }),
+            )
+          : Effect.succeed(
+              sessions[id] === undefined ? undefined : sessionRow({ id, ...sessions[id] }),
+            ),
+    }),
+  ),
+  Layer.succeed(
+    SealantRuntime,
+    fakeService({
+      connect: (target: SealantTarget) =>
+        Effect.succeed(
+          fakeService<SealantSession>({
+            openForward: (port: number) =>
+              Effect.fail(DAEMON_FAILURES[port]?.() ?? controlError(undefined)),
+            capabilities: Effect.sync(() => {
+              const containerId = target.kind === "docker-exec" ? target.containerId : "";
+              capabilitiesAsked.push(containerId);
+              return capabilitiesReport(containerId === "ctr_old_daemon" ? [] : ["forward.owner"]);
+            }),
+          }),
+        ),
+      openForwardConnection: (target: SealantTarget, options: SealantForwardConnectionOptions) => {
+        const containerId = target.kind === "docker-exec" ? target.containerId : undefined;
+        if (containerId === "ctr_lost") {
+          return runtimeLosingItsConnection.openForwardConnection(target, options);
+        }
+        if (containerId === "ctr_down") {
+          return Effect.fail(
+            new TransportError({ operation: "open", message: "no such container", cause: null }),
+          );
+        }
+        ownerSessionsAsked.push(options.ownerSessionId);
+        const opened = (
+          channel: SealantForwardChannel,
+        ): Effect.Effect<SealantForwardConnection, SealantForwardBindingUnsupported> =>
+          options.port === DAEMON_WITHOUT_BINDING_PORT && options.ownerSessionId !== undefined
+            ? Effect.fail(
+                new SealantForwardBindingUnsupported({ ownerSessionId: options.ownerSessionId }),
+              )
+            : Effect.succeed({
+                channel,
+                bound:
+                  options.ownerSessionId === undefined ||
+                  options.port === RUNTIME_THAT_DROPS_THE_ECHO_PORT
+                    ? { kind: "port" }
+                    : { kind: "session", daemonSessionId: options.ownerSessionId },
+              });
+        return Effect.acquireRelease(
+          Effect.sync(() => (daemonConnects += 1)),
+          () => Effect.sync(() => (daemonReleases += 1)),
+        ).pipe(
+          Effect.andThen(
+            (): Effect.Effect<
+              SealantForwardConnection,
+              SealantError | SealantForwardBindingUnsupported
+            > => {
+              if (options.port === SLOW_DIAL_PORT) {
+                dialsStarted += 1;
+                return Effect.never;
+              }
+              if (options.port === STALLED_PORT) return opened(stalledChannel());
+              if (options.port === FLOOD_PORT) return opened(floodChannel());
+              if (options.port === FAILING_PORT) return opened(floodThenFailChannel());
+              if (options.port === BROKEN_PUMP_PORT) return opened(brokenPumpChannel());
+              if (options.port === ENDS_AFTER_UPLOAD_PORT) return opened(endsAfterUploadChannel());
+              const failure = DAEMON_FAILURES[options.port];
+              return failure === undefined ? opened(echoChannel()) : Effect.fail(failure());
+            },
+          ),
+        );
+      },
+    }),
+  ),
 );
 
 const serve = (options: {

@@ -21,6 +21,7 @@ import path from "node:path";
 
 import type { V1Secret } from "@kubernetes/client-node";
 import type { NewWorkspace } from "@sealant/validators";
+import { Predicate } from "effect";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { planWorkspaceImageBuild } from "../buildkit/index.js";
@@ -209,10 +210,12 @@ const bootedImage: Record<Exclude<RuntimeAdapterId, "boat">, () => Promise<Built
       },
     });
     await adapter.launch(launchInput);
-    const launch = bodies[0] as { image?: { digestReference?: string } } | undefined;
+    const launch = bodies[0];
+    const image = Predicate.isObject(launch) ? launch["image"] : undefined;
+    const booted = Predicate.isObject(image) ? image["digestReference"] : undefined;
     return {
       published: publishedImage.digestReference,
-      booted: launch?.image?.digestReference ?? "",
+      booted: typeof booted === "string" ? booted : "",
     };
   },
   microvm: async () => {

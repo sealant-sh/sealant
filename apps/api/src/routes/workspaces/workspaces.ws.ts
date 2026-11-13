@@ -30,7 +30,7 @@
  * Registered as a RAW route (HttpApi cannot express an upgrade).
  */
 import { SealantRuntime } from "@sealant/workspaces";
-import { Effect, Fiber } from "effect";
+import { Effect, Fiber, Predicate } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
@@ -149,8 +149,8 @@ export const WorkspaceForwardRoute = HttpRouter.add(
               return Effect.void;
             }
             try {
-              const frame = JSON.parse(data) as { readonly t?: string };
-              if (frame.t === "eof") {
+              const frame: unknown = JSON.parse(data);
+              if (Predicate.isObject(frame) && frame["t"] === "eof") {
                 forward.channel.end();
               }
             } catch {

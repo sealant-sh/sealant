@@ -67,7 +67,7 @@ export const stopInOnePass = async (stack: HarnessStack, run: Launch): Promise<S
       const view = await runtimeView(stack, run.runId);
       return stopped !== undefined &&
         view.allocation === "deleted" &&
-        (view.has_tunnel !== true || view.tunnel_released === true) &&
+        (!view.has_tunnel || view.tunnel_released === true) &&
         view.pin === "released" &&
         view.status === "stopped"
         ? true

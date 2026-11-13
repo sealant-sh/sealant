@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
@@ -704,7 +705,7 @@ describe("microvm agent guest-local Docker", () => {
       launchV2(agent, acceptedRequest),
       launchV2(agent, acceptedRequest),
     ]);
-    expect(concurrent.map(({ status }) => status).toSorted()).toEqual([200, 409]);
+    expect(concurrent.map(({ status }) => status).toSorted((a, b) => a - b)).toEqual([200, 409]);
     expect(await launchV2(agent)).toMatchObject({ status: 409 });
 
     await waitFor(async () => (await readLines(agent.probeRecord)).length > 0);
@@ -937,8 +938,15 @@ describe("microvm agent guest-local Docker", () => {
     expect(recovered).toMatchObject({ status: 200, body: { outcome: "restarted" } });
     await waitFor(async () => !processExists(dockerPid) && !processExists(descendantPid));
     await waitFor(async () => (await readLines(agent.recordFile)).length === 2);
-    const boots = (await readLines(agent.recordFile)).map(
-      (line) => JSON.parse(line) as { argv: string[]; env: Record<string, string> },
+    const boots = (await readLines(agent.recordFile)).map((line) =>
+      Schema.decodeUnknownSync(
+        Schema.fromJsonString(
+          Schema.Struct({
+            argv: Schema.Array(Schema.String),
+            env: Schema.Record(Schema.String, Schema.String),
+          }),
+        ),
+      )(line),
     );
     expect(boots.map((boot) => boot.argv)).toEqual([["boot"], ["boot", "--recovery"]]);
     // Both boots are told where the agent lists what the final sweep spares.

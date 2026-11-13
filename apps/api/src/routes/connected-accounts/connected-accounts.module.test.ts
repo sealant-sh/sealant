@@ -1,3 +1,4 @@
+import { connectedAccountRow } from "@sealant/db/testing/rows";
 import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -78,8 +79,10 @@ describe("normalizeSecret, claude", () => {
   });
 });
 
-const account = (overrides: Record<string, unknown> = {}) =>
-  ({
+const account = (
+  overrides: Partial<Parameters<typeof toConnectedAccountSummary>[0]> = {},
+): Parameters<typeof toConnectedAccountSummary>[0] => ({
+  ...connectedAccountRow({
     id: "cacc_claude",
     ownerUserId: "user_1",
     provider: "claude",
@@ -97,9 +100,10 @@ const account = (overrides: Record<string, unknown> = {}) =>
     invalidAt: null,
     archivedAt: null,
     credentialRevision: 1,
-    isDefault: false,
-    ...overrides,
-  }) as Parameters<typeof toConnectedAccountSummary>[0];
+  }),
+  isDefault: false,
+  ...overrides,
+});
 
 describe("toConnectedAccountSummary, credential freshness", () => {
   /**

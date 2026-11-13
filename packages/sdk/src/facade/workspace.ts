@@ -45,6 +45,7 @@ import {
   SealantError,
   SealantNotImplementedError,
 } from "../errors.js";
+import { specHarnessId } from "../internal/blueprint.js";
 import { elapsed } from "../internal/clock.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
@@ -569,8 +570,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     const details = await ctx.runtime.run(
       getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
     );
-    const spec = details.spec as { harness?: { id?: string } } | undefined;
-    const harnessId = spec?.harness?.id;
+    const harnessId = specHarnessId(details.spec);
     if (harnessId === undefined) {
       throw new SealantError(
         `Workspace ${init.id} has no harness in its spec; open a session with workspace.sessions.open(argv) instead.`,

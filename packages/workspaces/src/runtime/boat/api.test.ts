@@ -1202,6 +1202,7 @@ describe("Boat connection credentials", () => {
     expect(connection.url).toBe("wss://sample-8080.on.boat.dev/sealant/control");
     expect(JSON.stringify({ access, relay, connection })).not.toContain(token);
     expect(inspect(access)).not.toContain(token);
+    // oxlint-disable-next-line typescript/restrict-template-expressions -- checks what a template makes of a Redacted, which defines its own toString at runtime though its type does not say so.
     expect(`${access.cookie}`).toBe("[REDACTED]");
     expect(await connection.prepare()).toEqual({
       headers: { Cookie: `_port_auth=${token}`, Authorization: `Bearer ${"b".repeat(64)}` },

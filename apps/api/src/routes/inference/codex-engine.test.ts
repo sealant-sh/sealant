@@ -119,12 +119,14 @@ describe("codex engine", () => {
     expect(result.turn.usage).toEqual({ inputTokens: 12, outputTokens: 3 });
 
     // The fixture echoes its argv/env: assert the spawn contract in one pass.
-    const echoed = result.turn.json as {
-      argv: string[];
-      codexHome: string | null;
-      home: string | null;
-      env: string[];
-    };
+    const echoed = Schema.decodeUnknownSync(
+      Schema.Struct({
+        argv: Schema.Array(Schema.String),
+        codexHome: Schema.NullOr(Schema.String),
+        home: Schema.NullOr(Schema.String),
+        env: Schema.Array(Schema.String),
+      }),
+    )(result.turn.json);
     expect(echoed.codexHome).toBe(codexHome);
     expect(echoed.home).toBe(codexHome);
     for (const name of Object.keys(hostOnly)) {

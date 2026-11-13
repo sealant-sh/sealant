@@ -9,6 +9,8 @@
  */
 import { createHash } from "node:crypto";
 
+import * as Rec from "effect/Record";
+
 export interface BudgetLimits {
   /** Hard request ceiling for one service key, or allowance for another principal. */
   readonly principalRequestsPerMinute: number;
@@ -137,7 +139,7 @@ export const budgetMessage = (decision: Extract<BudgetDecision, { allowed: false
 
 /** Which budgets are off, for the start-up log. */
 export const budgetsOff = (limits: BudgetLimits): ReadonlyArray<keyof BudgetLimits> =>
-  (Object.keys(WORDS) as Array<keyof BudgetLimits>).filter((name) => limits[name] <= 0);
+  Rec.keys(WORDS).filter((name) => limits[name] <= 0);
 
 /** Seconds until the next UTC midnight: when a daily budget has room again. */
 export const secondsUntilUtcMidnight = (now: Date): number => {

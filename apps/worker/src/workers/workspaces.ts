@@ -425,7 +425,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   };
   await reportBoatLaunch();
   const boatLaunchReportTimer =
-    boatAssembly === undefined ? undefined : setInterval(reportBoatLaunch, 60_000);
+    boatAssembly === undefined ? undefined : setInterval(() => void reportBoatLaunch(), 60_000);
   boatLaunchReportTimer?.unref();
   const targetOptions = {
     ...baseTargetOptions,
@@ -1218,7 +1218,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             }
           },
         });
-  const boatSweepTimer = boatAssembly === undefined ? undefined : setInterval(runBoatSweep, 30_000);
+  const boatSweepTimer =
+    boatAssembly === undefined ? undefined : setInterval(() => void runBoatSweep(), 30_000);
   boatSweepTimer?.unref();
   void runBoatSweep();
   // A restart dropped every tunnel carrier this worker held. The sweep above reopens a run's only
