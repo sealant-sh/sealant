@@ -9,9 +9,9 @@
  * `progress` with the cumulative bytes and frames it has consumed; a sender keeps what it has sent
  * within the last `progress` plus the window, and sends nothing before the first `progress`
  * (`{0,0}`), which opens the receiver's window. A receiver resets a sender that goes past it.
- * `fin` ends one direction with the totals sent; `reset` ends both at once. Core sends a `progress`
- * naming exactly what reached the workspace before its `fin`, so a client can tell whether
- * everything it wrote arrived. {@link ForwardFlow} keeps this ledger for either side.
+ * `fin` ends one direction with the totals sent; `reset` ends both at once. sealant sends a
+ * `progress` naming exactly what reached the workspace before its `fin`, so a client can tell
+ * whether everything it wrote arrived. {@link ForwardFlow} keeps this ledger for either side.
  */
 import { Option, Schema } from "effect";
 
@@ -92,8 +92,8 @@ export const forwardReadyFrameSchema = Schema.Struct({
 export type ForwardReadyFrame = typeof forwardReadyFrameSchema.Type;
 
 /**
- * Decoded with any `reason`, so a client keeps a refusal from a Core newer than itself, with the
- * status and message that Core sent.
+ * Decoded with any `reason`, so a client keeps a refusal from a sealant newer than itself, with the
+ * status and message that sealant sent.
  */
 export const forwardRefusedFrameSchema = Schema.Struct({
   t: Schema.Literal("refused"),
@@ -162,7 +162,7 @@ export const forwardResetReasonSchema = Schema.Literals([
 ]);
 export type ForwardResetReason = typeof forwardResetReasonSchema.Type;
 
-/** Decoded with any `reason`, so a client keeps a reset from a Core newer than itself. */
+/** Decoded with any `reason`, so a client keeps a reset from a sealant newer than itself. */
 export const forwardResetFrameSchema = Schema.Struct({
   t: Schema.Literal("reset"),
   reason: Schema.String,
@@ -231,8 +231,8 @@ export function* forwardFrames(chunk: Uint8Array): Generator<Uint8Array> {
 
 /**
  * Both directions of an open v2 forward as one side sees them, with no I/O: what it sent against
- * what its peer consumed, and what it received and consumed against what it granted. Core and the
- * SDK each drive one from their socket.
+ * what its peer consumed, and what it received and consumed against what it granted. sealant and
+ * the SDK each drive one from their socket.
  *
  * A grant is made when its `progress` is sent, so a side that holds a `progress` back while its
  * socket is backed up also holds back its peer, and the next `progress` it sends names the latest

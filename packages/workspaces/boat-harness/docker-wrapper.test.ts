@@ -19,7 +19,7 @@ const env = {
 const docker = async (...args: string[]) => (await run(wrapper, args, { env })).stdout.trim();
 
 describe("bin/docker", () => {
-  it("labels every container, network and volume Core creates with the run", async () => {
+  it("labels every container, network and volume sealant creates with the run", async () => {
     const label = "--label sh.sealant.boat-harness=abc12345";
     expect(await docker("create", "--name", "x", "image")).toBe(`create ${label} --name x image`);
     expect(await docker("run", "-d", "image")).toBe(`run ${label} -d image`);

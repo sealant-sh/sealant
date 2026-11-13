@@ -29,7 +29,7 @@
 //   node next-version.mjs --dist-tag <package> <tag>        # the tag's version, or nothing
 //
 // The next builds already handed out are the repository's vX.Y.Z-next.N tags, plus the versions of
-// `--npm <package>` (Core and sealantd publish without tags).
+// `--npm <package>` (sealant and sealantd publish without tags).
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 

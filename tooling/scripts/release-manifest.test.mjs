@@ -1,6 +1,6 @@
 // The release manifest release.yml writes, and the jobs that write and read it: run as written where
 // they are shell, against stand-in commands. Ported from sealant-sh/mend
-// scripts/release-manifest.test.mjs, for Core's four images.
+// scripts/release-manifest.test.mjs, for sealant's four images.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";

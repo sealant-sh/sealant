@@ -6,7 +6,7 @@ import type { CredentialCipherService } from "@sealant/credentials";
  * they started). Every path that keeps one records it (`CaptureDrainLedger.markRetained`); this
  * sweep works through them on a backoff, loudly:
  *
- *  1. **Evidence first.** If the one preservation policy now lets the executor go (Core observed
+ *  1. **Evidence first.** If the one preservation policy now lets the executor go (sealant observed
  *     its final flush complete, the control plane attested a sealed final capture of it, the
  *     owner discarded it, nothing of it is left), it is removed and the retention ends.
  *  2. **Recover.** Otherwise the runtime is asked to bring it back on its own disk
@@ -526,11 +526,11 @@ const recoverOne = (
       // ORDINARY boot: it restores the store's head over the staging and edits this disk holds,
       // and runs the lifecycle steps and the harness again. Unknown is treated the same (fail
       // closed). Nothing is started; the executor stays retained with its disk.
-      const build = instance.daemonImage ?? "a daemon build Core did not record";
+      const build = instance.daemonImage ?? "a daemon build sealant did not record";
       const why =
         instance.daemonRecoveryBoot === false
           ? `its daemon (${build}) predates sealantd's recovery boot`
-          : `Core cannot tell whether its daemon (${build}) has sealantd's recovery boot`;
+          : `sealant cannot tell whether its daemon (${build}) has sealantd's recovery boot`;
       yield* (row.recoveryAttempts === 0 ? Effect.logError : Effect.logWarning)(
         `${prefix}: not recoverable in place · ${why}. Restarting it would run its ordinary boot (restore, dotfiles, lifecycle steps, harness) over the work its disk holds, so it is kept and not started. Recover its disk by hand, or discard it.`,
       );

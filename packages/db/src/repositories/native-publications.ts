@@ -380,7 +380,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           // A stored Boat account's images are reserved under its row, the row its removal and its
           // wallet change take `for update`: none is reserved, or built, once its removal was
           // asked, and each is recorded in the wallet the account creates in now. An account whose
-          // wallet Core has not resolved creates nothing. The install's own account has no row.
+          // wallet sealant has not resolved creates nothing. The install's own account has no row.
           const owner = yield* deploymentCreateWallet(db, key.deploymentId);
           if (owner.removing || owner.wallet.kind === "unresolved")
             return yield* Effect.fail(
@@ -420,7 +420,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
               );
             return record;
           }
-          // The recipe's image in this wallet: one recorded in another wallet, or one Core cannot
+          // The recipe's image in this wallet: one recorded in another wallet, or one sealant cannot
           // reach, is never used here; a launch builds its own.
           const [active] = yield* db
             .select()

@@ -103,7 +103,7 @@ const file = (
  * The one definition of the agent manifest digest: over the path, mode and bytes digest of every
  * file the agent is (its modules, the daemon it starts, the unit and drop-in that run it), in
  * path order. The image writes it to `manifest.json`; the builder's receipt carries the same
- * value; Core sends it in every bind request, and the bind CLI refuses any other.
+ * value; sealant sends it in every bind request, and the bind CLI refuses any other.
  */
 export const boatAgentManifestDigest = (
   files: ReadonlyArray<Pick<NativeRecipeFile, "path" | "mode" | "sha256">>,

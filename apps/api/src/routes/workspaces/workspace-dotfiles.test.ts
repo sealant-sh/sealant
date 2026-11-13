@@ -1,8 +1,8 @@
 /**
  * `POST /v1/workspaces/:id/dotfiles` (docs/connected-accounts-design.md §6g): a person's dotfiles
  * applied as their user. The request is checked before the executor is reached (a service key, never
- * root, a home Core writes into and nobody else's logins hold, a URL with no credential, something
- * to apply), the daemon must report `dotfiles.user`, the stage script's
+ * root, a home sealant writes into and nobody else's logins hold, a URL with no credential,
+ * something to apply), the daemon must report `dotfiles.user`, the stage script's
  * refusals become stable codes, the archives go over stdin (never into the script or the job), and
  * a `dotfiles` run is queued naming only the staged directory. Driven against fake repositories, a
  * recording stage channel and a recording publisher; nothing reaches an executor.

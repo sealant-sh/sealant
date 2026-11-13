@@ -58,7 +58,7 @@ export class SealantApiError extends SealantError {
   readonly receipt?: InferenceReceipt;
   /** A Boat key refusal (`boat-key-refused`, `boat-key-unverified`): why, as Boat said. */
   readonly boat?: BoatFailure;
-  /** `boat-key-missing-permissions`: the Boat permissions Core needs that the key lacks. */
+  /** `boat-key-missing-permissions`: the Boat permissions sealant needs that the key lacks. */
   readonly missingPermissions?: readonly string[];
   /** `boat-key-missing-permissions`: what the check observed of the refused key. */
   readonly boatKeyReport?: BoatKeyReport;
@@ -104,10 +104,10 @@ export class SealantApiError extends SealantError {
 }
 
 /**
- * A Boat workspace that did not become ready because Boat refused, or did not answer, a call Core
- * made for it: its VM create, its image build, a saved snapshot. `boat` says why, as a kind from a
- * closed set (`key-expired`, `permission-missing`, `billing-required`, `rate-limited`, …) with
- * Boat's own code, message and request id, and when to retry or where to pay when Boat said.
+ * A Boat workspace that did not become ready because Boat refused, or did not answer, a call
+ * sealant made for it: its VM create, its image build, a saved snapshot. `boat` says why, as a kind
+ * from a closed set (`key-expired`, `permission-missing`, `billing-required`, `rate-limited`, …)
+ * with Boat's own code, message and request id, and when to retry or where to pay when Boat said.
  * `boat.retryable` is false when the same key and request cannot succeed later. `code` is the
  * same as for any other workspace that did not become ready (`workspace_not_ready`).
  */
@@ -164,8 +164,8 @@ export class SealantBudgetExceededError extends SealantApiError {
 }
 
 /**
- * Why a workspace forward did not open. Core names every refusal it sends. The SDK adds
- * `unrecognized-refusal` (Core sent a reason newer than this SDK; it is kept in `wireReason`),
+ * Why a workspace forward did not open. sealant names every refusal it sends. The SDK adds
+ * `unrecognized-refusal` (sealant sent a reason newer than this SDK; it is kept in `wireReason`),
  * `protocol-unsupported` (the control plane predates typed refusals, or answered with something
  * unreadable) and `transport-unavailable` (no answer could be read at all).
  */
@@ -202,7 +202,7 @@ export type ForwardDialFailure = (
 export class ForwardDialError extends SealantApiError {
   override readonly name: string = "ForwardDialError";
   override readonly reason: ForwardDialReason;
-  /** The reason Core sent, when this SDK does not know it (`unrecognized-refusal`). */
+  /** The reason sealant sent, when this SDK does not know it (`unrecognized-refusal`). */
   readonly wireReason?: string;
   /** Budget metadata from a refusal after the WebSocket upgrade. */
   readonly budget?: string;
@@ -241,7 +241,7 @@ export class SealantNotImplementedError extends SealantError {
 export class ForwardResetError extends SealantError {
   override readonly name: string = "ForwardResetError";
   readonly reason: ForwardResetCause;
-  /** The reason Core sent, when this SDK does not know it (`unrecognized-reset`). */
+  /** The reason sealant sent, when this SDK does not know it (`unrecognized-reset`). */
   readonly wireReason?: string;
   constructor(reason: ForwardResetCause, wireReason?: string) {
     super(`The forward was reset: ${wireReason ?? reason}.`, { code: "ForwardResetError" });

@@ -2,7 +2,8 @@
  * The guest agent (`microvm-image/agent.mjs`) in its Boat host mode (`SEALANT_AGENT_HOST=boat`),
  * spawned for real against a fake VM: a boot-id file the test can "reboot", a fake `sealantd`
  * (records argv + env, echoes on the control socket, can exit 75/76), fake `ip`/`wg` (record
- * argv), a fake `unshare`, and a local fake DNS server for the readiness probe. The bind CLI (`microvm-image/boat-bind.mjs`) runs the way Core runs it.
+ * argv), a fake `unshare`, and a local fake DNS server for the readiness probe. The bind CLI
+ * (`microvm-image/boat-bind.mjs`) runs the way sealant runs it.
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
@@ -533,7 +534,7 @@ const bindRequest = async (
   ...overrides,
 });
 
-/** `sudo -n node boat-bind.mjs '<json>'` as Core runs it (without the sudo). */
+/** `sudo -n node boat-bind.mjs '<json>'` as sealant runs it (without the sudo). */
 const runBind = (
   vm: Vm,
   request: unknown,
@@ -578,7 +579,7 @@ const decryptBearer = (request: BoatAgentBindRequest, ciphertext: string): strin
   ).toString("utf8");
 };
 
-/** Bind the VM on its current boot and return the bearer Core would hold. */
+/** Bind the VM on its current boot and return the bearer sealant would hold. */
 const bindVm = async (vm: Vm, operationId = "op-1"): Promise<string> => {
   const request = await bindRequest(vm, { operation_id: operationId });
   const result = await runBind(vm, request);
@@ -694,7 +695,7 @@ describe("boat agent · host mode", () => {
 });
 
 describe("boat agent · bind", () => {
-  it("answers the bootstrap wire Core parses, and the bearer arms the agent", async () => {
+  it("answers the bootstrap wire sealant parses, and the bearer arms the agent", async () => {
     const vm = await createVm();
     const request = await bindRequest(vm);
     const result = await runBind(vm, request);
@@ -899,9 +900,10 @@ describe("boat agent · launch", () => {
   });
 
   it("launches a run without resources with no network at all: no sealant-wg, no resolver of its own, and the VM's resolv.conf as it was", async () => {
-    // Core launches a workspace created never to be linked to resources with the same launch body
-    // and never sends `POST /sealant/network`. This is the agent every published snapshot carries
-    // (its bytes are pinned by the asset lock, unchanged), so an older snapshot launches the same.
+    // sealant launches a workspace created never to be linked to resources with the same launch
+    // body and never sends `POST /sealant/network`. This is the agent every published snapshot
+    // carries (its bytes are pinned by the asset lock, unchanged), so an older snapshot launches
+    // the same.
     const vm = await createVm();
     const { agent, bearer } = await launched(vm);
     await waitFor(() => exists(vm.socketPath));
@@ -1336,7 +1338,7 @@ const freeUdpPort = async (): Promise<number> => {
   return port;
 };
 
-/** Core's end of the carrier, as a test drives it: datagrams in, datagrams out. */
+/** sealant's end of the carrier, as a test drives it: datagrams in, datagrams out. */
 const openCarrier = async (agent: Agent, bearer: string) => {
   const socket = new WebSocket(`ws://127.0.0.1:${String(agent.port)}${BOAT_AGENT_TUNNEL_ROUTE}`, {
     headers: { authorization: `Bearer ${bearer}` },
@@ -1551,7 +1553,7 @@ describe("boat agent · network", () => {
     expect(await exists(path.join(plain.dataDir, "resolv.conf.orig"))).toBe(false);
   });
 
-  it("carries the tunnel over /sealant/tunnel: WireGuard's datagrams to Core and back, nothing else", async () => {
+  it("carries the tunnel over /sealant/tunnel: WireGuard's datagrams to sealant and back, nothing else", async () => {
     const vm = await createVm();
     const bearer = await bindVm(vm);
     const wireguardPort = await freeUdpPort();
@@ -1599,11 +1601,11 @@ describe("boat agent · network", () => {
           (await call(agent, "GET", BOAT_AGENT_NETWORK_ROUTE, { bearer })).body,
         ).carrier_attached,
       ).toBe(true);
-      // Out: a handshake initiation from WireGuard reaches Core as one binary frame.
+      // Out: a handshake initiation from WireGuard reaches sealant as one binary frame.
       wireguard.send(Buffer.from("initiation"), relayPort, "127.0.0.1");
       await waitFor(async () => core.received.length === 1);
       expect(core.received[0]?.toString()).toBe("initiation");
-      // In: Core's frame reaches WireGuard's own port.
+      // In: sealant's frame reaches WireGuard's own port.
       core.socket.send(Buffer.from("response"));
       await waitFor(async () => toWireguard.length === 1);
       expect(toWireguard[0]?.toString()).toBe("response");
@@ -1676,7 +1678,7 @@ describe("boat agent · network", () => {
     }
   });
 
-  it("connects WireGuard to the gateway end to end through the agent's carrier and Core's", async () => {
+  it("connects WireGuard to the gateway end to end through the agent's carrier and sealant's", async () => {
     const vm = await createVm();
     const bearer = await bindVm(vm);
     const wireguardPort = await freeUdpPort();
@@ -1690,7 +1692,7 @@ describe("boat agent · network", () => {
         (await netLines(vm)).find((line) => line.startsWith("wg set ")) ?? "",
       )?.[1],
     );
-    // The gateway's published port on Core's host, and the VM's WireGuard.
+    // The gateway's published port on sealant's host, and the VM's WireGuard.
     const gateway = dgram.createSocket("udp4");
     await new Promise<void>((resolve) => gateway.bind(0, "127.0.0.1", resolve));
     const atGateway: { data: Buffer; port: number }[] = [];

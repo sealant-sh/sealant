@@ -61,7 +61,7 @@ export const ResourceWorktreeKey = Schema.String.check(
 ).pipe(Schema.brand("ResourceWorktreeKey"));
 export type ResourceWorktreeKey = typeof ResourceWorktreeKey.Type;
 
-/** An image pinned by digest (a tag may precede it). Core never resolves a tag. */
+/** An image pinned by digest (a tag may precede it). sealant never resolves a tag. */
 export const ResourcePinnedImage = Schema.String.check(
   matching(
     /^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$/,
@@ -121,7 +121,7 @@ export const resourceInstanceReadySchema = Schema.Union([
 ]);
 export type ResourceInstanceReady = typeof resourceInstanceReadySchema.Type;
 
-/** Ten days: the longest an instance may wait unreached before Core stops it. */
+/** Ten days: the longest an instance may wait unreached before sealant stops it. */
 export const RESOURCE_INSTANCE_MAX_IDLE_SECONDS = 864_000;
 
 const distinct =
@@ -138,7 +138,7 @@ export const resourceCallerReachSchema = Schema.Struct({
 });
 export type ResourceCallerReach = typeof resourceCallerReachSchema.Type;
 
-/** Write-only process env. Core seals it before persistence and never returns or records it. */
+/** Write-only process env. sealant seals it before persistence and never returns or records it. */
 export const resourceInstanceSecretEnvSchema = Schema.Record(EnvName, EnvValue);
 
 /** What an instance runs. Excess keys are refused; see the header for what has no field. */
@@ -164,7 +164,7 @@ export const resourceInstanceSpecSchema = Schema.Struct({
     ),
   }),
   ready: resourceInstanceReadySchema,
-  /** Seconds with no live linked executor reaching it before Core stops it. */
+  /** Seconds with no live linked executor reaching it before sealant stops it. */
   idleStopAfterSeconds: Schema.NullOr(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: RESOURCE_INSTANCE_MAX_IDLE_SECONDS })),
   ),
@@ -181,7 +181,7 @@ export const resourceInstanceStopReasonSchema = Schema.Union([
 ]);
 export type ResourceInstanceStopReason = typeof resourceInstanceStopReasonSchema.Type;
 
-/** What Core last observed of an instance, apart from what was asked of it. Times are ISO. */
+/** What sealant last observed of an instance, apart from what was asked of it. Times are ISO. */
 export const resourceInstanceStateSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("not-started") }),
   Schema.Struct({ kind: Schema.Literal("starting"), since: Schema.String }),
@@ -192,7 +192,7 @@ export const resourceInstanceStateSchema = Schema.Union([
     at: Schema.String,
     reason: resourceInstanceStopReasonSchema,
   }),
-  /** The container ended on its own; Core starts it again. */
+  /** The container ended on its own; sealant starts it again. */
   Schema.Struct({
     kind: Schema.Literal("exited"),
     at: Schema.String,
@@ -339,7 +339,7 @@ export const resourceInstanceSchema = Schema.Struct({
   desired: Schema.Literals(["running", "stopped", "archived"]),
   /** Why it is stopped, while `desired` is `stopped`. */
   stopReason: Schema.NullOr(resourceInstanceStopReasonSchema),
-  /** What Core last observed, and when. */
+  /** What sealant last observed, and when. */
   state: resourceInstanceStateSchema,
   observedAt: Timestamp,
   startedAt: Schema.NullOr(Timestamp),

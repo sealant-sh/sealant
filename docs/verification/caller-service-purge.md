@@ -38,10 +38,10 @@ PVs, exact namespace/instance isolation, missing-resource idempotence, and retry
 provider 403. They also find Retain storage by its claim ref after its PVC is gone. These are
 protocol/contract tests, not live cluster acceptance; SLNT-544 owns live Kubernetes validation.
 
-Core stores no caller-volume backup files. Backups are tar streams; purge removes abandoned helpers.
-Copies downloaded by Mend, external snapshots, database/WAL backups and physical media sanitization
-are outside this operation. Kubernetes needs cluster-scoped read/list access to PVs; it performs no
-cluster-scoped writes and refuses Retain reclaim policy.
+sealant stores no caller-volume backup files. Backups are tar streams; purge removes abandoned
+helpers. Copies downloaded by Mend, external snapshots, database/WAL backups and physical media
+sanitization are outside this operation. Kubernetes needs cluster-scoped read/list access to PVs; it
+performs no cluster-scoped writes and refuses Retain reclaim policy.
 
 ## Independent reproduction
 

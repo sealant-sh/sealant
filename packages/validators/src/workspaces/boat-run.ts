@@ -84,8 +84,8 @@ export const boatRunHeldReasonSchema = z.enum([
 ]);
 
 /**
- * How Core knows Boat holds no VM for a run. `not-found`: Boat's typed 404 for a VM it had reported
- * past creation. `deletion-completed`: Boat's own deletion operation for it completed.
+ * How sealant knows Boat holds no VM for a run. `not-found`: Boat's typed 404 for a VM it had
+ * reported past creation. `deletion-completed`: Boat's own deletion operation for it completed.
  * `never-created`: create was never issued, or Boat definitively refused it under the run's key.
  */
 export const boatRunAbsentBasisSchema = z.enum([

@@ -20,10 +20,10 @@ export const BOAT_KEY_REFRESH_MS = 24 * 3_600_000;
 
 /**
  * The quarantine reasons (`NATIVE_REOPEN_BOAT_FAILURES`) whose cause a report shows cleared, each by
- * what Boat itself answered: the key is accepted now (Boat showed who it is); the permissions Core
- * needs are all held and the key reaches every VM; the account is active; the wallet can start a
- * VM; a saved snapshot slot is free. A cause the report did not observe is not cleared. A key
- * rotation reopens every reason (`reopenBoatQuarantine` with no `reasons`).
+ * what Boat itself answered: the key is accepted now (Boat showed who it is); the permissions
+ * sealant needs are all held and the key reaches every VM; the account is active; the wallet can
+ * start a VM; a saved snapshot slot is free. A cause the report did not observe is not cleared. A
+ * key rotation reopens every reason (`reopenBoatQuarantine` with no `reasons`).
  */
 export const boatReopenableReasons = (report: BoatKeyReport): readonly NativeReopenReason[] => {
   const reasons: NativeReopenReason[] = [];

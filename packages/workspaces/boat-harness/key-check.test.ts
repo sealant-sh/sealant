@@ -47,7 +47,7 @@ const start = async (account: FakeBoatAccount = {}, organization?: string) => {
 };
 
 describe("a Boat key's check", () => {
-  it("derives the permissions Core needs from its own calls, delete included", () => {
+  it("derives the permissions sealant needs from its own calls, delete included", () => {
     expect(BOAT_REQUIRED_PERMISSIONS).toEqual([
       // `/me`, limits, organization discovery and the key list: which wallet a key bills.
       "account.read",
@@ -138,7 +138,7 @@ describe("a Boat key's check", () => {
     });
   });
 
-  it("names account.read for a key that holds every other permission Core needs: without it, Core cannot see which wallet the key bills", async () => {
+  it("names account.read for a key that holds every other permission sealant needs: without it, sealant cannot see which wallet the key bills", async () => {
     const { api } = await start({
       key: {
         actions: [

@@ -89,7 +89,7 @@ const assertNoNetworkCalls = (stack: HarnessStack, sandbox: string) => {
   expect(calls.map((event) => `${event.kind} ${event.detail ?? ""}`)).toEqual([]);
 };
 
-/** Boat was asked to delete the VM exactly once, and Core polled that deletion operation. */
+/** Boat was asked to delete the VM exactly once, and sealant polled that deletion operation. */
 const assertOneDelete = (stack: HarnessStack, sandbox: string) => {
   const deletes = stack.boat.events.filter(
     (event) => event.kind === "delete" && event.sandboxId === sandbox,

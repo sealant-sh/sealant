@@ -248,9 +248,9 @@ export type GuestRecoveryAnswer =
   | "recover-binding-conflict"
   | "recover-state-unknown";
 /**
- * A fake of the agent as Core's transport sees it: the bind exchange answers the bootstrap wire
+ * A fake of the agent as sealant's transport sees it: the bind exchange answers the bootstrap wire
  * with a fixed bearer, and each agent route answers the way `agent-contract.ts` says, with
- * switches named for the fault they inject. It records what Core sent, so tests can read the
+ * switches named for the fault they inject. It records what sealant sent, so tests can read the
  * launch body, the network intent and the order of calls.
  */
 export class GuestFixture implements BoatGuestTransport {
@@ -263,7 +263,7 @@ export class GuestFixture implements BoatGuestTransport {
    * transport raises as the typed not-ready failure carrying that reason.
    */
   recoveryUnverified: "daemon-stop-unverified" | "docker-stop-unverified" | undefined;
-  /** Every recovery body exactly as Core sent it. */
+  /** Every recovery body exactly as sealant sent it. */
   readonly recoverBodies: string[] = [];
   /** Answer recovery with a body that matches no contract shape. */
   malformedRecovery = false;
@@ -299,11 +299,11 @@ export class GuestFixture implements BoatGuestTransport {
     secretEnvJson?: string | undefined;
     services?: unknown;
   }> = [];
-  /** Every launch body exactly as Core sent it: what the agent was, and was not, told. */
+  /** Every launch body exactly as sealant sent it: what the agent was, and was not, told. */
   readonly launchBodies: string[] = [];
   readonly targets: BoatExecutionTarget[] = [];
   fail = false;
-  /** The next launch push is accepted by the agent, but its reply never reaches Core. */
+  /** The next launch push is accepted by the agent, but its reply never reaches sealant. */
   lostLaunchReply = false;
   target: BoatExecutionTarget | undefined;
   readonly networkBodies: string[] = [];

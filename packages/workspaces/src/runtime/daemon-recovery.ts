@@ -58,8 +58,8 @@ export const declaredRecoveryBootImages = (
     .filter((entry) => entry.length > 0);
 
 /**
- * Whether the daemon from `image` has sealantd's recovery boot: `true` / `false` when Core knows,
- * `null` when it cannot tell (no image, or an image that is neither released nor declared).
+ * Whether the daemon from `image` has sealantd's recovery boot: `true` / `false` when sealant
+ * knows, `null` when it cannot tell (no image, or an image that is neither released nor declared).
  */
 export const sealantdHasRecoveryBoot = (
   image: string | undefined,

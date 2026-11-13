@@ -1,6 +1,6 @@
 /**
  * Idiomatic Effect-TS service wrapping the proven sealantd control transport (P3) and the
- * `@sealant/runtime-client` SDK (P5 of the sealantd -> sealant-core integration).
+ * `@sealant/runtime-client` SDK (P5 of the sealantd -> sealant integration).
  *
  * Layering mirrors the established package idiom (see `packages/db/src/repositories/workspaces.ts`,
  * `packages/jobs/src/service.ts`, `packages/source-integrations/src/github/{service,layer}.ts`):
@@ -309,7 +309,7 @@ export interface CaptureFlushReport {
   /**
    * Where in the executor's own history this answer was made (decision 17): its epoch, launch,
    * boot, boot generation and an observation number that only grows within the boot, with the
-   * capture head. Core
+   * capture head. sealant
    * orders and supersedes evidence by it, never by its own clocks (`statusSupersedes`). Absent
    * from a daemon that predates the stamp: such answers cannot be ordered by position, and
    * evidence nothing else orders fails closed.

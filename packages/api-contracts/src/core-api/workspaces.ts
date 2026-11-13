@@ -227,7 +227,7 @@ export type CreateWorkspaceCredentials = typeof createWorkspaceCredentialsSchema
  * as before the option existed, on every runtime.
  *
  * What it buys is runtime-specific. On Boat a workspace's way to reach resources is built when it
- * launches (a gateway on Core's Docker host, a tunnel and a resolver in the VM); with `"none"`
+ * launches (a gateway on sealant's Docker host, a tunnel and a resolver in the VM); with `"none"`
  * none of it is built, the workspace is ready sooner, and a Boat deployment with no resource
  * gateway can run it. A later link of such a workspace is refused there
  * (`ResourceWorkspaceWithoutResourcesError`, 409). A Boat deployment with no resource gateway
@@ -976,12 +976,12 @@ export const workspaceCredentialHomeAccountProvider: Readonly<
 /**
  * Put one person's logins into one home of a RUNNING workspace (docs/connected-accounts-design.md
  * §6c). A home holds one person's logins while it is held: the first put names its person, a put
- * for anyone else is refused (`home-held`) until the home is released. Core writes a copy of each
- * named account (no refresh token, like a launch) owned by the home's owner, mode 0600, and keeps it
- * refreshed there; GitHub is written as `<home>/.config/gh/hosts.yml`. Values are connected-account
- * ids ("cacc_…") or per-provider account names of `onBehalfOfUserId`, resolved exactly as at create
- * ("default" is the account `true` picks); `null` removes that provider's login from the home (the
- * person has not connected it). A provider left out is left as it is.
+ * for anyone else is refused (`home-held`) until the home is released. sealant writes a copy of
+ * each named account (no refresh token, like a launch) owned by the home's owner, mode 0600, and
+ * keeps it refreshed there; GitHub is written as `<home>/.config/gh/hosts.yml`. Values are
+ * connected-account ids ("cacc_…") or per-provider account names of `onBehalfOfUserId`, resolved
+ * exactly as at create ("default" is the account `true` picks); `null` removes that provider's
+ * login from the home (the person has not connected it). A provider left out is left as it is.
  */
 export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
   /** The workspace's owner (owner scope; uniform 404 otherwise). */
@@ -1073,7 +1073,7 @@ export const workspaceHomeAccountSchema = Schema.Struct({
 });
 export type WorkspaceHomeAccount = typeof workspaceHomeAccountSchema.Type;
 
-/** One home of a running workspace and the logins Core keeps in it. */
+/** One home of a running workspace and the logins sealant keeps in it. */
 export const workspaceCredentialHomeSchema = Schema.Struct({
   home: NonEmptyString,
   /** The one person whose logins the home holds. */
@@ -1860,7 +1860,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceConflictError,
         // The executor did not confirm the staging.
         WorkspaceBadGatewayError,
-        // Core cannot reach the executor.
+        // sealant cannot reach the executor.
         WorkspaceServiceUnavailableError,
         WorkspaceInternalServerError,
       ],
@@ -1960,7 +1960,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceConflictError,
         // The executor did not confirm the write.
         WorkspaceBadGatewayError,
-        // SEALANT_CREDENTIALS_KEY is not configured, or Core cannot reach the executor.
+        // SEALANT_CREDENTIALS_KEY is not configured, or sealant cannot reach the executor.
         WorkspaceServiceUnavailableError,
         WorkspaceInternalServerError,
       ],
@@ -1983,7 +1983,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceConflictError,
         // The executor did not confirm the write.
         WorkspaceBadGatewayError,
-        // SEALANT_CREDENTIALS_KEY is not configured, or Core cannot reach the executor.
+        // SEALANT_CREDENTIALS_KEY is not configured, or sealant cannot reach the executor.
         WorkspaceServiceUnavailableError,
         WorkspaceInternalServerError,
       ],

@@ -158,7 +158,7 @@ export interface BoatGatewayHost {
   readonly tunnel: BoatTunnel;
   readonly subnets: ResourceSubnets;
   /**
-   * Where this worker reaches the gateways' published WireGuard ports. Core carries every
+   * Where this worker reaches the gateways' published WireGuard ports. sealant carries every
    * tunnel over the agent's `/sealant/tunnel` WebSocket and relays it here, so no VM dials the
    * gateway's host and that host needs no inbound port.
    */

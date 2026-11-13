@@ -47,13 +47,15 @@ export const personLayoutCapability = (
   };
 };
 
-/** Runtimes whose daemon Core never asks to start a process as a user (no per-person capability). */
+/**
+ * Runtimes whose daemon sealant never asks to start a process as a user (no per-person capability).
+ */
 const NO_PROCESS_USER_RUNTIMES: ReadonlySet<RuntimeAdapterId> = new Set(["cloudflare"]);
 
 /**
  * Whether a workspace's processes can be started as a person's user (`user` on exec and sessions),
  * as its read reports it: from the sealantd its image's probe asked (`exec.user`), on a runtime
- * whose daemon Core reaches (Docker, MicroVM, Kubernetes; never Cloudflare's sandboxes). What is
+ * whose daemon sealant reaches (Docker, MicroVM, Kubernetes; never Cloudflare's sandboxes). What is
  * not known (an image built before the probe, an unreadable answer) is `unknown`. The exec or
  * session itself asks the running daemon, whose answer decides.
  */

@@ -1,6 +1,6 @@
 /**
- * e2e 5: an executor Core KEEPS for recovery read as a plain `failed` (or `stopped`) workspace, so
- * its session's control plane took it for dead and revoked the lease and capture token the
+ * e2e 5: an executor sealant KEEPS for recovery read as a plain `failed` (or `stopped`) workspace,
+ * so its session's control plane took it for dead and revoked the lease and capture token the
  * recovery boot needs — every recovery then exited 75 on `plan.get`. A retained executor reads
  * `retained` (workspace status and runtime status) on every read the control plane uses, from the
  * moment it is recorded retained until the retention ends.
@@ -289,7 +289,7 @@ describe("a retained executor reads `retained`", () => {
   });
 });
 
-// #546: a stopped Boat session whose VM Core is still keeping read `ready` for as long as it was
+// #546: a stopped Boat session whose VM sealant is still keeping read `ready` for as long as it was
 // kept. It reads `retained` from the moment its stop ended without removing the VM, and a stop
 // that is still draining never does.
 describe("a stopped Boat session whose VM is still kept reads `retained`", () => {

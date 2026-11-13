@@ -10,9 +10,9 @@ export const boatWireGuardKeySchema = z
 
 /**
  * The host ports a run's gateway is given, one each: published on the relay host address alone and
- * reached only by Core's own carrier, so no firewall names them. They sit above Linux's default
+ * reached only by sealant's own carrier, so no firewall names them. They sit above Linux's default
  * ephemeral range (32768 to 60999): a port in that range can already be the source port of an
- * outbound socket on the host (Core's own carrier to another gateway is one), and the gateway
+ * outbound socket on the host (sealant's own carrier to another gateway is one), and the gateway
  * that was reserved it could then never bind it.
  */
 export const BOAT_TUNNEL_PORTS = { first: 61000, last: 61511 } as const;

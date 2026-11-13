@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 
 /**
  * Every container, network, volume and image a harness run creates carries
- * `sh.sealant.boat-harness=<run>`, including what Core creates for it (see `bin/docker`). That label
- * is the only ownership evidence teardown, the reaper and `cleanup.ts` act on.
+ * `sh.sealant.boat-harness=<run>`, including what sealant creates for it (see `bin/docker`). That
+ * label is the only ownership evidence teardown, the reaper and `cleanup.ts` act on.
  */
 export const HARNESS_LABEL = "sh.sealant.boat-harness";
 /** Cached images carry this instead, so nothing that inherits their labels looks like a run's. */
@@ -119,7 +119,7 @@ export const removeLabelled = async (
   return found;
 };
 
-/** Labels Core puts on the Docker objects it creates for resources and Boat gateways. */
+/** Labels sealant puts on the Docker objects it creates for resources and Boat gateways. */
 export const CORE_LABELS = [
   "sealant.resource-instance",
   "sealant.resource-domain",
@@ -127,7 +127,7 @@ export const CORE_LABELS = [
   "sealant.boat-tunnel",
 ] as const;
 
-/** Names of Core-labelled objects on the host, for the preflight. They are never removed. */
+/** Names of sealant-labelled objects on the host, for the preflight. They are never removed. */
 export const listCoreObjectNames = async (run: DockerRunner = docker): Promise<string[]> => {
   const ok = okWith(run);
   const names = new Set<string>();

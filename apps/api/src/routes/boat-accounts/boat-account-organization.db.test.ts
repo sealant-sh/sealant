@@ -180,7 +180,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       return { runId, publicationId: seeded.sourceId };
     };
     /**
-     * A saved image Core built in the account, ready: what retention and removal delete. `wallet`:
+     * A saved image sealant built in the account, ready: what retention and removal delete. `wallet`:
      * the fake Boat holds it there too, as the wallet the account billed when it was saved.
      */
     const savedImage = async (
@@ -279,7 +279,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       });
     });
 
-    it("refuses to connect a key without account.read, naming it: Core could not see which wallet it bills", async () => {
+    it("refuses to connect a key without account.read, naming it: sealant could not see which wallet it bills", async () => {
       boat.account = {
         ...boat.account,
         key: {
@@ -324,7 +324,7 @@ describe.skipIf(DATABASE_URL === undefined)(
               Effect.provideService(availability.BoatConfigured, true),
             ),
           );
-        // What a worker with the install's key reports while Core has not seen its wallet.
+        // What a worker with the install's key reports while sealant has not seen its wallet.
         await inOwn(
           Effect.flatMap(BoatAccountRepo, (repo) =>
             repo.reportLaunch({

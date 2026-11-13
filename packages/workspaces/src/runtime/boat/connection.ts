@@ -23,13 +23,13 @@ export const parseBoatHostedControl = (input: string): BoatResult<BoatHostedCont
   return { ok: true, value: { origin: url.origin, cookie: token.value } };
 };
 
-/** The headers that authenticate Core to the agent through Boat's hosted proxy. */
+/** The headers that authenticate sealant to the agent through Boat's hosted proxy. */
 const hostedHeaders = (access: BoatHostedControl, relayToken: BoatSecret) => ({
   Cookie: `_port_auth=${access.cookie.reveal()}`,
   Authorization: `Bearer ${relayToken.reveal()}`,
 });
 
-/** Core's end of the resource tunnel's WebSocket carrier (`/sealant/tunnel`). */
+/** sealant's end of the resource tunnel's WebSocket carrier (`/sealant/tunnel`). */
 export const boatTunnelConnection = (
   access: BoatHostedControl,
   relayToken: BoatSecret,

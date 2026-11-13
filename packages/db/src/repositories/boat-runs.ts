@@ -261,7 +261,9 @@ export class BoatRunRepo extends Context.Service<BoatRunRepo, BoatRunRepoService
 ) {}
 
 const stale = () => new BoatRunStoreError("stale-transition");
-/** What an absence writes: when and how Core knows, and it clears the hold and the sealed launch. */
+/**
+ * What an absence writes: when and how sealant knows, and it clears the hold and the sealed launch.
+ */
 const absent = (basis: NonNullable<BoatRun["absentBasis"]>) => ({
   absentAt: sql`now()`,
   absentBasis: basis,
@@ -544,7 +546,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
         }
         // The wallet the run's VM is created in, and that every request about it names: the
         // account's pin, read under the row its wallet change takes `for update` (the install's own
-        // key's from `boat_install`). An account whose wallet Core has not resolved creates nothing.
+        // key's from `boat_install`). An account whose wallet sealant has not resolved creates nothing.
         const wallet =
           input.accountId === undefined
             ? yield* installCreateWallet(db, input.deploymentId)

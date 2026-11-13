@@ -61,7 +61,7 @@ describe("Boat key reports", () => {
               _tag: "BoatAccountKeyRefusedError",
               code: "boat-key-missing-permissions",
               message:
-                "The key lacks Boat permissions Core needs: sandbox.delete; nothing was stored.",
+                "The key lacks Boat permissions sealant needs: sandbox.delete; nothing was stored.",
               missingPermissions: ["sandbox.delete"],
               report,
             }),

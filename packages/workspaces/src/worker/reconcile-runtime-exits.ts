@@ -34,7 +34,7 @@
  * daemon that does not answer leaves an ended executor WITH ITS DISK: sealantd exits 75 with its
  * staging there after an incomplete final flush, whether or not any drain reached it (a plain
  * `docker stop`, its own shutdown FINAL, a lost reply). The exit is recorded, and the remains
- * go only through the one preservation policy (`decideExecutorDeletion`): removed when Core
+ * go only through the one preservation policy (`decideExecutorDeletion`): removed when sealant
  * observed its final flush complete, the control plane attested a sealed final capture of it,
  * the owner discarded it, or nothing of it is left — otherwise retained (recorded; recovery is
  * attempted). A runtime reported `running` with a `detail` (a guest service failed, the executor

@@ -71,13 +71,13 @@ const toWire = (
   unreachable: unreachable.length === 0 ? null : { savedImages: [...unreachable] },
 });
 
-/** The account's saved images Core cannot reach in any wallet its key can bill. */
+/** The account's saved images sealant cannot reach in any wallet its key can bill. */
 const unreachableOf = (account: BoatAccountRecord) =>
   Effect.flatMap(BoatAccountRepo, (repo) => repo.unreachableImages({ accountId: account.id })).pipe(
     Effect.mapError(internal("Failed to read the Boat account's images.")),
   );
 
-/** Whether Core has not resolved the account's wallet yet (connected before accounts were pinned). */
+/** Whether sealant has not resolved the account's wallet yet (connected before accounts were pinned). */
 const walletUnresolved = (account: BoatAccountRecord) =>
   createBoatWalletOf(account.organization, account.keyKind).kind === "unresolved";
 
@@ -137,8 +137,8 @@ const refusedWords = (failure: BoatFailure) =>
         : "Boat refused the key";
 
 /**
- * A pasted key as Core keeps it: whitespace around it trimmed, then refused by its shape alone if
- * it is not a Boat key. The key's value never reaches an error.
+ * A pasted key as sealant keeps it: whitespace around it trimmed, then refused by its shape alone
+ * if it is not a Boat key. The key's value never reaches an error.
  */
 const parseKey = (apiKey: string) => {
   const credential = BoatSecret.parse(apiKey.trim());
@@ -183,7 +183,7 @@ const unverified = (failure: BoatFailure | undefined, outcome: string) =>
 
 /**
  * Checks a key with Boat by read-only calls before it is stored: refused when Boat refuses the key
- * itself, when it provably lacks a permission Core needs (named), or when Boat does not answer.
+ * itself, when it provably lacks a permission sealant needs (named), or when Boat does not answer.
  * Otherwise answers the client and the key's report.
  */
 const acceptedKey = (
@@ -205,7 +205,7 @@ const acceptedKey = (
     if (check.missingPermissions.length > 0)
       return yield* new BoatAccountKeyRefusedError({
         code: "boat-key-missing-permissions",
-        message: `The key lacks Boat permissions Core needs: ${check.missingPermissions.join(", ")}; ${outcome}`,
+        message: `The key lacks Boat permissions sealant needs: ${check.missingPermissions.join(", ")}; ${outcome}`,
         missingPermissions: check.missingPermissions,
         report: check.report,
       });
@@ -281,7 +281,7 @@ export const createBoatAccount = (payload: CreateBoatAccountRequest) =>
       return yield* new BoatAccountKeyRefusedError({
         code: "boat-key-unverified",
         message:
-          "Boat did not show which wallet the key bills, so Core cannot pin the account to it (Core reads it with the key's account.read permission); nothing was stored. Give the key account.read, or try again.",
+          "Boat did not show which wallet the key bills, so sealant cannot pin the account to it (sealant reads it with the key's account.read permission); nothing was stored. Give the key account.read, or try again.",
         ...(!report.wallet.observed && report.wallet.boat !== undefined
           ? { boat: report.wallet.boat }
           : {}),
@@ -357,13 +357,13 @@ export const getBoatInstallKey = () =>
   });
 
 /**
- * A call that waits until Core has found where an account connected before accounts were pinned
+ * A call that waits until sealant has found where an account connected before accounts were pinned
  * keeps its VMs and images: a code every released client decodes.
  */
 const resolving = (boatAccountId: string, call: string) =>
   new BoatAccountConflictError({
     code: "boat-account-in-use",
-    message: `Core is still finding which Boat wallet Boat account ${boatAccountId}'s VMs and saved images are in, to pin the account to it; nothing was changed. Try the ${call} again in a minute.`,
+    message: `sealant is still finding which Boat wallet Boat account ${boatAccountId}'s VMs and saved images are in, to pin the account to it; nothing was changed. Try the ${call} again in a minute.`,
   });
 
 const notFound = (boatAccountId: string) =>
@@ -422,7 +422,7 @@ const decodeProof = Schema.decodeUnknownOption(boatKeyProofSchema);
 /**
  * What the account's full checks may still hold in Boat, as a sentence naming each thing and
  * where; `undefined` when none may. An account with one keeps the key that can clean it up: it is
- * not rotated or removed until Core has deleted them (or the owner has, in Boat).
+ * not rotated or removed until sealant has deleted them (or the owner has, in Boat).
  */
 const proofLeftovers = (boatAccountId: string) =>
   Effect.gen(function* () {
@@ -445,11 +445,11 @@ const proofLeftovers = (boatAccountId: string) =>
       ];
       const when =
         row.finishedAt === null
-          ? ` (the check is running, or stopped halfway; Core takes it over from ${row.claimedUntil.toISOString()})`
+          ? ` (the check is running, or stopped halfway; sealant takes it over from ${row.claimedUntil.toISOString()})`
           : "";
       return `full check ${row.id}: ${things.length === 0 ? "nothing created yet" : things.join(" and ")}${when}`;
     });
-    return `Boat may still hold what a full check of this account made: ${parts.join("; ")}. Core keeps deleting it with this account's key. Try again once it is gone, or delete it in Boat yourself; nothing was changed.`;
+    return `Boat may still hold what a full check of this account made: ${parts.join("; ")}. sealant keeps deleting it with this account's key. Try again once it is gone, or delete it in Boat yourself; nothing was changed.`;
   });
 
 /**
@@ -522,7 +522,7 @@ export const checkBoatInstallKey = () =>
         message: "The install's own Boat key could not be read from its environment.",
       });
     // The wallet the install's own key names on every request (`boat_install`: its setting once
-    // applied, or what Core observed); none while the worker has not resolved it.
+    // applied, or what sealant observed); none while the worker has not resolved it.
     const stored = yield* (yield* BoatAccountRepo)
       .installWallet()
       .pipe(Effect.mapError(internal("Failed to read the install's Boat wallet.")));
@@ -585,7 +585,7 @@ const unseenBy = (
 
 /**
  * `PUT /v1/boat-accounts/:id/key`: replaces the account's key with one Boat accepts and that sees
- * everything the account has in Boat now: every VM of its live runs and every saved image Core
+ * everything the account has in Boat now: every VM of its live runs and every saved image sealant
  * built there that is not deleted yet. Refused while a launch's create is unresolved. Every later Boat call for the account's runs uses the new key; each run stays in
  * the account it was created in.
  */
@@ -694,7 +694,7 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
 /**
  * `DELETE /v1/boat-accounts/:id`: refused while the account has runs whose VMs Boat may still hold
  * or an image build in flight. Otherwise no new workspace runs in it from now on, and the worker
- * deletes the saved images Core built in it before the account, and its key, are gone.
+ * deletes the saved images sealant built in it before the account, and its key, are gone.
  */
 export const removeBoatAccount = (boatAccountId: string) =>
   Effect.gen(function* () {
@@ -751,9 +751,9 @@ const count = (n: number, one: string, many = `${one}s`) => `${String(n)} ${n ==
  * wallet (an organization's id or name, or `personal`), without its key. The key is checked with
  * Boat (read-only) under the wallet it names now (which wallets it can bill) and under the new one.
  * There is no unpin (null is refused), an organization's key has nothing to choose, and an account
- * Core has not pinned yet waits until the worker has found where its things are.
+ * sealant has not pinned yet waits until the worker has found where its things are.
  *
- * Every object Core makes in Boat is recorded with the wallet it was made in, and every request
+ * Every object sealant makes in Boat is recorded with the wallet it was made in, and every request
  * about it names that wallet. So the change is refused, with the counts, only while the account
  * has something in Boat that lives in the wallet it names now and that a request names through
  * the account: a run whose VM Boat may hold, a run still being settled, an image build in flight
@@ -797,7 +797,7 @@ export const setBoatAccountOrganization = (
     if (walletUnresolved(account))
       return yield* new BoatAccountConflictError({
         code: "boat-account-wallet-unresolved",
-        message: `Boat account ${boatAccountId} was connected before Core pinned accounts, and Core is still finding which Boat wallet its VMs and saved images are in, to pin it there; ${outcome} Try again in a minute.`,
+        message: `Boat account ${boatAccountId} was connected before sealant pinned accounts, and sealant is still finding which Boat wallet its VMs and saved images are in, to pin it there; ${outcome} Try again in a minute.`,
       });
     // What a full check made is in the wallet the account names now, and is deleted there first.
     const leftovers = yield* proofLeftovers(boatAccountId);

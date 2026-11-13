@@ -130,7 +130,7 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
     expect(JSON.stringify(listed)).not.toContain(INSTALL_KEY);
   });
 
-  it("refuses a key that lacks a permission Core needs, naming it, and stores nothing", async () => {
+  it("refuses a key that lacks a permission sealant needs, naming it, and stores nothing", async () => {
     account.account = {
       key: {
         actions: [

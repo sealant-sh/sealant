@@ -1,9 +1,9 @@
 #!/bin/sh
-# The `docker` Core's worker and API find first on their PATH in the harness. It adds the run's
+# The `docker` sealant's worker and API find first on their PATH in the harness. It adds the run's
 # label to every container, network and volume they create, so teardown, the reaper and cleanup
-# remove only what this run owns. Everything else passes through unchanged. Core passes its daemon
-# through DOCKER_HOST, never as a global option; a global option is refused so nothing is created
-# unlabelled.
+# remove only what this run owns. Everything else passes through unchanged. sealant passes its
+# daemon through DOCKER_HOST, never as a global option; a global option is refused so nothing is
+# created unlabelled.
 set -eu
 real="${SEALANT_BOAT_HARNESS_REAL_DOCKER:?boat-harness docker wrapper: SEALANT_BOAT_HARNESS_REAL_DOCKER unset}"
 run="${SEALANT_BOAT_HARNESS_RUN:?boat-harness docker wrapper: SEALANT_BOAT_HARNESS_RUN unset}"
@@ -34,7 +34,7 @@ case "${1:-}" in
     ;;
 esac
 # A fault some scenarios arm: while the file named by SEALANT_BOAT_HARNESS_CONFIGURE_DELAY_FILE
-# exists, a `docker exec ... configure` (Core configuring a resource gateway) first touches
+# exists, a `docker exec ... configure` (sealant configuring a resource gateway) first touches
 # "<file>.started", then waits the seconds the file holds. Unset or absent, nothing changes.
 delay="${SEALANT_BOAT_HARNESS_CONFIGURE_DELAY_FILE:-}"
 if [ "${1:-}" = exec ] && [ -n "$delay" ] && [ -f "$delay" ]; then

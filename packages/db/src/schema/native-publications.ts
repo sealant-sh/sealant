@@ -50,15 +50,15 @@ export const nativePublications = snakeCase.table(
      */
     boatWallet: text(),
     /**
-     * `known`: `boatWallet` is where it is. `unknown`: made before Core recorded wallets, by an
-     * account with no pin; no request about it is made until Core has found it. `unreachable`: Core
+     * `known`: `boatWallet` is where it is. `unknown`: made before sealant recorded wallets, by an
+     * account with no pin; no request about it is made until sealant has found it. `unreachable`: sealant
      * looked under every wallet the key can bill and Boat has it in none: never removed or used.
      */
     boatWalletState: text().notNull().default("unknown"),
   },
   (table) => [
     // One image of a recipe per wallet: a launch uses only the one in the account's wallet, and
-    // builds there when there is none. One Core cannot reach is recorded, and in nobody's way.
+    // builds there when there is none. One sealant cannot reach is recorded, and in nobody's way.
     uniqueIndex("native_publications_key_active")
       .on(table.keyHash, sql`coalesce(${table.boatWallet}, '')`)
       .where(

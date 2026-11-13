@@ -171,7 +171,9 @@ const refusalError = (frame: ForwardRefusedFrame): ForwardDialError => {
   );
 };
 
-/** A gated Core before v2 answers the route 401, an open one 404. Core with v2 answers 426. */
+/**
+ * A gated sealant before v2 answers the route 401, an open one 404. sealant with v2 answers 426.
+ */
 const answeredLikeCoreBeforeV2 = (status: number): boolean => status === 401 || status === 404;
 
 const failedHandshakeError = async (

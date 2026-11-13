@@ -2,11 +2,11 @@
  * Which Boat wallet an account creates things in now, as the rows that record them read it.
  *
  * A personal Boat key sees an object, or not, depending on the wallet a request names, so every
- * object Core creates in Boat records the wallet it was created in (`boat_wallet`,
+ * object sealant creates in Boat records the wallet it was created in (`boat_wallet`,
  * `boat_wallet_state` on runs, images and full checks), and every later request about it names
  * that wallet. The wallet a new object is created in is the account's pin
  * (`boat_accounts.boat_organization`), or, for an organization's key, the key's only wallet (null,
- * no header). An account with a personal or unobserved key and no pin was connected before Core
+ * no header). An account with a personal or unobserved key and no pin was connected before sealant
  * pinned accounts: it creates nothing until the worker has resolved it. The install's own key reads
  * the same from `boat_install`.
  */

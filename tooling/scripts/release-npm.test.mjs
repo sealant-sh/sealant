@@ -2,7 +2,7 @@
 // on 127.0.0.1, a stub GitHub API and a stand-in docker, with the tarballs crafted the ways three
 // reviews found to fool a check of the tarball as built; and normalize-npm-tarball.mjs, which the
 // pack job runs and whose --check the job carries written out. Ported from sealant-sh/mend
-// scripts/republish.test.mjs, for Core's two packages. (republish.test.mjs is next.yml's.)
+// scripts/republish.test.mjs, for sealant's two packages. (republish.test.mjs is next.yml's.)
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";

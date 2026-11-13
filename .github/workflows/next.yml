@@ -19,8 +19,8 @@
 # BuildKit image in those jobs is pinned and no cache other jobs write is restored. Every job runs on a
 # GitHub-hosted runner, a fresh VM: the box's runner VMs keep state between jobs, so code from an
 # earlier pull request could change what a job there builds, tests or pushes. Mend's bundle
-# image pins the Core images by digest, which keeps out a tag moved after the pin (ADR 0015, Known
-# gaps).
+# image pins the sealant images by digest, which keeps out a tag moved after the pin (ADR 0015,
+# Known gaps).
 #
 # The npm credential (OIDC, `id-token: write`) is held only by `publish`, which checks out nothing,
 # installs nothing and runs no repository code. It refuses an artifact holding anything but the
@@ -512,7 +512,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       # The version and the commit go into each package.json: npm records `gitHead`, which the plan
-      # job compares on a re-run and Core's release guard reads to find a prerelease's commit.
+      # job compares on a re-run and sealant's release guard reads to find a prerelease's commit.
       - name: Set the prerelease version and commit
         env:
           VERSION: ${{ needs.plan.outputs.version }}

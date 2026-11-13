@@ -34,7 +34,7 @@ const token = (id: ResourceInstanceId): string =>
 /** `sealres-<first 12 hex of the uuid>`. */
 export const instanceContainerName = (id: ResourceInstanceId): string => `sealres-${token(id)}`;
 
-/** `sealres-<id12>-<volume>`. Core never removes it. */
+/** `sealres-<id12>-<volume>`. sealant never removes it. */
 export const instanceVolumeName = (id: ResourceInstanceId, volume: string): string =>
   `${instanceContainerName(id)}-${volume}`;
 
@@ -112,7 +112,7 @@ export const volumeCreateArgv = (
 ];
 
 /**
- * `docker run` of an instance on its egress network. `--restart no`: Core restarts it, so the
+ * `docker run` of an instance on its egress network. `--restart no`: sealant restarts it, so the
  * metadata guard goes back in with every start. Capabilities stay Docker's defaults less
  * `NET_RAW`, so a raw socket cannot route past the guard; nothing is added.
  */

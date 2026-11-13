@@ -3,8 +3,8 @@
  *
  * An install's default Boat account is its env key (`SEALANT_BOAT_API_KEY`). A product that serves
  * several organizations (Mend) stores one more account per organization, so each organization's
- * Boat VMs run in, and are billed to, that organization's own Boat account. Core has no notion of
- * organizations: it knows the account by id, and the caller keeps the mapping.
+ * Boat VMs run in, and are billed to, that organization's own Boat account. sealant has no notion
+ * of organizations: it knows the account by id, and the caller keeps the mapping.
  *
  * A workspace names its account at create (`spec.runtime.boatAccountId`; SDK `boatAccountId`) and
  * every run of it stays in that account. Install-scoped: a caller that reached this surface holds
@@ -34,11 +34,11 @@ export const BOAT_DEFAULT_ACCOUNT_ID = "default";
 const BoatAccountRef = Schema.Union([BoatAccountId, Schema.Literal(BOAT_DEFAULT_ACCOUNT_ID)]);
 
 /**
- * A fact Boat did not let Core observe, and why. `refused`: Boat refused the read (`boat` says
+ * A fact Boat did not let sealant observe, and why. `refused`: Boat refused the read (`boat` says
  * how; an organization key is refused Boat's key list). `no-answer`: Boat did not answer.
  * `not-listed`: Boat's key list did not include this key (a key limited to some VMs gets an empty
  * list), or included more than one that could be it. `unreadable`: Boat answered with something
- * Core could not read. Core never guesses a fact it did not observe.
+ * sealant could not read. sealant never guesses a fact it did not observe.
  */
 export const boatKeyNotObservedSchema = Schema.Struct({
   observed: Schema.Literal(false),
@@ -83,7 +83,7 @@ export type BoatKeyWalletChoice = typeof boatKeyWalletChoiceSchema.Type;
  * active wallet. `key-organization`: an organization's Boat key, which bills that organization and
  * nothing else; there is nothing to choose. `active-wallet`: a personal key with no pin, which bills
  * whichever wallet its Boat account has active, and that the person can change in Boat at any time
- * (a stored account is in it only until Core pins it, right after an upgrade);
+ * (a stored account is in it only until sealant pins it, right after an upgrade);
  * `walletChanged` says the wallet it bills now is not the one an earlier report saw (`from`), first
  * seen at `observedAt`, and stays while the wallet stays.
  */
@@ -100,7 +100,7 @@ export const boatKeyBillingSchema = Schema.Union([
 export type BoatKeyBilling = typeof boatKeyBillingSchema.Type;
 
 /**
- * What Core observed of a Boat key, from Boat's own answers, at `observedAt`. Each fact is
+ * What sealant observed of a Boat key, from Boat's own answers, at `observedAt`. Each fact is
  * `observed: true` with its value, or `observed: false` with the reason Boat did not show it.
  */
 export const boatKeyReportSchema = Schema.Struct({
@@ -125,21 +125,21 @@ export const boatKeyReportSchema = Schema.Struct({
   wallet: observedOr(boatWalletFields),
   /**
    * The wallets the key's Boat account can bill (`GET /orgs`), the active one marked. Absent in
-   * reports made before Core read them.
+   * reports made before sealant read them.
    */
   wallets: Schema.optional(observedOr({ choices: Schema.Array(boatKeyWalletChoiceSchema) })),
   /**
    * Whether the account names the wallet it bills, or follows the key's active wallet. Absent in
-   * reports made before Core said so.
+   * reports made before sealant said so.
    */
   billing: Schema.optional(boatKeyBillingSchema),
-  /** The permissions Core needs of every key, from the Boat calls it makes. */
+  /** The permissions sealant needs of every key, from the Boat calls it makes. */
   requiredPermissions: Schema.Array(Schema.String),
   /** The key's permissions (`GET /api-keys`), and which of the required ones it lacks. */
   permissions: observedOr({
     held: Schema.Array(Schema.String),
     missing: Schema.Array(Schema.String),
-    /** The key is limited to some VMs or environments: it cannot reach VMs Core creates. */
+    /** The key is limited to some VMs or environments: it cannot reach VMs sealant creates. */
     limitedToSandboxes: Schema.Boolean,
   }),
   /** When the key expires; `expiresAt` null: it never does. */
@@ -185,12 +185,12 @@ export const boatKeyProofStepSchema = Schema.Struct({
 export type BoatKeyProofStep = typeof boatKeyProofStepSchema.Type;
 
 /**
- * A full check of a Boat key: Core started the smallest VM, ran a command in it, published a port,
- * saved a snapshot, then deleted the snapshot and the VM, and says how far it got. `outcome`:
+ * A full check of a Boat key: sealant started the smallest VM, ran a command in it, published a
+ * port, saved a snapshot, then deleted the snapshot and the VM, and says how far it got. `outcome`:
  * `passed` (every step), `refused` (Boat refused a step; the first refused or unanswered step
  * says why), or `interrupted` (the check stopped before it finished; what it made was removed by
  * the sweep). `starts`: how many VM starts it asked Boat for (0 or 1). `leftBehind`: what Boat
- * may still hold of it when the answer was given. `removalConfirmed` true: Core saw Boat delete
+ * may still hold of it when the answer was given. `removalConfirmed` true: sealant saw Boat delete
  * everything it made. False: the worker's sweep owns what is left and keeps deleting it, with
  * `vm` (an id) and `snapshot` (a name) naming what is known; `vm` is null when a VM may exist
  * whose id Boat never answered (the sweep finds it by its label). Until the sweep has finished,
@@ -223,7 +223,7 @@ export const boatAccountSchema = Schema.Struct({
    * The wallet the account bills, named (`X-Boat-Org`) on every request it makes: an
    * organization's id, or `personal`. Every personal key is pinned (to the wallet it billed when it
    * was connected, unless the caller named another). Null: an organization's key, which has one
-   * wallet, or an account connected before Core pinned accounts that the worker has not pinned yet.
+   * wallet, or an account connected before sealant pinned accounts that the worker has not pinned yet.
    */
   organization: Schema.optional(Schema.NullOr(Schema.String)),
   /** The key's last report, with when it was observed; null until the key is checked. */
@@ -231,9 +231,9 @@ export const boatAccountSchema = Schema.Struct({
   /** The account's last full check (`prove`), kept beside its report; null until it is proven. */
   lastProof: Schema.optional(Schema.NullOr(boatKeyProofSchema)),
   /**
-   * What the account made in Boat that Core cannot reach: Core looked under every wallet the key
-   * can bill and Boat has it in none (it was made before Core recorded wallets, and since deleted
-   * in Boat, or left in an organization the key's account has left). Core keeps it recorded and
+   * What the account made in Boat that sealant cannot reach: sealant looked under every wallet the key
+   * can bill and Boat has it in none (it was made before sealant recorded wallets, and since deleted
+   * in Boat, or left in an organization the key's account has left). sealant keeps it recorded and
    * never removes it; look for it under Saved snapshots in Boat, in each organization the key's
    * account has been in. Null or absent: nothing.
    */
@@ -297,7 +297,7 @@ export class BoatAccountBadRequestError extends Schema.TaggedError<BoatAccountBa
 
 /**
  * Boat refused the key (`boat-key-refused`: it answered that the key is not valid, has expired or
- * belongs to another organization; `boat` says which), the key provably lacks permissions Core
+ * belongs to another organization; `boat` says which), the key provably lacks permissions sealant
  * needs (`boat-key-missing-permissions`, named in `missingPermissions`), or Boat did not answer
  * whether it is valid (`boat-key-unverified`: try again). Nothing was stored or changed. The
  * message never names the key or any part of it.
@@ -335,10 +335,10 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * `boat-account-environment`: the install's own key (`default`) is set in its environment, not
  * through this API. `boat-proof-running`: a full check of the account is running, or Boat may
  * still hold what one made (the message names the VM and the snapshot): a second check, a key
- * rotation, a removal and a change of organization wait until Core has deleted it.
+ * rotation, a removal and a change of organization wait until sealant has deleted it.
  * `boat-key-organization`: a change of organization for an organization's Boat key, which bills
  * its own organization and nothing else. `boat-account-wallet-unresolved`: a change of organization
- * for an account connected before Core pinned accounts, while Core is still finding where its
+ * for an account connected before sealant pinned accounts, while sealant is still finding where its
  * VMs and images are (a key rotation or a full check then answers `boat-account-in-use`). A change
  * of organization is also refused
  * `boat-account-in-use` while the account has runs whose VMs Boat may hold (`liveRuns`), runs

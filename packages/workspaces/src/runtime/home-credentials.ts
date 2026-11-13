@@ -67,8 +67,9 @@ const COPY_REFRESH_TOKEN = "sealant-copy-cannot-refresh";
  *   inside the home and outside `/workspace`, and the file must have one link, so a login never
  *   lands in saved state: a put elsewhere exits `outside`.
  * - A put whose file cannot be reached, opened or written as a regular file (a directory there,
- *   the owner's permissions), or whose entry is not JSON, exits `unusable`. A scrub has nothing of Core's to remove in any of these cases
- *   (outside the home, unreachable, not a regular file) and exits 0.
+ *   the owner's permissions), or whose entry is not JSON, exits `unusable`. A scrub has nothing of
+ *   sealant's to remove in any of these cases (outside the home, unreachable, not a regular file)
+ *   and exits 0.
  * - A put writes the entry only when there is none or it is a copy (its refresh token is
  *   `sealant-copy-cannot-refresh`): a login the person made inside pi or opencode stays (Mend's
  *   ADR 0016 decision 8a), and the put exits `personalLoginKept`. A scrub removes the entry only when it is a copy. A
@@ -158,11 +159,11 @@ export type HomeWriteFence =
   /** A write under a hold: the marker must name this generation. */
   | { readonly kind: "held"; readonly generation: string }
   /**
-   * A release: removes every login file Core names, and the marker, when the marker is absent or
+   * A release: removes every login file sealant names, and the marker, when the marker is absent or
    * names `generation`.
    */
   | { readonly kind: "release"; readonly generation: string }
-  /** A release of a home Core holds no record of: it removes them whatever the marker says. */
+  /** A release of a home sealant holds no record of: it removes them whatever the marker says. */
   | { readonly kind: "release-unfenced" };
 
 const isRelease = (fence: HomeWriteFence): boolean =>
@@ -185,7 +186,7 @@ export interface HomeCredentialScriptInput {
   readonly createWithOwner?: HomeOwner;
   /** The directory a created home is seeded from (default `/etc/skel`; absolute, safe characters). */
   readonly skel?: string;
-  /** Files to write, each a provider's login (already the copy Core injects), in stdin order. */
+  /** Files to write, each a provider's login (already the copy sealant injects), in stdin order. */
   readonly writes: readonly HomeCredentialProvider[];
   /** Providers whose login file is removed (a release removes them all). */
   readonly removes: readonly HomeCredentialProvider[];
@@ -228,7 +229,7 @@ export const HOME_SCRIPT_EXIT = {
   /** Another write into the home held its lock for too long. */
   busy: 78,
   /**
-   * The home is not one Core writes into: root's other than `/root`, or in a parent the person
+   * The home is not one sealant writes into: root's other than `/root`, or in a parent the person
    * could rename it in (not root's, or group- or world-writable without the sticky bit).
    */
   untrusted: 79,
@@ -337,8 +338,8 @@ export const homeScriptStdin = (contents: readonly string[]): string =>
 
 /**
  * The shell script that writes and removes one home's login files, in one exec. Paths are
- * validated before they reach it (`homePathProblem`; the relative paths are Core's own), so single
- * quotes suffice.
+ * validated before they reach it (`homePathProblem`; the relative paths are sealant's own), so
+ * single quotes suffice.
  *
  * As root:
  * 1. Every payload is read before anything is checked: a script whose stdin arrives late decides
@@ -808,7 +809,7 @@ export const homeScriptRefusal = (
 ): string | undefined => {
   switch (exitCode) {
     case HOME_SCRIPT_EXIT.linkOnTheWay:
-      return `A component of ${home} is a symbolic link, or one of its login directories links outside it; Core writes logins only into a home reached without one, and keeps them inside it.`;
+      return `A component of ${home} is a symbolic link, or one of its login directories links outside it; sealant writes logins only into a home reached without one, and keeps them inside it.`;
     case HOME_SCRIPT_EXIT.noNode:
       return `The workspace's image has no node on its system PATH, which writing or removing pi's and opencode's logins in ${home} needs; nothing was changed, and a release leaves the home held.`;
     case HOME_SCRIPT_EXIT.piLoginUnusable:
@@ -825,7 +826,7 @@ export const homeScriptRefusal = (
         exitCode === HOME_SCRIPT_EXIT.piLoginOutside
           ? HOME_CREDENTIAL_FILES.pi
           : HOME_CREDENTIAL_FILES.opencode;
-      return `${home}/${file} really is outside ${home}, under /workspace, or has another hard link; Core writes a login only where it stays in the home, never into saved state.`;
+      return `${home}/${file} really is outside ${home}, under /workspace, or has another hard link; sealant writes a login only where it stays in the home, never into saved state.`;
     }
     case HOME_SCRIPT_EXIT.claudeLoginUnusable:
     case HOME_SCRIPT_EXIT.codexLoginUnusable:
@@ -836,10 +837,10 @@ export const homeScriptRefusal = (
           : exitCode === HOME_SCRIPT_EXIT.codexLoginUnusable
             ? HOME_CREDENTIAL_FILES.codex
             : HOME_CREDENTIAL_FILES.github;
-      return `${home}/${file} is not a regular file its owner can write, or has another hard link (a name elsewhere, which could be saved state); Core writes a login only into a file of its own, and wrote none.`;
+      return `${home}/${file} is not a regular file its owner can write, or has another hard link (a name elsewhere, which could be saved state); sealant writes a login only into a file of its own, and wrote none.`;
     }
     case HOME_SCRIPT_EXIT.claudeKeyUnusable:
-      return `${home}/${CLAUDE_KEY_DIR} is reached through a symbolic link or is not a directory, or a key's name there is a directory; Core writes a Claude key only into a directory of its own in the home, reached without a link, and wrote none.`;
+      return `${home}/${CLAUDE_KEY_DIR} is reached through a symbolic link or is not a directory, or a key's name there is a directory; sealant writes a Claude key only into a directory of its own in the home, reached without a link, and wrote none.`;
     case HOME_SCRIPT_EXIT.missing:
       return `${home} does not exist in the workspace, or is not a directory. Make the home (its user) first.`;
     case HOME_SCRIPT_EXIT.fenced:
@@ -847,7 +848,7 @@ export const homeScriptRefusal = (
     case HOME_SCRIPT_EXIT.busy:
       return `Another write into ${home} held it for too long; try again.`;
     case HOME_SCRIPT_EXIT.untrusted:
-      return `${home} is not a home Core writes into: it belongs to root and is not /root, or its parent is one its owner could rename it in.`;
+      return `${home} is not a home sealant writes into: it belongs to root and is not /root, or its parent is one its owner could rename it in.`;
     case HOME_SCRIPT_EXIT.cannotDrop:
       return `The workspace cannot run a process as ${home}'s owner (setpriv was refused).`;
     case HOME_SCRIPT_EXIT.noLock:

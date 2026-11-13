@@ -96,7 +96,7 @@ const runTimelineInputSchema = runIdParamsSchema.extend(runTimelineQuerySchema.s
 const runScrollbackInputSchema = runIdParamsSchema.extend(runScrollbackQuerySchema.shape);
 
 /**
- * The core API is an unauthenticated internal boundary (it trusts its callers), so per-user
+ * The sealant API is an unauthenticated internal boundary (it trusts its callers), so per-user
  * scoping is enforced HERE: every run read loads the run and matches its owner against the
  * session before serving record data. A foreign or missing run is NOT_FOUND either way, so run
  * ids don't leak existence across users.
@@ -256,7 +256,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         return ctx.coreApi.workspaces.rename(input);
       }),
-    // Owner scoping rides in the payload: the core API 404s on a mismatch (uniform not-found).
+    // Owner scoping rides in the payload: the sealant API 404s on a mismatch (uniform not-found).
     stop: protectedProcedure.input(workspaceIdParamsSchema).mutation(async ({ ctx, input }) => {
       return ctx.coreApi.workspaces.stop({
         workspaceId: input.workspaceId,

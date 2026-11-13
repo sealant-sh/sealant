@@ -48,7 +48,9 @@ const fixture = async (
     initialWorktree?: string;
     extraSessions?: readonly unknown[];
     detailOverrides?: Readonly<Record<string, unknown>>;
-    /** Core's rows for a launch that fails before the agent starts, so Mend has no sealantRunId. */
+    /**
+     * sealant's rows for a launch that fails before the agent starts, so Mend has no sealantRunId.
+     */
     coreFailure?: {
       readonly attemptStatus: string;
       readonly runtimeStatus: string;
@@ -222,7 +224,7 @@ const fixture = async (
             runId: `run_${generation}`,
             ready: generation === 2 || (options.publicationReady?.() ?? true),
           },
-    // The real lookup over Core's rows: workspace, its latest attempt, that attempt's runtime.
+    // The real lookup over sealant's rows: workspace, its latest attempt, that attempt's runtime.
     failure: (s) =>
       findProofFailure(s, "usr_test", {
         workspace: async (id) =>
@@ -321,7 +323,7 @@ describe("operator checker against Mend HTTP and terminal protocol", () => {
     }
   }, 20_000);
 
-  it("stops waiting as soon as Core fails a launch before the agent starts, and reports Core's cause", async () => {
+  it("stops waiting as soon as sealant fails a launch before the agent starts, and reports sealant's cause", async () => {
     const cause =
       'Boat runtime: launch-held; diagnostic {"code":"agent-refused","agent":{"reason":"network-binding-conflict"}}';
     const f = await fixture({
@@ -334,7 +336,7 @@ describe("operator checker against Mend HTTP and terminal protocol", () => {
     });
     const began = Date.now();
     await expect(f.run()).rejects.toThrow("authenticated-readiness-core-failed");
-    // The readiness budget is twelve minutes; Core's verdict ends the wait on the next poll.
+    // The readiness budget is twelve minutes; sealant's verdict ends the wait on the next poll.
     expect(Date.now() - began).toBeLessThan(10_000);
     expect(f.events).toContainEqual(
       expect.objectContaining({

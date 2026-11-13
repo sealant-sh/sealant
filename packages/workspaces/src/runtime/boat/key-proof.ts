@@ -1,7 +1,7 @@
 /**
  * A full check of a Boat key (SLNT-784): Boat lets no key read all of its own permissions and has
- * no dry run, so Core proves the key by doing what a session does, once, on the smallest VM: start
- * it, run a command, publish a port, save a snapshot, then delete the snapshot and the VM.
+ * no dry run, so sealant proves the key by doing what a session does, once, on the smallest VM:
+ * start it, run a command, publish a port, save a snapshot, then delete the snapshot and the VM.
  *
  * Leaving nothing behind is the design, not the happy path:
  * - The ledger row (`boat_key_proofs`) is written before anything is created, and names what may be
@@ -412,7 +412,7 @@ export const sweepBoatKeyProofs = async (options: {
   const outcomes: BoatKeyProofSweepOutcome[] = [];
   for (const record of await store.do((repo) => repo.toSweep(now()))) {
     const settled = await (async () => {
-      // A check whose wallet Core does not know is looked for first (the worker's resolve pass);
+      // A check whose wallet sealant does not know is looked for first (the worker's resolve pass);
       // asked anywhere else, Boat's "not found" would prove nothing.
       if (record.wallet === undefined) return false;
       const wallet = record.wallet;

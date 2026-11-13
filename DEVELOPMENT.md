@@ -205,12 +205,12 @@ The pieces:
   shape, and a next build of the version on a commit the release leaves out. A `vX.Y.Z` tag refuses
   all of them, a sealantd prerelease included.
 - **Still unproven until a watched stable release**: the first OIDC publish of a downloaded tarball
-  (npm has only ever published stable Core with `pnpm publish`), the npm job reading GitHub's latest
-  release with a token that holds only `id-token: write`, `finalize-images` and `promote` writing to
-  GHCR, the GitHub release created with `--latest=false` and then moved by `promote`, the lock
-  queueing across real runs, and the smoke reading the staged indexes and pulling staged digests (a
-  dry run accepts archives, not pulls). A dry run proves the builds, both arches' smoke, the
-  manifest and the tarballs.
+  (npm has only ever published stable sealant with `pnpm publish`), the npm job reading GitHub's
+  latest release with a token that holds only `id-token: write`, `finalize-images` and `promote`
+  writing to GHCR, the GitHub release created with `--latest=false` and then moved by `promote`, the
+  lock queueing across real runs, and the smoke reading the staged indexes and pulling staged
+  digests (a dry run accepts archives, not pulls). A dry run proves the builds, both arches' smoke,
+  the manifest and the tarballs.
 - **Local dry-run**: build the images with the same Dockerfiles
   (`docker build -f apps/<app>/Dockerfile -t ghcr.io/sealant-sh/sealant-<name>:0.0.0-dev .`), then
   `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=$PWD/compose.selfhost.yaml sh install.sh`. Offset
@@ -227,8 +227,8 @@ The pieces:
   publish `@sealant/sdk`. Images have no such boundary: a job with `packages: write` can push the
   stable images too (GHCR cannot scope it), and any of the repository's writers can run a branch
   workflow that requests it, code-owner review or not. The image jobs' actions and BuildKit are
-  pinned, and Mend's bundle image pins the Core images by digest, which keeps out a tag moved after
-  the pin. Mend pins a prerelease through an exact alias
+  pinned, and Mend's bundle image pins the sealant images by digest, which keeps out a tag moved
+  after the pin. Mend pins a prerelease through an exact alias
   (`"@sealant/sdk": npm:@sealant/sdk-next@<version>`). `latest` on the stable packages moves only
   from a `vX.Y.Z` tag.
 - **Next image tags are written once.** `image-tag` computes this run's index digest
@@ -249,7 +249,7 @@ The pieces:
   reference lacks its digest or is a prerelease (`tooling/scripts/check-release-pins.mjs`); a dry
   run reports a prerelease and refuses a missing digest.
 - **Releasing** follows one order across the three repositories (sealant-sh/mend
-  `docs/operations/next-channel.md`). For Core: pin sealantd's release, merge, merge the Version
+  `docs/operations/next-channel.md`). For sealant: pin sealantd's release, merge, merge the Version
   Packages pull request, and **freeze main until the tag**; Mend proves that commit's next build;
   then tag it. The release refuses while an npm prerelease of the version came from a commit the tag
   leaves out, which is what a merge during the freeze produces.

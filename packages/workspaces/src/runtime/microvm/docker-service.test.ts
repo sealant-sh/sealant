@@ -420,7 +420,7 @@ describe("DockerService runtime directories", () => {
       code: "ENOENT",
     });
     // The default engine's failed health is the four fields it always was: no `output`, which a
-    // Core from before the field refuses.
+    // sealant from before the field refuses.
     const health: unknown = JSON.parse(
       result.stdout
         .split("\n")

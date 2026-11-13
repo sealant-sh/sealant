@@ -1198,7 +1198,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         });
         expect(c.fake.heldIn("personal").snapshots).toEqual([first.snapshot.identity.name]);
 
-        // As the migration leaves an account Mend connected before Core pinned accounts.
+        // As the migration leaves an account Mend connected before sealant pinned accounts.
         await c.sql(
           `update boat_accounts set boat_organization = null, key_kind = null where id = '${pinned.id}'`,
         );
@@ -1207,7 +1207,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         );
         // The owner switches the active wallet in Boat for their own use.
         c.fake.account = { ...c.fake.account, activeWallet: "team_acme" };
-        // Retention before Core has found where the image is: nothing is asked, nothing removed.
+        // Retention before sealant has found where the image is: nothing is asked, nothing removed.
         await c.worker.reapImages?.(retention);
         expect(await c.stateOf(first.publicationId)).toBe("ready");
         expect(c.fake.heldIn("personal").snapshots).toEqual([first.snapshot.identity.name]);
@@ -1318,7 +1318,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         },
       ));
 
-    it("launches nothing in the install's own account while Core cannot see which wallet its key bills", () =>
+    it("launches nothing in the install's own account while sealant cannot see which wallet its key bills", () =>
       withWallets(
         async (c) => {
           expect(await c.installWallet()).toMatchObject({ organization: null });

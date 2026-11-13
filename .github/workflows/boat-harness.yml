@@ -1,8 +1,8 @@
 name: Boat harness
 
-# The local Boat harness (packages/workspaces/boat-harness): Core's real worker, API, Boat adapter,
-# guest units and gateway against a fake Boat provider and guest-twin containers. It runs on pull
-# requests that touch Boat code, nightly, and on demand.
+# The local Boat harness (packages/workspaces/boat-harness): sealant's real worker, API, Boat
+# adapter, guest units and gateway against a fake Boat provider and guest-twin containers. It runs
+# on pull requests that touch Boat code, nightly, and on demand.
 on:
   pull_request:
     paths:

@@ -76,7 +76,7 @@ const makeStub = (
           features === "failed"
             ? Effect.fail(new Error("unavailable"))
             : Effect.succeed({
-                name: "Core",
+                name: "sealant",
                 version: "0.0.0",
                 docsPath: "/docs",
                 openApiPath: "/openapi.json",

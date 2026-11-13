@@ -2,7 +2,7 @@
  * The ids that name a person, and the one rule that keeps a resource domain out of them.
  *
  * A resource domain (`resource-domains.ts`) is an owner that is not a person: it never holds a
- * login or a provider credential and never runs a harness. Core mints every resource domain id
+ * login or a provider credential and never runs a harness. sealant mints every resource domain id
  * with {@link RESOURCE_DOMAIN_ID_PREFIX}, and no `user` row may carry it (a database check), so
  * the spelling alone tells the two apart. Every field and header that names a person (`ownerUserId`,
  * `onBehalfOfUserId`, `userId`, the SSH gateway's `principalId`) is a {@link PersonId}: a domain id there is refused with a `400`

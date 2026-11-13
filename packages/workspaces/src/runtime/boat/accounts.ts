@@ -21,9 +21,9 @@ export type BoatAccountId = string | null;
 /** What one Boat account gives every Boat owner built for it: its client and its names. */
 export interface BoatAccountProvider {
   readonly accountId: BoatAccountId;
-  /** The `sealant-deployment` label of every VM and image Core makes in the account. */
+  /** The `sealant-deployment` label of every VM and image sealant makes in the account. */
   readonly deploymentId: string;
-  /** The `sealant-owner` of every image Core builds in the account; absent: none is built. */
+  /** The `sealant-owner` of every image sealant builds in the account; absent: none is built. */
   readonly builderOwner: string | undefined;
   /** The account's client. For a stored account it always calls Boat with the current key. */
   readonly api: BoatApi;
@@ -222,7 +222,7 @@ export class BoatAccountDirectory {
   }
 
   /**
-   * The removal's end, once Boat holds nothing Core made under the key: the sealed key is erased
+   * The removal's end, once Boat holds nothing sealant made under the key: the sealed key is erased
    * and the account's client forgotten. `held`: something is still there; nothing changed.
    */
   async finishRemoval(accountId: string): Promise<"removed" | "held"> {
@@ -239,7 +239,7 @@ export class BoatAccountDirectory {
   /**
    * A client for the account that names `organization` on every request (`X-Boat-Org`: an
    * organization's id or name, or `personal`), whatever the account names: what removes something
-   * Core found in that wallet. The key is opened on first use and kept for the client's life.
+   * sealant found in that wallet. The key is opened on first use and kept for the client's life.
    */
   walletApi(accountId: string, organization: string | null): BoatApi {
     let opened: Promise<BoatResult<BoatApi>> | undefined;
@@ -354,7 +354,7 @@ export class BoatAccountDirectory {
 
 /**
  * The install's own key's client: every request names the wallet `boat_install` holds for it
- * (`SEALANT_BOAT_ORGANIZATION` once applied, or what Core observed at its first check; none for an
+ * (`SEALANT_BOAT_ORGANIZATION` once applied, or what sealant observed at its first check; none for an
  * organization's key), read again at most every `checkMs` and at once when Boat refuses or does not
  * find something. While it is not resolved, no request is made.
  */

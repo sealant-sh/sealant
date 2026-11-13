@@ -1,6 +1,6 @@
 /**
  * Expected-failure markers: a scenario that meets a known defect passes only while it fails with
- * that defect's named failure. Kept free of Core imports so a marker can be checked on its own.
+ * that defect's named failure. Kept free of sealant imports so a marker can be checked on its own.
  */
 /** A known defect: a scenario fails with its signature until the fix lands, then must pass. */
 export interface Defect {
@@ -23,7 +23,7 @@ export interface Defect {
   /** Any one of these (see `firstOf`). */
   readonly anyOf?: readonly Defect[];
   /**
-   * The defect leaves its launch for the owner's discard to release (e.g. Core keeps it as
+   * The defect leaves its launch for the owner's discard to release (e.g. sealant keeps it as
    * `retained`). Without this, a launch that releases only after a discard is a leak even when the
    * marker excused the scenario's own failure.
    */

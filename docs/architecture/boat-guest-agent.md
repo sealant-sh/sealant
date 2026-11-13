@@ -8,7 +8,7 @@ as PID 1 of its own PID namespace under the agent, in a transient scope of its o
 (`systemd-run --scope`, `sealant-workspace-<id>.scope` under `sealant-workspace.slice`,
 `OOMPolicy=continue`), and the unit itself has `OOMPolicy=continue`: an OOM kill takes one process
 of the workspace, never the agent and never the unit. There is no mapped root, no `systemd-nspawn`
-box, no Python guest and no relay: Core speaks to one process in the VM, over the hosted HTTPS
+box, no Python guest and no relay: sealant speaks to one process in the VM, over the hosted HTTPS
 proxy, with one bearer.
 
 The typed contract is `packages/workspaces/src/runtime/boat/agent-contract.ts`; the routes the
@@ -56,7 +56,7 @@ no pull. So an engine that answers `docker info` but cannot start a container is
 (`container-probe-failed`; `containerd-failed` when its containerd does not start). Every start and
 failure says which containerd dockerd uses (binary, socket, version), the shim's version and whether
 a system containerd socket was there. The agent's journal records it, and a failed health carries it
-in `services.docker.output`, which Core redacts into the launch diagnostic.
+in `services.docker.output`, which sealant redacts into the launch diagnostic.
 
 The agent manifest digest is `boatAgentManifestDigest`: SHA-256 over the path, mode and bytes digest
 of the agent files, `sealantd`, the unit and the Docker drop-in. The image writes it to
@@ -66,7 +66,7 @@ it; the bind CLI refuses any other (`bind-manifest-mismatch`).
 
 ## Bind
 
-Core runs one provider command in a VM:
+sealant runs one provider command in a VM:
 `sudo -n /opt/sealant/node /opt/sealant/boat-bind.mjs '<json>'`, with the `sealant-bootstrap-v1`
 request (identity, boot id, manifest digest, exchange operation, RSA-3072 public key). The CLI
 generates the bearer, writes it to tmpfs (`/run/sealant/agent/arm.json`, 0600) and a public record
@@ -78,8 +78,8 @@ the identity the disk was first bound to, and for no other (`bind-identity-confl
 one reason code on stderr.
 
 The agent arms itself lazily from the tmpfs bearer: it is the launch secret and the control token,
-so `GET /sealant/health` answers it (503, not booted) before any launch, and Core proves the bearer
-that way before sealing it.
+so `GET /sealant/health` answers it (503, not booted) before any launch, and sealant proves the
+bearer that way before sealing it.
 
 ## Routes
 
@@ -89,13 +89,13 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   `services.docker: "required"` on a Docker image; `runId`, `controlToken` = the bearer,
   `flushTimeoutMs`, `bootEnv`, `secretEnvJson`). The agent writes the durable launch record
   (`launch.json`: boot id, run id) before `sealantd boot`. A second push on the same boot, from this
-  agent process or a restarted one, is `409 already booted`: Core adopts it.
+  agent process or a restarted one, is `409 already booted`: sealant adopts it.
 - `GET /sealant/health`: `booted`, `controlSocket`, `daemonExit`, and `services.docker` on a Docker
   image.
 - `GET /sealant/control`: the WebSocket relay to sealantd's control socket;
   `503 {error: control-unavailable}` until the socket accepts.
 - `GET /sealant/tunnel`: the resource tunnel's WebSocket carrier, the tunnel's only transport
-  (`409 tunnel-not-carried` until a network is configured). Core opens it through Boat's hosted
+  (`409 tunnel-not-carried` until a network is configured). sealant opens it through Boat's hosted
   HTTPS with the control token, the same way it reaches every other route, and relays it to the
   gateway on its own host. Neither the VM nor the gateway's host takes an inbound connection, as
   with a MicroVM. Each binary frame is one WireGuard datagram, either way, and a message a proxy
@@ -106,8 +106,8 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   WireGuard. One carrier at a time: a newer one replaces the older, which is closed with 1012. The
   relay's and WireGuard's ports are kept on tmpfs, so an agent restarted on the boot binds the relay
   where the peer points, or re-points the peer. `GET /sealant/network` lists `carriers`
-  (`websocket`) before Core configures anything, and says `carrier_attached` once configured. Core
-  refuses an agent that does not list it (an image from before the carrier) with
+  (`websocket`) before sealant configures anything, and says `carrier_attached` once configured.
+  sealant refuses an agent that does not list it (an image from before the carrier) with
   `carrier-unavailable`: there is no gateway address for a VM to dial instead.
 - `POST /sealant/network`: the `sealant-guest-network-v1` body: the tunnel's keys, the resource
   subnet and `carrier: "websocket"`; an address or port to dial is refused
@@ -128,7 +128,7 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   carries the counters into the launch diagnostic (`tunnel: {sentBytes, receivedBytes}`): sent and
   nothing received is a gateway the carrier's datagrams do not reach. `transfer` is optional, so an
   older agent's answer still decodes. An agent built before the in-VM Docker network policy was
-  removed also reports `docker_policy`; Core accepts the field and never reads it.
+  removed also reports `docker_policy`; sealant accepts the field and never reads it.
 - `POST /sealant/recover`: `{version: 1, runId, secretEnvJson}` with the capture token. Answers from
   the records: `running`, `restarted` (`sealantd boot --recovery` on the VM's own disk),
   `nothing-to-save` with its basis (`daemon`: the recovery boot exited 76; `no-launch`: bound this
@@ -136,9 +136,9 @@ All over the hosted proxy on port 8080, all authenticated by the bearer:
   `recover-state-unknown`). An earlier boot's bearer after a reboot is `recover-new-boot`, never
   a 401. `503 {reason: docker-stop-unverified}` when Docker could not be proved stopped, and
   `503 {reason: daemon-stop-unverified}` when a daemon scope could not be proved gone: nothing was
-  started, and Core retries.
+  started, and sealant retries.
 
-There is no park route: Core removed parking, and the agent no longer serves `POST /sealant/park`
+There is no park route: sealant removed parking, and the agent no longer serves `POST /sealant/park`
 (an image built before that still does, and nothing calls it).
 
 ## An agent restarted on the same boot
@@ -157,8 +157,8 @@ the tmpfs is empty and nothing is adopted.
 ## Verification
 
 `src/runtime/boat/agent-boat.test.ts` runs the real agent and bind CLI on a fake VM against the
-contract. `src/runtime/boat/agent-transport.test.ts` runs Core's real execution owner and transport
-(`execution.ts`) against that same real agent: bind, health proof, network, launch and adoption of a
-lost reply, readiness, every recovery answer, and the control relay's typed refusal.
+contract. `src/runtime/boat/agent-transport.test.ts` runs sealant's real execution owner and
+transport (`execution.ts`) against that same real agent: bind, health proof, network, launch and
+adoption of a lost reply, readiness, every recovery answer, and the control relay's typed refusal.
 `src/runtime/boat/execution.test.ts` pins how each agent status is classified. These are local
 proofs; they do not replace a live Boat session.

@@ -110,9 +110,9 @@ PY
 ```
 
 The fixture attributes screen input to Mend commit `f0defb5753e6d489439be29f13e05ca585447900`,
-`packages/domain/src/settings.ts`, `screenPackageIds`. Core has no production screen package list.
-The Nix fixture supplements ffmpeg explicitly because Mend's missing request needs a later caller
-fix. Ubuntu Chromium uses official snapshot 1735811, its complete release tree and verified
+`packages/domain/src/settings.ts`, `screenPackageIds`. sealant has no production screen package
+list. The Nix fixture supplements ffmpeg explicitly because Mend's missing request needs a later
+caller fix. Ubuntu Chromium uses official snapshot 1735811, its complete release tree and verified
 checksum. ARM has no verified archive and fails planning.
 
 The runner checks receipt and runtime hashes after source deletion and cold clone. It exercises
@@ -147,7 +147,7 @@ start, waits for MainPID zero and the held-admission exit, then verifies lifecyc
 unchanged. A fixed sleep is insufficient while resumed files are loading. Whole-unit stop must
 remove detached writers, screens and Nix workers while the outer sentinel and relay survive. The
 proof accepts `populated 0` or complete cgroup removal after stop, with systemd MainPID zero. Linux
-refuses to remove a populated cgroup. This proves writer exclusion only. Core FINAL preservation
+refuses to remove a populated cgroup. This proves writer exclusion only. sealant FINAL preservation
 evidence remains the authority to delete a run's disk. Production capture/recovery, credentials,
 provider-aware artifact retention and public registration follow in a separate change.
 
@@ -195,7 +195,7 @@ deletion as a blocker.
 Mend still needs a longer cold screen-readiness budget and an explicit Nix ffmpeg request. Its
 current display wait is ten seconds; one cold Nix Xvnc start took about 46 seconds. The fixture
 provenance is Mend commit `f0defb5753e6d489439be29f13e05ca585447900`, blob
-`abc6af533dcb75d5d911ef767e8c4cdfb1fd95c0`. Core owns no production screen option expansion.
+`abc6af533dcb75d5d911ef767e8c4cdfb1fd95c0`. sealant owns no production screen option expansion.
 
 This unit does not prove FINAL capture preservation or per-person daemon sudo in clone mode.
 Registration must integrate owner-map admission, capture/recovery, credentials and artifact

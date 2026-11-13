@@ -65,7 +65,7 @@ export const SHUTDOWN_FINAL_DEADLINE_ENV = "SEALANT_SHUTDOWN_FINAL_DEADLINE_MS";
 
 /**
  * sealantd's own shutdown grace (SIGTERM → SIGKILL for its managed processes) when the boot names
- * none; Core never sets `SEALANT_SHUTDOWN_GRACE_MS`. The final flush's deadline is kept at or
+ * none; sealant never sets `SEALANT_SHUTDOWN_GRACE_MS`. The final flush's deadline is kept at or
  * above it: the processes get their grace before anything is snapped.
  */
 const DAEMON_SHUTDOWN_GRACE_MS = 10_000;
@@ -131,7 +131,7 @@ const shutdownFinalDeadlineEnv = (
  * blueprint's legacy `runtime.env` and every platform lane, so nothing a launch carries can
  * override it: the map in the daemon's encoding, or an empty value when the source names none.
  * sealantd reads an empty value as no map, and the entry overrides an image `ENV` of the same
- * name (a custom base could otherwise make an executor per-person behind Core's checks). Nothing
+ * name (a custom base could otherwise make an executor per-person behind sealant's checks). Nothing
  * for any other source: only a capture boot reads it.
  */
 export const captureOwnerMapEnv = (

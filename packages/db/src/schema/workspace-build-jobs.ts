@@ -265,7 +265,7 @@ export const workspaceRuntimeInstances = pgTable(
     daemonImage: text("daemon_image"),
     /**
      * Whether that daemon has sealantd's recovery boot (resume its own staging, no restore, no
-     * dotfiles, no lifecycle step, no harness, admission closed), as Core knew it at launch.
+     * dotfiles, no lifecycle step, no harness, admission closed), as sealant knew it at launch.
      * Recovery restarts a retained executor on its own disk ONLY when this is `true`: a daemon
      * without it would run its ordinary boot over the work the disk holds. Null = unknown, and
      * unknown is not recoverable in place (kept, reported).
@@ -479,7 +479,7 @@ export const workspaceCaptureDrains = pgTable(
     /**
      * Observations in flight: a status or flush request sent to the executor whose answer is not
      * recorded yet, by token, with when it was opened and when it lapses (the database's clock).
-     * While any is unresolved, nothing Core holds of the executor is known to be current, and no
+     * While any is unresolved, nothing sealant holds of the executor is known to be current, and no
      * deletion is authorized on it (review 6 #5). A failed record leaves its fence; a later
      * observation opened after it lapsed resolves it.
      */

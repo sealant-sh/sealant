@@ -1,9 +1,9 @@
 import { defineConfig } from "vitest/config";
 
 /**
- * The local Boat harness: Core's real worker, API, Boat adapter, guest and gateway against a fake
- * Boat provider and guest-twin containers. Needs Docker with privileged containers, cgroup v2 and
- * kernel WireGuard. Run with `pnpm boat:harness` from the repository root.
+ * The local Boat harness: sealant's real worker, API, Boat adapter, guest and gateway against a
+ * fake Boat provider and guest-twin containers. Needs Docker with privileged containers, cgroup v2
+ * and kernel WireGuard. Run with `pnpm boat:harness` from the repository root.
  */
 export default defineConfig({
   test: {

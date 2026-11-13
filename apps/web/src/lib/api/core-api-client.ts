@@ -711,7 +711,7 @@ class CoreApiClientImpl implements CoreApiClient {
       const parsedMessageResponse = messageResponseSchema.safeParse(payload);
       const message = parsedMessageResponse.success
         ? parsedMessageResponse.data.message
-        : `Core API request to ${url.toString()} failed with status ${response.status}.`;
+        : `sealant API request to ${url.toString()} failed with status ${response.status}.`;
 
       throw new CoreApiHttpError({
         message,

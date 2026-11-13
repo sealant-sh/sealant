@@ -1,10 +1,10 @@
 /**
- * Core's end of a Boat resource tunnel carried over HTTPS. The VM's WireGuard sends its datagrams
- * to the agent's loopback relay, and the agent puts each one in a binary frame on
+ * sealant's end of a Boat resource tunnel carried over HTTPS. The VM's WireGuard sends its
+ * datagrams to the agent's loopback relay, and the agent puts each one in a binary frame on
  * `/sealant/tunnel`. This end opens that WebSocket through Boat's hosted endpoint, the same
- * outbound HTTPS Core uses for every agent route, and relays each frame to the gateway's WireGuard
- * port on this host, and each of the gateway's datagrams back. Neither the VM nor the gateway's
- * host takes an inbound connection, as with a MicroVM.
+ * outbound HTTPS sealant uses for every agent route, and relays each frame to the gateway's
+ * WireGuard port on this host, and each of the gateway's datagrams back. Neither the VM nor the
+ * gateway's host takes an inbound connection, as with a MicroVM.
  *
  * WireGuard is the authority on both ends: a lost frame is a lost datagram, which it retransmits,
  * and a dropped carrier is reopened while WireGuard re-handshakes on its keepalive. A carrier that

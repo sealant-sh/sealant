@@ -1,4 +1,4 @@
-# Release: a vX.Y.Z tag releases Core: the four product images on GHCR, @sealant/sdk and
+# Release: a vX.Y.Z tag releases sealant: the four product images on GHCR, @sealant/sdk and
 # @sealant/api-contracts on npm, and the GitHub release whose assets install.sh downloads. In order:
 #
 # 1. build pushes each image's two platforms by digest, untagged; merge stages each image's index

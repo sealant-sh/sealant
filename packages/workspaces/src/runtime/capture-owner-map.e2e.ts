@@ -1,5 +1,5 @@
 /**
- * The capture owner map through Core's Docker adapter and a real daemon, on a per-person image
+ * The capture owner map through sealant's Docker adapter and a real daemon, on a per-person image
  * (Mend's ADR 0016 decisions 1, 2 and 8; sealantd#145 and #148):
  *
  * 1. **Without a map, as today.** An executor launched with no owner map seeds a worktree and a
@@ -400,7 +400,7 @@ describe.skipIf(!imageTakesOwnerMap)(
 
     it("an image ENV naming a map is overridden: the executor keeps no-new-privileges", async () => {
       // sealant#333 review P3-1: a custom base that sets the variable must not make an executor
-      // per-person behind Core's checks. Every capture launch sets it last, empty without a map.
+      // per-person behind sealant's checks. Every capture launch sets it last, empty without a map.
       const tag = `sealant-owner-map-e2e-env:${randomUUID().slice(0, 8)}`;
       await buildFromStdin(
         tag,

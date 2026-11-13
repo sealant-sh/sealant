@@ -1,7 +1,7 @@
 /**
  * Which workspace reaches which resource instance, and when an unreached instance stops: pure
- * functions of the rows Core stores. Every path that changes Docker (an `up`, a link, an executor's
- * launch and end, the reconciler's tick) converges it to `desiredAttachments`.
+ * functions of the rows sealant stores. Every path that changes Docker (an `up`, a link, an
+ * executor's launch and end, the reconciler's tick) converges it to `desiredAttachments`.
  */
 import type { ResourceInstanceAlias, ResourceInstanceId } from "@sealant/api-contracts";
 import type { LinkedExecutor, ResourceInstanceRecord, ResourceWorkspaceLink } from "@sealant/db";

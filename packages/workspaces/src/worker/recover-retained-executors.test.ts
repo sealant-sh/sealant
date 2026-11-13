@@ -416,7 +416,7 @@ describe("recoverRetainedExecutorsEffect", () => {
   });
 
   it("never removes a RUNNING retained executor on recorded evidence: it drains it first (review 4 #1)", async () => {
-    // A seal of capture 41 is on record; Core's newer observation says the FINAL failed to
+    // A seal of capture 41 is on record; sealant's newer observation says the FINAL failed to
     // snapshot. The executor still runs: the stale seal must not delete it without a drain.
     const failed = captureStatus({
       epoch: 3,
@@ -717,7 +717,7 @@ const unstarted = async () =>
 describe("recoverRetainedExecutorsEffect · a runtime that answers for an executor nothing was started on", () => {
   it.each([
     ["its daemon predates the recovery boot", { instance: { daemonRecoveryBoot: false } }],
-    ["Core cannot tell its daemon's build", { instance: { daemonRecoveryBoot: null } }],
+    ["sealant cannot tell its daemon's build", { instance: { daemonRecoveryBoot: null } }],
     ["no capture token was kept", { captureTokenSealed: null }],
     ["its capture token cannot be unsealed", { captureTokenSealed: "sealed:other" }],
   ] as const)("is asked even when %s, and told what the launch recorded", async (_name, gate) => {
@@ -822,7 +822,7 @@ describe("recoverRetainedExecutorsEffect · a daemon without the recovery boot (
     {
       name: "is of an unknown build",
       recorded: { daemonImage: null, daemonRecoveryBoot: null },
-      reason: "Core cannot tell whether its daemon",
+      reason: "sealant cannot tell whether its daemon",
     },
   ])("keeps an ended executor whose daemon $name, and never starts it", async (scenario) => {
     // Review 3 #8: recovery copied the marker in and ran `docker start` whatever the image; a

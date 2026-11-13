@@ -399,9 +399,9 @@ const workspace = await sealant.workspaces.create({
   `-`), no id and no uid twice, at most 256 people.
 - Launched only on an image whose probe reports `restore.owner_map` from its sealantd
   (`personLayout`). On an image whose sealantd does not report it, the launch fails with
-  `owner-map-unsupported` before anything starts; on one with no probe, or a probe Core cannot read,
-  it fails with `owner-map-unverified`. Refused at create on Cloudflare. On Kubernetes it runs under
-  runc: a per-person Pod may escalate, so each person's `sudo` works, and the cluster's image
+  `owner-map-unsupported` before anything starts; on one with no probe, or a probe sealant cannot
+  read, it fails with `owner-map-unverified`. Refused at create on Cloudflare. On Kubernetes it runs
+  under runc: a per-person Pod may escalate, so each person's `sudo` works, and the cluster's image
   builder reads the probe back from the pushed image. Under gVisor (`ociRuntime: "runsc"`) it is
   refused. `features().kubernetesPersonLayout` says whether the control plane takes it on
   Kubernetes.

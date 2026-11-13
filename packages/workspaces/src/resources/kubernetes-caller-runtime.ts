@@ -535,7 +535,7 @@ export class KubernetesCallerRuntime implements ResourceRuntime {
       bytes: null,
     }));
   }
-  /** Commands are sent over Kubernetes exec, excluded from Core run records and diagnostics. */
+  /** Commands are sent over Kubernetes exec, excluded from sealant run records and diagnostics. */
   public async exec(
     instance: ResourceInstanceRecord,
     command: ResourceExecCommand,

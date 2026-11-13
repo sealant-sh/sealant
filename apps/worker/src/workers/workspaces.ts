@@ -1161,7 +1161,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     if (boatAssembly === undefined || boatSweepRunning) return;
     boatSweepRunning = true;
     try {
-      // Where the things of accounts Core has not pinned are, first: until it knows, such an
+      // Where the things of accounts sealant has not pinned are, first: until it knows, such an
       // account makes no Boat request and takes no new workspace.
       const resolved = await boatAssembly.resolveWallets().catch(() => []);
       const pinned = resolved

@@ -1,11 +1,11 @@
 /**
- * TEST FIXTURE — the drain ledger repository exactly as Core shipped it at review 11
+ * TEST FIXTURE — the drain ledger repository exactly as sealant shipped it at review 11
  * (`packages/db/src/repositories/workspace-capture-drains.ts` at 1d268ec, the commit that added the
- * table's invariants trigger), kept so tests can run the IMMEDIATELY PREVIOUS Core writer against
- * the CURRENT schema, as an adjacent-version rolling deploy does (review 12 #3): it marks its
- * transactions with the first ledger contract (`sealant.capture_ledger = '1'`) but knows nothing of
- * per-request removal outcomes (`deletion_requests`), so it releases an issued removal on any
- * refusal. Not used by any production path. Changes from the original: this comment, and the
+ * table's invariants trigger), kept so tests can run the IMMEDIATELY PREVIOUS sealant writer
+ * against the CURRENT schema, as an adjacent-version rolling deploy does (review 12 #3): it marks
+ * its transactions with the first ledger contract (`sealant.capture_ledger = '1'`) but knows
+ * nothing of per-request removal outcomes (`deletion_requests`), so it releases an issued removal
+ * on any refusal. Not used by any production path. Changes from the original: this comment, and the
  * service key.
  */
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
@@ -147,7 +147,7 @@ export interface WorkspaceCaptureDrainRepoService {
   /**
    * Mark an observation of the run's executor in flight, BEFORE the request is sent (review 6
    * #5): `token` names it until it is resolved — by `recordStatus` with its answer, or by
-   * `closeObservation` when nothing was received. While any is unresolved, nothing Core holds of
+   * `closeObservation` when nothing was received. While any is unresolved, nothing sealant holds of
    * the executor counts as current, and no deletion is authorized on it. It lapses `ttlMs` after
    * it was opened (the database's clock); a lapsed fence still counts until an observation opened
    * after it lapsed is recorded. Bumps the evidence version. Answers when it was opened.
@@ -172,8 +172,8 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly token: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
-   * Record a capture status Core received from the run's executor — a drain's, the public flush
-   * and status routes', a probe's, a sampler's: every status Core receives is evidence about the
+   * Record a capture status sealant received from the run's executor — a drain's, the public flush
+   * and status routes', a probe's, a sampler's: every status sealant receives is evidence about the
    * executor's disk, whoever asked (review 5 #3). `fence`: the observation it answers
    * (`openObservation`), resolved by this write, which also resolves every fence that lapsed
    * before it was opened. Ordered by the executor's own history, never by any process's clock
@@ -184,7 +184,7 @@ export interface WorkspaceCaptureDrainRepoService {
    * 9 #4): an incomparable later answer never erases one. No `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
    * reader's clock, kept for display only. Bumps the evidence version whether or not it replaced
    * the stored status; answers whether it did. A removal still held (`deleting`) is voided: what
-   * Core received about the executor outranks a decision taken before it. One already issued
+   * sealant received about the executor outranks a decision taken before it. One already issued
    * (`deleting-issued`) cannot be revoked and stays; the bumped version keeps it from being issued
    * again on the old evidence (`reconcileIssuedDeletion`). Atomic under the row lock.
    */
@@ -437,7 +437,7 @@ const deletionColumns = {
  * Mark the transaction as a writer that keeps the ledger's invariants itself (review 10, decision
  * 32): `unsaved_statuses`, an issued removal until its outcome is known, the evidence behind every
  * removal request, recovery claims. The table's trigger (`workspace_capture_drains_invariants`)
- * keeps them for every write NOT marked — a Core process from before them, still running in a
+ * keeps them for every write NOT marked — a sealant process from before them, still running in a
  * rolling deploy — and leaves marked writes as they are. Local to the transaction.
  */
 const markCurrentWriter = (tx: Pick<DB, "execute">) =>

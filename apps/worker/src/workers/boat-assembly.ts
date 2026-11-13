@@ -717,7 +717,7 @@ export const assembleBoat = async (input: {
             remaining += 1;
             continue;
           }
-          // Removed with requests that name the wallet it was made in. One Core has not found
+          // Removed with requests that name the wallet it was made in. One sealant has not found
           // yet waits for the resolve pass; one Boat has in no wallet is reported, not removed.
           const recorded = await runRepo(
             Effect.flatMap(NativePublicationRepo, (catalog) =>
@@ -852,9 +852,9 @@ export const assembleBoat = async (input: {
   };
 
   /**
-   * One pass that resolves where things are, for every owner Core has not pinned (accounts
-   * connected before Core pinned them, the install's own key without a setting) and every object
-   * whose wallet Core does not know. The key is checked (read-only); an organization's key has one
+   * One pass that resolves where things are, for every owner sealant has not pinned (accounts
+   * connected before sealant pinned them, the install's own key without a setting) and every object
+   * whose wallet sealant does not know. The key is checked (read-only); an organization's key has one
    * wallet, so everything is in it. For a personal key, each unknown live VM, saved image and full
    * check is looked for under every wallet the key can bill, naming each, in parallel and bounded;
    * what is found is recorded there, an image Boat has in none is `unreachable`. The owner is pinned
@@ -938,9 +938,9 @@ export const assembleBoat = async (input: {
             : observed.wallet.kind === "personal"
               ? "personal"
               : observed.wallet.organizationId) ?? target.desired;
-        // The wallet the key bills now is what a pin needs (`account.read`, which Core requires).
+        // The wallet the key bills now is what a pin needs (`account.read`, which sealant requires).
         // The list of wallets it can bill is needed only to look for unknown objects: without it,
-        // Core looks in the wallet it bills and the person's own, and a miss there proves nothing.
+        // sealant looks in the wallet it bills and the person's own, and a miss there proves nothing.
         if (billed === undefined) return "unavailable";
         const complete = wallets !== undefined;
         const searched = wallets ?? [...new Set([billed, "personal"])];
@@ -1194,7 +1194,7 @@ export const assembleBoat = async (input: {
         },
     reconcileRemovals: registration === undefined ? undefined : reconcileRemovals,
     /** One pass of the changes of organization (`reconcileOrganizationChanges` above). */
-    /** One pass that finds where unknown objects are and pins the owners Core has not pinned. */
+    /** One pass that finds where unknown objects are and pins the owners sealant has not pinned. */
     resolveWallets,
     /** One pass removing saved images recorded in another wallet than their account's now. */
     removeImagesElsewhere: registration === undefined ? undefined : removeImagesElsewhere,
@@ -1242,7 +1242,7 @@ export const assembleBoat = async (input: {
     },
     /** Writes this worker's launch report (`launchReport`), stamped by the database's clock. */
     reportLaunch: async (worker: string, observedAt?: Date) => {
-      // The install's own account launches only once Core knows which wallet its key bills: until
+      // The install's own account launches only once sealant knows which wallet its key bills: until
       // then this worker says it cannot, and the API refuses a create that would need it.
       const installReady =
         launchReport.defaultAccount &&

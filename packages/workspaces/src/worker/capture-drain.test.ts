@@ -105,7 +105,7 @@ describe("drainCaptureBeforeStop", () => {
   });
 
   it("reads the status again when a FINAL's connection closes under it, never taking the close as the outcome (e2e 6)", async () => {
-    // e2e 6: the FINAL's sweep killed Core's `docker exec … socat` bridge, so every stop logged
+    // e2e 6: the FINAL's sweep killed sealant's `docker exec … socat` bridge, so every stop logged
     // `refused: connection closed` and retried a FINAL per poll. The daemon had answered complete.
     const daemon = fakeCaptureDaemon(["closed", savedStatus()]);
     const outcome = await drain(daemon, inMemoryCaptureDrainLedger());

@@ -1,4 +1,4 @@
-// §5 — BUILD ON THE SDK. Sealant core is programmable infrastructure, not container
+// §5 — BUILD ON THE SDK. sealant is programmable infrastructure, not container
 // glue. The fluent SDK is the public surface: create a live workspace, run the harness
 // you already use, keep the record. Light mono panel (not a dark terminal) so the
 // code reads in the same warm evidence-review system as the rest of the page.

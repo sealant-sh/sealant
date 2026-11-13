@@ -21,11 +21,11 @@
 (*   assembly.ts    apps/worker/src/workers/boat-assembly.ts               *)
 (*                                                                         *)
 (* Boat (docs.boat.dev): any call may be refused or go unanswered, a reply *)
-(* may be lost after Boat acted, a request may reach Boat after Core gave  *)
-(* up on it, the label listing may lag a create, a DELETE of a VM stops it *)
-(* at once, and a call with one Boat account's key sees nothing of         *)
-(* another's (404, an empty list). Wallets: "A" is the key the account had *)
-(* when the check started; "B" is another Boat account's key that a        *)
+(* may be lost after Boat acted, a request may reach Boat after sealant    *)
+(* gave up on it, the label listing may lag a create, a DELETE of a VM     *)
+(* stops it at once, and a call with one Boat account's key sees nothing   *)
+(* of another's (404, an empty list). Wallets: "A" is the key the account  *)
+(* had when the check started; "B" is another Boat account's key that a    *)
 (* rotation may store.                                                     *)
 (***************************************************************************)
 EXTENDS Naturals, TLC
@@ -69,7 +69,7 @@ VARIABLES
     createAt,    \* a create sent and not yet acted on by Boat: FALSE | TRUE
     saveAt,      \* a save sent and not yet acted on by Boat
     wallet,      \* the wallet the check's client opened: "A" | "B" | "none"
-    \* Core: the account row (accounts.ts) and the check's row in boat_key_proofs (proofs.ts)
+    \* sealant: the account row (accounts.ts) and the check's row in boat_key_proofs (proofs.ts)
     storedKey,   \* boat_accounts.sealed_key: "A" | "B" | "erased"
     removal,     \* removal_requested_at is set
     started, createIssued, sandboxKnown, saveIssued, vmDeleted, snapDeleted,

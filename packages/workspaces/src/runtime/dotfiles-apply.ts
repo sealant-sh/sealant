@@ -2,7 +2,8 @@
  * A person's dotfiles applied into their home of a RUNNING workspace, as their Linux user
  * (docs/connected-accounts-design.md §6g; Mend's ADR 0016 decision 11). sealantd's `dotfiles.apply`
  * does the applying: the repository clone, chezmoi, stow or copy, then each tree's bootstrap
- * (`./install.sh`) as one managed process of that user. Core does what comes before it and after:
+ * (`./install.sh`) as one managed process of that user. sealant does what comes before it and
+ * after:
  *
  * 1. **The check and the staging, in one exec as root** (`buildDotfilesStageScript`): the user must
  *    exist, must not be root (uid 0) or in root's group, and their passwd home must be the home the

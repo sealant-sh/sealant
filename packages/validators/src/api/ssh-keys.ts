@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /*
-Browser-safe zod mirrors of the ssh-keys core API contract (packages/api-contracts). Used by the
+Browser-safe zod mirrors of the ssh-keys sealant API contract (packages/api-contracts). Used by the
 web tRPC router + settings UI. Key parsing/fingerprinting itself lives in the Node-only subpath
 `@sealant/validators/ssh-public-key` — the API is the authoritative parser; these schemas only
 shape requests/responses.

@@ -1,6 +1,6 @@
 # Boat provider lifetime and ownership evidence
 
-This provider stage starts at Core `8c22bfc4a06ff03a7b764ae75de2d954a2dbec52`. Boat remains
+This provider stage starts at sealant `8c22bfc4a06ff03a7b764ae75de2d954a2dbec52`. Boat remains
 unregistered. No executor, admission, tunnel, database, SDK, or worker registration behavior is
 added.
 
@@ -24,7 +24,7 @@ billing.
 
 One intentional stop reached `archived`, followed by one resume of the same sandbox ID. This was a
 warm stop/resume. It does not establish cold restoration, writer exclusion, FINAL capture, or
-indefinite uptime. Provider failures and exhausted account balance remain outside Core's control.
+indefinite uptime. Provider failures and exhausted account balance remain outside sealant's control.
 
 Deletion operation `bdop_e54bd3d20fb147b0aa54f220ed741750` reached `completed` at `05:34:50.684Z`.
 Final inventory at `05:34:50.815Z` contained zero sandboxes across one complete cursor page and zero
@@ -118,7 +118,7 @@ VM.
 The durable executor still needs issued-create slot occupancy, original-key retries only within the
 documented 24-hour guarantee, positive adoption, conflict quarantine, and no reissue after
 uncertainty. Full failed-FINAL retention, idle maintenance, claim takeover, controller outage,
-recovery, and deletion authorization remain integration gates. Public Core and SDK serialization
+recovery, and deletion authorization remain integration gates. Public sealant and SDK serialization
 must still retain the exact VM ID, observed running state, and continuing compute cost. The parent
 owns those changes, the full forced monorepo checks, registration, and publication. No full
 running-retention integration pass is claimed here.

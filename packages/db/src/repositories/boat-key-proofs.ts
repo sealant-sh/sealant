@@ -34,7 +34,7 @@ export interface BoatKeyProofRecord {
   readonly result: unknown;
   /**
    * The wallet the check made its VM and snapshot in (null: the key's only one), named on every
-   * request about them; undefined while Core does not know it (a check made before wallets were
+   * request about them; undefined while sealant does not know it (a check made before wallets were
    * recorded, by an account with no pin), or Boat has them in no wallet the key can bill.
    */
   readonly wallet: string | null | undefined;

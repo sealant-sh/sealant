@@ -129,7 +129,7 @@ describe("instanceRunArgv", () => {
 });
 
 describe("network, exec and probe argv", () => {
-  it("creates reach networks internal and egress networks routed, each on Core's subnet", () => {
+  it("creates reach networks internal and egress networks routed, each on sealant's subnet", () => {
     expect(networkCreateArgv("sealant-run-1-reach", "reach", "10.231.0.0/27")).toEqual([
       "network",
       "create",

@@ -128,8 +128,8 @@ const deletionResponse = successSchema
   .extend({ operation: deletionSchema })
   .transform((value) => value.operation);
 /**
- * The Boat permission (key action) each of Core's calls needs, by the operation name its errors
- * carry. The list of permissions Core requires of a key is derived from this, so it cannot drift
+ * The Boat permission (key action) each of sealant's calls needs, by the operation name its errors
+ * carry. The list of permissions sealant requires of a key is derived from this, so it cannot drift
  * from the calls the client makes. `deleteSandbox` needs `sandbox.delete`, not
  * `sandbox.delete-own`: after a rotation the new key deletes VMs the old key created.
  */
@@ -152,7 +152,7 @@ export const BOAT_OPERATION_PERMISSIONS = {
   getSnapshot: "snapshot.read",
   deleteSnapshot: "snapshot.write",
   // The account reads (docs.boat.dev/api-keys/scopes: "`/me`, limits, organization discovery,
-  // list keys"): which wallet a key bills and which it can bill, which Core must observe to pin a
+  // list keys"): which wallet a key bills and which it can bill, which sealant must observe to pin a
   // personal key's account, and to find where an account's things are.
   me: "account.read",
   orgs: "account.read",
@@ -298,7 +298,7 @@ export const boatOrganizationSchema = z
   .refine((value) => value.trim() === value);
 
 /**
- * The permissions Core requires of every Boat key: one for each of the client's calls
+ * The permissions sealant requires of every Boat key: one for each of the client's calls
  * ({@link BOAT_OPERATION_PERMISSIONS}), so the list cannot drift from the calls it makes.
  */
 export const BOAT_REQUIRED_PERMISSIONS: readonly string[] = [
@@ -536,8 +536,8 @@ export class HttpBoatApi implements BoatApi {
 
   /**
    * Whether Boat accepts the key, by one read-only call that names no VM: the first page of the
-   * VMs Core labels as its own. It never creates, changes or deletes anything. A key Boat refuses
-   * answers its typed error (401, 403); nothing about the key is in the error.
+   * VMs sealant labels as its own. It never creates, changes or deletes anything. A key Boat
+   * refuses answers its typed error (401, 403); nothing about the key is in the error.
    */
   async verifyCredential(): Promise<BoatResult<void>> {
     const query = new URLSearchParams({ limit: "1" });
