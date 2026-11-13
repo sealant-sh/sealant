@@ -226,5 +226,4 @@ multiple runtimes (HTTP + worker + scheduled job, for example).
 - `apps/api/src/index.ts` — layer composition and server bootstrap.
 - `packages/db/src/client.ts`, `packages/db/src/layers.ts`, and `packages/db/src/repositories/*.ts`.
 - `packages/api-contracts/src/core-api/control-plane.ts`.
-- Effect patterns generally: consult `pnpm exec effect-solutions list` /
-  `pnpm exec effect-solutions show <topic>` before writing new Effect code — see `AGENTS.md`.
+- Effect patterns generally: the home repo's `effect` skill, which `AGENTS.md` points to.

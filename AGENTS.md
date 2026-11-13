@@ -51,33 +51,11 @@ spans repos.
 - In React code, avoid `useEffect` unless there is no cleaner data-flow option.
 - Avoid `any` and avoid type assertions/casts like `as X` unless absolutely unavoidable.
 
-<!-- effect-solutions:start -->
+## Effect
 
-## Effect Best Practices
-
-**IMPORTANT:** Always consult effect-solutions before writing Effect code.
-
-1. Run `pnpm exec effect-solutions list` to see available guides
-2. Run `pnpm exec effect-solutions show <topic>...` for relevant patterns (supports multiple topics)
-3. Search `~/.local/share/effect-solutions/effect` for real implementations
-4. Define Effect services as types/contracts first (`Context.Tag` / `ServiceMap.Service`) with no
-   embedded live implementation in the definition.
-5. Define live/test implementations as separate layer constants after the service definitions (same
-   file is fine when clearly sectioned), and compose those layers at the boundary.
-
-Topics: quick-start, project-setup, tsconfig, basics, services-and-layers, data-modeling,
-error-handling, config, testing, cli.
-
-Never guess at Effect patterns - check the guide first.
-
-<!-- effect-solutions:end -->
-
-## Local Effect Source
-
-The Effect v4 repository is cloned to `~/.local/share/effect-solutions/effect` for reference. Use
-this to explore APIs, find usage examples, and understand implementation details when the
-documentation isn't enough. If the clone is missing, make it with
-`git clone --depth 1 https://github.com/Effect-TS/effect-smol ~/.local/share/effect-solutions/effect`.
+Before writing Effect code, load the home repo's `effect` skill. It covers services, layers, the
+composition root, entrypoints, testing with layers, concurrency and the everyday Effect APIs. Check
+every API against the `effect` version installed in `node_modules`, not memory or upstream `main`.
 
 <!-- intent-skills:start -->
 
