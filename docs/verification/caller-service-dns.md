@@ -71,8 +71,8 @@ SEALANT_CALLER_DOCKER_E2E=1 pnpm exec vitest run \
   apps/api/src/routes/resource-domains/caller-instances.docker.test.ts --reporter=verbose
 ```
 
-CI runs the focused private-resolver proof explicitly in the Docker volume mounts job. The
-Kubernetes NetworkPolicy already has the required rule and is unchanged: only pods labelled
-`k8s-app=kube-dns` in `kube-system`, over UDP/TCP destination 53. The contract test asserts its
-complete destination/port rule and the remaining private-range exclusions. Custom DNS labels or
-NodeLocal DNS need deployment-specific policy.
+CI runs the focused private-resolver proof explicitly in the Runtime proofs job. The Kubernetes
+NetworkPolicy already has the required rule and is unchanged: only pods labelled `k8s-app=kube-dns`
+in `kube-system`, over UDP/TCP destination 53. The contract test asserts its complete
+destination/port rule and the remaining private-range exclusions. Custom DNS labels or NodeLocal DNS
+need deployment-specific policy.

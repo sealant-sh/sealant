@@ -96,8 +96,11 @@ jobs:
       - name: Run typecheck
         run: pnpm typecheck
 
-  docker-volume-mounts:
-    name: Docker volume mounts
+  # The unit and database suites, and the runtime proofs below, were one job that ran them in
+  # series. They share nothing but their setup, so they are two jobs and a pull request waits for
+  # the slower, not the sum.
+  tests:
+    name: Tests
     # Where next.yml's `test` runs (tooling/scripts/workflow-runners.test.mjs): a pull request is
     # tested in the environment its merge's Next tests in. On the box, a test that depended on the
     # host's /etc/skel passed every pull request and failed the first hosted Next (#370).
@@ -153,6 +156,56 @@ jobs:
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
 
+  # Real daemons, real Docker: each step is one proof against the runner's own Docker daemon.
+  runtime-proofs:
+    name: Runtime proofs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The Boat publication suite, the resource reconciler and the caller-owned services proof
+    # use the same migrated Postgres as the tests job.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sealant_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s
+          --health-retries 12
+    env:
+      SEALANT_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sealant_test
+      # The pg-boss queue suite keeps its own schema in the same database.
+      SEALANT_JOBS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sealant_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Migrate the test database
+        run: pnpm db:migrate
+        env:
+          DATABASE_URL: ${{ env.SEALANT_TEST_DATABASE_URL }}
+
+      # Rootless workspace Docker needs unprivileged user namespaces. Ubuntu 24.04's AppArmor
+      # default refuses the uid_map write, so allow and verify them before the proofs run.
+      - name: Allow unprivileged user namespaces, as a Docker host must
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare -Urn true
+
       # The binary from the image sealant pins (the reference pin-sealantd.mjs writes), copied out
       # of a container that is created and never started.
       - name: The pinned sealantd binary
@@ -164,7 +217,8 @@ jobs:
           docker rm "$container"
           "$RUNNER_TEMP/sealantd" --version
 
-      # The suites above skip these without a binary; REQUIRE_SEALANTD=1 makes a missing one fail.
+      # The Tests job skips these suites without a binary; REQUIRE_SEALANTD=1 makes a missing one
+      # fail.
       - name: API forwards through a real sealantd (never skipped)
         env:
           SEALANTD_BIN: ${{ runner.temp }}/sealantd
