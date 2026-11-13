@@ -340,6 +340,11 @@ export const rotateBoatAccountKeyOp = (
     client.boatAccounts.rotateBoatAccountKey({ params: { boatAccountId }, payload }),
   );
 
+export const checkBoatAccountOp = (boatAccountId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.boatAccounts.checkBoatAccount({ params: { boatAccountId } }),
+  );
+
 export const removeBoatAccountOp = (boatAccountId: string) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.boatAccounts.removeBoatAccount({ params: { boatAccountId } }),

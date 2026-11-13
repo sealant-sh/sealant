@@ -241,6 +241,6 @@ export {
 
 export { nativePublications, nativePublicationConsumers } from "./native-publications.js";
 
-export { boatAccounts, type BoatAccountRow } from "./boat-accounts.js";
+export { boatAccounts, boatKeyReports, type BoatAccountRow } from "./boat-accounts.js";
 export { boatRuns, type BoatRunRow } from "./boat-runs.js";
 export { boatTunnels } from "./boat-tunnels.js";

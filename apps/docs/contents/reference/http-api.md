@@ -158,16 +158,53 @@ account per organization, so each organization's Boat VMs run in, and are billed
 account. Core has no notion of organizations: it knows each account by id, and the caller keeps the
 mapping. These routes need a service key, and an install that serves Boat (`503` otherwise).
 
-- `POST /v1/boat-accounts { label, apiKey }` checks the key with Boat by one read-only call before
-  it stores anything: a key Boat refuses answers `422` with code `boat-key-refused`, and one Boat
-  did not answer for `boat-key-unverified`. The key is sealed with the install's credential key
+- `POST /v1/boat-accounts { label, apiKey, organization? }` checks the key with Boat by read-only
+  calls before it stores anything (whitespace around a pasted key is trimmed). A key Boat refuses
+  (unknown, revoked, expired, another organization's) answers `422` with code `boat-key-refused` and
+  Boat's reason in `boat` (see the workspace's `error.boat` below); a key that provably lacks a
+  permission Core needs answers `422` with code `boat-key-missing-permissions`, the permissions
+  named in `missingPermissions` and the check in `report`; one Boat did not answer for
+  `boat-key-unverified`. For a personal key, `organization` names the Boat organization to bill (its
+  id or name): Core stores it and sends it as `X-Boat-Org` on every request for the account, so
+  billing never follows the key's active wallet. The key is sealed with the install's credential key
   (`SEALANT_CREDENTIALS_KEY`) and is never returned by any route, logged or named in an error. The
-  answer is `{ boatAccountId, label, state, createdAt, keyRotatedAt }`.
-- `GET /v1/boat-accounts` lists every account not removed. `state` is `active` or `removing`.
-- `PUT /v1/boat-accounts/:boatAccountId/key { apiKey }` replaces the key. The new key must see every
-  VM of the account's live runs and every saved image its launches use, so a key of another Boat
-  account is refused (`409`, code `boat-key-cannot-see`, with the count in `unseen`). Running
-  workspaces stay in the account and use the new key from then on.
+  answer is
+  `{ boatAccountId, label, state, createdAt, keyRotatedAt, source, organization, report }`.
+- `GET /v1/boat-accounts` lists the install's own key first, as `boatAccountId` `default` with
+  `source: "environment"`, then every stored account not removed (`source: "stored"`). `state` is
+  `active` or `removing`. Each carries its key's last `report`, null until it is checked.
+- `POST /v1/boat-accounts/:boatAccountId/check` checks the key again (`default` for the install's
+  own key) and stores and answers the new report. A key Boat now refuses, or that lacks a
+  permission, is reported, not refused; Boat not answering is `422` `boat-key-unverified`, and the
+  last report stands.
+- `PUT /v1/boat-accounts/:boatAccountId/key { apiKey }` replaces the key, checked as on create and
+  billing the organization the account was stored with. The new key must see every VM of the
+  account's live runs and every saved image its launches use, so a key of another Boat account is
+  refused (`409`, code `boat-key-cannot-see`, with the count in `unseen`). Running workspaces stay
+  in the account and use the new key from then on. Rotating or removing `default` is refused (`409`,
+  code `boat-account-environment`): that key is set in the install's environment.
+
+A key's `report` says what Core observed of it, from Boat's own answers, and when (`observedAt`).
+Each fact is `{ observed: true, … }` or `{ observed: false, reason, boat? }`, where `reason` is
+`refused` (Boat refused the read; `boat` says how), `no-answer`, `not-listed` (Boat's key list did
+not include the key: an organization key is refused the list, a key limited to some VMs gets an
+empty one) or `unreadable`. Core never guesses a fact it did not observe.
+
+| Field                 | What it is, when observed                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| `identity`            | Who the key is (`GET /me`): `userId`, `login`, `displayName`, `serviceAccount`, `accountStatus`        |
+| `keyKind`             | `personal` or `organization`                                                                           |
+| `wallet`              | Which wallet a VM bills (`GET /limits`): `personal`, or `organization` with its id and name            |
+| `requiredPermissions` | The permissions Core needs, one per Boat call it makes (always present)                                |
+| `permissions`         | The key's permissions (`GET /api-keys`), the required ones it lacks, whether it is limited to some VMs |
+| `expiry`              | `expiresAt` (null: never), `expired`, `expiringSoon`                                                   |
+| `start`               | `canStart`, `blockedReason`, `billingStatus`, `runningVms`, `allowedVms`                               |
+| `snapshots`           | Saved snapshot slots `used` and `included`                                                             |
+
+Core needs `exec`, `file.write`, `host`, `sandbox.create`, `sandbox.delete`, `sandbox.read`,
+`sandbox.resume`, `sandbox.stop`, `snapshot.read` and `snapshot.write`. `sandbox.delete-own` is not
+enough: after a rotation the new key deletes VMs the old key created.
+
 - `DELETE /v1/boat-accounts/:boatAccountId` is refused while the account has runs whose VMs Boat may
   still hold, or an image build in flight (`409`, code `boat-account-in-use`, with `liveRuns` and
   `buildsInFlight`). Otherwise the account answers `state: "removing"`: no new workspace runs in it,

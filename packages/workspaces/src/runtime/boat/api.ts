@@ -276,17 +276,107 @@ export interface BoatApiOptions {
   readonly credential: BoatSecret;
   readonly baseUrl?: string;
   readonly timeoutMs?: number;
+  /**
+   * The Boat organization every request bills (its id or name; `X-Boat-Org`). Absent: a personal
+   * key bills its account's active wallet, which `boat org switch` changes at any time.
+   */
+  readonly organization?: string;
 }
+
+/** A Boat organization as `X-Boat-Org` takes it: an id (`team_…`), a name, or `personal`. */
+export const boatOrganizationSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,127}$/)
+  .refine((value) => value.trim() === value);
+
+/**
+ * The permissions Core requires of every Boat key: one for each of the client's calls
+ * ({@link BOAT_OPERATION_PERMISSIONS}), so the list cannot drift from the calls it makes.
+ */
+export const BOAT_REQUIRED_PERMISSIONS: readonly string[] = [
+  ...new Set(Object.values(BOAT_OPERATION_PERMISSIONS)),
+].toSorted();
+
+const looseObject = <S extends z.ZodRawShape>(shape: S) => z.object(shape).loose();
+const meResponse = looseObject({
+  user: looseObject({
+    id: z.string().optional(),
+    login: z.string().optional(),
+    displayName: z.string().nullable().optional(),
+    serviceAccount: z.boolean().optional(),
+    accountStatus: z.string().optional(),
+    suspended: z.boolean().optional(),
+    closed: z.boolean().optional(),
+  }),
+});
+export type BoatMe = z.infer<typeof meResponse>["user"];
+const orgsResponse = looseObject({
+  orgs: z.array(
+    looseObject({
+      id: z.string(),
+      name: z.string().optional(),
+      type: z.string().optional(),
+      role: z.string().optional(),
+      active: z.boolean().optional(),
+    }),
+  ),
+});
+export type BoatOrg = z.infer<typeof orgsResponse>["orgs"][number];
+const limitsResponse = looseObject({
+  canStart: z.boolean(),
+  blockedReason: z.string().nullable().optional(),
+  startBlockedReason: z.string().nullable().optional(),
+  billingStatus: z.string().optional(),
+  activeSandboxes: z.number().int().nonnegative(),
+  maxActiveSandboxes: z.number().int().nonnegative(),
+  teamId: z.string().optional(),
+  teamRole: z.string().optional(),
+});
+export type BoatLimits = z.infer<typeof limitsResponse>;
+const apiKeysResponse = looseObject({
+  apiKeys: z.array(
+    looseObject({
+      id: z.string(),
+      name: z.string().optional(),
+      keyPrefix: z.string(),
+      keyLastFour: z.string(),
+      teamId: z.string().nullable().optional(),
+      expiresAt: z.string().nullable().optional(),
+      neverExpires: z.boolean().optional(),
+      expired: z.boolean().optional(),
+      expiringSoon: z.boolean().optional(),
+      scope: looseObject({
+        expiresAt: z.string().nullable().optional(),
+        actions: z.array(z.string()).optional(),
+        sandboxes: z.union([z.literal("*"), z.array(z.string())]).optional(),
+        environments: z.union([z.literal("*"), z.array(z.string())]).optional(),
+      }).optional(),
+    }),
+  ),
+  catalog: looseObject({
+    presets: z.record(z.string(), z.array(z.string())).optional(),
+  }).optional(),
+});
+export type BoatApiKeys = z.infer<typeof apiKeysResponse>;
+const snapshotsResponse = looseObject({
+  allowance: looseObject({
+    included: z.number().int().nonnegative(),
+    used: z.number().int().nonnegative(),
+  }),
+});
+export type BoatSnapshotAllowance = z.infer<typeof snapshotsResponse>["allowance"];
 
 export class HttpBoatApi implements BoatApi {
   readonly #credential: BoatSecret;
   readonly #base: string;
   readonly #timeout: number;
+  readonly #organization: string | undefined;
 
   private constructor(options: BoatApiOptions, base: string) {
     this.#credential = options.credential;
     this.#base = base;
     this.#timeout = options.timeoutMs ?? 90_000;
+    this.#organization = options.organization;
   }
 
   static create(options: BoatApiOptions): BoatResult<HttpBoatApi> {
@@ -301,7 +391,9 @@ export class HttpBoatApi implements BoatApi {
         url.username ||
         url.password ||
         !Number.isInteger(options.timeoutMs ?? 90_000) ||
-        (options.timeoutMs ?? 90_000) <= 0
+        (options.timeoutMs ?? 90_000) <= 0 ||
+        (options.organization !== undefined &&
+          !boatOrganizationSchema.safeParse(options.organization).success)
       ) {
         return { ok: false, error: new BoatApiError("config", null, "invalid_config") };
       }
@@ -410,6 +502,50 @@ export class HttpBoatApi implements BoatApi {
     query.append("label", "sealant-runtime=boat");
     const page = await this.#request("verify", "GET", `/sandboxes?${query}`, inventoryResponse);
     return page.ok ? { ok: true, value: undefined } : page;
+  }
+
+  /** Who the key is (`GET /me`). Read-only. */
+  async me(): Promise<BoatResult<BoatMe>> {
+    const result = await this.#request("me", "GET", "/me", meResponse);
+    return result.ok ? { ok: true, value: result.value.user } : result;
+  }
+
+  /** The organizations the key's account belongs to (`GET /orgs`). Read-only. */
+  async orgs(): Promise<BoatResult<readonly BoatOrg[]>> {
+    const result = await this.#request("orgs", "GET", "/orgs", orgsResponse);
+    return result.ok ? { ok: true, value: result.value.orgs } : result;
+  }
+
+  /** The billed wallet's limits (`GET /limits`), for the organization this client names. */
+  limits(): Promise<BoatResult<BoatLimits>> {
+    return this.#request("limits", "GET", "/limits", limitsResponse);
+  }
+
+  /** The account's keys (`GET /api-keys`): metadata only, never a secret. Read-only. */
+  apiKeys(): Promise<BoatResult<BoatApiKeys>> {
+    return this.#request("apiKeys", "GET", "/api-keys", apiKeysResponse);
+  }
+
+  /** The wallet's saved snapshot allowance (`GET /saved-snapshots`). Read-only. */
+  async snapshotAllowance(): Promise<BoatResult<BoatSnapshotAllowance>> {
+    const result = await this.#request(
+      "listSnapshots",
+      "GET",
+      "/saved-snapshots",
+      snapshotsResponse,
+    );
+    return result.ok ? { ok: true, value: result.value.allowance } : result;
+  }
+
+  /** Whether `entry` (from {@link apiKeys}) is this client's own key, by its prefix and last four. */
+  isOwnKey(entry: { readonly keyPrefix: string; readonly keyLastFour: string }): boolean {
+    const key = this.#credential.reveal();
+    return (
+      entry.keyPrefix.length > 0 &&
+      entry.keyLastFour.length === 4 &&
+      key.startsWith(entry.keyPrefix) &&
+      key.endsWith(entry.keyLastFour)
+    );
   }
 
   get(id: BoatSandboxId): Promise<BoatResult<BoatSandbox>> {
@@ -689,6 +825,7 @@ export class HttpBoatApi implements BoatApi {
           headers: {
             Authorization: `Bearer ${this.#credential.reveal()}`,
             "Content-Type": "application/json",
+            ...(this.#organization === undefined ? {} : { "X-Boat-Org": this.#organization }),
             ...extra,
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),

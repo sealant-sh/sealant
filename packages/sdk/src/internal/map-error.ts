@@ -4,7 +4,11 @@
  * errors, or schema decode errors; the runtime squashes the `Cause` to its failure value and hands it
  * here. This is the single funnel that keeps Effect internals out of the public, Promise-based API.
  */
-import { BudgetExceededError } from "@sealant/api-contracts";
+import {
+  boatFailureSchema,
+  boatKeyReportSchema,
+  BudgetExceededError,
+} from "@sealant/api-contracts";
 import { Option, Schema } from "effect";
 
 import { SealantApiError, SealantBudgetExceededError, SealantError } from "../errors.js";
@@ -82,6 +86,12 @@ export const toSealantError = (cause: unknown): SealantError => {
       ? candidates.filter((id): id is string => typeof id === "string")
       : undefined;
     const receipt = toReceipt(record?.["receipt"]);
+    const boat = Schema.decodeUnknownOption(boatFailureSchema)(record?.["boat"]);
+    const missing = record?.["missingPermissions"];
+    const missingPermissions = Array.isArray(missing)
+      ? missing.filter((name): name is string => typeof name === "string")
+      : undefined;
+    const report = Schema.decodeUnknownOption(boatKeyReportSchema)(record?.["report"]);
     return new SealantApiError(message, {
       code: tag,
       ...(status === undefined ? {} : { status }),
@@ -89,6 +99,11 @@ export const toSealantError = (cause: unknown): SealantError => {
       ...(provider === undefined ? {} : { provider }),
       ...(candidateAccountIds === undefined ? {} : { candidateAccountIds }),
       ...(receipt === undefined ? {} : { receipt }),
+      ...(Option.isSome(boat) ? { boat: boat.value } : {}),
+      ...(missingPermissions === undefined ? {} : { missingPermissions }),
+      ...(tag === "BoatAccountKeyRefusedError" && Option.isSome(report)
+        ? { boatKeyReport: report.value }
+        : {}),
       cause,
     });
   }

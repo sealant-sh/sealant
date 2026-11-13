@@ -33,8 +33,11 @@ export type * from "./types.js";
 export {
   BOAT_FAILURE_KINDS,
   BOAT_RETRYABLE_FAILURE_KINDS,
+  BOAT_DEFAULT_ACCOUNT_ID,
   type BoatFailure,
   type BoatFailureKind,
+  type BoatKeyNotObserved,
+  type BoatKeyReport,
 } from "@sealant/api-contracts";
 export type {
   EnsuredScope,

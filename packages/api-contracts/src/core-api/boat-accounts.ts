@@ -1,5 +1,5 @@
 /**
- * Boat accounts wire contracts — the Boat API keys an install keeps beside its default one.
+ * Boat accounts wire contracts — the Boat keys an install keeps beside its default one.
  *
  * An install's default Boat account is its env key (`SEALANT_BOAT_API_KEY`). A product that serves
  * several organizations (Mend) stores one more account per organization, so each organization's
@@ -13,6 +13,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import { boatFailureSchema } from "./boat-failures.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 /**
  * A key is checked only for being there: a check that failed on its value would print it in the
@@ -23,27 +25,118 @@ const BoatAccountId = Schema.String.check(
   Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
 );
 
+/** The install's own Boat key (its env key) as `list` and `check` name it. */
+export const BOAT_DEFAULT_ACCOUNT_ID = "default";
+const BoatAccountRef = Schema.Union([BoatAccountId, Schema.Literal(BOAT_DEFAULT_ACCOUNT_ID)]);
+
+/**
+ * A fact Boat did not let Core observe, and why. `refused`: Boat refused the read (`boat` says
+ * how; an organization key is refused Boat's key list). `no-answer`: Boat did not answer.
+ * `not-listed`: Boat's key list did not include this key (a key limited to some VMs gets an empty
+ * list), or included more than one that could be it. `unreadable`: Boat answered with something
+ * Core could not read. Core never guesses a fact it did not observe.
+ */
+export const boatKeyNotObservedSchema = Schema.Struct({
+  observed: Schema.Literal(false),
+  reason: Schema.Literals(["refused", "no-answer", "not-listed", "unreadable"]),
+  boat: Schema.optional(boatFailureSchema),
+});
+export type BoatKeyNotObserved = typeof boatKeyNotObservedSchema.Type;
+const observedOr = <F extends Schema.Struct.Fields>(fields: F) =>
+  Schema.Union([
+    Schema.Struct({ observed: Schema.Literal(true), ...fields }),
+    boatKeyNotObservedSchema,
+  ]);
+
+/**
+ * What Core observed of a Boat key, from Boat's own answers, at `observedAt`. Each fact is
+ * `observed: true` with its value, or `observed: false` with the reason Boat did not show it.
+ */
+export const boatKeyReportSchema = Schema.Struct({
+  observedAt: Schema.String,
+  /** The Boat organization the account bills (`X-Boat-Org` on every request), or null. */
+  organization: Schema.NullOr(Schema.String),
+  /** Who the key is (`GET /me`). */
+  identity: observedOr({
+    userId: Schema.optional(Schema.String),
+    login: Schema.optional(Schema.String),
+    displayName: Schema.optional(Schema.String),
+    serviceAccount: Schema.optional(Schema.Boolean),
+    accountStatus: Schema.Literals(["active", "suspended", "closed", "unknown"]),
+  }),
+  /** A personal (account) key, or an organization's key. */
+  keyKind: observedOr({ kind: Schema.Literals(["personal", "organization"]) }),
+  /** Which wallet a VM started with the key bills (`GET /limits`). */
+  wallet: observedOr({
+    kind: Schema.Literals(["personal", "organization"]),
+    organizationId: Schema.optional(Schema.String),
+    organizationName: Schema.optional(Schema.String),
+    role: Schema.optional(Schema.String),
+  }),
+  /** The permissions Core needs of every key, from the Boat calls it makes. */
+  requiredPermissions: Schema.Array(Schema.String),
+  /** The key's permissions (`GET /api-keys`), and which of the required ones it lacks. */
+  permissions: observedOr({
+    held: Schema.Array(Schema.String),
+    missing: Schema.Array(Schema.String),
+    /** The key is limited to some VMs or environments: it cannot reach VMs Core creates. */
+    limitedToSandboxes: Schema.Boolean,
+  }),
+  /** When the key expires; `expiresAt` null: it never does. */
+  expiry: observedOr({
+    expiresAt: Schema.NullOr(Schema.String),
+    expired: Schema.Boolean,
+    expiringSoon: Schema.Boolean,
+  }),
+  /** Whether the wallet can start a VM now, why not, and its running and allowed VMs. */
+  start: observedOr({
+    canStart: Schema.Boolean,
+    blockedReason: Schema.optional(Schema.String),
+    billingStatus: Schema.optional(Schema.String),
+    runningVms: Schema.Int,
+    allowedVms: Schema.Int,
+  }),
+  /** Saved snapshot slots of the wallet (`GET /saved-snapshots`). */
+  snapshots: observedOr({ used: Schema.Int, included: Schema.Int }),
+});
+export type BoatKeyReport = typeof boatKeyReportSchema.Type;
+
 export const boatAccountSchema = Schema.Struct({
-  boatAccountId: BoatAccountId,
+  /** The account's id; `default` for the install's own key (`source: environment`). */
+  boatAccountId: BoatAccountRef,
   label: NonEmptyString,
   /** `active`: workspaces may run in it. `removing`: its removal was asked; none may. */
   state: Schema.Literals(["active", "removing"]),
   createdAt: Schema.String,
   /** When its key was last replaced; null when it still has the key it was created with. */
   keyRotatedAt: Schema.NullOr(Schema.String),
+  /**
+   * `stored`: kept through this API. `environment`: the install's own key, set in its environment
+   * (`SEALANT_BOAT_API_KEY`); it cannot be rotated or removed here.
+   */
+  source: Schema.optional(Schema.Literals(["stored", "environment"])),
+  /** The Boat organization the account bills, sent on every request for it; null: none named. */
+  organization: Schema.optional(Schema.NullOr(Schema.String)),
+  /** The key's last report, with when it was observed; null until the key is checked. */
+  report: Schema.optional(Schema.NullOr(boatKeyReportSchema)),
 });
 export type BoatAccountWire = typeof boatAccountSchema.Type;
 
 export const createBoatAccountRequestSchema = Schema.Struct({
   /** The caller's name for the account (an organization's name, say). At most 200 characters. */
   label: NonEmptyString,
-  /** The Boat API key. Checked with Boat by one read-only call before it is stored. */
+  /** The Boat key. Checked with Boat by read-only calls before it is stored; whitespace around it is trimmed. */
   apiKey: SecretString,
+  /**
+   * For a personal key: the Boat organization to bill (its id or name), sent as `X-Boat-Org` on
+   * every request for the account, so billing never follows the key's active wallet.
+   */
+  organization: Schema.optional(NonEmptyString),
 });
 export type CreateBoatAccountRequest = typeof createBoatAccountRequestSchema.Type;
 
 export const rotateBoatAccountKeyRequestSchema = Schema.Struct({
-  /** The new Boat API key, for the same Boat account: it must see every VM the account runs. */
+  /** The new Boat key, for the same Boat account: it must see every VM the account runs. */
   apiKey: SecretString,
 });
 export type RotateBoatAccountKeyRequest = typeof rotateBoatAccountKeyRequestSchema.Type;
@@ -60,15 +153,24 @@ export class BoatAccountBadRequestError extends Schema.TaggedError<BoatAccountBa
 ) {}
 
 /**
- * Boat refused the key (`boat-key-refused`: it answered that the key is not valid), or did not
- * answer whether it is (`boat-key-unverified`: Boat was unreachable; try again). Nothing was
- * stored or changed. The message never names the key or any part of it.
+ * Boat refused the key (`boat-key-refused`: it answered that the key is not valid, has expired or
+ * belongs to another organization; `boat` says which), the key provably lacks permissions Core
+ * needs (`boat-key-missing-permissions`, named in `missingPermissions`), or Boat did not answer
+ * whether it is valid (`boat-key-unverified`: try again). Nothing was stored or changed. The
+ * message never names the key or any part of it.
  */
 export class BoatAccountKeyRefusedError extends Schema.TaggedError<BoatAccountKeyRefusedError>()(
   "BoatAccountKeyRefusedError",
   {
     message: Schema.String,
-    code: Schema.Literals(["boat-key-refused", "boat-key-unverified"]),
+    code: Schema.Literals([
+      "boat-key-refused",
+      "boat-key-unverified",
+      "boat-key-missing-permissions",
+    ]),
+    missingPermissions: Schema.optional(Schema.Array(Schema.String)),
+    boat: Schema.optional(boatFailureSchema),
+    report: Schema.optional(boatKeyReportSchema),
   },
   { httpApiStatus: 422 },
 ) {}
@@ -87,6 +189,8 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * `boat-key-cannot-see`: a rotation to a key that cannot see VMs or saved images the account has
  * now (`unseen`), so it is most likely another Boat account's key. `boat-account-removing`: the
  * account's removal was asked. `boat-account-changed`: another rotation won; read and try again.
+ * `boat-account-environment`: the install's own key (`default`) is set in its environment, not
+ * through this API.
  */
 export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConflictError>()(
   "BoatAccountConflictError",
@@ -97,6 +201,7 @@ export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConf
       "boat-key-cannot-see",
       "boat-account-removing",
       "boat-account-changed",
+      "boat-account-environment",
     ]),
     liveRuns: Schema.optional(Schema.Int),
     buildsInFlight: Schema.optional(Schema.Int),
@@ -118,7 +223,7 @@ export class BoatAccountInternalServerError extends Schema.TaggedError<BoatAccou
   { httpApiStatus: 500 },
 ) {}
 
-const boatAccountIdParams = Schema.Struct({ boatAccountId: BoatAccountId });
+const boatAccountIdParams = Schema.Struct({ boatAccountId: BoatAccountRef });
 
 export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
   .add(
@@ -155,6 +260,19 @@ export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
     }),
   )
   .add(
+    // Checks the account's key with Boat again (read-only) and stores the report it answers.
+    HttpApiEndpoint.post("checkBoatAccount", "/:boatAccountId/check", {
+      params: boatAccountIdParams,
+      success: boatAccountSchema,
+      error: [
+        BoatAccountKeyRefusedError,
+        BoatAccountNotFoundError,
+        BoatAccountServiceUnavailableError,
+        BoatAccountInternalServerError,
+      ],
+    }),
+  )
+  .add(
     // The removal's first step: the account takes no new workspace at once, and its saved images
     // are deleted from Boat by the worker before it is gone from the list.
     HttpApiEndpoint.delete("removeBoatAccount", "/:boatAccountId", {
@@ -170,5 +288,5 @@ export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
   )
   .annotate(
     OpenApi.Description,
-    "The Boat API keys an install keeps beside its default one: one Boat account each, for the workspaces that name it.",
+    "The Boat keys an install keeps beside its default one: one Boat account each, for the workspaces that name it.",
   );

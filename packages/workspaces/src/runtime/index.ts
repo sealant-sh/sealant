@@ -269,7 +269,19 @@ export {
 export { BOAT_KEPT_REPORT_MS, boatKeptReports } from "./boat/kept-report.js";
 export { BoatAllocationProvider } from "./boat/provider.js";
 
-export { HttpBoatApi, type BoatApi } from "./boat/api.js";
+export {
+  BOAT_OPERATION_PERMISSIONS,
+  BOAT_REQUIRED_PERMISSIONS,
+  HttpBoatApi,
+  boatOrganizationSchema,
+  type BoatApi,
+} from "./boat/api.js";
+export {
+  boatKeyRefusedReport,
+  checkBoatKey,
+  type BoatKeyCheck,
+  type BoatKeyCheckClient,
+} from "./boat/key-check.js";
 export {
   BoatApiError,
   BoatSecret,

@@ -9,7 +9,9 @@ import { BoatAccountRepo } from "@sealant/db";
 import { BOAT_RUNTIME_ID } from "@sealant/validators";
 import {
   HttpBoatApi,
+  loadBoatCredential,
   unregisteredRuntimeRefusal,
+  type BoatKeyCheckClient,
   type BoatResult,
   type BoatSecret,
 } from "@sealant/workspaces";
@@ -27,15 +29,37 @@ export const BoatConfigured = Context.Reference<boolean>("@sealant/api/BoatConfi
     env.SEALANT_BOAT_API_KEY !== undefined || env.SEALANT_BOAT_API_KEY_FILE !== undefined,
 });
 
-/** The reads the API asks of Boat with a key it was given, before it stores the key. */
-export type BoatKeyClient = Pick<HttpBoatApi, "verifyCredential" | "get" | "getSnapshot">;
+/** The reads the API asks of Boat with a key: its check, and what a rotation must still see. */
+export type BoatKeyClient = BoatKeyCheckClient & Pick<HttpBoatApi, "get" | "getSnapshot">;
 
-/** How the API opens a Boat key it was given into a client: Boat's real API; a test's fake. */
+/**
+ * How the API opens a Boat key into a client, naming the organization it bills when the account
+ * names one: Boat's real API; a test's fake.
+ */
 export const BoatKeyClients = Context.Reference<
-  (credential: BoatSecret) => BoatResult<BoatKeyClient>
+  (
+    credential: BoatSecret,
+    options?: { readonly organization?: string },
+  ) => BoatResult<BoatKeyClient>
 >("@sealant/api/BoatKeyClients", {
-  defaultValue: () => (credential) => HttpBoatApi.create({ credential }),
+  defaultValue: () => (credential, options) =>
+    HttpBoatApi.create({
+      credential,
+      ...(options?.organization === undefined ? {} : { organization: options.organization }),
+    }),
 });
+
+/** The install's own Boat key (`SEALANT_BOAT_API_KEY` or its file), for its check; never returned. */
+export const BoatDefaultKey = Context.Reference<() => BoatResult<BoatSecret>>(
+  "@sealant/api/BoatDefaultKey",
+  {
+    defaultValue: () => () =>
+      loadBoatCredential({
+        value: env.SEALANT_BOAT_API_KEY,
+        file: env.SEALANT_BOAT_API_KEY_FILE,
+      }),
+  },
+);
 
 /** Boat on a deployment that did not configure it is refused like any unregistered runtime. */
 export const requireBoatConfigured = Effect.gen(function* () {

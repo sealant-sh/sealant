@@ -1,5 +1,6 @@
 import type {
   BoatFailure,
+  BoatKeyReport,
   RequestBudgetRefusal,
   ForwardRefusalReason,
 } from "@sealant/api-contracts";
@@ -55,6 +56,12 @@ export class SealantApiError extends SealantError {
   readonly candidateAccountIds?: readonly string[];
   /** An inference error after the account was resolved: the exchange's login. */
   readonly receipt?: InferenceReceipt;
+  /** A Boat key refusal (`boat-key-refused`, `boat-key-unverified`): why, as Boat said. */
+  readonly boat?: BoatFailure;
+  /** `boat-key-missing-permissions`: the Boat permissions Core needs that the key lacks. */
+  readonly missingPermissions?: readonly string[];
+  /** `boat-key-missing-permissions`: what the check observed of the refused key. */
+  readonly boatKeyReport?: BoatKeyReport;
   constructor(
     message: string,
     options?: {
@@ -64,6 +71,9 @@ export class SealantApiError extends SealantError {
       readonly provider?: string;
       readonly candidateAccountIds?: readonly string[];
       readonly receipt?: InferenceReceipt;
+      readonly boat?: BoatFailure;
+      readonly missingPermissions?: readonly string[];
+      readonly boatKeyReport?: BoatKeyReport;
       readonly cause?: unknown;
     },
   ) {
@@ -86,6 +96,10 @@ export class SealantApiError extends SealantError {
     if (options?.receipt !== undefined) {
       this.receipt = options.receipt;
     }
+    if (options?.boat !== undefined) this.boat = options.boat;
+    if (options?.missingPermissions !== undefined)
+      this.missingPermissions = options.missingPermissions;
+    if (options?.boatKeyReport !== undefined) this.boatKeyReport = options.boatKeyReport;
   }
 }
 

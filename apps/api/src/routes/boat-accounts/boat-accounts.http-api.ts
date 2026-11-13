@@ -2,6 +2,7 @@ import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { HttpApiBuilder } from "effect/http-api";
 
 import {
+  checkBoatAccount,
   createBoatAccount,
   listBoatAccounts,
   removeBoatAccount,
@@ -18,5 +19,6 @@ export const BoatAccountsHandlersLive = HttpApiBuilder.group(
       .handle("rotateBoatAccountKey", ({ params, payload }) =>
         rotateBoatAccountKey(params.boatAccountId, payload),
       )
+      .handle("checkBoatAccount", ({ params }) => checkBoatAccount(params.boatAccountId))
       .handle("removeBoatAccount", ({ params }) => removeBoatAccount(params.boatAccountId)),
 );
