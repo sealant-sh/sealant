@@ -13,7 +13,7 @@ import { CliFailure, describeUnknown } from "./errors.js";
 import { authClaudeCommand } from "./providers/claude.js";
 import { authCodexCommand } from "./providers/codex.js";
 import { authGithubCommand } from "./providers/github.js";
-import { makePalette } from "./render.js";
+import { isTerminal, makePalette } from "./render.js";
 import { ExternalToolsLive } from "./tools.js";
 
 const authCommand = Command.make("auth").pipe(
@@ -48,9 +48,7 @@ const MainLive = Layer.mergeAll(
  */
 const handleFailure = (error: unknown): Effect.Effect<void> =>
   Effect.sync(() => {
-    const palette = makePalette(
-      Boolean(process.stderr.isTTY) && process.env.NO_COLOR === undefined,
-    );
+    const palette = makePalette(isTerminal(process.stderr) && process.env.NO_COLOR === undefined);
     if (error instanceof CliFailure) {
       console.error(palette.red(`error: ${error.message}`));
       if (error.hint !== undefined) {

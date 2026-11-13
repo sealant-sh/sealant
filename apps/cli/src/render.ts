@@ -28,8 +28,15 @@ export const makePalette = (enabled: boolean): Palette => ({
   cyan: style(enabled, 36, 39),
 });
 
+/**
+ * Whether a stream is a terminal. @types/node types `isTTY` as always present, but Node leaves it
+ * undefined on a pipe or a file, so read it as optional.
+ */
+export const isTerminal = (stream: { readonly isTTY?: boolean | undefined }): boolean =>
+  stream.isTTY === true;
+
 export const isColorEnabled = (): boolean =>
-  Boolean(process.stdout.isTTY) && process.env.NO_COLOR === undefined;
+  isTerminal(process.stdout) && process.env.NO_COLOR === undefined;
 
 // Intentional control character: it strips the ANSI SGR sequences the palette itself emits.
 // oxlint-disable-next-line no-control-regex
