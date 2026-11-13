@@ -30,6 +30,8 @@ export function RepositoryRow({
       try {
         const result = await onLoadTags(repository);
         setTags(result);
+      } catch {
+        // The tags stay unloaded, so expanding the row again retries.
       } finally {
         setLoading(false);
       }
@@ -43,7 +45,7 @@ export function RepositoryRow({
       {/* Row header — clickable */}
       <button
         type="button"
-        onClick={handleToggle}
+        onClick={() => void handleToggle()}
         className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
         aria-expanded={expanded}
       >

@@ -42,7 +42,12 @@ export function ManifestDetail({
 
   const handleCopyDigest = React.useCallback(async () => {
     if (!digest) return;
-    await navigator.clipboard.writeText(digest);
+    try {
+      await navigator.clipboard.writeText(digest);
+    } catch {
+      // A refused clipboard leaves the button as it was; the digest stays on screen to copy.
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }, [digest]);
@@ -65,7 +70,7 @@ export function ManifestDetail({
             <Button
               variant="ghost"
               size="icon-xs"
-              onClick={handleCopyDigest}
+              onClick={() => void handleCopyDigest()}
               aria-label="Copy full digest"
               className="shrink-0 text-muted-foreground hover:text-foreground"
             >
@@ -145,6 +150,19 @@ function MetaCell({ label, value, mono }: MetaCellProps) {
   );
 }
 
+function isOciLayer(value: unknown): value is OciLayer {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "mediaType" in value &&
+    typeof value.mediaType === "string" &&
+    "size" in value &&
+    typeof value.size === "number" &&
+    "digest" in value &&
+    typeof value.digest === "string"
+  );
+}
+
 function getLayers(manifest: unknown): OciLayer[] {
   if (
     typeof manifest === "object" &&
@@ -152,7 +170,7 @@ function getLayers(manifest: unknown): OciLayer[] {
     "layers" in manifest &&
     Array.isArray(manifest.layers)
   ) {
-    return (manifest as { layers: OciLayer[] }).layers;
+    return manifest.layers.filter(isOciLayer);
   }
   return [];
 }
