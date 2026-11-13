@@ -9,7 +9,15 @@ spans repos.
 - `apps/web`: TanStack Start product web app.
 - `apps/api`: Hono control-plane API.
 - `apps/worker`: background workspace build worker.
-- `packages/*`: shared libraries (`db`, `auth`, `ui`, `workspace-*`, `registry-*`, integrations).
+- `apps/ssh-gateway`: SSH routing to workspaces. `apps/cf-bridge`: the Cloudflare Worker behind the
+  cloudflare runtime adapter.
+- `apps/cli`: connects AI-subscription credentials and manages profile bindings.
+- `apps/docs`, `apps/marketing`: the docs site and the public website.
+- `packages/sdk`, `packages/api-contracts`: published to npm as `@sealant/sdk` and
+  `@sealant/api-contracts`. Mend builds on the SDK alone, so a change to either is a public API
+  change and needs a changeset (`.changeset/README.md`).
+- `packages/*`: private shared libraries (`db`, `auth`, `jobs`, `workspaces`, `credentials`,
+  `telemetry`, `validators`, `source-integrations`, `ui`).
 
 ## Product Language Contract
 
@@ -21,35 +29,57 @@ spans repos.
 - When shaping sealant API surfaces for the web app, model around the workspace and run lifecycles
   first.
 
-## Agent Defaults
+## Linear, Fixes and PRs
 
-- Submit pull requests as ready for review, never as drafts. With `gh stack`, use
-  `gh stack submit --auto --open`.
-- After code changes, always run `pnpm format:fix`.
-- For type-checking, use `pnpm typecheck`. It runs [tsrs](https://github.com/oxc-project/tsrs), a
-  Rust port of the TypeScript 7 checker, in every package, as `tsrs --checkers 1`. It is in beta and
-  pinned exactly; if you think it is wrong about an error, compare with `tsc` and report any
-  difference upstream. Package builds still emit with `tsc`. `pnpm lint:types` runs oxlint's
-  type-aware rules with tsrs as the type engine (`OXLINT_TSGOLINT_PATH=…/tsrs-lint`).
-- `pnpm-lock.yaml` is generated, never hand-edited: let `pnpm install` / `pnpm add` write it, and
-  commit the result alongside the `package.json` change that caused it. CI and every image build
-  install with `--frozen-lockfile`, so a dependency change without its lockfile update fails CI. No
-  workflow step writes the lockfile.
-- For internal dependencies, always use `workspace:*` in `package.json` and import via
-  `@sealant/<package-name>`; never import from `../packages/*` paths.
-- For external dependencies used by more than one app/package, prefer `catalog:` versions in
-  `package.json` instead of inline semver.
-- If a shared external dependency is missing from the catalog, add it to the root
-  `pnpm-workspace.yaml` `catalog` and then reference it as `catalog:` from importers.
-- Do not duplicate shared external dependency version strings across apps/packages; keep version
-  authority in `pnpm-workspace.yaml`.
-- For any non-tiny UI change in `apps/web`, read `apps/web/DESIGN.md` first and follow it as the
-  design source of truth.
-- Tests passing is not verification. To see a change working, and to screenshot every UI change for
-  its PR, use the `verify` skill in `.agents/skills/verify/`.
-- Do not add `"use client"` anywhere; this repo is not Next.js.
-- In React code, avoid `useEffect` unless there is no cleaner data-flow option.
-- Avoid `any` and avoid type assertions/casts like `as X` unless absolutely unavoidable.
+- When the work has a Linear ticket, load the `linear` skill
+  (`../agent-home/.agents/skills/linear/`) before you start. Keep the ticket current while you work:
+  when you make a decision, hit a blocker or change scope, comment on the ticket then, before
+  carrying on.
+- Fix a problem straight away only if it meets Fix Now or File in `../agent-home/AGENTS.md`. File
+  the rest in Linear.
+- Every change lands through a PR, docs and config included; never push to `main`. Open it with the
+  `file-pr` skill (`../agent-home/.agents/skills/file-pr/`).
+
+## Checks Before a PR
+
+CI runs lint, typecheck and the tests. Run these before pushing and see them pass, formatting last:
+
+```sh
+pnpm lint
+pnpm typecheck
+pnpm --filter <package> test   # for each package the change touches
+pnpm format:fix
+```
+
+`pnpm typecheck` runs [tsrs](https://github.com/oxc-project/tsrs), a Rust port of the TypeScript 7
+checker, in every package, as `tsrs --checkers 1`. It is in beta and pinned exactly; if you think it
+is wrong about an error, compare with `tsc` and report any difference upstream. Package builds still
+emit with `tsc`. `pnpm lint:types` runs oxlint's type-aware rules with tsrs as the type engine
+(`OXLINT_TSGOLINT_PATH=…/tsrs-lint`).
+
+Tests passing is not verification. To see a change working, and to screenshot every UI change for
+its PR, use the `verify` skill in `.agents/skills/verify/`.
+
+## Dependencies
+
+- `pnpm-lock.yaml` is generated: let `pnpm install` / `pnpm add` write it, and commit it with the
+  `package.json` change that caused it. CI and every image build install with `--frozen-lockfile`,
+  and no workflow step writes the lockfile, so a dependency change without its lockfile fails CI.
+- Internal dependencies use `workspace:*` in `package.json` and are imported as
+  `@sealant/<package-name>`, never through `../packages/*` paths.
+- An external dependency used by more than one app or package takes its version from the root
+  `pnpm-workspace.yaml` `catalog`, referenced as `catalog:`. Add it to the catalog if it is missing.
+
+## Code
+
+- All backend code is Effect v4; see Effect below.
+- Write TypeScript to the `coding-standards` skill
+  (`../agent-home/.agents/skills/coding-standards/`), including its rules on `any` and casts.
+- Before any non-tiny UI change in `apps/web`, read `apps/web/DESIGN.md` and follow it as the design
+  source of truth.
+- This repo is not Next.js: write no `"use client"` directives.
+- In React, derive data from props, state and loaders; reach for `useEffect` only when no cleaner
+  data flow exists.
 
 ## Effect
 
