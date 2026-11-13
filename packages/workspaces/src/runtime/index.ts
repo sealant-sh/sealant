@@ -277,11 +277,14 @@ export {
   type BoatApi,
 } from "./boat/api.js";
 export {
+  boatKeyBilling,
   boatKeyRefusedReport,
   checkBoatKey,
   observeBoatKey,
+  readBoatKeyReport,
   type BoatKeyCheck,
   type BoatKeyCheckClient,
+  type BoatKeyCheckOptions,
   type BoatKeyObservation,
 } from "./boat/key-check.js";
 export {

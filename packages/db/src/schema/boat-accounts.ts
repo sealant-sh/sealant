@@ -39,11 +39,21 @@ export const boatAccounts = snakeCase.table(
     keyId: text(),
     keyRevision: integer().notNull().default(1),
     /**
-     * The Boat organization the account bills (its id or name), sent as `X-Boat-Org` on every
-     * request for it; null: none named, so a personal key bills its active wallet. Set when the
-     * account is stored and never changed.
+     * The Boat organization the account bills (its id or name, or `personal`), sent as
+     * `X-Boat-Org` on every request for it; null: none named, so a personal key bills its active
+     * wallet. Set when the account is stored, and changed only once the account holds nothing in
+     * the wallet it billed (see `organization_change_requested_at`); every change bumps
+     * `key_revision`, so every holder of a client opens one that names the new wallet.
      */
     boatOrganization: text(),
+    /**
+     * What the key is, as a check observed it: `personal` (a person's key, which bills the wallet a
+     * request names, so the account is always pinned), `organization` (an organization's key, one
+     * wallet by construction: no pin), or null: not observed. An account with a personal or
+     * unobserved key and no pin was connected before sealant pinned accounts; it makes no Boat request
+     * until the worker has found where its things are and pinned it.
+     */
+    keyKind: text(),
     createdAt: instant().notNull().defaultNow(),
     keyRotatedAt: instant(),
     removalRequestedAt: instant(),
@@ -59,6 +69,7 @@ export const boatAccounts = snakeCase.table(
       sql`${table.removedAt} is null or ${table.removalRequestedAt} is not null`,
     ),
     check("boat_accounts_label", sql`length(${table.label}) between 1 and 200`),
+    check("boat_accounts_key_kind", sql`${table.keyKind} in ('personal','organization')`),
   ],
 );
 
@@ -98,6 +109,15 @@ export const boatInstall = snakeCase.table(
     id: text().primaryKey(),
     deploymentId: text(),
     builderOwner: uuid(),
+    /**
+     * The wallet the install's own key bills (`X-Boat-Org` on its every request): what
+     * `SEALANT_BOAT_ORGANIZATION` names, applied once nothing of the install's runs, builds or full
+     * checks is in the wallet it named before; or, without the setting, what sealant observed at its
+     * first check. Null with `key_kind` `organization`: an organization's key. Null otherwise: not
+     * resolved yet, and the install's own account makes no Boat request.
+     */
+    organization: text(),
+    keyKind: text(),
     createdAt: instant().notNull().defaultNow(),
   },
   (table) => [check("boat_install_one", sql`${table.id} = 'install'`)],
@@ -147,10 +167,28 @@ export const boatKeyProofs = snakeCase.table(
     finishedAt: instant(),
     cleanupPending: boolean().notNull().default(false),
     result: jsonb(),
+    /**
+     * The Boat wallet it was created in, named (`X-Boat-Org`) on every later request about it: an
+     * organization's id or name, or `personal`; null with `boatWalletState` `known`: the key's only
+     * wallet (an organization's key), named by no header. See `boatWalletState`.
+     */
+    boatWallet: text(),
+    /**
+     * `known`: `boatWallet` is where it is. `unknown`: made before sealant recorded wallets, by an
+     * account with no pin; no request about it is made until sealant has found it. `unreachable`: sealant
+     * looked under every wallet the key can bill and Boat has it in none: never removed or used.
+     */
+    boatWalletState: text().notNull().default("unknown"),
   },
   (table) => [
+    check(
+      "boat_key_proofs_wallet",
+      sql`${table.boatWalletState} in ('known','unknown','unreachable') and (${table.boatWalletState} = 'known' or ${table.boatWallet} is null)`,
+    ),
     uniqueIndex("boat_key_proofs_one_running")
       .on(table.account)
-      .where(sql`${table.finishedAt} is null or ${table.cleanupPending}`),
+      .where(
+        sql`(${table.finishedAt} is null or ${table.cleanupPending}) and ${table.boatWalletState} <> 'unreachable'`,
+      ),
   ],
 );

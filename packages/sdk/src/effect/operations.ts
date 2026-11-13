@@ -16,6 +16,7 @@ import type {
   CreateConnectedAccountRequest,
   CreateBoatAccountRequest,
   RotateBoatAccountKeyRequest,
+  SetBoatAccountOrganizationRequest,
   CreateSshKeyRequest,
   EnsureUserRequest,
   PersonBindingWire,
@@ -342,6 +343,14 @@ export const rotateBoatAccountKeyOp = (
 ) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.boatAccounts.rotateBoatAccountKey({ params: { boatAccountId }, payload }),
+  );
+
+export const setBoatAccountOrganizationOp = (
+  boatAccountId: string,
+  payload: SetBoatAccountOrganizationRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.boatAccounts.setBoatAccountOrganization({ params: { boatAccountId }, payload }),
   );
 
 export const checkBoatAccountOp = (boatAccountId: string) =>

@@ -62,6 +62,11 @@ export interface BoatKeyProofOptions {
   /** A stored account's id, or `default` for the install's own key. */
   readonly account: string;
   readonly client: BoatKeyProofClient;
+  /**
+   * The wallet `client` names on every request (null: none, an organization key's only wallet).
+   * The check is recorded in it, and starts only if the account creates in that wallet now.
+   */
+  readonly wallet: string | null;
   readonly now?: () => Date;
   /** Between two reads while Boat starts the VM, saves the snapshot or deletes the VM. */
   readonly pollMs?: number;
@@ -147,7 +152,10 @@ const locateVm = async (client: BoatKeyProofClient, record: BoatKeyProofRecord) 
 export const proveBoatKey = async (
   options: BoatKeyProofOptions,
 ): Promise<
-  { readonly kind: "running" } | { readonly kind: "proven"; readonly proof: BoatKeyProof }
+  | { readonly kind: "running" }
+  /** The account's wallet changed since `client` was opened: nothing was started. */
+  | { readonly kind: "wallet-changed" }
+  | { readonly kind: "proven"; readonly proof: BoatKeyProof }
 > => {
   const now = options.now ?? (() => new Date());
   const pollMs = options.pollMs ?? 2_000;
@@ -166,9 +174,11 @@ export const proveBoatKey = async (
       snapshotName: snapshot,
       startedAt,
       claimedUntil: new Date(startedAt.getTime() + BOAT_KEY_PROOF_CLAIM_MS),
+      wallet: options.wallet,
     }),
   );
   if (started === "running") return { kind: "running" };
+  if (started === "wallet-changed") return { kind: "wallet-changed" };
 
   const steps = new Map<BoatKeyProofStepName, BoatKeyProofStep>();
   const set = (step: BoatKeyProofStep) => steps.set(step.step, step);
@@ -307,6 +317,7 @@ export const proveBoatKey = async (
               snapshotName: snapshot,
               startedAt,
               claimedUntil: startedAt,
+              wallet: options.wallet,
               createIssuedAt: startedAt,
               sandboxId: null,
               saveIssuedAt: null,
@@ -384,7 +395,16 @@ export interface BoatKeyProofSweepOutcome {
  */
 export const sweepBoatKeyProofs = async (options: {
   readonly proofs: BoatKeyProofRepoService;
-  readonly clientFor: (account: string) => Promise<BoatKeyProofClient | undefined>;
+  /**
+   * A client for the account's key that names `wallet` on every request (null: none): the wallet
+   * the check was recorded in, never the account's current one. Undefined: the check was made
+   * before sealant recorded wallets, and the client finds where its VM and snapshot are, recording
+   * them unreachable if Boat has them in none of the key's wallets (`StoredAccountApi`).
+   */
+  readonly clientFor: (
+    account: string,
+    wallet: string | null | undefined,
+  ) => Promise<BoatKeyProofClient | undefined>;
   readonly now?: () => Date;
   readonly pollMs?: number;
   readonly waitMs?: number;
@@ -394,7 +414,7 @@ export const sweepBoatKeyProofs = async (options: {
   const outcomes: BoatKeyProofSweepOutcome[] = [];
   for (const record of await store.do((repo) => repo.toSweep(now()))) {
     const settled = await (async () => {
-      const client = await options.clientFor(record.account).catch(() => undefined);
+      const client = await options.clientFor(record.account, record.wallet).catch(() => undefined);
       if (client === undefined) return false;
       let snapshotGone = record.saveIssuedAt === null || record.snapshotDeletedAt !== null;
       if (!snapshotGone) {

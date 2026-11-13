@@ -3,8 +3,13 @@ import { BoatRunRepo, BoatRunRepoLive, SealantDB, type DB } from "@sealant/db";
 import { Effect, Layer, ManagedRuntime } from "effect";
 
 import { boatAccountControl } from "./account-router.js";
-import { BoatAccountDirectory, type BoatAccountId, type BoatClientFactory } from "./accounts.js";
-import type { BoatApi } from "./api.js";
+import {
+  BoatAccountDirectory,
+  installBoatApi,
+  type BoatAccountId,
+  type BoatClientFactory,
+} from "./accounts.js";
+import type { BoatSecret } from "./config.js";
 import { BoatControlMaterial, boatControlMaterialLayer } from "./control-material.js";
 import { boatInstallNames } from "./provider-env.js";
 import { BoatAllocationProvider } from "./provider.js";
@@ -78,12 +83,16 @@ export const boatAccountControlMaterial = (input: {
 
 /**
  * The same control as a layer, for a process root that holds its database and cipher as services:
- * the API's. `defaultAccount` is the env key's client, where the install has one, and the deployment
+ * the API's. `defaultAccount` is the env key, where the install has one (its client names the
+ * install's wallet, `installBoatApi`), and the deployment
  * its env names; without one, the install's stored name (`boatInstallNames`), the worker's too. An
  * install with no env key still opens its stored accounts' runs.
  */
 export const boatAccountControlMaterialLayer = (options: {
-  readonly defaultAccount?: { readonly deploymentId: string | undefined; readonly api: BoatApi };
+  readonly defaultAccount?: {
+    readonly deploymentId: string | undefined;
+    readonly credential: BoatSecret;
+  };
   readonly clientFor?: BoatClientFactory;
 }): Layer.Layer<BoatControlMaterial, never, SealantDB | CredentialCipher> => {
   // Read once per process, not once per build of the layer: the name never changes.
@@ -104,12 +113,21 @@ export const boatAccountControlMaterialLayer = (options: {
       const db = yield* SealantDB;
       const cipher = yield* CredentialCipher;
       const fallback = options.defaultAccount;
-      const defaultAccount =
+      const fallbackDeployment =
         fallback === undefined
           ? undefined
+          : yield* Effect.promise(() => deploymentOf(db, fallback.deploymentId));
+      const defaultAccount =
+        fallback === undefined || fallbackDeployment === undefined
+          ? undefined
           : {
-              api: fallback.api,
-              deploymentId: yield* Effect.promise(() => deploymentOf(db, fallback.deploymentId)),
+              api: installBoatApi({
+                db,
+                credential: fallback.credential,
+                deploymentId: fallbackDeployment,
+                ...(options.clientFor === undefined ? {} : { clientFor: options.clientFor }),
+              }),
+              deploymentId: fallbackDeployment,
             };
       const directory = new BoatAccountDirectory({
         db,

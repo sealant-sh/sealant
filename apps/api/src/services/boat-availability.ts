@@ -5,7 +5,7 @@ import {
   WorkspaceNotFoundError,
   WorkspaceServiceUnavailableError,
 } from "@sealant/api-contracts";
-import { BoatAccountRepo } from "@sealant/db";
+import { BoatAccountRepo, createBoatWalletOf } from "@sealant/db";
 import { BOAT_RUNTIME_ID } from "@sealant/validators";
 import {
   BOAT_LAUNCH_REPORT_FRESH_MS,
@@ -182,6 +182,7 @@ export const requireBoatAccount = (
           message: refusal,
         });
     }
+    // The install's own account, unresolved or absent, is refused above from the workers' report.
     if (accountId === undefined) return;
     if (runtimeFamily !== BOAT_RUNTIME_ID)
       return yield* new WorkspaceBadRequestError({
@@ -202,5 +203,14 @@ export const requireBoatAccount = (
     if (account.removalRequestedAt !== null)
       return yield* new WorkspaceConflictError({
         message: `Boat account ${accountId} is being removed: no new workspace runs in it.`,
+      });
+    // Connected before sealant pinned accounts, and not pinned yet: nothing new starts with its key
+    // until sealant has seen the wallet the key bills (the worker's next pass, or a rotation). Its
+    // workspaces already running are not touched.
+    if (createBoatWalletOf(account.organization, account.keyKind).kind === "unresolved")
+      return yield* new WorkspaceConflictError({
+        code: "boat-account-wallet-unresolved",
+        message:
+          "The Boat account this workspace names was connected before sealant pinned accounts to a Boat wallet, and sealant has not seen yet which wallet its key bills: no new workspace starts in it until then, usually within a minute of an upgrade. If the key lacks Boat's account.read permission, sealant cannot see it: replace the account's key with one that has account.read (rotate it). Its workspaces already running are not affected.",
       });
   });

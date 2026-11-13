@@ -49,6 +49,7 @@ describe.skipIf(databaseUrl === undefined)("a stored account's organization", ()
               sealedKey: `sealed:${KEY}`,
               keyId: "k-test",
               organization: "team_acme",
+              keyKind: "personal",
             }),
           ).pipe(
             Effect.provide(BoatAccountRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db)))),

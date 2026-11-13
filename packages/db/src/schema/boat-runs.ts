@@ -41,6 +41,19 @@ export const boatRuns = snakeCase.table(
      * existed is.
      */
     accountId: uuid().references(() => boatAccounts.id, { onDelete: "restrict" }),
+    /**
+     * The Boat wallet it was created in, named (`X-Boat-Org`) on every later request about it: an
+     * organization's id or name, or `personal`; null with `boatWalletState` `known`: the key's only
+     * wallet (an organization's key), named by no header. See `boatWalletState`.
+     */
+    boatWallet: text(),
+    /**
+     * `known`: `boatWallet` is where it is. `unknown`: made before sealant recorded wallets, by an
+     * account with no pin; requests about it name no wallet, as they did then, until sealant has
+     * found it. `unreachable`: Boat has it in none of the wallets the key can bill (or, for a key
+     * that cannot list them, not in the one it bills): the run is absent on that basis.
+     */
+    boatWalletState: text().notNull().default("unknown"),
     publicationId: uuid()
       .notNull()
       .references(() => nativePublications.id, { onDelete: "restrict" }),
@@ -77,7 +90,9 @@ export const boatRuns = snakeCase.table(
     deletionOperationId: text(),
     deletionCompletedAt: instant(),
     absentAt: instant(),
-    absentBasis: text().$type<"not-found" | "deletion-completed" | "never-created">(),
+    absentBasis: text().$type<
+      "not-found" | "deletion-completed" | "never-created" | "unreachable"
+    >(),
     heldReason: text().$type<
       "allocation-conflict" | "lifetime-unverified" | "run-stopped" | "create-unresolved"
     >(),
@@ -87,6 +102,10 @@ export const boatRuns = snakeCase.table(
       .default(sql`'[]'::jsonb`),
   },
   (table) => [
+    check(
+      "boat_runs_wallet",
+      sql`${table.boatWalletState} in ('known','unknown','unreachable') and (${table.boatWalletState} = 'known' or ${table.boatWallet} is null)`,
+    ),
     uniqueIndex("boat_runs_sandbox").on(table.deploymentId, table.sandboxId),
     index("boat_runs_deployment").on(table.deploymentId, table.runId),
     index("boat_runs_account").on(table.accountId, table.runId),
@@ -123,7 +142,8 @@ export const boatRuns = snakeCase.table(
       sql`(${table.absentAt} is null and ${table.absentBasis} is null)
         or (${table.absentAt} is not null and ${table.absentBasis} = 'not-found' and ${table.sandboxId} is not null and ${table.createdSeenAt} is not null)
         or (${table.absentAt} is not null and ${table.absentBasis} = 'deletion-completed' and ${table.sandboxId} is not null)
-        or (${table.absentAt} is not null and ${table.absentBasis} = 'never-created' and ${table.sandboxId} is null)`,
+        or (${table.absentAt} is not null and ${table.absentBasis} = 'never-created' and ${table.sandboxId} is null)
+        or (${table.absentAt} is not null and ${table.absentBasis} = 'unreachable')`,
     ),
     check(
       "boat_runs_held",

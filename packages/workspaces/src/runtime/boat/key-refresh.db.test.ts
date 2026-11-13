@@ -67,7 +67,13 @@ describe.skipIf(databaseUrl === undefined)("the scheduled refresh of Boat key re
         const id = randomUUID();
         await repo(
           Effect.flatMap(BoatAccountRepo, (accounts) =>
-            accounts.create({ id, label: "Org R", sealedKey: `sealed:${ACCOUNT_KEY}`, keyId: "k" }),
+            accounts.create({
+              id,
+              label: "Org R",
+              sealedKey: `sealed:${ACCOUNT_KEY}`,
+              keyId: "k",
+              keyKind: null,
+            }),
           ),
         );
         const installKey = BoatSecret.parse(INSTALL_KEY);
@@ -95,7 +101,12 @@ describe.skipIf(databaseUrl === undefined)("the scheduled refresh of Boat key re
         ]);
         const first = await reports();
         expect(first.get(id)?.observedAt.toISOString()).toBe(clock.toISOString());
-        expect(first.get("default")?.report).toMatchObject({ organization: "team_acme" });
+        // The install's own key, pinned by SEALANT_BOAT_ORGANIZATION, says so as a stored one does.
+        expect(first.get("default")?.report).toMatchObject({
+          organization: "team_acme",
+          billing: { mode: "pinned", organization: "team_acme" },
+        });
+        expect(first.get(id)?.report).toMatchObject({ billing: { mode: "active-wallet" } });
         expect(install.organizationHeaders.map((header) => header.organization)).toContain(
           "team_acme",
         );

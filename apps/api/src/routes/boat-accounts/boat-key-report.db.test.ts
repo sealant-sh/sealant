@@ -108,7 +108,8 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
       routes.createBoatAccount({ label: "Org A", apiKey: `  ${ACCOUNT_KEY}\n` }),
     );
     expect(created).toMatchObject({
-      organization: null,
+      // Pinned at connect to the wallet the key bills.
+      organization: "personal",
       report: {
         identity: { observed: true, login: "fake-owner", accountStatus: "active" },
         wallet: { observed: true, kind: "personal" },
@@ -143,6 +144,7 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
           "host",
           "snapshot.read",
           "snapshot.write",
+          "account.read",
         ],
       },
     };

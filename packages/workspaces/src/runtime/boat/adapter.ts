@@ -120,6 +120,11 @@ export const BOAT_STOP_BOUND_MS = 45_000;
  * How long this adapter's own `recover` answer that a VM holds nothing to save lets its `stop`
  * delete that VM: longer than one recovery attempt takes to go from the answer to the removal.
  */
+/**
+ * Why a run's VM is gone when sealant made it before it recorded wallets and Boat has it in none of
+ * the wallets the key can bill (absence basis `unreachable`).
+ */
+export const BOAT_VM_UNREACHABLE = "the VM could not be found in any wallet this key can bill";
 const BOAT_NOTHING_TO_SAVE_MS = 10 * 60_000;
 /** The bound on one inspection's reads; past it the answer is `running`. */
 const BOAT_INSPECT_BOUND_MS = 20_000;
@@ -627,7 +632,10 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
           if (now - at >= BOAT_INSPECT_READ_MS) inspected.delete(id);
       inspected.set(sandboxId, now);
       const presence = yield* (yield* BoatVm).observe(run);
-      if (presence.kind === "absent") return { state: "missing" } as const;
+      if (presence.kind === "absent")
+        return presence.basis === "unreachable"
+          ? ({ state: "missing", detail: BOAT_VM_UNREACHABLE } as const)
+          : ({ state: "missing" } as const);
       // A 404 before Boat ever reported the VM past creation, a failed read, another VM's labels.
       if (presence.kind !== "present") return running;
       const platformState = presence.sandbox.state;

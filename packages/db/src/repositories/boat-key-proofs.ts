@@ -1,8 +1,9 @@
-import { and, desc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
-import { boatKeyProofs } from "../schema/boat-accounts.js";
+import { boatAccounts, boatKeyProofs } from "../schema/boat-accounts.js";
+import { createWalletOf, installCreateWallet } from "./boat-wallets.js";
 
 /** Safe failure codes: never a key or a provider body. */
 export class BoatKeyProofStoreError extends Error {
@@ -31,6 +32,12 @@ export interface BoatKeyProofRecord {
   readonly finishedAt: Date | null;
   readonly cleanupPending: boolean;
   readonly result: unknown;
+  /**
+   * The wallet the check made its VM and snapshot in (null: the key's only one), named on every
+   * request about them; undefined while sealant does not know it (a check made before wallets were
+   * recorded, by an account with no pin), or Boat has them in no wallet the key can bill.
+   */
+  readonly wallet: string | null | undefined;
 }
 
 /**
@@ -47,7 +54,9 @@ export interface BoatKeyProofRepoService {
     readonly snapshotName: string;
     readonly startedAt: Date;
     readonly claimedUntil: Date;
-  }) => Failing<"started" | "running">;
+    /** The wallet the check's client names (null: none). Recorded with the check. */
+    readonly wallet: string | null;
+  }) => Failing<"started" | "running" | "wallet-changed">;
   readonly createIssued: (id: string, at: Date) => Failing<void>;
   readonly sandboxSeen: (id: string, sandboxId: string) => Failing<void>;
   readonly saveIssued: (id: string, at: Date) => Failing<void>;
@@ -82,6 +91,12 @@ export class BoatKeyProofRepo extends Context.Service<BoatKeyProofRepo, BoatKeyP
   "@sealant/db/BoatKeyProofRepo",
 ) {}
 
+type ProofRow = typeof boatKeyProofs.$inferSelect;
+const toRecord = ({ boatWallet, boatWalletState, ...row }: ProofRow): BoatKeyProofRecord => ({
+  ...row,
+  wallet: boatWalletState === "known" ? boatWallet : undefined,
+});
+
 const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.gen(function* () {
   const db = yield* SealantDB;
   const boundary = <A>(effect: Effect.Effect<A, unknown>): Failing<A> =>
@@ -91,16 +106,42 @@ const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.ge
       db.update(boatKeyProofs).set(values).where(eq(boatKeyProofs.id, id)).pipe(Effect.asVoid),
     );
   return BoatKeyProofRepo.of({
-    start: (input) =>
+    // Recorded in the wallet the account creates in now, read under the row its wallet change
+    // takes `for update`; a client that names another (the wallet changed since it was opened)
+    // starts nothing. A change is refused while the check is outstanding.
+    start: ({ wallet, ...input }) =>
       boundary(
-        db
-          .insert(boatKeyProofs)
-          .values(input)
-          .onConflictDoNothing()
-          .returning({ id: boatKeyProofs.id })
-          .pipe(
-            Effect.map((rows) => (rows.length === 0 ? ("running" as const) : ("started" as const))),
-          ),
+        db.transaction(() =>
+          Effect.gen(function* () {
+            const current =
+              input.account === "default"
+                ? yield* installCreateWallet(db)
+                : yield* db
+                    .select({
+                      organization: boatAccounts.boatOrganization,
+                      keyKind: boatAccounts.keyKind,
+                    })
+                    .from(boatAccounts)
+                    .where(eq(boatAccounts.id, input.account))
+                    .for("share")
+                    .pipe(
+                      // No such account (a test's): nothing to name, as for an install with none.
+                      Effect.map(([row]) =>
+                        row === undefined
+                          ? ({ kind: "known", wallet: null } as const)
+                          : createWalletOf(row.organization, row.keyKind),
+                      ),
+                    );
+            if (current.kind !== "known" || current.wallet !== wallet)
+              return "wallet-changed" as const;
+            const rows = yield* db
+              .insert(boatKeyProofs)
+              .values({ ...input, boatWallet: wallet, boatWalletState: "known" })
+              .onConflictDoNothing()
+              .returning({ id: boatKeyProofs.id });
+            return rows.length === 0 ? ("running" as const) : ("started" as const);
+          }),
+        ),
       ),
     createIssued: (id, at) => set(id, { createIssuedAt: at }),
     sandboxSeen: (id, sandboxId) => set(id, { sandboxId }),
@@ -122,13 +163,18 @@ const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.ge
           .select()
           .from(boatKeyProofs)
           .where(
-            or(
-              and(isNull(boatKeyProofs.finishedAt), lt(boatKeyProofs.claimedUntil, now)),
-              eq(boatKeyProofs.cleanupPending, true),
+            and(
+              or(
+                and(isNull(boatKeyProofs.finishedAt), lt(boatKeyProofs.claimedUntil, now)),
+                eq(boatKeyProofs.cleanupPending, true),
+              ),
+              // Boat has what it made in none of the key's wallets: nothing is left to delete.
+              ne(boatKeyProofs.boatWalletState, "unreachable"),
             ),
           )
           .orderBy(boatKeyProofs.startedAt)
-          .limit(20),
+          .limit(20)
+          .pipe(Effect.map((rows) => rows.map(toRecord))),
       ),
     settle: (id, input) =>
       boundary(
@@ -149,7 +195,7 @@ const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.ge
           .from(boatKeyProofs)
           .where(and(isNotNull(boatKeyProofs.finishedAt), isNotNull(boatKeyProofs.result)))
           .orderBy(boatKeyProofs.account, desc(boatKeyProofs.finishedAt))
-          .pipe(Effect.map((rows) => new Map(rows.map((row) => [row.account, row])))),
+          .pipe(Effect.map((rows) => new Map(rows.map((row) => [row.account, toRecord(row)])))),
       ),
     outstanding: (account) =>
       boundary(
@@ -160,9 +206,12 @@ const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.ge
             and(
               eq(boatKeyProofs.account, account),
               or(isNull(boatKeyProofs.finishedAt), eq(boatKeyProofs.cleanupPending, true)),
+              // Boat has what it made in no wallet the key can bill: finished, as the sweep reads it.
+              ne(boatKeyProofs.boatWalletState, "unreachable"),
             ),
           )
-          .orderBy(boatKeyProofs.startedAt),
+          .orderBy(boatKeyProofs.startedAt)
+          .pipe(Effect.map((rows) => rows.map(toRecord))),
       ),
     get: (id) =>
       boundary(
@@ -170,7 +219,7 @@ const make: Effect.Effect<BoatKeyProofRepoService, never, SealantDB> = Effect.ge
           .select()
           .from(boatKeyProofs)
           .where(eq(boatKeyProofs.id, id))
-          .pipe(Effect.map((rows) => rows[0])),
+          .pipe(Effect.map((rows) => (rows[0] === undefined ? undefined : toRecord(rows[0])))),
       ),
   });
 });

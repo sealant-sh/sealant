@@ -95,6 +95,9 @@ export { loadBoatCredential } from "./runtime/boat/credential.js";
 export {
   BoatAccountDirectory,
   httpBoatClientFactory,
+  installBoatApi,
+  installBuildApi,
+  installWalletApi,
   type BoatAccountDirectoryOptions,
   type BoatAccountId,
   type BoatAccountProvider,

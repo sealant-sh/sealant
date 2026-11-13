@@ -1,8 +1,7 @@
 import { BoatAccountRepo, BoatAccountRepoLive, SealantDB, type DB } from "@sealant/db";
 import { Effect } from "effect";
 
-import { httpBoatClientFactory, type BoatClientFactory } from "./accounts.js";
-import type { BoatApi } from "./api.js";
+import type { BoatSecret } from "./config.js";
 import { loadBoatCredential } from "./credential.js";
 
 /** The Boat provider settings every process that reaches Boat reads (`boatProviderEnvSchema`). */
@@ -13,26 +12,26 @@ export interface BoatProviderEnvLike {
   readonly SEALANT_BOAT_ORGANIZATION?: string | undefined;
 }
 
-/** The install's own Boat account as a process holds it: its client, and what the env names. */
+/** The install's own Boat key as a process holds it, and what the env names. */
 export interface BoatEnvAccount {
-  readonly api: BoatApi;
+  /** The key, opened once from the value or the root-owned file. */
+  readonly credential: BoatSecret;
   /** The operator's `SEALANT_BOAT_DEPLOYMENT_ID`; absent: the install's stored name is used. */
   readonly deploymentId: string | undefined;
-  /** The organization the key bills (`SEALANT_BOAT_ORGANIZATION`), named on every request. */
+  /**
+   * The wallet the operator names (`SEALANT_BOAT_ORGANIZATION`). Its requests name the wallet
+   * `boat_install` holds (`installBoatApi`): this one, once applied (at once on a new install, and
+   * once nothing of the install's runs, builds or full checks is in the wallet it named before).
+   */
   readonly organization: string | undefined;
 }
 
 /**
- * This process's default Boat account (the env key): its client, or `undefined` when no Boat key is
- * configured. The key is read once (from the value or the root-owned file) into the client and
- * nowhere else; a refused key throws an error that names neither the key nor its file. The client
- * names `SEALANT_BOAT_ORGANIZATION` on every request when it is set. `clientFor` opens the key;
- * default: Boat's real API.
+ * This process's default Boat key (the env key), or `undefined` when none is configured. The key
+ * is read once (from the value or the root-owned file); a refused key throws an error that names
+ * neither the key nor its file. Its client is `installBoatApi`, which names the install's wallet.
  */
-export const boatProviderFromEnv = (
-  env: BoatProviderEnvLike,
-  clientFor: BoatClientFactory = httpBoatClientFactory,
-): BoatEnvAccount | undefined => {
+export const boatProviderFromEnv = (env: BoatProviderEnvLike): BoatEnvAccount | undefined => {
   if (env.SEALANT_BOAT_API_KEY === undefined && env.SEALANT_BOAT_API_KEY_FILE === undefined)
     return undefined;
   const credential = loadBoatCredential({
@@ -40,13 +39,11 @@ export const boatProviderFromEnv = (
     file: env.SEALANT_BOAT_API_KEY_FILE,
   });
   if (!credential.ok) throw credential.error;
-  const organization = env.SEALANT_BOAT_ORGANIZATION;
-  const api = clientFor(
-    credential.value,
-    organization === undefined ? undefined : { organization },
-  );
-  if (!api.ok) throw api.error;
-  return { api: api.value, deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID, organization };
+  return {
+    credential: credential.value,
+    deploymentId: env.SEALANT_BOAT_DEPLOYMENT_ID,
+    organization: env.SEALANT_BOAT_ORGANIZATION,
+  };
 };
 
 /**

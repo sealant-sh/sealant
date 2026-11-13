@@ -52,6 +52,53 @@ const observedOr = <F extends Schema.Struct.Fields>(fields: F) =>
     boatKeyNotObservedSchema,
   ]);
 
+/** A wallet a VM can bill: a person's own Boat account, or one of their Boat organizations. */
+const boatWalletFields = {
+  kind: Schema.Literals(["personal", "organization"]),
+  organizationId: Schema.optional(Schema.String),
+  organizationName: Schema.optional(Schema.String),
+  role: Schema.optional(Schema.String),
+};
+export const boatWalletSchema = Schema.Struct(boatWalletFields);
+export type BoatWallet = typeof boatWalletSchema.Type;
+
+/**
+ * One wallet the key's Boat account can bill (`GET /orgs`): its own (`personal`), or an
+ * organization it belongs to, with the account's role there. `active`: the account's active wallet,
+ * which an unpinned personal key bills. `id` is what a pin names: an organization's id, or
+ * `personal` for the account's own wallet.
+ */
+export const boatKeyWalletChoiceSchema = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["personal", "organization"]),
+  name: Schema.optional(Schema.String),
+  role: Schema.optional(Schema.String),
+  active: Schema.Boolean,
+});
+export type BoatKeyWalletChoice = typeof boatKeyWalletChoiceSchema.Type;
+
+/**
+ * Whether the account's requests name the wallet to bill. `pinned`: every request names
+ * `organization` (an organization's id or name, or `personal`), so the bill never follows the key's
+ * active wallet. `key-organization`: an organization's Boat key, which bills that organization and
+ * nothing else; there is nothing to choose. `active-wallet`: a personal key with no pin, which bills
+ * whichever wallet its Boat account has active, and that the person can change in Boat at any time
+ * (a stored account is in it only until sealant pins it, right after an upgrade);
+ * `walletChanged` says the wallet it bills now is not the one an earlier report saw (`from`), first
+ * seen at `observedAt`, and stays while the wallet stays.
+ */
+export const boatKeyBillingSchema = Schema.Union([
+  Schema.Struct({ mode: Schema.Literal("pinned"), organization: Schema.String }),
+  Schema.Struct({ mode: Schema.Literal("key-organization") }),
+  Schema.Struct({
+    mode: Schema.Literal("active-wallet"),
+    walletChanged: Schema.optional(
+      Schema.Struct({ from: boatWalletSchema, observedAt: Schema.String }),
+    ),
+  }),
+]);
+export type BoatKeyBilling = typeof boatKeyBillingSchema.Type;
+
 /**
  * What sealant observed of a Boat key, from Boat's own answers, at `observedAt`. Each fact is
  * `observed: true` with its value, or `observed: false` with the reason Boat did not show it.
@@ -75,12 +122,17 @@ export const boatKeyReportSchema = Schema.Struct({
   /** A personal (account) key, or an organization's key. */
   keyKind: observedOr({ kind: Schema.Literals(["personal", "organization"]) }),
   /** Which wallet a VM started with the key bills (`GET /limits`). */
-  wallet: observedOr({
-    kind: Schema.Literals(["personal", "organization"]),
-    organizationId: Schema.optional(Schema.String),
-    organizationName: Schema.optional(Schema.String),
-    role: Schema.optional(Schema.String),
-  }),
+  wallet: observedOr(boatWalletFields),
+  /**
+   * The wallets the key's Boat account can bill (`GET /orgs`), the active one marked. Absent in
+   * reports made before sealant read them.
+   */
+  wallets: Schema.optional(observedOr({ choices: Schema.Array(boatKeyWalletChoiceSchema) })),
+  /**
+   * Whether the account names the wallet it bills, or follows the key's active wallet. Absent in
+   * reports made before sealant said so.
+   */
+  billing: Schema.optional(boatKeyBillingSchema),
   /** The permissions sealant needs of every key, from the Boat calls it makes. */
   requiredPermissions: Schema.Array(Schema.String),
   /** The key's permissions (`GET /api-keys`), and which of the required ones it lacks. */
@@ -159,6 +211,23 @@ export const boatKeyProofSchema = Schema.Struct({
 });
 export type BoatKeyProof = typeof boatKeyProofSchema.Type;
 
+/**
+ * What a key's account made in Boat before sealant recorded wallets, that sealant cannot reach: Boat
+ * has it in none of the wallets the key can bill (for a key without `account.read`, which cannot list
+ * them: not in the one it bills). It was since deleted in Boat, or is in an organization the key's
+ * account has left. sealant keeps it recorded, never uses or removes it, and waits on it for nothing;
+ * look for it in Boat, in each organization the key's account has been in.
+ */
+export const boatUnreachableSchema = Schema.Struct({
+  /** Saved images, by snapshot name (Saved snapshots in Boat). */
+  savedImages: Schema.Array(Schema.String),
+  /** Runs whose VM it was, by run id: each ended as gone, its VM in no wallet the key can bill. */
+  runs: Schema.optional(Schema.Array(Schema.String)),
+  /** Image builds, by publication id: abandoned, and built again in the wallet the key bills now. */
+  builds: Schema.optional(Schema.Array(Schema.String)),
+});
+export type BoatUnreachableWire = typeof boatUnreachableSchema.Type;
+
 export const boatAccountSchema = Schema.Struct({
   boatAccountId: BoatAccountId,
   label: NonEmptyString,
@@ -167,12 +236,19 @@ export const boatAccountSchema = Schema.Struct({
   createdAt: Schema.String,
   /** When its key was last replaced; null when it still has the key it was created with. */
   keyRotatedAt: Schema.NullOr(Schema.String),
-  /** The Boat organization the account bills, sent on every request for it; null: none named. */
+  /**
+   * The wallet the account bills, named (`X-Boat-Org`) on every request it makes: an
+   * organization's id, or `personal`. Every personal key is pinned (to the wallet it billed when it
+   * was connected, unless the caller named another). Null: an organization's key, which has one
+   * wallet, or an account connected before sealant pinned accounts that the worker has not pinned yet.
+   */
   organization: Schema.optional(Schema.NullOr(Schema.String)),
   /** The key's last report, with when it was observed; null until the key is checked. */
   report: Schema.optional(Schema.NullOr(boatKeyReportSchema)),
   /** The account's last full check (`prove`), kept beside its report; null until it is proven. */
   lastProof: Schema.optional(Schema.NullOr(boatKeyProofSchema)),
+  /** What the account made in Boat that sealant cannot reach (`boatUnreachableSchema`). */
+  unreachable: Schema.optional(Schema.NullOr(boatUnreachableSchema)),
 });
 export type BoatAccountWire = typeof boatAccountSchema.Type;
 
@@ -185,6 +261,8 @@ export const boatInstallKeySchema = Schema.Struct({
   label: NonEmptyString,
   /** The key's last report, with when it was observed; null until it is checked. */
   report: Schema.NullOr(boatKeyReportSchema),
+  /** What the install's key made in Boat that sealant cannot reach (`boatUnreachableSchema`). */
+  unreachable: Schema.optional(Schema.NullOr(boatUnreachableSchema)),
 });
 export type BoatInstallKeyWire = typeof boatInstallKeySchema.Type;
 
@@ -200,6 +278,16 @@ export const createBoatAccountRequestSchema = Schema.Struct({
   organization: Schema.optional(NonEmptyString),
 });
 export type CreateBoatAccountRequest = typeof createBoatAccountRequestSchema.Type;
+
+export const setBoatAccountOrganizationRequestSchema = Schema.Struct({
+  /**
+   * The wallet to bill from now on: an organization's id (or name) from the key report's
+   * `wallets`, or `personal` for the key's own Boat account. Only a personal key can be pointed at
+   * a wallet. Null is refused: a personal key's account is never unpinned.
+   */
+  organization: Schema.NullOr(NonEmptyString),
+});
+export type SetBoatAccountOrganizationRequest = typeof setBoatAccountOrganizationRequestSchema.Type;
 
 export const rotateBoatAccountKeyRequestSchema = Schema.Struct({
   /** The new Boat key, for the same Boat account: it must see every VM the account runs. */
@@ -258,7 +346,12 @@ export class BoatAccountNotFoundError extends Schema.TaggedError<BoatAccountNotF
  * `boat-account-environment`: the install's own key (`default`) is set in its environment, not
  * through this API. `boat-proof-running`: a full check of the account is running, or Boat may
  * still hold what one made (the message names the VM and the snapshot): a second check, a key
- * rotation and a removal wait until sealant has deleted it.
+ * rotation, a removal and a change of organization wait until sealant has deleted it.
+ * `boat-key-organization`: a change of organization for an organization's Boat key, which bills
+ * its own organization and nothing else. `boat-account-wallet-unresolved`: not answered any more
+ * (kept so a client that lists it still decodes): a change of organization, a rotation and a removal
+ * wait for nothing the account made, which each stay in their own wallet. A full check of an account
+ * sealant has not pinned yet (its key cannot show the wallet it bills) answers `boat-account-in-use`.
  */
 export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConflictError>()(
   "BoatAccountConflictError",
@@ -271,8 +364,11 @@ export class BoatAccountConflictError extends Schema.TaggedError<BoatAccountConf
       "boat-account-changed",
       "boat-account-environment",
       "boat-proof-running",
+      "boat-key-organization",
+      "boat-account-wallet-unresolved",
     ]),
     liveRuns: Schema.optional(Schema.Int),
+    unsettledRuns: Schema.optional(Schema.Int),
     buildsInFlight: Schema.optional(Schema.Int),
     unseen: Schema.optional(Schema.Int),
   },
@@ -319,6 +415,23 @@ export const BoatAccountsGroup = HttpApiGroup.make("boatAccounts")
     HttpApiEndpoint.put("rotateBoatAccountKey", "/:boatAccountId/key", {
       params: boatAccountRefParams,
       payload: rotateBoatAccountKeyRequestSchema,
+      success: boatAccountSchema,
+      error: [
+        BoatAccountBadRequestError,
+        BoatAccountKeyRefusedError,
+        BoatAccountNotFoundError,
+        BoatAccountConflictError,
+        BoatAccountServiceUnavailableError,
+        BoatAccountInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Points the account at another wallet, without its key. What it made stays recorded in the
+    // wallet it was made in; its saved images there are removed with requests that name it.
+    HttpApiEndpoint.put("setBoatAccountOrganization", "/:boatAccountId/organization", {
+      params: boatAccountRefParams,
+      payload: setBoatAccountOrganizationRequestSchema,
       success: boatAccountSchema,
       error: [
         BoatAccountBadRequestError,

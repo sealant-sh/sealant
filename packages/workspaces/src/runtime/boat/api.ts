@@ -151,6 +151,13 @@ export const BOAT_OPERATION_PERMISSIONS = {
   saveSnapshot: "snapshot.write",
   getSnapshot: "snapshot.read",
   deleteSnapshot: "snapshot.write",
+  // The account reads (docs.boat.dev/api-keys/scopes: "`/me`, limits, organization discovery,
+  // list keys"): which wallet a key bills and which it can bill, which sealant must observe to pin a
+  // personal key's account, and to find where an account's things are.
+  me: "account.read",
+  orgs: "account.read",
+  limits: "account.read",
+  apiKeys: "account.read",
 } as const satisfies Record<string, string>;
 export type BoatOperation = keyof typeof BOAT_OPERATION_PERMISSIONS;
 const permissionFor = (operation: string): string | undefined =>
@@ -271,6 +278,11 @@ export interface BoatApi {
   saveSnapshot(id: BoatSandboxId, name: BoatSnapshotName): Promise<BoatResult<BoatSavedSnapshot>>;
   getSnapshot(name: BoatSnapshotName): Promise<BoatResult<BoatSavedSnapshot>>;
   deleteSnapshot(name: BoatSnapshotName): Promise<BoatResult<void>>;
+  /**
+   * The wallets the key's account can bill (`GET /orgs`, `account.read`). Optional: a client that
+   * cannot list them leaves an object of unknown wallet where it was looked for.
+   */
+  orgs?(): Promise<BoatResult<readonly BoatOrg[]>>;
 }
 
 export interface BoatApiOptions {

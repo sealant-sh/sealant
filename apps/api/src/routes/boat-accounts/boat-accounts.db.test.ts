@@ -168,7 +168,9 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
       sealedKey: `sealed:${KEY_A}`,
       keyId: "k-test",
       keyRevision: 1,
-      organization: null,
+      // A personal key is pinned at connect to the wallet it bills (the recorded Boat's own).
+      organization: "personal",
+      keyKind: "personal",
     });
     const record = await run(
       Effect.flatMap(BoatAccountRepo, (repo) => repo.get(created.boatAccountId)),
@@ -201,21 +203,22 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
   it("rotates only to a key that sees the account's VMs", async () => {
     const created = await run(routes.createBoatAccount({ label: "Rotating", apiKey: KEY_A }));
     await liveRun(created.boatAccountId, boatA);
-    // B's key is another Boat account's: it cannot see A's VM.
+    // B's key is another Boat account's, as its `/me` shows: it cannot see A's VM.
+    boatB.identity = "usr_recorded_b";
     expect(
       await refusal(routes.rotateBoatAccountKey(created.boatAccountId, { apiKey: KEY_B })),
     ).toMatchObject({ _tag: "BoatAccountConflictError", code: "boat-key-cannot-see", unseen: 1 });
-    // A launch whose VM Boat has not reported yet: only the current key can find it.
+    // A launch whose VM Boat has not reported yet: only a key of the same Boat account can find it.
     const pending = await liveRun(created.boatAccountId, boatA);
     await Effect.runPromise(
       corruptBoatRun(db, pending.runId, { sandboxId: null, createdSeenAt: null, target: null }),
     );
+    boatA.identity = "usr_someone_else";
     expect(
       await refusal(routes.rotateBoatAccountKey(created.boatAccountId, { apiKey: KEY_A_NEXT })),
     ).toMatchObject({ code: "boat-account-in-use", liveRuns: 1 });
-    await Effect.runPromise(
-      corruptBoatRun(db, pending.runId, { absentAt: new Date(), absentBasis: "never-created" }),
-    );
+    // The same Boat account's key, as both keys' `/me` show it: the launch waits for nothing.
+    boatA.identity = "usr_recorded";
     const rotated = await run(
       routes.rotateBoatAccountKey(created.boatAccountId, { apiKey: KEY_A_NEXT }),
     );
@@ -226,7 +229,9 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
       sealedKey: `sealed:${KEY_A_NEXT}`,
       keyId: "k-test",
       keyRevision: 2,
-      organization: null,
+      // A personal key is pinned at connect to the wallet it bills (the recorded Boat's own).
+      organization: "personal",
+      keyKind: "personal",
     });
     expect(
       await refusal(routes.rotateBoatAccountKey(randomUUID(), { apiKey: KEY_A })),

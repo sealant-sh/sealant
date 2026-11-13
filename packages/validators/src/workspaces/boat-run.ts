@@ -87,11 +87,15 @@ export const boatRunHeldReasonSchema = z.enum([
  * How sealant knows Boat holds no VM for a run. `not-found`: Boat's typed 404 for a VM it had
  * reported past creation. `deletion-completed`: Boat's own deletion operation for it completed.
  * `never-created`: create was never issued, or Boat definitively refused it under the run's key.
+ * `unreachable`: the run was made before sealant recorded wallets, and Boat has its VM in none of the
+ * wallets the key can bill (or the key cannot list them): sealant stops tracking it and says so,
+ * never that Boat deleted it.
  */
 export const boatRunAbsentBasisSchema = z.enum([
   "not-found",
   "deletion-completed",
   "never-created",
+  "unreachable",
 ]);
 export type BoatRunAbsentBasis = z.infer<typeof boatRunAbsentBasisSchema>;
 
@@ -201,9 +205,11 @@ export const boatRunSchema = z
         ? run.absentBasis === null
         : run.absentBasis === "never-created"
           ? run.sandboxId === null
-          : run.sandboxId !== null &&
-            (run.absentBasis === "deletion-completed" ||
-              (run.absentBasis === "not-found" && run.createdSeenAt !== null))) &&
+          : // Unreachable: its VM, or its create's, is in no wallet the key can bill.
+            run.absentBasis === "unreachable" ||
+            (run.sandboxId !== null &&
+              (run.absentBasis === "deletion-completed" ||
+                (run.absentBasis === "not-found" && run.createdSeenAt !== null)))) &&
       (run.heldReason === null ||
         (run.absentAt === null &&
           target === null &&

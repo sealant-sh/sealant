@@ -45,6 +45,8 @@ interface Deletion {
 
 export class RecordedBoat {
   readonly vms = new Map<string, RecordedVm>();
+  /** The Boat account every key here belongs to, as `/me` answers it (`user.id`). */
+  identity = "usr_recorded";
   readonly deletions = new Map<string, Deletion>();
   readonly requests: string[] = [];
   /**
@@ -172,6 +174,47 @@ export class RecordedBoat {
       response.end(JSON.stringify(value));
     };
     const path = url.pathname.replace(/^\/api\/v1/, "");
+    // The account reads a key check makes: a personal key with every permission, in its own
+    // wallet (the only one), which can start a VM. What resolves an install's or an account's
+    // wallet reads; nothing here keeps wallets apart.
+    if (request.method === "GET" && path === "/me")
+      return send(200, {
+        ok: true,
+        user: { id: this.identity, login: "recorded", accountStatus: "active" },
+      });
+    if (request.method === "GET" && path === "/orgs")
+      return send(200, {
+        ok: true,
+        orgs: [
+          { id: "usr_recorded", name: "recorded", type: "personal", role: "owner", active: true },
+        ],
+      });
+    if (request.method === "GET" && path === "/limits")
+      return send(200, {
+        ok: true,
+        canStart: true,
+        activeSandboxes: 0,
+        maxActiveSandboxes: 10,
+      });
+    if (request.method === "GET" && path === "/api-keys") {
+      const bearer = this.bearers.at(-1) ?? "";
+      return send(200, {
+        ok: true,
+        apiKeys: [
+          {
+            id: "key_recorded",
+            name: "sealant",
+            keyPrefix: bearer.slice(0, 9),
+            keyLastFour: bearer.slice(-4),
+            teamId: null,
+            expiresAt: null,
+            neverExpires: true,
+            scope: { actions: ["*"], sandboxes: "*", environments: "*" },
+          },
+        ],
+        catalog: { presets: {} },
+      });
+    }
     if (request.method === "POST" && path === "/sandboxes") {
       const key = request.headers["idempotency-key"];
       if (typeof key !== "string") return send(400, { ok: false, code: "invalid_request" });
