@@ -52,7 +52,7 @@ export function AddSshKeyForm(props: {
     return addKeyMutation.error instanceof Error ? addKeyMutation.error.message : null;
   }, [addKeyMutation.error, emptyKeyMessage]);
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     event.stopPropagation();
 
@@ -64,7 +64,7 @@ export function AddSshKeyForm(props: {
 
     setEmptyKeyMessage(null);
     const normalizedName = name.trim().length > 0 ? name.trim() : readKeyComment(normalizedKey);
-    await addKeyMutation.mutateAsync({
+    addKeyMutation.mutate({
       publicKey: normalizedKey,
       ...(normalizedName === undefined ? {} : { name: normalizedName }),
     });

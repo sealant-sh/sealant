@@ -230,7 +230,7 @@ function ProviderCard({
     return null;
   };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     event.stopPropagation();
 
@@ -248,7 +248,7 @@ function ProviderCard({
 
     setValidationError(null);
     setStatusMessage(null);
-    await connectMutation.mutateAsync({
+    connectMutation.mutate({
       provider: copy.provider,
       secret: normalized,
       ...(account === null ? {} : { accountId: account.connectedAccountId }),
