@@ -211,6 +211,17 @@ mapping. These routes need a service key, and an install that serves Boat (`503`
   and a worker that builds Boat images deletes the saved images Core built in the account, then
   erases its key. It leaves the list once that is done.
 
+A Boat workspace whose launch or image build failed because Boat refused, or did not answer, a call
+Core made reads `error.boat` beside `error.message` and `error.code` on `GET /v1/workspaces/:id`:
+`{ kind, retryable, operation?, status?, code?, message?, requestId?, permission?, retryAfterSeconds?, retryAt?, billingUrl? }`.
+`kind` is one of `key-refused`, `key-expired`, `permission-missing`, `sandbox-outside-key`,
+`organization-mismatch`, `account-suspended`, `billing-required`, `running-limit`, `member-cap`,
+`rate-limited`, `trial-restricted`, `no-machine`, `snapshot-allowance-full`, `no-answer` or
+`refused` (see the SDK's `SealantBoatError`). `code`, `message` and `requestId` are Boat's own;
+nothing else of Boat's answer is kept, and never the key. A launch Boat refused for a reason no
+retry can change (the key, its permissions, the account, billing, plan limits) is not retried as a
+create whose outcome is unknown.
+
 A workspace names its account at create in `spec.runtime.boatAccountId`, and every run of it,
 restarts included, stays in that account. Omitted, it runs in the default account. An unknown or
 removed account answers `404`, one being removed `409`, and naming one for a workspace that does not

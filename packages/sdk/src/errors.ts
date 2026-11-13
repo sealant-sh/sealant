@@ -1,4 +1,8 @@
-import type { RequestBudgetRefusal, ForwardRefusalReason } from "@sealant/api-contracts";
+import type {
+  BoatFailure,
+  RequestBudgetRefusal,
+  ForwardRefusalReason,
+} from "@sealant/api-contracts";
 
 import type { ForwardResetCause, InferenceReceipt } from "./types.js";
 
@@ -82,6 +86,30 @@ export class SealantApiError extends SealantError {
     if (options?.receipt !== undefined) {
       this.receipt = options.receipt;
     }
+  }
+}
+
+/**
+ * A Boat workspace that did not become ready because Boat refused, or did not answer, a call Core
+ * made for it: its VM create, its image build, a saved snapshot. `boat` says why, as a kind from a
+ * closed set (`key-expired`, `permission-missing`, `billing-required`, `rate-limited`, …) with
+ * Boat's own code, message and request id, and when to retry or where to pay when Boat said.
+ * `boat.retryable` is false when the same key and request cannot succeed later. `code` is the
+ * same as for any other workspace that did not become ready (`workspace_not_ready`).
+ */
+export class SealantBoatError extends SealantError {
+  override readonly name = "SealantBoatError";
+  readonly boat: BoatFailure;
+  constructor(
+    message: string,
+    boat: BoatFailure,
+    options?: { readonly code?: string; readonly cause?: unknown },
+  ) {
+    super(message, {
+      code: options?.code ?? "workspace_not_ready",
+      ...(options?.cause === undefined ? {} : { cause: options.cause }),
+    });
+    this.boat = boat;
   }
 }
 

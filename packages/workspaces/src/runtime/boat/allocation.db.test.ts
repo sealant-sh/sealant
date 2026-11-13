@@ -78,6 +78,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { BOAT_REFUSALS } from "../../../boat-harness/refusals.js";
 import { boatProofConfigSchema } from "../../operator/boat-live-check.js";
 import { makeBoatProofCore } from "../../operator/boat-proof-core.js";
 import {
@@ -157,6 +158,7 @@ import {
   boatExecutionLayer,
   type BoatLaunchMaterial,
 } from "./execution.js";
+import { boatFailureInMessage } from "./failure.js";
 import { BoatAllocationProvider } from "./provider.js";
 import { RecordedBoat } from "./recorded-boat.fixture.js";
 import {
@@ -166,7 +168,7 @@ import {
   boatRemovalLayerNoDeps,
 } from "./removal.js";
 import { BoatTunnelCarrier, type BoatTunnelCarrierInput } from "./tunnel-carrier.js";
-import { BoatVm, boatVmLayer, boatVmLayerNoDeps } from "./vm.js";
+import { BoatAllocationError, BoatVm, boatVmLayer, boatVmLayerNoDeps } from "./vm.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -2943,6 +2945,49 @@ describe.runIf(databaseUrl !== undefined)(
         expect(s.provider.creates).toHaveLength(1);
         expect(s.guest.targets).toHaveLength(1);
       }));
+    it.each(["key-expired", "permission-missing"] as const)(
+      "ends a launch Boat refused for %s after one create, with Boat's reason, never as an ambiguous create (SLNT-782)",
+      (kind) =>
+        test(async (s) => {
+          s.provider.createRefusal = BOAT_REFUSALS[kind];
+          const failure = await execute(s.allocations.prepare(s.input)).catch(
+            (error: unknown) => error,
+          );
+          expect(failure).toBeInstanceOf(BoatAllocationError);
+          expect(failure).toMatchObject({
+            code: "provider-unavailable",
+            diagnostic: {
+              step: "create",
+              provider: {
+                operation: "create",
+                status: 403,
+                boat: {
+                  kind,
+                  code: BOAT_REFUSALS[kind].code,
+                  retryable: false,
+                  requestId: expect.stringMatching(/^req_/),
+                  ...(kind === "permission-missing" ? { permission: "sandbox.create" } : {}),
+                },
+              },
+            },
+          });
+          // Not retried as a create whose outcome is unknown: one create, nothing replayed.
+          expect(s.provider.creates).toHaveLength(1);
+          // The message the runtime row keeps carries it, as the API reads it back for the SDK.
+          expect(
+            failure instanceof Error ? boatFailureInMessage(failure.message)?.kind : undefined,
+          ).toBe(kind);
+          // The only create sent under the key was refused: Boat holds no VM, recorded at once.
+          expect(await vmOf(s, s.input.consumer.runId)).toMatchObject({
+            phase: "deleted",
+            sandboxId: null,
+            removal: { kind: "never-created" },
+          });
+          // A later drive asks Boat for nothing.
+          await execute(s.allocations.prepare(s.input)).catch(() => undefined);
+          expect(s.provider.creates).toHaveLength(1);
+        }),
+    );
     it("adopts a lost create response from the complete paginated inventory after restarting the service", () =>
       test(async (s) => {
         // The create reply is lost and Boat's inventory stays unreachable, so the launch gives up.
@@ -3778,12 +3823,17 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
             status: "failed",
           }),
         );
-        // Unknown outcomes never settle it: Boat is unreachable, then busy with the same key.
+        // Unknown outcomes never settle it: Boat is unreachable, then busy with the same key,
+        // then refusing the account (billing), which a replay cannot prove (SLNT-782 review).
         o.boat.unlisted = true;
         o.boat.rejectCreate = { status: 409, code: "idempotency_in_progress" };
         await execute(allocations.reconcile({ limit: 20 }));
         expect(await vmPhase(s, input.consumer.runId)).toBe("issued");
         o.boat.rejectCreate = { status: 402, code: "insufficient_balance" };
+        await execute(allocations.reconcile({ limit: 20 }));
+        expect(await vmPhase(s, input.consumer.runId)).toBe("issued");
+        // The replay names a source snapshot Boat no longer has: it holds no VM for the key.
+        o.boat.rejectCreate = { status: 404, code: "snapshot_not_found" };
         await execute(allocations.reconcile({ limit: 20 }));
         expect(await vmOf(s, input.consumer.runId)).toMatchObject({
           phase: "deleted",
@@ -3854,6 +3904,44 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
         await o.boat.close();
       }
     }));
+
+  it.each([
+    { status: 429, code: "limit_reached" },
+    { status: 402, code: "billing_required" },
+    { status: 429, code: "trial_compute_limit_reached" },
+    { status: 403, code: "api_key_expired" },
+  ])(
+    "keeps a VM whose create reply was lost when Boat refuses the replay ($code), and finds and deletes it (SLNT-782 review)",
+    (refusal) =>
+      test(async (s) => {
+        const o = await observedLaunch(s);
+        try {
+          const allocations = await recordedAllocations(s, o);
+          const { input, key } = await lostCreate(s, o);
+          // Boat has not listed the VM yet, and refuses the replay: the VM took the last running
+          // slot, the wallet ran dry, or the key expired after Boat accepted the create.
+          o.boat.unlisted = true;
+          o.boat.rejectCreate = refusal;
+          await execute(allocations.reconcile({ limit: 20 }));
+          expect(await vmPhase(s, input.consumer.runId)).toBe("issued");
+          expect((await runOf(s, input.consumer.runId)).absentAt).toBeNull();
+          expect(vmsFor(o, key)).toHaveLength(1);
+          // Still tracked: Boat lists it, discovery adopts it, and the run's stop deletes it.
+          o.boat.unlisted = false;
+          o.boat.rejectCreate = undefined;
+          await execute(allocations.reconcile({ limit: 20 }));
+          expect(await vmOf(s, input.consumer.runId)).toMatchObject({ phase: "allocated" });
+          await execute(
+            s.runtimes.markStopRequested({ runId: input.consumer.runId, stopReason: "failed" }),
+          );
+          const paths = await execute(s.final([], o.api));
+          for (let pass = 0; pass < 3; pass += 1) await execute(paths.sweep({ limit: 20 }));
+          expect(vmsFor(o, key)).toHaveLength(0);
+        } finally {
+          await o.boat.close();
+        }
+      }),
+  );
 
   it("never takes a refusal past Boat's key retention as proof that no VM exists (review of #495)", () =>
     test(async (s) => {
@@ -3927,7 +4015,7 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
           recordNeverCreated: (runId) =>
             s.repo.recordNeverCreated(runId).pipe(Effect.andThen(Effect.interrupt)),
         });
-        o.boat.rejectCreate = { status: 402, code: "insufficient_balance" };
+        o.boat.rejectCreate = { status: 404, code: "snapshot_not_found" };
         await execute(interrupted.reconcile({ limit: 20 })).catch(() => undefined);
         expect(await observedOf(s, input.consumer.runId)).toMatchObject({
           presence: "absent",

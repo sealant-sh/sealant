@@ -121,6 +121,36 @@ export interface FakeBoatFaults {
    */
   deleteReply?: (sandbox: FakeSandbox) => "lose" | undefined;
   snapshot?: (name: string) => "failed" | undefined;
+  /**
+   * Boat refuses this call with its error envelope (`FakeBoatRefusal`), or `no-answer`: the
+   * connection is dropped before any reply. Checked after the key, before the call does anything.
+   */
+  refuse?: (call: FakeBoatCall) => FakeBoatRefusal | "no-answer" | undefined;
+}
+
+/** One API call as `refuse` sees it. */
+export interface FakeBoatCall {
+  readonly method: string;
+  /** Below `/api/v1`, without the query: `/sandboxes`, `/saved-snapshots`. */
+  readonly path: string;
+  readonly query: URLSearchParams;
+  readonly headers: http.IncomingHttpHeaders;
+  /** The request's JSON body, when it has one. */
+  readonly body: unknown;
+}
+
+/**
+ * A refusal as Boat sends it (docs.boat.dev/api/v1, /limits): `{ ok: false, type, status, code,
+ * message, error: { code, message, status, details }, requestId }`, plus top-level fields some
+ * codes carry (`retryAfterSeconds`, `nextStartAt`, `billingUrl`) and a `Retry-After` header.
+ */
+export interface FakeBoatRefusal {
+  readonly status: number;
+  readonly code: string;
+  readonly message?: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+  readonly fields?: Readonly<Record<string, unknown>>;
+  readonly retryAfter?: number;
 }
 
 export interface FakeBoatEvent {
@@ -244,6 +274,27 @@ interface DetachedProcess {
   exitCode: number | null;
   running: boolean;
 }
+
+let requests = 0;
+/** Boat's error envelope for a refusal, with a fresh request id. */
+export const boatErrorEnvelope = (refusal: FakeBoatRefusal) => {
+  const message = refusal.message ?? refusal.code;
+  return {
+    ok: false,
+    type: "sandbox.error",
+    status: refusal.status,
+    code: refusal.code,
+    message,
+    error: {
+      code: refusal.code,
+      message,
+      status: refusal.status,
+      ...(refusal.details === undefined ? {} : { details: refusal.details }),
+    },
+    requestId: `req_fake${(++requests).toString(36).padStart(6, "0")}`,
+    ...refusal.fields,
+  };
+};
 
 class HttpError extends Error {
   constructor(
@@ -425,9 +476,9 @@ export class FakeBoat {
 
   async #serveApi(request: http.IncomingMessage, response: http.ServerResponse) {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const send = (status: number, value: unknown) => {
+    const send = (status: number, value: unknown, headers: Record<string, string> = {}) => {
       if (response.destroyed) return;
-      response.writeHead(status, { "Content-Type": "application/json" });
+      response.writeHead(status, { "Content-Type": "application/json", ...headers });
       response.end(JSON.stringify(value));
     };
     try {
@@ -438,6 +489,32 @@ export class FakeBoat {
       const path = url.pathname.replace(/^\/api\/v1/, "");
       const method = request.method ?? "GET";
       this.#record("api", undefined, `${method} ${path}`);
+      const refusal = this.faults.refuse?.({
+        method,
+        path,
+        query: url.searchParams,
+        headers: request.headers,
+        body: (() => {
+          try {
+            return json();
+          } catch {
+            return undefined;
+          }
+        })(),
+      });
+      if (refusal === "no-answer") {
+        this.#record("fault:no-answer", undefined, `${method} ${path}`);
+        response.destroy();
+        return;
+      }
+      if (refusal !== undefined) {
+        this.#record("fault:refused", undefined, `${method} ${path} ${refusal.code}`);
+        return send(
+          refusal.status,
+          boatErrorEnvelope(refusal),
+          refusal.retryAfter === undefined ? {} : { "Retry-After": String(refusal.retryAfter) },
+        );
+      }
       let match: RegExpMatchArray | null;
       if (method === "POST" && path === "/sandboxes") {
         const key = request.headers["idempotency-key"];
@@ -677,7 +754,8 @@ export class FakeBoat {
         return this.#snapshotFile(match[1] ?? "", url.searchParams.get("path") ?? "", response);
       throw new HttpError(404, "not_found");
     } catch (error) {
-      if (error instanceof HttpError) return send(error.status, { ok: false, code: error.code });
+      if (error instanceof HttpError)
+        return send(error.status, boatErrorEnvelope({ status: error.status, code: error.code }));
       if (error instanceof z.ZodError || error instanceof SyntaxError)
         return send(400, { ok: false, code: "invalid_request" });
       this.#record("api-error", undefined, String(error));

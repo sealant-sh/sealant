@@ -179,7 +179,12 @@ describe("Boat launch diagnostics", () => {
     ).toEqual({
       step: "read-boot-id",
       errorClass: "BoatApiError",
-      provider: { operation: "execute", status: 503, causeClass: "UND_ERR_SOCKET" },
+      provider: {
+        operation: "execute",
+        status: 503,
+        causeClass: "UND_ERR_SOCKET",
+        boat: { kind: "no-answer", retryable: true, operation: "execute", status: 503 },
+      },
     });
     expect(wrapper.message).toContain(boatLaunchSummary(diagnostic));
     expect(wrapper.message).not.toContain("secret-credential");

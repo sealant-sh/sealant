@@ -40,6 +40,7 @@ import {
 } from "../effect/operations.js";
 import {
   SealantApiError,
+  SealantBoatError,
   SealantBudgetExceededError,
   SealantError,
   SealantNotImplementedError,
@@ -754,10 +755,12 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         }
         if (FAILED_STATUSES.has(details.status)) {
           const reason = details.error === undefined ? "" : `: ${details.error.message}`;
-          throw new SealantError(
-            `Workspace ${init.id} reached terminal status "${details.status}" before becoming ready${reason}`,
-            { code: readyFailureCode(details.error?.code) },
-          );
+          const message = `Workspace ${init.id} reached terminal status "${details.status}" before becoming ready${reason}`;
+          const code = readyFailureCode(details.error?.code);
+          // Boat refused (or did not answer) the call that failed it: why, in a closed set.
+          if (details.error?.boat !== undefined)
+            throw new SealantBoatError(message, details.error.boat, { code });
+          throw new SealantError(message, { code });
         }
 
         const phase = details.phase === undefined ? undefined : toWorkspacePhase(details.phase);

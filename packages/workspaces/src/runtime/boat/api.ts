@@ -21,6 +21,7 @@ import {
   type BoatLifetime,
 } from "./config.js";
 import { parseBoatHostedControl, type BoatHostedControl } from "./connection.js";
+import { classifyBoatRefusal } from "./failure.js";
 
 /** Only an explicit null deadline without a contradictory TTL verifies disabled auto-stop. */
 export type BoatAutoStop =
@@ -126,22 +127,34 @@ const snapshotResponse = successSchema
 const deletionResponse = successSchema
   .extend({ operation: deletionSchema })
   .transform((value) => value.operation);
-const safeCodes = new Set([
-  "unauthorized",
-  "sandbox_not_found",
-  "not_found",
-  "snapshot_not_found",
-  "rate_limited",
-  "idempotency_in_progress",
-  "idempotency_key_reused",
-  "trial_saved_snapshots_not_allowed",
-  "no_ready_machine",
-  "machine_class_plan_required",
-  "insufficient_balance",
-  "trial_auto_stop_required",
-  "snapshot_data_expired",
-]);
-const codeSchema = z.object({ code: z.string() });
+/**
+ * The Boat permission (key action) each of Core's calls needs, by the operation name its errors
+ * carry. The list of permissions Core requires of a key is derived from this, so it cannot drift
+ * from the calls the client makes. `deleteSandbox` needs `sandbox.delete`, not
+ * `sandbox.delete-own`: after a rotation the new key deletes VMs the old key created.
+ */
+export const BOAT_OPERATION_PERMISSIONS = {
+  create: "sandbox.create",
+  discover: "sandbox.read",
+  verify: "sandbox.read",
+  get: "sandbox.read",
+  execute: "exec",
+  commandStatus: "exec",
+  stopCommand: "exec",
+  writeFile: "file.write",
+  uploadUrl: "file.write",
+  host: "host",
+  stop: "sandbox.stop",
+  resume: "sandbox.resume",
+  deleteSandbox: "sandbox.delete",
+  getDeletion: "sandbox.read",
+  saveSnapshot: "snapshot.write",
+  getSnapshot: "snapshot.read",
+  deleteSnapshot: "snapshot.write",
+} as const satisfies Record<string, string>;
+export type BoatOperation = keyof typeof BOAT_OPERATION_PERMISSIONS;
+const permissionFor = (operation: string): string | undefined =>
+  Object.entries(BOAT_OPERATION_PERMISSIONS).find(([name]) => name === operation)?.[1];
 const stagingPathSchema = z
   .string()
   .regex(/^\/home\/user\/sealant-dev-boat-stream-[a-f0-9-]{36}\/[A-Za-z0-9._/-]+$/)
@@ -690,10 +703,26 @@ export class HttpBoatApi implements BoatApi {
       status = response.status;
       const data: unknown = await response.json();
       if (!response.ok) {
-        const parsed = codeSchema.safeParse(data);
-        const code =
-          parsed.success && safeCodes.has(parsed.data.code) ? parsed.data.code : "provider_error";
-        return { ok: false, error: new BoatApiError(operation, status, code) };
+        const permission = permissionFor(operation);
+        const boat = classifyBoatRefusal({
+          operation,
+          status,
+          body: data,
+          retryAfterHeader: response.headers.get("retry-after"),
+          ...(permission === undefined ? {} : { permission }),
+          secrets: [this.#credential.reveal()],
+        });
+        // Boat's own code, bounded to its shape; `provider_error` when it sent none.
+        return {
+          ok: false,
+          error: new BoatApiError(
+            operation,
+            status,
+            boat.code ?? "provider_error",
+            undefined,
+            boat,
+          ),
+        };
       }
       const parsed = schema.safeParse(data);
       return parsed.success

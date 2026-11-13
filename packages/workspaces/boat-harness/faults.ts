@@ -6,10 +6,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { SealantBoatError } from "@sealant/sdk";
 import { expect } from "vitest";
 
 import { CACHE_LABEL, docker, dockerOk } from "./docker.js";
 import type { FakeBoatFaults, FakeSandbox } from "./fake-boat.js";
+import { BOAT_REFUSALS } from "./refusals.js";
 import {
   assertSettled,
   awaitOutcome,
@@ -117,6 +119,15 @@ const commandFault =
   (command: string, sandbox: FakeSandbox) =>
     isSession(sandbox) && pattern.test(command) ? fault : undefined;
 
+/** A create body for a session VM: it carries the run's label. */
+const sessionCreate = (body: unknown) =>
+  typeof body === "object" &&
+  body !== null &&
+  "labels" in body &&
+  typeof body.labels === "object" &&
+  body.labels !== null &&
+  "sealant-run" in body.labels;
+
 /** Core's one provider command in a session VM: the agent's bind exchange. */
 const BIND = /boat-bind\.mjs/;
 
@@ -143,6 +154,47 @@ export const scenarios = {
             stack.boat.sandboxes.get(event.sandboxId ?? "")?.labels["sealant-run"] === run.runId,
         );
         expect(created).toHaveLength(1);
+      },
+    );
+  },
+
+  /**
+   * Boat refuses the session's create: its key expired (SLNT-782). The SDK caller reads why, as
+   * Boat's kind, code and request id, and Core asks for the VM once, never retrying it as a create
+   * whose outcome is unknown.
+   */
+  async createRefused(stack: HarnessStack, project: Project) {
+    await withFaults(
+      stack,
+      {
+        refuse: (call) =>
+          call.method === "POST" && call.path === "/sandboxes" && sessionCreate(call.body)
+            ? BOAT_REFUSALS["key-expired"]
+            : undefined,
+      },
+      async () => {
+        const run = await failedLaunch(stack, project, { cause: /api_key_expired|key-expired/ });
+        const error: unknown = await run.workspace.ready().catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(SealantBoatError);
+        expect(error).toMatchObject({
+          code: "workspace_not_ready",
+          boat: {
+            kind: "key-expired",
+            retryable: false,
+            operation: "create",
+            status: 403,
+            code: "api_key_expired",
+            requestId: expect.stringMatching(/^req_/),
+          },
+        });
+        const refused = stack.boat.events.filter(
+          (event) => event.kind === "fault:refused" && event.detail?.startsWith("POST /sandboxes"),
+        );
+        // The launch's create and, on its next drive, the one replay under the same key that
+        // records Boat holds no VM: never the 120-second retry of an unknown outcome.
+        expect(refused.length).toBeGreaterThanOrEqual(1);
+        expect(refused.length).toBeLessThanOrEqual(2);
+        expect(stack.boat.liveSandboxes().filter(isSession)).toHaveLength(0);
       },
     );
   },

@@ -292,10 +292,23 @@ describe.skipIf(!enabled)("native publication worker and persistence (disposable
       await withWorkspaceJobTestDatabase(databaseUrl ?? "", async (url) => {
         const s = await setup(undefined, undefined, url, mode);
         const job = await s.enqueue();
+        const operation = mode === "status-http-failed" ? "commandStatus" : "execute";
         const providerFailure = {
-          operation: mode === "status-http-failed" ? "commandStatus" : "execute",
+          operation,
           status: mode === "transport-failed" ? null : 503,
           causeClass: mode === "transport-failed" ? "UND_ERR_SOCKET" : null,
+          // Boat did not answer, or answered a server error: its code and its message, redacted.
+          boat:
+            mode === "transport-failed"
+              ? { kind: "no-answer", retryable: true, operation }
+              : {
+                  kind: "no-answer",
+                  retryable: true,
+                  operation,
+                  code: "provider_error",
+                  message: "[REDACTED_AUTH]",
+                  status: 503,
+                },
           step: "install-recipe",
         };
         await expect(processWorkspaceBuildJob(s.options(job.id))).rejects.toMatchObject({

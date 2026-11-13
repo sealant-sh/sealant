@@ -18,6 +18,8 @@ import { join } from "node:path";
 import { nativeBuildOwnershipSchema, nativeSnapshotArtifactSchema } from "@sealant/validators";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { boatErrorEnvelope, type FakeBoatRefusal } from "../../../boat-harness/fake-boat.js";
+import { BOAT_REFUSALS } from "../../../boat-harness/refusals.js";
 import { HttpBoatApi, boatBuildOwnershipLabels } from "../../runtime/boat/api.js";
 import { BoatSecret, BoatBuildOwnership } from "../../runtime/boat/config.js";
 import { BoatSnapshotBuilder } from "./builder.js";
@@ -69,6 +71,7 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
   const requests: Array<{ method: string; path: string; key?: string | string[]; body: unknown }> =
     [];
   let failCreateOnce = false;
+  let createRefusal: FakeBoatRefusal | undefined;
   let snapshot:
     | {
         name: string;
@@ -111,6 +114,10 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
         if (failCreateOnce) {
           failCreateOnce = false;
           response.destroy();
+          return;
+        }
+        if (createRefusal !== undefined) {
+          respond(response, boatErrorEnvelope(createRefusal), createRefusal.status);
           return;
         }
         respond(response, {
@@ -215,6 +222,9 @@ const fixture = async (cleanupTimeoutMs = 1000) => {
     },
     loseCreate: () => {
       failCreateOnce = true;
+    },
+    refuseCreate: (refusal: FakeBoatRefusal) => {
+      createRefusal = refusal;
     },
     snapshot: (value: typeof snapshot) => {
       snapshot = value;
@@ -333,7 +343,11 @@ describe("attempt-owned durable native cleanup", () => {
     f.hideSandbox();
     expect(await f.builder.cleanup(f.path)).toMatchObject({
       ok: false,
-      error: { code: "native-provider-not_found" },
+      // Boat's 404 is a refusal the builder does not classify; its code stays on the failure.
+      error: {
+        code: "native-boat-refused",
+        providerFailure: { status: 404, boat: { kind: "refused", code: "not_found" } },
+      },
     });
     expect(f.requests.some((r) => r.method === "DELETE")).toBe(false);
   });
@@ -413,6 +427,37 @@ describe("attempt-owned durable native cleanup", () => {
     const count = f.requests.length;
     expect(await f.builder.cleanup(f.path)).toEqual({ ok: true, value: undefined });
     expect(f.requests).toHaveLength(count);
+  });
+
+  it("ends on a refusal no retry can change, with Boat's reason, and creates once (SLNT-782)", async () => {
+    const f = await fixture();
+    f.refuseCreate(BOAT_REFUSALS["key-expired"]);
+    const result = await f.builder.cleanup(f.path);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "native-boat-key-expired",
+        providerFailure: {
+          operation: "create",
+          status: 403,
+          boat: { kind: "key-expired", code: "api_key_expired", retryable: false },
+        },
+      },
+    });
+    expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(1);
+    if (!result.ok) expect(result.error.message).not.toContain("boat_test_credential");
+  });
+
+  it("retries a create Boat could not serve yet, under the same key", async () => {
+    const f = await fixture();
+    f.refuseCreate(BOAT_REFUSALS["no-machine"]);
+    expect(await f.builder.cleanup(f.path)).toMatchObject({
+      ok: false,
+      error: { providerFailure: { boat: { kind: "no-machine", retryAfterSeconds: 5 } } },
+    });
+    const creates = f.requests.filter((r) => r.method === "POST");
+    expect(creates).toHaveLength(3);
+    expect(new Set(creates.map((r) => r.key))).toEqual(new Set([f.journal.allocation.key]));
   });
 
   it("replays the private snapshot policy recorded by a newer allocation intent", async () => {
@@ -584,15 +629,20 @@ describe("attempt-owned durable native cleanup", () => {
         },
       });
       f.failSnapshotRead(failure);
-      const code =
-        failure === "html"
-          ? "invalid_response"
-          : failure === "wrong-resource"
-            ? "sandbox_not_found"
-            : "provider_error";
+      // The failure's code is Boat's kind; Boat's own code stays on its provider failure.
       expect(await f.builder.remove(artifact)).toMatchObject({
         ok: false,
-        error: { code: `native-provider-${code}` },
+        error:
+          failure === "html"
+            ? { code: "native-boat-no-answer", providerFailure: { status: 404 } }
+            : {
+                code: "native-boat-refused",
+                providerFailure: {
+                  boat: {
+                    code: failure === "wrong-resource" ? "sandbox_not_found" : "unknown_route",
+                  },
+                },
+              },
       });
       expect(await f.read()).not.toHaveProperty("removal");
       expect(f.requests.some((request) => request.method === "DELETE")).toBe(false);

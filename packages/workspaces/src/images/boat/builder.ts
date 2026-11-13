@@ -28,6 +28,7 @@ import {
   boatDeletionIdSchema,
   boatSandboxIdSchema,
   boatSnapshotNameSchema,
+  type BoatApiError,
   type BoatResult,
 } from "../../runtime/boat/config.js";
 import { sealantdHasRecoveryBoot } from "../../runtime/daemon-recovery.js";
@@ -207,6 +208,33 @@ const failure = (error: unknown, path?: string) =>
     : new NativeBuildError("native-local-io-failed", path);
 
 const noop = () => undefined;
+/** A save Boat answered with a refusal (4xx) other than a save already under way. */
+const savedNothing = (error: unknown) => {
+  if (!(error instanceof NativeBuildError)) return false;
+  const status = error.providerFailure?.status ?? null;
+  return (
+    status !== null &&
+    status >= 400 &&
+    status < 500 &&
+    error.providerFailure?.boat !== undefined &&
+    !["save_in_progress", "idempotency_in_progress"].includes(error.providerFailure.boat.code ?? "")
+  );
+};
+
+/**
+ * The build failure code for a Boat call that failed. Boat answered: `native-boat-<kind>`, from
+ * the closed set of failure kinds, which decides whether a later launch rebuilds
+ * (`nativeBuildRetryReasonSchema`) and is always a valid quarantine reason. Boat is still settling
+ * this idempotency key: `native-provider-idempotency_in_progress`, which the build retries. No
+ * answer at all, or a call Core refused itself: `native-provider-<Core's own code>`.
+ */
+const providerFailureCode = (error: BoatApiError) =>
+  error.code === "idempotency_in_progress"
+    ? "native-provider-idempotency_in_progress"
+    : error.status !== null && error.boat !== undefined
+      ? `native-boat-${error.boat.kind}`
+      : `native-provider-${error.code.toLowerCase().replace(/[^a-z0-9_-]/g, "_")}`;
+
 const awaitProviderResponse = async <T>(
   request: () => Promise<BoatResult<T>>,
   signal: AbortSignal,
@@ -218,7 +246,7 @@ const awaitProviderResponse = async <T>(
       request().then((r) => {
         if (!r.ok)
           throw new NativeBuildError(
-            `native-provider-${r.error.code}`,
+            providerFailureCode(r.error),
             undefined,
             undefined,
             nativeProviderFailureSchema.parse(r.error),
@@ -429,13 +457,15 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         return;
       } catch (error) {
         last = error;
+        // Retried: Boat did not answer, is still settling this key, or asked to wait (a rate
+        // limit, no machine now). A refusal no retry can change (the key, its permissions,
+        // billing, the plan) ends the build with Boat's reason.
         if (
           !(error instanceof NativeBuildError) ||
-          ![
-            "native-provider-transport_error",
-            "native-provider-idempotency_in_progress",
-            "native-provider-provider_error",
-          ].includes(error.code)
+          !(
+            error.code === "native-provider-idempotency_in_progress" ||
+            error.providerFailure?.boat?.retryable === true
+          )
         )
           throw error;
         await pause(this.#options.pollIntervalMs ?? 1500, signal);
@@ -536,7 +566,12 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     const saved = await awaitProviderResponse(
       () => this.#options.api.saveSnapshot(save.sourceSandboxId, save.name),
       signal,
-    ).catch(async () => this.#observeSave(journal, path, signal));
+    ).catch(async (error: unknown) => {
+      // Boat refused the save outright (the snapshot allowance, billing, the key): it holds no
+      // snapshot for it, and its reason is the build's. Any other outcome may have saved one.
+      if (savedNothing(error)) throw error;
+      return this.#observeSave(journal, path, signal);
+    });
     if (
       saved.name !== save.name ||
       saved.sourceSandboxId !== save.sourceSandboxId ||
@@ -894,10 +929,15 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
           await persist(path, journal);
           await this.#cleanup(journal, path);
         } catch {
+          // A cleanup Boat's refusal blocks too (its replay of the create is refused) keeps the
+          // refusal's kind in its reason, so a later launch on it says why.
+          const code = failure(error).code;
           return {
             ok: false,
             error: new NativeBuildError(
-              "native-cleanup-pending",
+              code.startsWith("native-boat-")
+                ? `native-cleanup-pending-${code.slice("native-".length)}`
+                : "native-cleanup-pending",
               path,
               failure(error).commandFailure,
               failure(error).providerFailure,

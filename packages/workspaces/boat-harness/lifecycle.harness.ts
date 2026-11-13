@@ -310,6 +310,7 @@ describe("one fault per step", () => {
   fault("worker killed after bind", scenarios.workerKilled);
   fault("Stop after the launch", scenarios.stopAfterLaunch);
   fault("deletion stuck in processing", scenarios.deletionStuck);
+  fault("create refused: Boat key expired", scenarios.createRefused);
 });
 
 // Workspaces created without resources (#589): no gateway, tunnel or in-VM resolver.
