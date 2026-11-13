@@ -1136,12 +1136,12 @@ describe.skipIf(DATABASE_URL === undefined)(
             installWallet: () =>
               repo(Effect.flatMap(BoatAccountRepo, (accounts) => accounts.installWallet())),
             report: async () => {
-              const worker = `worker-${randomUUID()}`;
-              await assembled.reportLaunch(worker);
+              const reporter = `worker-${randomUUID()}`;
+              await assembled.reportLaunch(reporter);
               const reports = await repo(
                 Effect.flatMap(BoatAccountRepo, (accounts) => accounts.launchReports(60_000)),
               );
-              return reports.find((each) => each.worker === worker);
+              return reports.find((each) => each.worker === reporter);
             },
             walletOf: (publicationId) =>
               repo(
