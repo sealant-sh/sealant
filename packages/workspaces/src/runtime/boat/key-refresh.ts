@@ -1,3 +1,4 @@
+import type { BoatKeyReport } from "@sealant/api-contracts";
 /**
  * Keeps every Boat key's report fresh without anyone asking: the install's own key and each stored
  * account's are checked against Boat (read-only) once their last report is older than
@@ -16,6 +17,22 @@ import { observeBoatKey, type BoatKeyCheckClient } from "./key-check.js";
 /** Once a day: enough to see an expiry approaching or an account suspended. */
 export const BOAT_KEY_REFRESH_MS = 24 * 3_600_000;
 
+/** The wallet a report observed can start a VM now: a cause a person fixed may have cleared. */
+export const boatReportCanStart = (report: BoatKeyReport): boolean =>
+  report.start.observed && report.start.canStart;
+
+/**
+ * Reopens the deployment's quarantined builds whose Boat reason a person fixes, so the next launch
+ * tries each once more. Answers how many were reopened.
+ */
+export const reopenBoatQuarantine = (db: DB, deploymentId: string, at: Date = new Date()) =>
+  Effect.runPromise(
+    Effect.flatMap(BoatAccountRepo, (repo) => repo.reopenQuarantined({ deploymentId, at })).pipe(
+      Effect.provide(BoatAccountRepoLive),
+      Effect.provideService(SealantDB, db),
+    ),
+  );
+
 /** The account id of the install's own key in `boat_key_reports`. */
 const DEFAULT_ACCOUNT = "default";
 
@@ -26,6 +43,8 @@ export interface BoatKeyRefreshOptions {
   readonly defaultKey?: {
     readonly credential: BoatSecret;
     readonly organization: string | undefined;
+    /** The install's own deployment label: its quarantined builds are reopened by its checks. */
+    readonly deploymentId?: string;
   };
   /** How a key is opened into the client its check reads with. Default: Boat's real API. */
   readonly clientFor?: (
@@ -98,6 +117,7 @@ export const refreshBoatKeyReports = async (
 
   const refresh = async (
     account: string,
+    deploymentId: string | undefined,
     key: () => Promise<
       { readonly credential: BoatSecret; readonly organization: string | undefined } | undefined
     >,
@@ -122,6 +142,8 @@ export const refreshBoatKeyReports = async (
           repo.saveReport({ account, report, observedAt: new Date(report.observedAt) }),
         ),
       );
+      if (deploymentId !== undefined && boatReportCanStart(report))
+        await reopenBoatQuarantine(options.db, deploymentId, now()).catch(() => 0);
       return { account, outcome: "refreshed" };
     } catch {
       return { account, outcome: "unavailable" };
@@ -131,11 +153,13 @@ export const refreshBoatKeyReports = async (
   const outcomes: BoatKeyRefreshOutcome[] = [];
   const defaultKey = options.defaultKey;
   if (defaultKey !== undefined)
-    outcomes.push(await refresh(DEFAULT_ACCOUNT, () => Promise.resolve(defaultKey)));
+    outcomes.push(
+      await refresh(DEFAULT_ACCOUNT, defaultKey.deploymentId, () => Promise.resolve(defaultKey)),
+    );
   for (const account of accounts) {
     // An account being removed is going away: its key is not checked again.
     if (account.removalRequestedAt !== null) continue;
-    outcomes.push(await refresh(account.id, () => storedKey(account.id)));
+    outcomes.push(await refresh(account.id, account.deploymentId, () => storedKey(account.id)));
   }
   return outcomes;
 };

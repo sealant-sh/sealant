@@ -31,6 +31,7 @@ import {
   boatSandboxIdSchema,
   boatSnapshotNameSchema,
   checkBoatKey,
+  boatReportCanStart,
   observeBoatKey,
   type BoatKeyCheck,
 } from "@sealant/workspaces";
@@ -166,6 +167,24 @@ const acceptedKey = (credential: BoatSecret, organization: string | null, outcom
     return { client, report: check.report };
   });
 
+/**
+ * The account's quarantined builds a person may have fixed are tried again on the next launch:
+ * after a rotation, and after a check that says the wallet can start (`reopenBoatQuarantine`). A
+ * failure to reopen loses nothing but the reopen; the next check tries again.
+ */
+const reopenQuarantine = (deploymentId: string) =>
+  Effect.flatMap(BoatAccountRepo, (repo) =>
+    repo.reopenQuarantined({ deploymentId, at: new Date() }),
+  ).pipe(Effect.orElseSucceed(() => 0));
+
+/** The install's own deployment label, as the worker names its VMs and images with it. */
+const installDeployment = Effect.flatMap(BoatAccountRepo, (repo) =>
+  repo.installDeployment(env.SEALANT_BOAT_DEPLOYMENT_ID),
+).pipe(
+  Effect.map((stored) => env.SEALANT_BOAT_DEPLOYMENT_ID ?? stored),
+  Effect.mapError(internal("Failed to read the install's Boat deployment.")),
+);
+
 const saveReport = (account: string, report: BoatKeyReport) =>
   Effect.flatMap(BoatAccountRepo, (repo) =>
     repo.saveReport({ account, report, observedAt: new Date(report.observedAt) }),
@@ -293,6 +312,7 @@ export const checkBoatAccount = (boatAccountId: string) =>
         message: "The Boat account's stored key is not a Boat key.",
       });
     const report = yield* recheck(parsed.value, account.organization, account.id);
+    if (boatReportCanStart(report)) yield* reopenQuarantine(account.deploymentId);
     return toWire(account, report);
   });
 
@@ -308,7 +328,9 @@ export const checkBoatInstallKey = () =>
       });
     // The organization the install's own key bills, named on the check as on every request.
     const organization = (yield* BoatDefaultOrganization) ?? null;
-    return installKeyWire(yield* recheck(key.value, organization, BOAT_DEFAULT_ACCOUNT_ID));
+    const report = yield* recheck(key.value, organization, BOAT_DEFAULT_ACCOUNT_ID);
+    if (boatReportCanStart(report)) yield* reopenQuarantine(yield* installDeployment);
+    return installKeyWire(report);
   });
 
 /**
@@ -427,6 +449,8 @@ export const rotateBoatAccountKey = (boatAccountId: string, payload: RotateBoatA
         ),
       );
     yield* saveReport(rotated.id, report);
+    // A new key may be what a quarantined build was waiting for.
+    yield* reopenQuarantine(rotated.deploymentId);
     return toWire(rotated, report);
   });
 

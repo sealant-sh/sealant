@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { NATIVE_REOPEN_BOAT_FAILURES } from "@sealant/validators";
 import { and, asc, count, eq, exists, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
@@ -127,6 +128,16 @@ export interface BoatAccountRepoService {
   readonly reportLaunch: (input: BoatLaunchReportRecord) => Failing<void>;
   /** Every worker's launch report observed at or after `since`, newest first. */
   readonly launchReports: (since: Date) => Failing<readonly BoatLaunchReportRecord[]>;
+  /**
+   * The cause of a deployment's quarantined builds may have cleared (its account's key was rotated,
+   * or a check of it can start): each one quarantined for a Boat reason a person fixes
+   * (`NATIVE_REOPEN_BOAT_FAILURES`), not reopened yet, is reopened, so the next launch builds it once
+   * more. Answers how many.
+   */
+  readonly reopenQuarantined: (input: {
+    readonly deploymentId: string;
+    readonly at: Date;
+  }) => Failing<number>;
   /** Every stored check report, by account (`default` for the env key). */
   readonly reports: () => Failing<ReadonlyMap<string, BoatKeyReportRecord>>;
   /** The account whatever its state, removed included; never its key. */
@@ -526,8 +537,36 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       }),
     );
   });
+  const reopenQuarantined = Effect.fn("BoatAccountRepo.reopenQuarantined")(function* (input: {
+    readonly deploymentId: string;
+    readonly at: Date;
+  }) {
+    const rows = yield* db
+      .update(nativePublications)
+      .set({ reopenedAt: input.at })
+      .where(
+        and(
+          eq(nativePublications.deploymentId, input.deploymentId),
+          eq(nativePublications.state, "quarantined"),
+          isNull(nativePublications.publication),
+          isNull(nativePublications.claimToken),
+          isNull(nativePublications.reopenedAt),
+          // A build whose cleanup is still pending for the same cause is marked too: once its
+          // sweep finishes the cleanup, the reason is the plain kind and the next launch builds.
+          inArray(nativePublications.reason, [
+            ...NATIVE_REOPEN_BOAT_FAILURES,
+            ...NATIVE_REOPEN_BOAT_FAILURES.map(
+              (reason) => `native-cleanup-pending-${reason.slice("native-".length)}`,
+            ),
+          ]),
+        ),
+      )
+      .returning({ id: nativePublications.id });
+    return rows.length;
+  });
   return BoatAccountRepo.of({
     create: (input) => boundary(create(input)),
+    reopenQuarantined: (input) => boundary(reopenQuarantined(input)),
     installDeployment: (preferred) => boundary(installDeployment(preferred)),
     installBuilderOwner: (preferred) => boundary(installBuilderOwner(preferred)),
     reportLaunch: (input) => boundary(reportLaunch(input)),

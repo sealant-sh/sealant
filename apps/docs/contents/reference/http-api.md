@@ -226,6 +226,14 @@ nothing else of Boat's answer is kept, and never the key. A launch Boat refused 
 retry can change (the key, its permissions, the account, billing, plan limits) is not retried as a
 create whose outcome is unknown.
 
+An image build Boat refused for a reason a person fixes in Boat (`key-refused`, `key-expired`,
+`permission-missing`, `sandbox-outside-key`, `organization-mismatch`, `account-suspended`,
+`billing-required`, `member-cap`, `trial-restricted`, `snapshot-allowance-full`) stays quarantined,
+and every launch on it reads the kind back, until the cause may have cleared: the account's key is
+rotated, or a check of it (`check`, `install-key`, or the worker's daily refresh) observes that the
+wallet can start. The next launch then builds it once more; a fresh refusal quarantines the new
+build with the fresh reason until the next such event.
+
 A workspace names its account at create in `spec.runtime.boatAccountId`, and every run of it,
 restarts included, stays in that account. Omitted, it runs in the default account. An unknown or
 removed account answers `404`, one being removed `409`, and naming one for a workspace that does not

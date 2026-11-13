@@ -266,7 +266,11 @@ export const assembleBoat = async (input: {
       file: env.SEALANT_BOAT_API_KEY_FILE,
     });
     return credential.ok
-      ? { credential: credential.value, organization: envAccount.organization }
+      ? {
+          credential: credential.value,
+          organization: envAccount.organization,
+          ...(names === undefined ? {} : { deploymentId: names.deploymentId }),
+        }
       : undefined;
   })();
   const directory = new BoatAccountDirectory({
