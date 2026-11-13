@@ -181,6 +181,8 @@ export const boatAccountCatalog = (input: {
       byDeployment(ownership.key.deploymentId).pipe(
         Effect.flatMap((catalog) => catalog.withdraw(ownership)),
       ),
+    // Retention is per account: the worker's Boat sweep runs each account's own catalog's
+    // `reap`, which knows the account's deployment and the workspaces that run in it.
     reap: () =>
       Effect.fail<NativeCatalogError | NativeCatalogStoreError>(
         catalogUnavailable("reap-per-account"),

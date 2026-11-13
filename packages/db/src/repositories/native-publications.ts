@@ -18,19 +18,19 @@ import {
   type NativePublication,
   type NativePublicationKey,
 } from "@sealant/validators";
-import { and, asc, eq, gt, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import { SealantDB } from "../client.js";
 import { boatAccounts } from "../schema/boat-accounts.js";
 import { boatRuns } from "../schema/boat-runs.js";
 import { boatTunnels } from "../schema/boat-tunnels.js";
-import { workspaceAttempts } from "../schema/control-plane.js";
+import { workspaceAttempts, workspaces } from "../schema/control-plane.js";
 import {
   nativePublicationConsumers as consumers,
   nativePublications as publications,
 } from "../schema/native-publications.js";
-import { workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
+import { ociImageBuildJobs, workspaceRuntimeInstances } from "../schema/workspace-build-jobs.js";
 
 /** Persistence failures never imply a publication was absent or a consumer was released. */
 export class NativeCatalogStoreError extends Error {
@@ -48,6 +48,25 @@ export class NativeCatalogStoreError extends Error {
   ) {
     super(`Native catalog store failed during ${operation}: ${code}`);
   }
+}
+
+/**
+ * What a retention pass of one Boat account keeps. An image is retired only when no run holds it,
+ * its key is not one a workspace that can still start would look up (`wanted`), no build for its
+ * image scope is queued or running, and nothing has used it since `unusedSince`: it became ready
+ * before then, and no run was pinned to it or released it after.
+ */
+export interface NativeRetentionPolicy {
+  readonly wanted: ReadonlyArray<NativePublicationKey>;
+  readonly unusedSince: Date;
+}
+
+/** A workspace that can still start, as retention reads it: its latest launch's spec and scope. */
+export interface NativeStartableWorkspace {
+  readonly workspaceId: string;
+  /** The latest build job's request, unparsed: the spec that job's acquire planned from. */
+  readonly spec: unknown;
+  readonly scope: unknown;
 }
 
 /** Transactional ownership; provider and filesystem operations belong outside these methods. */
@@ -112,10 +131,39 @@ export interface NativePublicationRepoService {
     limit: number,
     after?: string,
   ) => Effect.Effect<ReadonlyArray<NativeCatalogRecord>, NativeCatalogStoreError>;
+  /**
+   * Marks a publication `retiring`, the record a removal is made from, or `undefined` when it is
+   * kept. A removal already under way is resumed (`retiring` is returned as it is; a pending one
+   * becomes `retiring` again) with or without a policy. A ready one is retired only under a
+   * retention policy (`NativeRetentionPolicy`), checked here under its row lock, and never in a
+   * Boat account whose removal was asked: that removal deletes it.
+   */
   readonly retire: (
     publicationId: string,
-    policy?: { readonly keepRecent: number; readonly minAgeMs: number },
+    policy?: NativeRetentionPolicy,
   ) => Effect.Effect<NativeCatalogRecord | undefined, NativeCatalogStoreError>;
+  /**
+   * One page of a deployment's saved images (ready, retiring, or a removal still pending), by id:
+   * what a retention pass of its Boat account looks at.
+   */
+  readonly images: (input: {
+    readonly deploymentId: string;
+    readonly limit: number;
+    readonly after?: string;
+  }) => Effect.Effect<ReadonlyArray<NativeCatalogRecord>, NativeCatalogStoreError>;
+  /**
+   * One page, by workspace id, of the workspaces whose next launch would run in this deployment's
+   * Boat account and look up an image there: not archived, their latest launch a Boat one (its
+   * build job has an image scope) in this account, and either not stopped or failed, or stopped
+   * or failed at or after `stoppedSince`. A stopped Boat workspace is started again from its
+   * latest launch's spec, so each row is the spec and scope that launch planned from.
+   */
+  readonly startable: (input: {
+    readonly deploymentId: string;
+    readonly stoppedSince: Date;
+    readonly limit: number;
+    readonly after?: string;
+  }) => Effect.Effect<ReadonlyArray<NativeStartableWorkspace>, NativeCatalogStoreError>;
   /** Explicit operator withdrawal of an exact unused build, independent of cache retention. */
   readonly withdraw: (
     ownership: NativeBuildOwnership,
@@ -142,6 +190,11 @@ const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const scopeId = (scope: NativePublicationKey["scope"]) =>
   scope.kind === "owner" ? scope.ownerUserId : scope.domainId;
 const clearClaim = { claimToken: null, claimUntil: null, claimPurpose: null };
+/** A caller's instant as SQL takes it; an invalid date is refused. */
+const instant = (value: Date): string => {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) throw new Error("instant");
+  return value.toISOString();
+};
 
 const parseRow = (
   row: typeof publications.$inferSelect,
@@ -647,17 +700,37 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
     });
     const retire = Effect.fn("NativePublicationRepo.retire")(function* (
       id: string,
-      policy = { keepRecent: 10, minAgeMs: 7 * 86400000 },
+      policy?: NativeRetentionPolicy,
     ) {
-      if (
-        !Number.isInteger(policy.keepRecent) ||
-        policy.keepRecent < 10 ||
-        !Number.isSafeInteger(policy.minAgeMs) ||
-        policy.minAgeMs < 7 * 86400000
-      )
-        return yield* Effect.fail(new NativeCatalogStoreError("retire", "invalid-input"));
+      const parsed = yield* Effect.try({
+        try: () =>
+          policy === undefined
+            ? undefined
+            : {
+                wanted: new Set(
+                  policy.wanted.map((key) => digest(nativePublicationKeySchema.parse(key))),
+                ),
+                unusedSince: instant(policy.unusedSince),
+              },
+        catch: () => new NativeCatalogStoreError("retire", "invalid-input"),
+      });
       return yield* db.transaction(() =>
         Effect.gen(function* () {
+          if (parsed !== undefined) {
+            // The account first, as reserve and removal take it: an account whose removal was
+            // asked is left to that removal, which deletes every image it holds.
+            const [owner] = yield* db
+              .select({ deploymentId: publications.deploymentId })
+              .from(publications)
+              .where(eq(publications.id, id));
+            if (owner === undefined) return undefined;
+            const [account] = yield* db
+              .select({ removalRequestedAt: boatAccounts.removalRequestedAt })
+              .from(boatAccounts)
+              .where(eq(boatAccounts.deploymentId, owner.deploymentId))
+              .for("share");
+            if (account !== undefined && account.removalRequestedAt !== null) return undefined;
+          }
           const [row] = yield* lock(id);
           if (row === undefined) return undefined;
           const record = yield* parseRow(row);
@@ -680,21 +753,20 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
               .returning();
             return updated === undefined ? undefined : yield* parseRow(updated);
           }
-          const recent = yield* db
-            .select({ recipeHash: publications.recipeHash })
-            .from(publications)
+          if (parsed === undefined || parsed.wanted.has(row.keyHash)) return undefined;
+          // A build of this image scope queued or running may be about to look this image up: its
+          // spec was not read when the wanted keys were.
+          const [inFlight] = yield* db
+            .select({ id: ociImageBuildJobs.id })
+            .from(ociImageBuildJobs)
             .where(
               and(
-                eq(publications.deploymentId, row.deploymentId),
-                eq(publications.scopeKind, row.scopeKind),
-                eq(publications.scopeId, row.scopeId),
-                sql`${publications.state} in ('ready','retiring')`,
+                sql`${ociImageBuildJobs.imageScope} = ${JSON.stringify(record.ownership.key.scope)}::jsonb`,
+                inArray(ociImageBuildJobs.status, ["queued", "running"]),
               ),
             )
-            .groupBy(publications.recipeHash)
-            .orderBy(sql`max(${publications.createdAt}) desc`, asc(publications.recipeHash))
-            .limit(policy.keepRecent);
-          if (recent.some((plan) => plan.recipeHash === row.recipeHash)) return undefined;
+            .limit(1);
+          if (inFlight !== undefined) return undefined;
           const [updated] = yield* db
             .update(publications)
             .set({
@@ -705,13 +777,83 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             .where(
               and(
                 eq(publications.id, id),
-                sql`${publications.readyAt} <= now() - ${policy.minAgeMs} * interval '1 millisecond'`,
+                sql`${publications.readyAt} <= ${parsed.unusedSince}::timestamptz`,
+                sql`not exists (select 1 from ${consumers} where ${consumers.publicationId} = ${publications.id} and (${consumers.createdAt} > ${parsed.unusedSince}::timestamptz or ${consumers.releasedAt} > ${parsed.unusedSince}::timestamptz))`,
               ),
             )
             .returning();
           return updated === undefined ? undefined : yield* parseRow(updated);
         }),
       );
+    });
+    const images = Effect.fn("NativePublicationRepo.images")(function* (input: {
+      readonly deploymentId: string;
+      readonly limit: number;
+      readonly after?: string;
+    }) {
+      if (
+        !Number.isInteger(input.limit) ||
+        input.limit < 1 ||
+        input.limit > 200 ||
+        (input.after !== undefined &&
+          !nativePublicationSchema.shape.publicationId.safeParse(input.after).success)
+      )
+        return yield* Effect.fail(new NativeCatalogStoreError("images", "invalid-input"));
+      const rows = yield* db
+        .select()
+        .from(publications)
+        .where(
+          and(
+            eq(publications.deploymentId, input.deploymentId),
+            input.after === undefined ? undefined : gt(publications.id, input.after),
+            sql`(${publications.state} in ('ready','retiring') or (${publications.state} = 'quarantined' and ${publications.reason} = 'native-removal-pending'))`,
+          ),
+        )
+        .orderBy(asc(publications.id))
+        .limit(input.limit);
+      return yield* Effect.forEach(rows, parseRow);
+    });
+    const startable = Effect.fn("NativePublicationRepo.startable")(function* (input: {
+      readonly deploymentId: string;
+      readonly stoppedSince: Date;
+      readonly limit: number;
+      readonly after?: string;
+    }) {
+      if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 500)
+        return yield* Effect.fail(new NativeCatalogStoreError("startable", "invalid-input"));
+      const stoppedSince = yield* Effect.try({
+        try: () => instant(input.stoppedSince),
+        catch: () => new NativeCatalogStoreError("startable", "invalid-input"),
+      });
+      // A stored account's deployment has its row; the install's own account has none, and its
+      // workspaces name no account.
+      const [account] = yield* db
+        .select({ id: boatAccounts.id })
+        .from(boatAccounts)
+        .where(eq(boatAccounts.deploymentId, input.deploymentId));
+      const accountOfSpec = sql`(${ociImageBuildJobs.requestPayload} -> 'runtime' ->> 'boatAccountId')`;
+      const rows = yield* db
+        .selectDistinctOn([workspaces.id], {
+          workspaceId: workspaces.id,
+          spec: ociImageBuildJobs.requestPayload,
+          scope: ociImageBuildJobs.imageScope,
+        })
+        .from(workspaces)
+        .innerJoin(ociImageBuildJobs, eq(ociImageBuildJobs.runId, workspaces.latestRunId))
+        .where(
+          and(
+            isNull(workspaces.archivedAt),
+            sql`${ociImageBuildJobs.imageScope} is not null`,
+            account === undefined
+              ? sql`${accountOfSpec} is null`
+              : sql`${accountOfSpec} = ${account.id}`,
+            sql`(${workspaces.status} not in ('stopped','failed') or ${workspaces.updatedAt} >= ${stoppedSince}::timestamptz)`,
+            input.after === undefined ? undefined : gt(workspaces.id, input.after),
+          ),
+        )
+        .orderBy(asc(workspaces.id), desc(ociImageBuildJobs.createdAt))
+        .limit(input.limit);
+      return rows;
     });
     const withdraw = Effect.fn("NativePublicationRepo.withdraw")(function* (
       ownership: NativeBuildOwnership,
@@ -832,6 +974,8 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         ),
       candidates: (scope, limit, after) => boundary("candidates", candidates(scope, limit, after)),
       retire: (id, policy) => boundary("retire", retire(id, policy)),
+      images: (input) => boundary("images", images(input)),
+      startable: (input) => boundary("startable", startable(input)),
       withdraw: (ownership) => boundary("withdraw", withdraw(ownership)),
       removed: (claim) => boundary("removed", removed(claim)),
       heldByDeployment: (input) =>

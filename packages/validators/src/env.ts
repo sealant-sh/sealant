@@ -883,6 +883,26 @@ export const workerServerEnvSchema = databaseEnvSchema
       .string()
       .regex(/^(?:[a-z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/)
       .optional(),
+    /**
+     * Boat image retention: whether this worker removes, per Boat account, the saved images
+     * (snapshots) it built that no workspace can use any more. Only a worker that launches Boat
+     * workspaces (SEALANT_BOAT_STATE_DIRECTORY) removes any. `false` keeps every image.
+     */
+    SEALANT_BOAT_IMAGE_GC_ENABLED: z
+      .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+      .default(true),
+    /** How often the Boat image retention pass runs; the first runs a minute after start. */
+    SEALANT_BOAT_IMAGE_GC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
+    /**
+     * How long a stopped or failed Boat workspace keeps the image it would start again from. Within
+     * it, the image its latest launch's spec plans to (with this Core) is never removed.
+     */
+    SEALANT_BOAT_IMAGE_RESUME_DAYS: z.coerce.number().min(1).default(14),
+    /**
+     * An image no run has used for less than this (it became ready, or a run started on it or
+     * ended on it, more recently) is kept whatever else holds, so a rolled-back Core finds its own.
+     */
+    SEALANT_BOAT_IMAGE_MIN_AGE_HOURS: z.coerce.number().min(1).default(24),
   });
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {

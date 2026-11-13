@@ -94,6 +94,18 @@ export type BoatWorkerEnv = Pick<
   | "DOCKER_SOCKET_PATH"
 >;
 
+/** The bounds of one Boat image retention pass, from the worker's clock and settings. */
+export interface BoatImageRetention {
+  /** A stopped or failed workspace keeps the image it would start from if it stopped since. */
+  readonly stoppedSince: Date;
+  /** An image something used since is kept. */
+  readonly unusedSince: Date;
+}
+
+/** Images a retention pass reads per page, and pages at most per account and pass. */
+const RETENTION_PAGE = 50;
+const RETENTION_PAGES = 20;
+
 /** The Docker resource host a resource gateway's containers and networks run on. */
 export interface BoatResourceDockerHost {
   readonly subnets: ResourceSubnets | undefined;
@@ -177,6 +189,13 @@ export interface BoatWorkerStack extends BoatAccountStack {
     | undefined;
   /** One page of the account's build journals; nothing for an account that never built here. */
   readonly reconcileCatalog: (() => Promise<NativeCatalogSweep | undefined>) | undefined;
+  /**
+   * One retention pass of the account's saved images (`BoatNativeCatalogService.reap`), every
+   * page; nothing for an account that never built here.
+   */
+  readonly reapImages:
+    | ((policy: BoatImageRetention) => Promise<NativeCatalogSweep["entries"] | undefined>)
+    | undefined;
   /** Where each of the sweeps above stopped last; the next tick starts there. */
   readonly cursors: {
     vm?: string | undefined;
@@ -339,6 +358,7 @@ export const assembleBoat = async (input: {
         reconcileConvergence: undefined,
         reconcileResources: undefined,
         reconcileCatalog: undefined,
+        reapImages: undefined,
         reach: undefined,
         reopenCarriers: undefined,
         verifyBearers: undefined,
@@ -450,6 +470,29 @@ export const assembleBoat = async (input: {
             );
             cursors.catalog = report.next;
             return report;
+          },
+      reapImages: !launches
+        ? undefined
+        : async (policy) => {
+            if (accountId !== null && catalog === undefined && !(await hasJournals()))
+              return undefined;
+            const service = await catalogOf();
+            if (service === undefined) return undefined;
+            const entries: NativeCatalogSweep["entries"][number][] = [];
+            let after: string | undefined;
+            for (let page = 0; page < RETENTION_PAGES; page++) {
+              const report = await Effect.runPromise(
+                service.reap({
+                  ...policy,
+                  limit: RETENTION_PAGE,
+                  ...(after === undefined ? {} : { after }),
+                }),
+              );
+              entries.push(...report.entries);
+              after = report.next;
+              if (after === undefined) break;
+            }
+            return entries;
           },
       reach:
         gateway === undefined
@@ -608,6 +651,43 @@ export const assembleBoat = async (input: {
     return report;
   };
 
+  /**
+   * One Boat image retention pass: in the install's own account and every stored account not
+   * being removed (a removal deletes every image of its account itself), each saved image no
+   * workspace can use any more is removed. Per account: what it removed, kept, or could not
+   * remove yet (an obligation the next pass, or the journal sweep, finishes).
+   */
+  const reapImages = async (policy: BoatImageRetention) => {
+    const accounts: BoatAccountId[] = [
+      ...(fallback === undefined ? [] : [null]),
+      ...(await directory.list())
+        .filter((account) => account.removalRequestedAt === null)
+        .map((account) => account.id),
+    ];
+    const report: {
+      readonly accountId: string;
+      readonly removed: number;
+      readonly kept: number;
+      readonly obligations: readonly { readonly id: string; readonly code: string }[];
+    }[] = [];
+    for (const accountId of accounts) {
+      const entries = await (async () => {
+        const stack = await stackOf(accountId);
+        return stack?.reapImages?.(policy);
+      })().catch(() => [{ id: "pass", outcome: "obligation" as const, code: "retention-failed" }]);
+      if (entries === undefined) continue;
+      report.push({
+        accountId: accountId ?? "default",
+        removed: entries.filter((entry) => entry.outcome === "updated").length,
+        kept: entries.filter((entry) => entry.outcome === "skipped").length,
+        obligations: entries
+          .filter((entry) => entry.outcome === "obligation")
+          .map(({ id, code }) => ({ id, code })),
+      });
+    }
+    return report;
+  };
+
   const launchReport = {
     launches: registration !== undefined,
     defaultAccount: registration !== undefined && fallback !== undefined,
@@ -677,6 +757,8 @@ export const assembleBoat = async (input: {
           return stack?.applyLink === undefined ? ("pending" as const) : stack.applyLink(runId);
         },
     reconcileRemovals: registration === undefined ? undefined : reconcileRemovals,
+    /** One image retention pass (`reapImages` above); only a worker that builds images has one. */
+    reapImages: registration === undefined ? undefined : reapImages,
     /**
      * What this worker does for Boat, as the API reads it (`boat_launch_reports`): whether it
      * launches Boat workspaces, in the install's own account too, and with the resource gateway.
