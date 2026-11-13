@@ -123,6 +123,8 @@ export interface FakeBoatFaults {
   snapshot?: (name: string) => "failed" | undefined;
   /** `lose`: Boat starts saving the snapshot, then the HTTP reply is dropped. */
   saveReply?: (name: string) => "lose" | undefined;
+  /** `lose`: Boat deletes the saved snapshot, then the HTTP reply is dropped. */
+  snapshotDeleteReply?: (name: string) => "lose" | undefined;
   /**
    * Boat refuses this call with its error envelope (`FakeBoatRefusal`), or `no-answer`: the
    * connection is dropped before any reply. Checked after the key, before the call does anything.
@@ -805,6 +807,15 @@ export class FakeBoat {
           await this.#docker(["image", "rm", "-f", snapshot.image]);
           await this.#docker(["volume", "rm", "-f", snapshot.dockerData]);
           this.#record("snapshot-deleted", snapshot.sourceSandboxId, snapshot.name);
+          if (this.faults.snapshotDeleteReply?.(snapshot.name) === "lose") {
+            this.#record(
+              "fault:snapshot-delete-reply-lost",
+              snapshot.sourceSandboxId,
+              snapshot.name,
+            );
+            response.destroy();
+            return;
+          }
           return send(200, {
             ok: true,
             name: snapshot.name,

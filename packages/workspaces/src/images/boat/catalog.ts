@@ -1,12 +1,16 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
   NativePublicationRepo,
   NativePublicationRepoLive,
   type NativeCatalogStoreError,
+  type NativeRetentionPolicy,
   type SealantDB,
 } from "@sealant/db";
 import {
+  boatLaunchSupport,
+  newWorkspaceSchema,
   nativeImageScopeSchema,
   nativeBuildRetryReasonSchema,
   nativePublicationKeySchema,
@@ -94,8 +98,17 @@ export interface BoatNativeCatalogService {
   ) => Effect.Effect<void, NativeCatalogStoreError>;
   /** Operator withdrawal is exact, refuses every live pin, and uses the original build journal. */
   readonly withdraw: (ownership: NativeBuildOwnership) => Effect.Effect<void, NativeCatalogFailure>;
+  /**
+   * One page of this account's retention: each saved image no workspace can use any more is
+   * removed (`NativeRetentionPolicy`). The keys still wanted are what this Core plans, now, for the
+   * latest launch of every Boat workspace that can still start in the account (`startsOnBoat`):
+   * not archived, and live, or stopped or failed at or after `stoppedSince`. An image is also kept while a run holds it,
+   * while a build of its scope is queued or running, and until nothing has used it since
+   * `unusedSince`. If any of those specs cannot be planned, nothing is removed.
+   */
   readonly reap: (input: {
-    readonly scope: NativePublicationKey["scope"];
+    readonly stoppedSince: Date;
+    readonly unusedSince: Date;
     readonly limit: number;
     readonly after?: string;
   }) => Effect.Effect<NativeCatalogSweep, NativeCatalogFailure>;
@@ -118,6 +131,11 @@ export interface BoatNativeCatalogOptions {
 }
 
 const claimMs = 30 * 60 * 1000;
+/** Workspaces read per page, and pages at most, when retention reads what is still wanted. */
+const startablePage = 500;
+const startablePages = 40;
+/** Plans kept per catalog, by spec: a plan is pure in its spec, the bundle and the assets. */
+const plannedSpecs = 2000;
 const mechanism = <A>(
   action: () => Promise<NativeResult<A>>,
   id?: string,
@@ -152,6 +170,18 @@ const publication = (
   snapshot: built.artifact,
   evidence: built.evidence,
 });
+/**
+ * Whether a workspace's next launch can be a Boat one, and so look up an image here. Every create
+ * has an image scope whatever its runtime: a workspace whose launch resolved to another runtime,
+ * one that asks for another runtime and has not launched yet, and one whose spec Boat refuses (a
+ * custom base image, host directories, Arch, Fedora) never looks a Boat image up, and is never
+ * planned. An `auto` spec Boat can run counts even where the install's default is Docker: its key
+ * matches no Boat image unless that spec also launched on Boat.
+ */
+const startsOnBoat = (spec: NativeAcquireInput["spec"], adapter: string | null) =>
+  (adapter === null
+    ? spec.target.runtime.family === "boat" || spec.target.runtime.family === "auto"
+    : adapter === "boat") && boatLaunchSupport(spec).supported;
 const failureCode = (error: NativeCatalogFailure) =>
   error instanceof NativeCatalogError ? (error.detail ?? error.code) : error.code;
 
@@ -194,7 +224,21 @@ const make = (
           );
         }
       }
-      const record = yield* repo.reserve(key, input.consumer);
+      // An image being removed (retention, a withdrawal) is waited for like a build in progress:
+      // the build job tries again, and once the removal is recorded the next reserve builds anew.
+      const record = yield* repo.reserve(key, input.consumer).pipe(
+        Effect.catchIf(
+          (error) => error.code === "publication-removing",
+          () =>
+            Effect.fail(
+              new NativeCatalogError(
+                "publication-pending",
+                undefined,
+                "native-publication-removing",
+              ),
+            ),
+        ),
+      );
       const id = record.ownership.publicationId;
       if (record.state === "ready") {
         const checked = yield* Effect.result(
@@ -281,9 +325,12 @@ const make = (
       return exact;
     });
 
-    const remove = Effect.fn("BoatNativeCatalog.remove")(function* (record: NativeCatalogRecord) {
+    const remove = Effect.fn("BoatNativeCatalog.remove")(function* (
+      record: NativeCatalogRecord,
+      policy?: NativeRetentionPolicy,
+    ) {
       const id = record.ownership.publicationId;
-      const retiring = yield* repo.retire(id);
+      const retiring = yield* repo.retire(id, policy);
       if (retiring?.state !== "retiring") return "retained";
       const claim = yield* repo.claim(id, "remove", claimMs);
       if (claim === undefined) return "active-claim";
@@ -315,21 +362,62 @@ const make = (
           new NativeCatalogError("publication-pending", ownership.publicationId),
         );
     });
+    type Plan = Pick<NativePublicationKey, "recipeHash" | "runtime" | "assetsHash" | "platform">;
+    const plans = new Map<string, Plan>();
+    /** The keys a workspace that can still start in this account would look up, planned now. */
+    const wantedKeys = Effect.fn("BoatNativeCatalog.wantedKeys")(function* (stoppedSince: Date) {
+      const wanted: NativePublicationKey[] = [];
+      let after: string | undefined;
+      for (let page = 0; page < startablePages; page++) {
+        const rows = yield* repo.startable({
+          deploymentId: options.deploymentId,
+          stoppedSince,
+          limit: startablePage,
+          ...(after === undefined ? {} : { after }),
+        });
+        for (const row of rows) {
+          // A launch whose spec or scope no longer parses cannot start: its build job refuses it.
+          const spec = newWorkspaceSchema.safeParse(row.spec);
+          const scope = nativeImageScopeSchema.safeParse(row.scope);
+          if (!spec.success || !scope.success || !startsOnBoat(spec.data, row.adapter)) continue;
+          const id = createHash("sha256").update(JSON.stringify(row.spec)).digest("hex");
+          let plan = plans.get(id);
+          if (plan === undefined) {
+            const parsed = spec.data;
+            plan = yield* mechanism(() => builder.plan(parsed));
+            if (plans.size >= plannedSpecs) plans.clear();
+            plans.set(id, plan);
+          }
+          const key = nativePublicationKeySchema.safeParse({
+            ...plan,
+            deploymentId: options.deploymentId,
+            scope: scope.data,
+          });
+          if (key.success) wanted.push(key.data);
+        }
+        if (rows.length < startablePage) return wanted;
+        after = rows.at(-1)?.workspaceId;
+      }
+      // More workspaces than one pass reads: nothing is removed rather than something wanted.
+      return yield* Effect.fail(
+        new NativeCatalogError("mechanism-failed", undefined, "native-retention-unbounded"),
+      );
+    });
     const reap = Effect.fn("BoatNativeCatalog.reap")(function* (
       input: Parameters<BoatNativeCatalogService["reap"]>[0],
     ) {
-      const scope = yield* Effect.try({
-        try: () => nativeImageScopeSchema.parse(input.scope),
-        catch: () => new NativeCatalogError("invalid-input"),
+      const policy: NativeRetentionPolicy = {
+        wanted: yield* wantedKeys(input.stoppedSince),
+        unusedSince: input.unusedSince,
+      };
+      const records = yield* repo.images({
+        deploymentId: options.deploymentId,
+        limit: input.limit,
+        ...(input.after === undefined ? {} : { after: input.after }),
       });
-      const records = yield* repo.candidates(
-        { deploymentId: options.deploymentId, scope },
-        input.limit,
-        input.after,
-      );
       const entries: Array<NativeCatalogSweep["entries"][number]> = [];
       for (const record of records) {
-        const result = yield* Effect.result(remove(record));
+        const result = yield* Effect.result(remove(record, policy));
         entries.push(
           Result.isFailure(result)
             ? {

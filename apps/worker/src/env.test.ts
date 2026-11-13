@@ -214,6 +214,33 @@ describe("parseWorkerEnv", () => {
       }).SEALANT_BOAT_API_KEY_FILE,
     ).toBeUndefined();
   });
+  it("removes unused Boat images hourly by default, with documented bounds an operator may change", () => {
+    const base = {
+      SEALANT_BOAT_STATE_DIRECTORY: "/var/lib/sealant/boat",
+      SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+    };
+    expect(parseWorkerEnv(base)).toMatchObject({
+      SEALANT_BOAT_IMAGE_GC_ENABLED: true,
+      SEALANT_BOAT_IMAGE_GC_INTERVAL_MS: 3_600_000,
+      SEALANT_BOAT_IMAGE_RESUME_DAYS: 14,
+      SEALANT_BOAT_IMAGE_MIN_AGE_HOURS: 24,
+    });
+    expect(
+      parseWorkerEnv({
+        ...base,
+        SEALANT_BOAT_IMAGE_GC_ENABLED: "false",
+        SEALANT_BOAT_IMAGE_RESUME_DAYS: "30",
+        SEALANT_BOAT_IMAGE_MIN_AGE_HOURS: "72",
+      }),
+    ).toMatchObject({
+      SEALANT_BOAT_IMAGE_GC_ENABLED: false,
+      SEALANT_BOAT_IMAGE_RESUME_DAYS: 30,
+      SEALANT_BOAT_IMAGE_MIN_AGE_HOURS: 72,
+    });
+    // A bound of zero would remove an image a moment after its run ended.
+    expect(() => parseWorkerEnv({ ...base, SEALANT_BOAT_IMAGE_MIN_AGE_HOURS: "0" })).toThrow();
+    expect(() => parseWorkerEnv({ ...base, SEALANT_BOAT_IMAGE_RESUME_DAYS: "0" })).toThrow();
+  });
   it("refuses a half-set resource gateway at start, naming the variables that are missing", () => {
     const base = {
       SEALANT_BOAT_API_KEY_FILE: "/run/secrets/boat-api-key",
