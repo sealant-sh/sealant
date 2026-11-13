@@ -38,12 +38,27 @@ export const BoatDefaultOrganization = Context.Reference<string | undefined>(
 const storeFailed = () =>
   new WorkspaceInternalServerError({ message: "Failed to read whether Boat can launch here." });
 
-/** What the workers that reported in the last five minutes do for Boat (`boat_launch_reports`). */
+/** When this API process started (milliseconds since the epoch, by its own clock). */
+const STARTED_AT = Date.now();
+export const BoatApiStartedAt = Context.Reference<number>("@sealant/api/BoatApiStartedAt", {
+  defaultValue: () => STARTED_AT,
+});
+
+/**
+ * What the workers that reported in the last five minutes (by the database's clock) do for Boat
+ * (`boat_launch_reports`), or `unknown`: none reported, and this API started too recently for a
+ * worker started beside it to have reported yet (an upgrade, a restart). Unknown is not a refusal:
+ * the create is accepted and waits for the worker, as it did before workers reported.
+ */
 const boatLaunchSupport = Effect.gen(function* () {
   const reports = yield* (yield* BoatAccountRepo)
-    .launchReports(new Date(Date.now() - BOAT_LAUNCH_REPORT_FRESH_MS))
+    .launchReports(BOAT_LAUNCH_REPORT_FRESH_MS)
     .pipe(Effect.mapError(storeFailed));
-  return boatLaunchSupportOf(reports);
+  const support = boatLaunchSupportOf(reports);
+  if (support.observedAt !== undefined) return support;
+  return Date.now() - (yield* BoatApiStartedAt) < BOAT_LAUNCH_REPORT_FRESH_MS
+    ? ("unknown" as const)
+    : support;
 });
 
 /**
@@ -56,6 +71,7 @@ export const boatLaunchRefusalNow = Effect.gen(function* () {
   if (!(yield* BoatConfigured))
     return "This install's API has no SEALANT_CREDENTIALS_KEY, so it cannot open Boat keys; the install's operator can set it.";
   const support = yield* boatLaunchSupport;
+  if (support === "unknown") return undefined;
   const refusal = boatLaunchRefusal(support, { namesAccount: true, resources: "none" });
   if (refusal !== undefined || support.defaultAccount) return refusal;
   const stored = yield* (yield* BoatAccountRepo).list().pipe(Effect.mapError(storeFailed));
@@ -68,9 +84,8 @@ export const boatLaunchRefusalNow = Effect.gen(function* () {
  * Whether a worker that launches Boat workspaces has the resource gateway: what the runtime report
  * says of Boat's `resources`, from the same reports the create reads.
  */
-export const boatResourceGateway = Effect.map(
-  boatLaunchSupport,
-  (support) => support.resourceGateway,
+export const boatResourceGateway = Effect.map(boatLaunchSupport, (support) =>
+  support === "unknown" ? undefined : support.resourceGateway,
 );
 
 /** `boatLaunchable`: true when a Boat workspace can be launched here (see `boatLaunchRefusalNow`). */
@@ -145,8 +160,11 @@ export const requireBoatAccount = (
 ) =>
   Effect.gen(function* () {
     const accountId = spec.runtime.boatAccountId;
-    if (runtimeFamily === BOAT_RUNTIME_ID && (yield* BoatConfigured)) {
-      const support = yield* boatLaunchSupport;
+    const support =
+      runtimeFamily === BOAT_RUNTIME_ID && (yield* BoatConfigured)
+        ? yield* boatLaunchSupport
+        : ("unknown" as const);
+    if (support !== "unknown") {
       const refusal = boatLaunchRefusal(support, {
         namesAccount: accountId !== undefined,
         resources: spec.runtime.resources,

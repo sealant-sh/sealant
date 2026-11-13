@@ -125,9 +125,19 @@ export interface BoatAccountRepoService {
   /** The same, for the `sealant-owner` of the saved images built in the install's own account. */
   readonly installBuilderOwner: (preferred: string | undefined) => Failing<string>;
   /** Replaces a worker's launch report, and forgets reports no worker renewed for a day. */
-  readonly reportLaunch: (input: BoatLaunchReportRecord) => Failing<void>;
+  /**
+   * Replaces a worker's launch report, stamped with the database's own clock (or `observedAt`, for a
+   * test), and forgets reports no worker renewed for a day.
+   */
+  readonly reportLaunch: (
+    input: Omit<BoatLaunchReportRecord, "observedAt"> & { readonly observedAt?: Date },
+  ) => Failing<void>;
   /** Every worker's launch report observed at or after `since`, newest first. */
-  readonly launchReports: (since: Date) => Failing<readonly BoatLaunchReportRecord[]>;
+  /**
+   * Every worker's launch report observed within the last `withinMs`, by the database's own clock,
+   * newest first: hosts with skewed clocks neither drop a live worker nor keep a dead one.
+   */
+  readonly launchReports: (withinMs: number) => Failing<readonly BoatLaunchReportRecord[]>;
   /**
    * The cause of a deployment's quarantined builds may have cleared (its account's key was rotated,
    * or a check of it can start): each one quarantined for a Boat reason a person fixes
@@ -137,6 +147,8 @@ export interface BoatAccountRepoService {
   readonly reopenQuarantined: (input: {
     readonly deploymentId: string;
     readonly at: Date;
+    /** Only these reasons (what a check shows cleared); absent: every one (a key rotation). */
+    readonly reasons?: readonly (typeof NATIVE_REOPEN_BOAT_FAILURES)[number][];
   }) => Failing<number>;
   /** Every stored check report, by account (`default` for the env key). */
   readonly reports: () => Failing<ReadonlyMap<string, BoatKeyReportRecord>>;
@@ -503,13 +515,13 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     return row.value;
   });
   const reportLaunch = Effect.fn("BoatAccountRepo.reportLaunch")(function* (
-    input: BoatLaunchReportRecord,
+    input: Omit<BoatLaunchReportRecord, "observedAt"> & { readonly observedAt?: Date },
   ) {
     const values = {
       launches: input.launches,
       defaultAccount: input.defaultAccount,
       resourceGateway: input.resourceGateway,
-      observedAt: input.observedAt,
+      observedAt: input.observedAt ?? sql`now()`,
     };
     yield* db
       .insert(boatLaunchReports)
@@ -517,15 +529,18 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       .onConflictDoUpdate({ target: boatLaunchReports.worker, set: values });
     yield* db
       .delete(boatLaunchReports)
-      .where(
-        lt(boatLaunchReports.observedAt, new Date(input.observedAt.getTime() - 24 * 3_600_000)),
-      );
+      .where(lt(boatLaunchReports.observedAt, sql`now() - interval '1 day'`));
   });
-  const launchReports = Effect.fn("BoatAccountRepo.launchReports")(function* (since: Date) {
+  const launchReports = Effect.fn("BoatAccountRepo.launchReports")(function* (withinMs: number) {
     const rows = yield* db
       .select()
       .from(boatLaunchReports)
-      .where(gte(boatLaunchReports.observedAt, since))
+      .where(
+        gte(
+          boatLaunchReports.observedAt,
+          sql`now() - (${Math.max(0, Math.round(withinMs))} * interval '1 millisecond')`,
+        ),
+      )
       .orderBy(sql`${boatLaunchReports.observedAt} desc`);
     return rows.map(
       (row): BoatLaunchReportRecord => ({
@@ -540,7 +555,10 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
   const reopenQuarantined = Effect.fn("BoatAccountRepo.reopenQuarantined")(function* (input: {
     readonly deploymentId: string;
     readonly at: Date;
+    readonly reasons?: readonly (typeof NATIVE_REOPEN_BOAT_FAILURES)[number][];
   }) {
+    const reasons = input.reasons ?? NATIVE_REOPEN_BOAT_FAILURES;
+    if (reasons.length === 0) return 0;
     const rows = yield* db
       .update(nativePublications)
       .set({ reopenedAt: input.at })
@@ -554,10 +572,8 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           // A build whose cleanup is still pending for the same cause is marked too: once its
           // sweep finishes the cleanup, the reason is the plain kind and the next launch builds.
           inArray(nativePublications.reason, [
-            ...NATIVE_REOPEN_BOAT_FAILURES,
-            ...NATIVE_REOPEN_BOAT_FAILURES.map(
-              (reason) => `native-cleanup-pending-${reason.slice("native-".length)}`,
-            ),
+            ...reasons,
+            ...reasons.map((reason) => `native-cleanup-pending-${reason.slice("native-".length)}`),
           ]),
         ),
       )
@@ -570,7 +586,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     installDeployment: (preferred) => boundary(installDeployment(preferred)),
     installBuilderOwner: (preferred) => boundary(installBuilderOwner(preferred)),
     reportLaunch: (input) => boundary(reportLaunch(input)),
-    launchReports: (since) => boundary(launchReports(since)),
+    launchReports: (withinMs) => boundary(launchReports(withinMs)),
     saveReport: (input) => boundary(saveReport(input)),
     reports: () => boundary(reports()),
     get: (id) => boundary(get(id)),
