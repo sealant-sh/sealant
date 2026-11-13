@@ -33,9 +33,11 @@ with (`nativeImagePath`):
 `/usr/local/bin:/nix/var/nix/profiles/default/bin:/usr/sbin:/usr/bin:/sbin:/bin`. Without it the
 profile's tools were off sealantd's `PATH`, and a session whose argv is a bare `zsh` (Mend's
 interactive shell) failed to start (`zsh: No such file or directory`): Ubuntu has no zsh, the
-profile does (SLNT-786). The agent itself keeps the unit's `PATH`, so its own `ip`, `wg` and
-`unshare` stay Ubuntu's. A Nix container gets the same from its image `PATH`. An Ubuntu launch names
-no `PATH`. `/etc/sealant/native-boot.json` still records the image's boot entries; nothing reads it.
+profile does (SLNT-786). The agent itself keeps the unit's `PATH`, so its own `ip` and `wg` stay
+Ubuntu's; the wrappers it starts sealantd in, which run with sealantd's environment, are named by
+absolute path (`/usr/bin/systemd-run`, `/usr/bin/unshare`). A Nix container gets the same from its
+image `PATH`. An Ubuntu launch names no `PATH`. `/etc/sealant/native-boot.json` still records the
+image's boot entries; nothing reads it.
 
 When the blueprint asks for the workspace's own Docker, the recipe runs `download-docker.sh` (the
 MicroVM image's installer, x86_64 here), the person layout makes the `docker` group, and a drop-in

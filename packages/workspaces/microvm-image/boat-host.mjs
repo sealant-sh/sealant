@@ -699,8 +699,10 @@ export const createBoatHost = ({ env = process.env, log }) => {
   const commands = {
     ip: env.SEALANT_AGENT_IP ?? "ip",
     wg: env.SEALANT_AGENT_WG ?? "wg",
-    unshare: env.SEALANT_AGENT_UNSHARE ?? "unshare",
-    systemdRun: env.SEALANT_AGENT_SYSTEMD_RUN ?? "systemd-run",
+    // sealantd's wrappers are spawned with sealantd's environment, whose PATH on a Nix image names
+    // the Nix profile first: by absolute path they stay Ubuntu's (util-linux, the held systemd).
+    unshare: env.SEALANT_AGENT_UNSHARE ?? "/usr/bin/unshare",
+    systemdRun: env.SEALANT_AGENT_SYSTEMD_RUN ?? "/usr/bin/systemd-run",
     systemctl: env.SEALANT_AGENT_SYSTEMCTL ?? "systemctl",
   };
   const daemonNamespace = env.SEALANT_AGENT_DAEMON_NAMESPACE === "none" ? "none" : "pid";
