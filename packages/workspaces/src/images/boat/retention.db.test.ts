@@ -724,6 +724,8 @@ describe.skipIf(databaseUrl === undefined || bundleDirectory === undefined)(
             builderOwner: c.catalog.owner,
             sealedKey: "sealed",
             keyId: "key",
+            // An organization's key, as the images were built naming no wallet: a resolved account.
+            keyKind: "organization",
             removalRequestedAt: new Date(),
           }),
         );
