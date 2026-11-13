@@ -5,8 +5,9 @@ Two TLA+ models of how sealant keeps track of what it makes in a Boat account, c
 and keep them in step with the code. This file is the record: what is verified, under which bounds
 and assumptions, and what the check found.
 
-Confirmed against the code at `dd39b9de` (main, 2026-11-13). Run with TLC 2.19 (TLA+ tools 1.7.4,
-from the nixpkgs this repository's `flake.lock` pins).
+Confirmed against the code at `dd39b9de` (main, 2026-11-13), and the run ledger's create, replay and
+never-created rules again at sealant#648 (SLNT-825), which fixed P1-A. Run with TLC 2.19 (TLA+ tools
+1.7.4, from the nixpkgs this repository's `flake.lock` pins).
 
 ## The two promises
 
@@ -24,16 +25,22 @@ holds one of the account's ten included slots, or bills by the day, for ever; a 
 
 ## Findings
 
-Seven schedules break a promise on main; the model finds each one, and each has its own case in
-`cases/` that is expected to fail until the code changes. Four need no silence of Boat's; three do
-(marked), and one of those (P1-C) needs a Boat behaviour the docs arguably rule out. For each but
-P2-D a proposed fix is expressed in the model, and the `-fixes` cases pass with every schedule on
-(P2-D's silence aside): within these bounds these are the only breaks. P1-A matters most: its
-trigger is an owner stopping a workspace in the second its VM is being asked for.
+The check found seven schedules that broke a promise at `dd39b9de`. P1-A, the one that mattered most
+(its trigger is an owner stopping a workspace in the second its VM is being asked for), is fixed:
+its case now passes, and `ledger-broken-no-replay-mark` keeps the code before the fix as a broken
+variant that must fail. The other six break a promise on main; the model finds each one, and each
+has its own case in `cases/` that is expected to fail until the code changes. Three need no silence
+of Boat's; three do (marked), and one of those (P1-C) needs a Boat behaviour the docs arguably rule
+out. For each but P2-D a proposed fix is expressed in the model, and the `-fixes` cases pass with
+every schedule on (P2-D's silence aside): within these bounds these are the only breaks.
 
-### P1-A: a stopped launch records never-created while the sweep's replay makes the VM
+### P1-A (fixed by sealant#648, SLNT-825): a stopped launch recorded never-created while the sweep's replay made the VM
 
-Case `ledger-finding-replay-during-first-create`. Needs no silence of Boat's.
+Case `ledger-finding-replay-during-first-create`, now expected to pass. The code before the fix is
+`ledger-broken-no-replay-mark`, which must fail. Needed no silence of Boat's.
+
+What could be lost: a VM billing by the second without end, which nothing in sealant would ever find
+again (nothing in sealant looks for Boat VMs it has no row for). The ordering, at `dd39b9de`:
 
 1. A launch wins `issueCreate` and sends the first create.
 2. The owner stops the workspace. The stop route accepts a stop once the run's pending runtime row
@@ -41,33 +48,35 @@ Case `ledger-finding-replay-during-first-create`. Needs no silence of Boat's.
    it skips the adapter and runs `markStopped`: `status = 'stopped'`, guarded only on
    `status <> 'stopped'`. The launch goes on. (A launch whose lease lapsed, because its worker
    stalled or could not reach the database for the two minutes of `DEFAULT_LAUNCH_LEASE_MS`, gets to
-   the same place: `ledger-lease-lapse` turns that on.)
+   the same place: `ledger-lease-lapse` turns both on.)
 3. A VM sweep reads the run: `launchInFlight` (status `pending` and a live lease) is false, so
    `resolve` loads it as `issued`.
 4. Boat refuses the first create for a reason in `DEFINITE_REFUSALS` (the plan's running limit,
    say). `firstCreateRejected` holds, and the launch commits `recordNeverCreated`.
 5. The sweep's discovery finds no VM; the run is inside its 23-hour window, so it replays the create
-   under the same key. `resolve` does not read the row again before it sends. Boat has released the
+   under the same key. `resolve` did not read the row again before it sent. Boat has released the
    failed key ("within about 2 minutes", api/v1.md) and the limit has room again: the replay makes
    the VM.
 6. The sweep's `adopt` is refused: the row is absent. Nothing lists the run again.
 
-A second form needs a silence: the sweep's replay reaches Boat first and makes the VM, and the
+A second form needed a silence: the sweep's replay reaches Boat first and makes the VM, and the
 launch's first create, now a second request under a linked key, is refused for the limit that VM
-just filled (if Boat checks limits before it looks up the key, which "each retry ... returns that
-same sandbox" arguably rules out).
+just filled (if Boat checks limits before it looks up the key).
 
-How likely: rare, but its trigger is ordinary: a stop in the second or so a first create takes.
-Beyond it, a sweep must load the run in that window (one runs every 30 s), the refusal must be one
-whose cause can clear in seconds (a running limit or billing, not the key, which the model's
-adversary also allows), and the replay must land after Boat released the key and before anything
-else takes the slot. Cost: one VM billing without end. Nothing in sealant finds Boat VMs it has no
-row for.
+How likely it was: rare, but its trigger is ordinary: a stop in the second or so a first create
+takes. Beyond it, a sweep must load the run in that window (one runs every 30 s), the refusal must
+be one whose cause can clear in seconds (a running limit or billing), and the replay must land after
+Boat released the key and before anything else takes the slot.
 
-Proposed fix (`MarkReplayBeforeSend`): one guarded statement marks the row (`replay_issued_at`,
-`WHERE absent_at IS NULL`) before any replay is sent, and the first create's `recordNeverCreated`
-also requires `replay_issued_at IS NULL`. Whichever commits first wins: a marked replay keeps the
-run tracked, and a recorded absence stops the replay.
+The fix (`MarkReplayBeforeSend`, now `CodeMarkReplayBeforeSend` on main): `resolve` marks the row
+before it sends any replay, launch or sweep alike (`markReplay`: `replay_issued_at`,
+`WHERE absent_at IS NULL`), and sends nothing on a row already absent. The first create's refusal
+records never-created through `recordFirstCreateRefused`, whose `WHERE` adds
+`replay_issued_at IS NULL`. The two statements compete on the row and whichever commits first wins:
+a marked replay keeps the run tracked, so the sweep adopts the VM it makes and the stop removes it;
+a recorded absence stops the replay, so Boat makes nothing. The `-fixes` and `ledger-lease-lapse`
+cases check it with a lapsed lease too. `allocation.db.test.ts` drives both orders through the real
+ledger and the real sweep on the fake Boat, for a stop and for a lapsed lease.
 
 ### P1-B: a 404 read before the VM was seen created is committed after it (silence)
 
@@ -85,7 +94,7 @@ creating, which `observe` (vm.ts) already treats as possible.
 
 How likely: very rare. The gap between one observer's `GET` and its `UPDATE` is milliseconds and
 must straddle the moment Boat reports the VM created, and Boat must 404 a VM it is creating at all.
-Cost: as P1-A.
+Cost: one VM billing without end, which nothing in sealant will find.
 
 Proposed fix (`NotFoundNeedsSeenBeforeGet`): `observe` counts a 404 only if the row it read before
 the `GET` already had `created_seen_at` (or `recordNotFound` guards on `created_seen_at` being older
@@ -105,7 +114,7 @@ the same account, key and request body returns that same sandbox" arguably rules
 4. Boat answers the replay `snapshot_not_found`. `replayRejected` holds, and the launch commits
    `recordNeverCreated`.
 
-How likely: very low, and nil if Boat looks up the key first. Cost: as P1-A.
+How likely: very low, and nil if Boat looks up the key first. Cost: as P1-B.
 
 Proposed fix: no refusal of a replay proves absence (`ReplayRejectedKinds = {}` in the model). A run
 whose snapshot is truly gone keeps replaying until its window closes and is held
@@ -210,12 +219,13 @@ which gives P2-B its form without a stall.
 
 ## Each property fails on a broken variant
 
-| Property                 | Broken variant (case)                                                                                                                  | What the model finds                                                                                                                                            |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NoForgottenVM`          | `ledger-broken-pre634`: vm.ts before sealant#634's review round, where a replay refused for `DEFINITE_REFUSALS` recorded never-created | The first create makes the VM but answers 5xx; the listing lags; the replay is refused `api_key_expired`; `recordNeverCreated` (14 steps). The reviewer's leak. |
-| `KeyKeptWhileLeftover`   | `proof-broken-pre638`: removal and rotation before sealant#638's review round, which never read `boat_key_proofs`                      | A check creates its VM; the owner rotates the key meanwhile (8 steps). The reviewer's finding.                                                                  |
-| `NothingLeftWhenSettled` | `proof-broken-no-listing-lag`: the sweep trusts an empty label search at once                                                          | The check's create reply is lost and it dies; the sweep's search, before the list shows the VM, settles the row (14 steps).                                     |
-| `EventuallyDeleted`      | `proof-broken-no-pending-live`: `finish` never sets `cleanup_pending`                                                                  | The check's cleanup misses its VM and finishes clean; no sweep looks again; the account can then be removed.                                                    |
+| Property                 | Broken variant (case)                                                                                                                                   | What the model finds                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NoForgottenVM`          | `ledger-broken-pre634`: vm.ts before sealant#634's review round, where a replay refused for `DEFINITE_REFUSALS` recorded never-created                  | The first create makes the VM but answers 5xx; the listing lags; the replay is refused `api_key_expired`; `recordNeverCreated` (14 steps). The reviewer's leak.                           |
+| `NoForgottenVM`          | `ledger-broken-no-replay-mark`: vm.ts before sealant#648 (SLNT-825), with no `markReplay` and the first create's refusal recorded whatever a sweep sent | The owner stops the run while its first create is out; a sweep loads it, finds no VM and is about to replay; the refusal records never-created; the replay makes the VM (17 steps). P1-A. |
+| `KeyKeptWhileLeftover`   | `proof-broken-pre638`: removal and rotation before sealant#638's review round, which never read `boat_key_proofs`                                       | A check creates its VM; the owner rotates the key meanwhile (8 steps). The reviewer's finding.                                                                                            |
+| `NothingLeftWhenSettled` | `proof-broken-no-listing-lag`: the sweep trusts an empty label search at once                                                                           | The check's create reply is lost and it dies; the sweep's search, before the list shows the VM, settles the row (14 steps).                                                               |
+| `EventuallyDeleted`      | `proof-broken-no-pending-live`: `finish` never sets `cleanup_pending`                                                                                   | The check's cleanup misses its VM and finishes clean; no sweep looks again; the account can then be removed.                                                                              |
 
 The skill's own run on a scratch change (`running-limit` added to what `replayRejected` treats as
 definite) failed `ledger` with the same leak as the review's, and passed again once the change was
@@ -263,12 +273,12 @@ faults in all (refusals or lost replies), one crash of the check, two sweep pass
 Where the docs say nothing, a constant lets the adversary do either. Main's own reading is the
 `ledger` and `proof` cases; the `finding` cases turn one silence on.
 
-| Silence                                                                  | Constant                   | What depends on it                                           |
-| ------------------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------ |
-| Boat checks limits, billing or a trial before it looks up a replay's key | `LimitCheckedBeforeKey`    | Nothing on main (on in every case); the second form of P1-A. |
-| Boat checks a replay's source snapshot before its key                    | `SnapshotCheckedBeforeKey` | P1-C                                                         |
-| `GET` answers 404 for a VM Boat is still creating                        | `GetMay404WhileCreating`   | P1-B, P2-D                                                   |
-| A failed create's key is released "within about 2 minutes"               | (any moment in the model)  | P1-A's main form                                             |
+| Silence                                                                  | Constant                   | What depends on it                                              |
+| ------------------------------------------------------------------------ | -------------------------- | --------------------------------------------------------------- |
+| Boat checks limits, billing or a trial before it looks up a replay's key | `LimitCheckedBeforeKey`    | Nothing on main (on in every case); P1-A's second form (fixed). |
+| Boat checks a replay's source snapshot before its key                    | `SnapshotCheckedBeforeKey` | P1-C                                                            |
+| `GET` answers 404 for a VM Boat is still creating                        | `GetMay404WhileCreating`   | P1-B, P2-D                                                      |
+| A failed create's key is released "within about 2 minutes"               | (any moment in the model)  | P1-A's main form (fixed)                                        |
 
 ## Not covered
 
@@ -282,11 +292,14 @@ Where the docs say nothing, a constant lets the adversary do either. Main's own 
   some VMs are kept (a FINAL not confirmed) or held for an operator.
 - Two runs sharing an account's limits, the install's own key (`default`), a second check of the
   same account (a unique index on unfinished rows prevents it).
+- The `unreachable` absence sealant#641 added (a run made before sealant recorded wallets, whose VM
+  is in no wallet the key can bill) and the wallet each request names. Its hunks in the covered
+  files are not yet read against the models, so the sync commit stays at `dd39b9de`.
 - The TypeScript itself. The models are written by hand; they are as close to the code as the
   coverage record in the skill says, at the commit above.
 
 ## In CI (not added)
 
 A job that installs Nix and runs `docs/verification/boat-custody/check.sh` on pull requests touching
-the files in the skill's coverage record would take about a minute; `--deep` (about 40 minutes on 32
-cores) suits a nightly run.
+the files in the skill's coverage record would take about three minutes; `--deep` (about 40 minutes
+on 32 cores) suits a nightly run.

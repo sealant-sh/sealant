@@ -37,6 +37,7 @@ import {
   claimBoatDeletionAgo,
   corruptBoatRun,
   holdBoatLaunch,
+  lapseBoatLaunchLease,
   lapseCaptureDeletionHold,
   recordRetainedBoatLaunch,
   restoreUnprogressedCaptureDrain,
@@ -4041,6 +4042,22 @@ describe.runIf(databaseUrl !== undefined)("Boat observed presence", () => {
       }
     }));
 
+  it.each(FIRST_CREATE_RACES)(
+    "never forgets a VM when the owner stops a launch while its first create is out: the sweep's replay and the first create's refusal, whichever commits first, wins (SLNT-825, $order)",
+    ({ order }) =>
+      test(async (s) => {
+        await firstCreateRace(s, { way: "stop", order });
+      }),
+  );
+
+  it.each(FIRST_CREATE_RACES)(
+    "never forgets a VM when a launch's lease lapses while its first create is out: the sweep's replay and the first create's refusal, whichever commits first, wins (SLNT-825, $order)",
+    ({ order }) =>
+      test(async (s) => {
+        await firstCreateRace(s, { way: "lease-lapse", order });
+      }),
+  );
+
   it("honors the owner's discard on Boat: no guest must answer before the VM is removed (audit S8)", () =>
     test(async (s) => {
       const target = await stopLaunched(s);
@@ -4696,6 +4713,114 @@ const lostCreate = async (s: AllocationFixture, o: Awaited<ReturnType<typeof obs
   o.boat.unreachable = false;
   expect(vmsFor(o, reserved.idempotencyKey)).toHaveLength(1);
   return { input, key: reserved.idempotencyKey };
+};
+
+/**
+ * The two orders of P1-A's race (docs/verification/boat-custody, SLNT-825). `replay-first`: the
+ * sweep's replay is on its way to Boat when the first create's refusal comes back. `refusal-first`:
+ * the refusal comes back while the sweep is between its discovery and its replay.
+ */
+const FIRST_CREATE_RACES = [
+  { order: "replay-first" as const },
+  { order: "refusal-first" as const },
+];
+
+/**
+ * A launch sends its first create; while Boat holds it the owner stops the workspace (the stop job
+ * finds no VM on record and marks the run stopped) or the launch's lease lapses, so a VM sweep
+ * loads the run as issued. Boat refuses the first create for its running limit, then has room
+ * again. Whatever the order, the run ends tracked with the one VM Boat made, or recorded absent
+ * with no VM made: never absent while Boat holds a VM for it.
+ */
+const firstCreateRace = async (
+  s: AllocationFixture,
+  race: { readonly way: "stop" | "lease-lapse"; readonly order: "replay-first" | "refusal-first" },
+) => {
+  const o = await observedLaunch(s);
+  try {
+    const allocations = await recordedAllocations(s, o);
+    const input = await execute(seed(s.db, s.catalog));
+    const runId = input.consumer.runId;
+    o.boat.savedSnapshots.set(input.publication.snapshot.identity.name, {
+      ...input.publication.snapshot.identity,
+      status: "ready",
+    });
+    // The build worker writes the pending row and its launch ownership before allocating.
+    await execute(
+      s.runtimes.upsertRuntimeInstance({
+        runId,
+        adapter: "boat",
+        status: "pending",
+        sourceKind: "capture",
+        publication: input.publication,
+        imageScope: input.scope,
+      }),
+    );
+    await execute(holdBoatLaunch(s.db, runId));
+    const firstReached = Promise.withResolvers<void>();
+    const answerFirst = Promise.withResolvers<void>();
+    const replayReached = Promise.withResolvers<void>();
+    const answerReplay = Promise.withResolvers<void>();
+    const listed = Promise.withResolvers<void>();
+    const answerList = Promise.withResolvers<void>();
+    let creates = 0;
+    o.boat.beforeCreate = async () => {
+      creates += 1;
+      if (creates === 1) {
+        firstReached.resolve();
+        await answerFirst.promise;
+      } else if (creates === 2) {
+        replayReached.resolve();
+        await answerReplay.promise;
+      }
+    };
+    if (race.order === "refusal-first")
+      o.boat.beforeList = async () => {
+        listed.resolve();
+        await answerList.promise;
+      };
+
+    // 1. The launch wins issueCreate and sends the first create; Boat holds it.
+    const launch = execute(allocations.prepare(input)).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await firstReached.promise;
+    // 2. The stop job finds no VM on record and marks the run stopped, or the lease lapses.
+    if (race.way === "stop") {
+      await execute(s.runtimes.markStopRequested({ runId, stopReason: "user" }));
+      await execute(s.runtimes.markStopped({ runId, stopReason: "user" }));
+    } else await execute(lapseBoatLaunchLease(s.db, runId));
+    expect(await execute(s.repo.launchInFlight(runId))).toBe(false);
+    // 3. A VM sweep loads the run as issued; its discovery finds no VM.
+    const sweep = execute(allocations.reconcile({ limit: 20 }));
+    await (race.order === "replay-first" ? replayReached.promise : listed.promise);
+    // 4. Boat refuses the first create for the plan's running limit.
+    o.boat.rejectCreate = { status: 429, code: "limit_reached" };
+    answerFirst.resolve();
+    expect(String(await launch)).toMatch(/provider-unavailable/);
+    // 5. The limit has room again, and Boat has released the failed key: the sweep goes on.
+    o.boat.rejectCreate = undefined;
+    answerList.resolve();
+    answerReplay.resolve();
+    await sweep;
+
+    const made = vmsFor(o, (await runOf(s, runId)).idempotencyKey);
+    const run = await vmOf(s, runId);
+    if (race.order === "replay-first") {
+      // The replay was marked before it went out: the refusal recorded nothing, and the sweep
+      // adopted the VM the replay made.
+      expect(made).toHaveLength(1);
+      expect(run).toMatchObject({ phase: "allocated", sandboxId: made[0]?.id });
+    } else {
+      // The refusal was recorded first: the sweep sent no replay, and Boat made nothing.
+      expect(made).toHaveLength(0);
+      expect(run).toMatchObject({ phase: "deleted", removal: { kind: "never-created" } });
+      expect(creates).toBe(1);
+    }
+  } finally {
+    await o.boat.close();
+  }
 };
 
 /** sealant's record of when create was issued, 25 hours ago by the database's clock. */

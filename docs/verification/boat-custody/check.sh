@@ -2,7 +2,7 @@
 # Model-checks Boat custody: the run ledger (BoatRunLedger.tla) and the full check's ledger
 # (BoatKeyProof.tla). Each case in cases/ names its module, the verdict it must give and its group.
 #
-#   docs/verification/boat-custody/check.sh            the fast cases (about a minute on 32 cores)
+#   docs/verification/boat-custody/check.sh            the fast cases (about three minutes on 32 cores)
 #   docs/verification/boat-custody/check.sh --deep     the fast and the deep cases (about 40 minutes)
 #   docs/verification/boat-custody/check.sh ledger     the named cases only
 #   ... --trace                                        also print the counterexample of expected failures

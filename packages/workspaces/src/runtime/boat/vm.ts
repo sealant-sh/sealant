@@ -363,9 +363,11 @@ const make: Effect.Effect<
         const diagnostic =
           reply === undefined ? uncertainCreate : boatLaunchDiagnostic(reply.error, "create");
         // A definite refusal of the only create sent under this key: Boat holds no VM for it.
-        // Recorded now, because a replay's refusal could not prove it.
+        // Recorded now, because a replay's refusal could not prove it. Unless a sweep marked a
+        // replay first (the run was stopped, or this launch's lease lapsed, while create was out):
+        // that replay may make the VM once Boat releases the key, and the run stays tracked.
         if (reply !== undefined && firstCreateRejected(reply.error)) {
-          yield* runs.recordNeverCreated(runId);
+          yield* runs.recordFirstCreateRefused(runId);
           return yield* Effect.fail(new BoatAllocationError("provider-unavailable", diagnostic));
         }
         // Boat may have accepted it (a lost reply, a 5xx). The launch keeps its row: its next
@@ -424,6 +426,19 @@ const make: Effect.Effect<
       // yet, or create was never sent. Replay create under the same idempotency key. Boat answers
       // with the VM it already accepted for that key, or creates it now; either way sealant ends
       // with a positive identity, never an inference from an empty list or elapsed time.
+      // The replay is marked on the row before it is sent, and only on a row not yet absent: a
+      // refusal of the first create recorded meanwhile stops it, and once marked that refusal no
+      // longer records absence. Whichever commits first wins, so the run is never recorded absent
+      // while a replay may make its VM.
+      const marked = yield* runs.markReplay(runId);
+      if (marked.absentAt !== null)
+        return yield* Effect.fail(
+          new BoatAllocationError("allocation-held", {
+            step: "create",
+            errorClass: "BoatAllocationError",
+            code: "allocation-held",
+          }),
+        );
       const replay = yield* Effect.tryPromise(create).pipe(Effect.orElseSucceed(() => undefined));
       if (
         phase === "issued" &&

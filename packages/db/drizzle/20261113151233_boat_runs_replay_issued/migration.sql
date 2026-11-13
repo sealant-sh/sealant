@@ -1,0 +1,2 @@
+ALTER TABLE "boat_runs" ADD COLUMN "replay_issued_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "boat_runs" ADD CONSTRAINT "boat_runs_replay" CHECK ("replay_issued_at" is null or "create_issued_at" is not null);

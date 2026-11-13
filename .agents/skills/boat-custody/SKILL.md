@@ -24,6 +24,10 @@ assumptions, Boat's silences and the open findings is `docs/verification/boat-cu
 Read it before you judge a counterexample.
 
 **Sync commit: `dd39b9de`.** The models were last confirmed to describe the code there.
+sealant#648's change since (`markReplay` and `recordFirstCreateRefused`, the fix of P1-A) is
+mirrored in `BoatRunLedger.tla`. The hunks sealant#641 made in the covered files (each object's
+wallet, the `unreachable` absence) are not yet read against the models: read them before you move
+this commit.
 
 ## 1. Does the change touch it?
 
@@ -61,6 +65,7 @@ same way:
 - Main's choices live once, in the `Code…` definitions near the top of each model:
   `CodeFirstCreateRejected` and `CodeReplayRejected` are `firstCreateRejected` and `replayRejected`
   as sets of the model's kinds (the comment above `Kinds` maps each `BoatFailureKind` to one);
+  `CodeMarkReplayBeforeSend` is `markReplay` before every replay with `recordFirstCreateRefused`;
   `CodeKeyGuardsOnProofs`, `CodeSweepWaitsForListingLag` and `CodeFinishMarksPending` are the full
   check's guards. The cases substitute them (`<-`); edit the definition, not the cases. Only
   `*-broken-*` and `*-fixes*` cases set their own values.
@@ -80,7 +85,7 @@ If the change fixes an open finding, switch its fix on in the model, set the fin
 docs/verification/boat-custody/check.sh
 ```
 
-About a minute on 32 cores (14 cases). Done when the last line is
+About three minutes on 32 cores (15 cases). Done when the last line is
 `Every case gave its expected verdict.` and the exit status is 0. `--deep` adds five longer cases
 (about 40 minutes on 32 cores): run it before merging a change from step 2. `--trace` also prints
 the counterexample of the cases that are meant to fail. Name cases to run only those
@@ -129,21 +134,21 @@ old one.
 
 Files as named in step 1's list. Run ledger, `BoatRunLedger.tla`:
 
-| Code                                                                                                                                                                                 | Model                                                                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `vm.ts` `resolve`: load, phase, `isActive`, hold `run-stopped`                                                                                                                       | `LLoad`, `LHoldStopped`; `SLoad`, `SCheckActive`, `SHoldStopped`                                                                                                   |
-| `vm.ts` `resolve`, reserved: `getSnapshot`, `issueCreate`, the first create, `firstCreateRejected`, `recordNeverCreated`                                                             | `LReadSource`, `LIssue`, `LSendFirst`, `LReplyFirst`, `LNeverFirst`; `FirstCreateRejectedKinds`, `FirstRefusalRecords`                                             |
-| `vm.ts` `resolve`, issued: `discover`, `createAgeMs` against `BOAT_CREATE_REPLAY_WINDOW_MS`, hold `create-unresolved`, the replay, `replayRejected`, `adopt`                         | `LDiscover`, `LAge`, `LHoldUnresolved`, `LSendReplay`, `LReplyReplay`, `LNeverReplay`, `LAdopt`; the `S…` steps of the same names; `ReplayRejectedKinds`, `window` |
-| `vm.ts` `DEFINITE_REFUSALS`; `failure.ts` `kindByCode`                                                                                                                               | `Kinds` (comment), `CreateAnswers`                                                                                                                                 |
-| `vm.ts` `observe`; `adapter.ts` `inspect`, `recover`                                                                                                                                 | `LGet`/`LObserveWrite`, `RGet`/`RObserveWrite`, `IGet`/`IObserveWrite`, `ObservedGet`                                                                              |
-| `vm.ts` `prepared` (retries), `reconcile` (`launchInFlight`)                                                                                                                         | `LaunchRetry`, `MaxRetries`; `SCheck`                                                                                                                              |
-| `boat-runs.ts` `issueCreate`, `adopt`, `hold`, `seen`, `recordNotFound`, `recordNeverCreated`, `claimDeletion`, `lapseDeletionClaim`, `recordDeletion`, `isActive`, `launchInFlight` | `IssueGuard`, `AdoptGuard`, `HoldGuard`, `Seen`, `RecordNotFound`, `RecordNeverCreated`, `RClaim`, `RLapse`, `RecordDeletion`, `Active`, `LaunchInFlight`          |
-| `packages/validators/src/workspaces/boat-run.ts` `boatRunVmPhase`                                                                                                                    | `Phase`                                                                                                                                                            |
-| `removal.ts` `deletion`: observe, `stopping`, `claimDeletion`, `DELETE`, `follow`/`record`, the operation poll, `BOAT_REMOVAL_CLAIM_MS`                                              | `RStart`, `RGet`, `RObserveWrite`, `RClaim`, `RDelete`, `RLapse`, `RRecord`, `RPoll`, `RClaimLapses`                                                               |
-| `convergence.ts` `step`, a run with no VM held `run-stopped`                                                                                                                         | `CRead`, `CNever`                                                                                                                                                  |
-| `process-workspace-build-job.ts` launch lease (`DEFAULT_LAUNCH_LEASE_MS`, `renewLaunchLease`); `workspace-runtime-instances.ts`                                                      | `lease`, `LeaseLapses`                                                                                                                                             |
-| `process-workspace-stop.ts` `processWorkspaceStop`: a run with no VM on record is `markStopped`; the stop route's `markStopRequested`                                                | `StopAsked`, `StopJobReads`, `StopJobMarksStopped`                                                                                                                 |
-| `api.ts` `create` (`Idempotency-Key`), `discover`, `get`, `deleteSandbox`                                                                                                            | `Send`, `BoatActsOnCreate`, `ListResults`, `GetResults`, `RDelete`                                                                                                 |
+| Code                                                                                                                                                                                                                           | Model                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vm.ts` `resolve`: load, phase, `isActive`, hold `run-stopped`                                                                                                                                                                 | `LLoad`, `LHoldStopped`; `SLoad`, `SCheckActive`, `SHoldStopped`                                                                                                                                          |
+| `vm.ts` `resolve`, reserved: `getSnapshot`, `issueCreate`, the first create, `firstCreateRejected`, `recordFirstCreateRefused`                                                                                                 | `LReadSource`, `LIssue`, `LSendFirst`, `LReplyFirst`, `LNeverFirst`; `FirstCreateRejectedKinds`, `FirstRefusalRecords`                                                                                    |
+| `vm.ts` `resolve`, issued: `discover`, `createAgeMs` against `BOAT_CREATE_REPLAY_WINDOW_MS`, hold `create-unresolved`, `markReplay`, the replay, `replayRejected`, `adopt`                                                     | `LDiscover`, `LAge`, `LHoldUnresolved`, `LMarkReplay`, `LSendReplay`, `LReplyReplay`, `LNeverReplay`, `LAdopt`; the `S…` steps of the same names; `ReplayRejectedKinds`, `MarkReplayBeforeSend`, `window` |
+| `vm.ts` `DEFINITE_REFUSALS`; `failure.ts` `kindByCode`                                                                                                                                                                         | `Kinds` (comment), `CreateAnswers`                                                                                                                                                                        |
+| `vm.ts` `observe`; `adapter.ts` `inspect`, `recover`                                                                                                                                                                           | `LGet`/`LObserveWrite`, `RGet`/`RObserveWrite`, `IGet`/`IObserveWrite`, `ObservedGet`                                                                                                                     |
+| `vm.ts` `prepared` (retries), `reconcile` (`launchInFlight`)                                                                                                                                                                   | `LaunchRetry`, `MaxRetries`; `SCheck`                                                                                                                                                                     |
+| `boat-runs.ts` `issueCreate`, `adopt`, `hold`, `seen`, `recordNotFound`, `recordNeverCreated`, `recordFirstCreateRefused`, `markReplay`, `claimDeletion`, `lapseDeletionClaim`, `recordDeletion`, `isActive`, `launchInFlight` | `IssueGuard`, `AdoptGuard`, `HoldGuard`, `Seen`, `RecordNotFound`, `RecordNeverCreated`, `RecordNeverCreatedFirst`, `MarkReplayGuard`, `RClaim`, `RLapse`, `RecordDeletion`, `Active`, `LaunchInFlight`   |
+| `packages/validators/src/workspaces/boat-run.ts` `boatRunVmPhase`                                                                                                                                                              | `Phase`                                                                                                                                                                                                   |
+| `removal.ts` `deletion`: observe, `stopping`, `claimDeletion`, `DELETE`, `follow`/`record`, the operation poll, `BOAT_REMOVAL_CLAIM_MS`                                                                                        | `RStart`, `RGet`, `RObserveWrite`, `RClaim`, `RDelete`, `RLapse`, `RRecord`, `RPoll`, `RClaimLapses`                                                                                                      |
+| `convergence.ts` `step`, a run with no VM held `run-stopped`                                                                                                                                                                   | `CRead`, `CNever`                                                                                                                                                                                         |
+| `process-workspace-build-job.ts` launch lease (`DEFAULT_LAUNCH_LEASE_MS`, `renewLaunchLease`); `workspace-runtime-instances.ts`                                                                                                | `lease`, `LeaseLapses`                                                                                                                                                                                    |
+| `process-workspace-stop.ts` `processWorkspaceStop`: a run with no VM on record is `markStopped`; the stop route's `markStopRequested`                                                                                          | `StopAsked`, `StopJobReads`, `StopJobMarksStopped`                                                                                                                                                        |
+| `api.ts` `create` (`Idempotency-Key`), `discover`, `get`, `deleteSandbox`                                                                                                                                                      | `Send`, `BoatActsOnCreate`, `ListResults`, `GetResults`, `RDelete`                                                                                                                                        |
 
 Full check, `BoatKeyProof.tla`:
 
@@ -161,14 +166,15 @@ Full check, `BoatKeyProof.tla`:
 ## Open findings
 
 Each has a case that is expected to fail until the code and the model change; the record tells each
-one in full, with its likelihood and a proposed fix the model accepts.
+one in full, with its likelihood and a proposed fix the model accepts. P1-A is fixed (sealant#648,
+SLNT-825): its case `ledger-finding-replay-during-first-create` passes, and
+`ledger-broken-no-replay-mark` must fail.
 
-| Case                                        | Finding                                                                                                                                       |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ledger-finding-replay-during-first-create` | P1-A: a stopped launch (or one whose lease lapsed) records never-created on its first create's refusal while the sweep's replay makes the VM. |
-| `ledger-finding-404-while-creating`         | P1-B (Boat silence): a 404 read before `created_seen_at` was set is committed as not-found after it.                                          |
-| `ledger-finding-snapshot-before-key`        | P1-C (Boat silence): a replay refused for its deleted source snapshot records never-created while Boat holds the VM.                          |
-| `proof-finding-start-race`                  | P2-A: a rotation or removal commits between the check's account read and its ledger insert.                                                   |
-| `proof-finding-claim-overlap`               | P2-B: a check that outlives its claim is settled from the sweep's stale copy.                                                                 |
-| `proof-finding-late-save`                   | P2-C: a save sealant gave up on lands after the check's snapshot delete answered 404.                                                         |
-| `proof-finding-404-while-creating`          | P2-D (Boat silence): `deleteVm`'s poll takes a 404 for a VM still being created.                                                              |
+| Case                                 | Finding                                                                                                              |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `ledger-finding-404-while-creating`  | P1-B (Boat silence): a 404 read before `created_seen_at` was set is committed as not-found after it.                 |
+| `ledger-finding-snapshot-before-key` | P1-C (Boat silence): a replay refused for its deleted source snapshot records never-created while Boat holds the VM. |
+| `proof-finding-start-race`           | P2-A: a rotation or removal commits between the check's account read and its ledger insert.                          |
+| `proof-finding-claim-overlap`        | P2-B: a check that outlives its claim is settled from the sweep's stale copy.                                        |
+| `proof-finding-late-save`            | P2-C: a save sealant gave up on lands after the check's snapshot delete answered 404.                                |
+| `proof-finding-404-while-creating`   | P2-D (Boat silence): `deleteVm`'s poll takes a 404 for a VM still being created.                                     |

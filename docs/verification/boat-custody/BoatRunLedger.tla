@@ -51,9 +51,10 @@ CONSTANTS
     FirstCreateRejectedKinds, \* `firstCreateRejected`: kinds that end the launch on its first create
     FirstRefusalRecords,      \* TRUE: that refusal records never-created at once (sealant#634 round 1)
     ReplayRejectedKinds,      \* `replayRejected`: kinds that record never-created on a replay
+    MarkReplayBeforeSend,     \* `markReplay` marks the row before any replay is sent, and a first
+                              \* create's refusal records never-created only if none was marked
+                              \* (`recordFirstCreateRefused`; the fix of P1-A, SLNT-825)
     \* Proposed fixes, not in the code (FALSE on main). See the skill's findings.
-    MarkReplayBeforeSend,     \* a guarded statement marks the row before any replay is sent, and a
-                              \* first create's refusal records never-created only if none was marked
     NotFoundNeedsSeenBeforeGet \* observe counts a 404 only if the row it read before the GET
                               \* already had created_seen_at
 
@@ -93,6 +94,9 @@ CodeFirstCreateRejected == {"key-expired", "running-limit", "snapshot_not_found"
 CodeFirstRefusalRecords == TRUE
 \* `replayRejected`: snapshot_not_found or snapshot_data_expired, on a 4xx
 CodeReplayRejected == {"snapshot_not_found"}
+\* `resolve` marks the row (`markReplay`) before every replay, and the first create's refusal
+\* records never-created through `recordFirstCreateRefused` (WHERE replay_issued_at IS NULL)
+CodeMarkReplayBeforeSend == TRUE
 
 VARIABLES
     \* Boat
@@ -105,7 +109,7 @@ VARIABLES
     from,      \* request id -> the actor that sent it
     \* sealant: the run's boat_runs row (boat-runs.ts) and its runtime row
     createIssued, \* create_issued_at is set
-    replayIssued, \* (MarkReplayBeforeSend only) a replay was marked on the row
+    replayIssued, \* replay_issued_at is set (MarkReplayBeforeSend)
     sandbox,      \* sandbox_id: "null" | "V"
     held,         \* held_reason: "none" | "run-stopped" | "create-unresolved"
     absent,       \* absent_basis: "null" | "never-created" | "not-found" | "deletion-completed"
@@ -165,13 +169,14 @@ RecordNeverCreated ==
     THEN absent' = "never-created" /\ held' = "none"
     ELSE UNCHANGED <<absent, held>>
 
-\* recordNeverCreated after the first create's refusal (vm.ts `resolve`, phase reserved)
+\* recordFirstCreateRefused (vm.ts `resolve`, phase reserved): recordNeverCreated's WHERE, and
+\* replay_issued_at IS NULL
 RecordNeverCreatedFirst ==
     IF MarkReplayBeforeSend /\ replayIssued
     THEN UNCHANGED <<absent, held>>
     ELSE RecordNeverCreated
 
-\* (MarkReplayBeforeSend) UPDATE ... SET replay_issued_at WHERE absent_at IS NULL
+\* markReplay: UPDATE ... SET replay_issued_at = coalesce(replay_issued_at, now()) WHERE absent_at IS NULL
 MarkReplayGuard == absent = "null"
 
 \* recordNotFound: UPDATE ... WHERE sandbox_id = V AND absent_at IS NULL AND created_seen_at IS NOT NULL
@@ -405,7 +410,7 @@ LReplyFirst ==
     /\ UNCHANGED <<boatVars, rowVars, stopAsked, stopJob, window, seenPhase, got,
                    sends, lost, lapses, crashes, stops>>
 
-\* runs.recordNeverCreated(runId) after a refusal of the first create
+\* runs.recordFirstCreateRefused(runId) after a refusal of the first create
 LNeverFirst ==
     /\ pc[Launch] = "neverFirst"
     /\ RecordNeverCreatedFirst
@@ -433,7 +438,7 @@ LAge ==
             ELSE LaunchEnds(FALSE)
     /\ UNCHANGED <<boatVars, rowVars, stopAsked, stopJob, window, awaiting, inbox, seenPhase, got, boundVars>>
 
-\* (MarkReplayBeforeSend) mark the row; a row already absent sends nothing
+\* runs.markReplay(runId) (MarkReplayBeforeSend): a row already absent sends nothing
 LMarkReplay ==
     /\ pc[Launch] = "markReplay"
     /\ IF MarkReplayGuard

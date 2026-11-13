@@ -188,6 +188,16 @@ export const holdBoatLaunch = (db: DB, runId: string) =>
     })
     .where(eq(workspaceRuntimeInstances.runId, runId));
 
+/**
+ * A launch whose worker is alive but whose lease lapsed: it stalled, or could not reach the
+ * database, for longer than the lease. Its row stays pending and its owner named.
+ */
+export const lapseBoatLaunchLease = (db: DB, runId: string) =>
+  db
+    .update(workspaceRuntimeInstances)
+    .set({ launchLeaseExpiresAt: new Date(Date.now() - 1_000) })
+    .where(eq(workspaceRuntimeInstances.runId, runId));
+
 /** A run's stop is asked, as the stop worker records it before its drain. */
 export const requestBoatRunStop = (db: DB, runId: string) =>
   db

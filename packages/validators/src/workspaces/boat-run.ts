@@ -126,6 +126,12 @@ export const boatRunSchema = z
      * observation.
      */
     createIssuedAt: instant,
+    /**
+     * When the first replay of create under the run's key was marked, by the database's clock,
+     * before it was sent. A refusal of the first create proves Boat holds no VM only while this is
+     * null.
+     */
+    replayIssuedAt: instant,
     sandboxId: sandbox.nullable(),
     /**
      * When Boat first reported the VM past creation (a state after `cloning`). Until then a 404 may
@@ -179,6 +185,7 @@ export const boatRunSchema = z
           run.deletionClaimedAt === null &&
           run.deletionOperationId === null)) &&
       (run.createIssuedAt !== null || run.sandboxId === null) &&
+      (run.replayIssuedAt === null || run.createIssuedAt !== null) &&
       (target === null ||
         (target.deploymentId === run.deploymentId &&
           target.workspaceId === run.workspaceId &&
