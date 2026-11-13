@@ -695,6 +695,22 @@ describe.runIf(databaseUrl !== undefined)(
             7_000_000,
           );
           expect(await Effect.runPromise(repo.createAgeMs(reserved.runId))).toBeUndefined();
+          // No carried run has a replay marked (SLNT-825): a carried issued create is marked by
+          // its first replay, and from then on a refusal of its first create records nothing.
+          for (const unmarked of [reserved, issued, undated, unresolved, refused])
+            expect((await read(unmarked)).run.replayIssuedAt).toBeNull();
+          expect(await Effect.runPromise(repo.markReplay(issued.runId))).toMatchObject({
+            replayIssuedAt: instant,
+            absentAt: null,
+          });
+          expect(
+            await Effect.runPromise(repo.recordFirstCreateRefused(issued.runId)),
+          ).toMatchObject({ replayIssuedAt: instant, absentAt: null, absentBasis: null });
+          // A carried run already recorded absent is never marked: no replay goes out for it.
+          expect(await Effect.runPromise(repo.markReplay(refused.runId))).toMatchObject({
+            replayIssuedAt: null,
+            absentBasis: "never-created",
+          });
         });
       }));
 

@@ -189,6 +189,18 @@ export interface BoatRunRepoService {
    * the run's key. Only for a run with no VM on record.
    */
   readonly recordNeverCreated: (runId: string) => Failing<BoatRun>;
+  /**
+   * Boat definitively refused the first create sent under the run's key. Records never-created
+   * only while no replay under the key was marked (`markReplay`): a replay marked first may make
+   * the VM, which the refusal says nothing of. Returns the stored row: absent, or still tracked.
+   */
+  readonly recordFirstCreateRefused: (runId: string) => Failing<BoatRun>;
+  /**
+   * Marks a replay of create under the run's key, before it is sent: `replay_issued_at` is the
+   * database's `now()` of the first one. Only for a row not yet absent. Returns the stored row: one
+   * already absent (a refusal of the first create recorded first) sends no replay.
+   */
+  readonly markReplay: (runId: string) => Failing<BoatRun>;
   /** Binds the VM's current boot as the run's target. Refused once the run is fenced or deleting. */
   readonly bind: (runId: string, target: BoatExecutionTarget) => Failing<BoatRun>;
   /** Reserves the bind exchange. A replay returns the first reservation, never a second key. */
@@ -874,6 +886,31 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     if (run?.absentBasis !== "never-created") return yield* Effect.fail(stale());
     return run;
   });
+  // The first create's refusal and a replay's mark compete on the row: whichever commits first
+  // wins. A marked replay keeps the run tracked; a recorded absence stops the replay.
+  const recordFirstCreateRefused = Effect.fn("BoatRunRepo.recordFirstCreateRefused")(function* (
+    runId: string,
+  ) {
+    yield* db
+      .update(boatRuns)
+      .set(absent("never-created"))
+      .where(
+        and(
+          eq(boatRuns.runId, runId),
+          isNull(boatRuns.sandboxId),
+          isNull(boatRuns.absentAt),
+          isNull(boatRuns.replayIssuedAt),
+        ),
+      );
+    return yield* required(runId);
+  });
+  const markReplay = Effect.fn("BoatRunRepo.markReplay")(function* (runId: string) {
+    yield* db
+      .update(boatRuns)
+      .set({ replayIssuedAt: sql`coalesce(${boatRuns.replayIssuedAt}, now())` })
+      .where(and(eq(boatRuns.runId, runId), isNull(boatRuns.absentAt)));
+    return yield* required(runId);
+  });
 
   const bind = Effect.fn("BoatRunRepo.bind")(function* (runId: string, raw: BoatExecutionTarget) {
     const target = yield* Effect.try({
@@ -1188,6 +1225,8 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     seen: (runId, sandboxId, created) => boundary(seen(runId, sandboxId, created)),
     recordNotFound: (runId, sandboxId) => boundary(recordNotFound(runId, sandboxId)),
     recordNeverCreated: (runId) => boundary(recordNeverCreated(runId)),
+    recordFirstCreateRefused: (runId) => boundary(recordFirstCreateRefused(runId)),
+    markReplay: (runId) => boundary(markReplay(runId)),
     bind: (runId, target) => boundary(bind(runId, target)),
     beginExchange: (target, exchange) => boundary(beginExchange(target, exchange)),
     sealControl: (runId, exchangeId, sealed) => boundary(sealControl(runId, exchangeId, sealed)),

@@ -71,6 +71,13 @@ export class RecordedBoat {
   stuckProvisioning = false;
   /** Runs before a VM read is answered, to interleave another writer. */
   beforeRead: () => Promise<void> = async () => {};
+  /**
+   * Runs when a create reaches Boat, before Boat acts on it (and before `rejectCreate` is read), to
+   * hold one request while other actors move. `key`: the create's idempotency key.
+   */
+  beforeCreate: (key: string) => Promise<void> = async () => {};
+  /** Runs before a label listing is answered, to interleave another writer. */
+  beforeList: () => Promise<void> = async () => {};
   /** Fault: Boat accepted a create but its inventory does not list the VM yet. */
   unlisted = false;
   /** Fault: Boat refuses every create outright with this status and code. */
@@ -218,6 +225,7 @@ export class RecordedBoat {
     if (request.method === "POST" && path === "/sandboxes") {
       const key = request.headers["idempotency-key"];
       if (typeof key !== "string") return send(400, { ok: false, code: "invalid_request" });
+      await this.beforeCreate(key);
       if (this.rejectCreate !== undefined)
         return send(this.rejectCreate.status, { ok: false, code: this.rejectCreate.code });
       const body = z
@@ -243,6 +251,7 @@ export class RecordedBoat {
       return send(202, { ok: true, sandbox: this.#view(vm) });
     }
     if (request.method === "GET" && path === "/sandboxes") {
+      await this.beforeList();
       const wanted = url.searchParams.getAll("label").map((pair) => pair.split("="));
       const sandboxes = [...this.vms.values()]
         .filter(() => !this.unlisted)

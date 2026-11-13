@@ -68,6 +68,12 @@ export const boatRuns = snakeCase.table(
     diskLineage: uuid().notNull().unique(),
     /** Set by `now()` in the statement that issues create; a future instant is refused by trigger. */
     createIssuedAt: instant(),
+    /**
+     * Set by `now()` in the statement that marks the first replay of create under the run's key,
+     * before that replay is sent. From then on a refusal of the first create no longer proves Boat
+     * holds no VM: the replay may make it. Never set on a row already absent.
+     */
+    replayIssuedAt: instant(),
     sandboxId: text(),
     /** Boat reported the VM past creation: from then on a 404 for it can only mean it is gone. */
     createdSeenAt: instant(),
@@ -129,6 +135,11 @@ export const boatRuns = snakeCase.table(
     check(
       "boat_runs_vm",
       sql`(${table.sandboxId} is null or ${table.createIssuedAt} is not null) and (${table.sandboxId} is not null or (${table.createdSeenAt} is null and ${table.deletionClaimedAt} is null and ${table.deletionOperationId} is null)) and (${table.deletionCompletedAt} is null or (${table.deletionOperationId} is not null and ${table.absentAt} is not null))`,
+    ),
+    // A replay is of an issued create.
+    check(
+      "boat_runs_replay",
+      sql`${table.replayIssuedAt} is null or ${table.createIssuedAt} is not null`,
     ),
     // Each step of the launch has the one before it: bind, bearer, sealed launch, push, answer.
     // (A launch carried from before isolation was recorded has none; every new push requires it.)
