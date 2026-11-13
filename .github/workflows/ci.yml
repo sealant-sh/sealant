@@ -67,7 +67,7 @@ jobs:
           tooling/scripts/workflow-runners.test.mjs tooling/scripts/next-image-tag.test.mjs
           tooling/scripts/release-manifest.test.mjs tooling/scripts/release-publication.test.mjs
           tooling/scripts/release-overrides.test.mjs tooling/scripts/release-npm.test.mjs
-          tooling/scripts/workflow-concurrency.test.mjs
+          tooling/scripts/workflow-concurrency.test.mjs tooling/scripts/workflow-checks.test.mjs
 
       - name: Run lint
         run: pnpm lint
@@ -311,3 +311,33 @@ jobs:
 
       - name: Build and run an Arch workspace image
         run: pnpm --filter @sealant/workspaces test:e2e src/buildkit/arch-native.e2e.ts
+
+  # The one result branch protection requires from this workflow. Requiring each job by name leaves
+  # a check pending forever when a job is skipped, renamed or re-matrixed, so this job reads every
+  # other job's result instead. `always()`, not `!cancelled()`: a skipped roll-up would count as
+  # passed. tooling/scripts/workflow-checks.test.mjs fails when a job is missing from `needs`.
+  checks:
+    name: checks
+    needs: [lint, typecheck, tests, runtime-proofs, arch-native]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Reads only `needs`: no checkout, and the runner image's Node runs it.
+      - name: Require every CI job
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          # The jobs allowed to be skipped on purpose (a path filter, a condition). None is today, so
+          # every job must succeed.
+          MAY_SKIP: "[]"
+        run: |
+          node --input-type=module <<'NODE'
+          const results = JSON.parse(process.env.RESULTS);
+          const maySkip = new Set(JSON.parse(process.env.MAY_SKIP));
+          const refused = Object.entries(results).filter(
+            ([job, { result }]) => !(result === "success" || (result === "skipped" && maySkip.has(job))),
+          );
+          for (const [job, { result }] of refused) console.log(`::error::${job}: ${result}`);
+          if (refused.length > 0 || Object.keys(results).length === 0) process.exit(1);
+          console.log(`Every job passed: ${Object.keys(results).join(", ")}`);
+          NODE

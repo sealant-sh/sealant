@@ -51,6 +51,11 @@ pnpm --filter <package> test   # for each package the change touches
 pnpm format:fix
 ```
 
+A PR merges on two results: `checks`, the roll-up of every CI job, and `e2e checks`, the roll-up of
+every Kubernetes e2e job. A new job in either workflow goes in its roll-up's `needs`;
+`tooling/scripts/workflow-checks.test.mjs` fails until it does. DEVELOPMENT.md ("CI and merging")
+says how the Version Packages PR gets them.
+
 `pnpm typecheck` runs [tsrs](https://github.com/oxc-project/tsrs), a Rust port of the TypeScript 7
 checker, in every package, as `tsrs --checkers 1`. It is in beta and pinned exactly; if you think it
 is wrong about an error, compare with `tsc` and report any difference upstream. Package builds still
