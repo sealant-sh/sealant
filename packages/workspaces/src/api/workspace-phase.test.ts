@@ -2,7 +2,8 @@
  * The launch phase a workspace read reports while the workspace is not ready: queued, building
  * its image (with the build's progress), or booting on a built image.
  */
-import type { WorkspaceBuildJob, WorkspaceRuntimeInstance } from "@sealant/db";
+import type { WorkspaceBuildJob } from "@sealant/db";
+import { buildJobRow, runtimeInstanceRow } from "@sealant/db/testing/rows";
 import { describe, expect, it } from "vitest";
 
 import { resolveWorkspacePhase } from "./workspace.js";
@@ -10,7 +11,7 @@ import { resolveWorkspacePhase } from "./workspace.js";
 const at = (iso: string) => new Date(iso);
 
 const job = (overrides: Partial<WorkspaceBuildJob>): WorkspaceBuildJob =>
-  ({
+  buildJobRow({
     id: "job_1",
     status: "queued",
     createdAt: at("2026-10-07T20:44:00.000Z"),
@@ -19,7 +20,7 @@ const job = (overrides: Partial<WorkspaceBuildJob>): WorkspaceBuildJob =>
     finishedAt: null,
     progress: null,
     ...overrides,
-  }) as WorkspaceBuildJob;
+  });
 
 describe("resolveWorkspacePhase", () => {
   it("is queued until a worker takes the launch", () => {
@@ -71,9 +72,9 @@ describe("resolveWorkspacePhase", () => {
       resolveWorkspacePhase({
         status: "running",
         latestJob: job({ status: "succeeded", finishedAt: at("2026-10-07T20:53:13.000Z") }),
-        runtimeInstance: {
+        runtimeInstance: runtimeInstanceRow({
           createdAt: at("2026-10-07T20:53:14.000Z"),
-        } as WorkspaceRuntimeInstance,
+        }),
       }),
     ).toEqual({ name: "boot", since: "2026-10-07T20:53:14.000Z" });
   });

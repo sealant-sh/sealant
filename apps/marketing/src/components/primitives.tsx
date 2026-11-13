@@ -149,7 +149,12 @@ export const INSTALL_COMMAND = "curl -fsSL https://get.sealant.dev | sh";
 export function InstallCommand({ className = "" }: { className?: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    await navigator.clipboard.writeText(INSTALL_COMMAND);
+    try {
+      await navigator.clipboard.writeText(INSTALL_COMMAND);
+    } catch {
+      // A refused clipboard leaves the button as it was; the command stays on screen to copy.
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
   };
@@ -163,7 +168,7 @@ export function InstallCommand({ className = "" }: { className?: string }) {
       </code>
       <button
         type="button"
-        onClick={copy}
+        onClick={() => void copy()}
         aria-label={copied ? "Copied" : "Copy install command"}
         className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-[var(--sw-wash)] hover:text-primary"
       >

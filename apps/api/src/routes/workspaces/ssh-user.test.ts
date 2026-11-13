@@ -16,13 +16,12 @@ import {
   SshKeyRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
-  type SshKey,
   type SshKeyRepoService,
-  type Workspace,
   type WorkspaceRepoService,
-  type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runtimeInstanceRow, sshKeyRow, workspaceRow } from "@sealant/db/testing/rows";
 import { Effect, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -36,14 +35,14 @@ beforeAll(async () => {
 
 const OWNER = "usr_alice";
 
-const instance = {
+const instance = runtimeInstanceRow({
   runId: "run_1",
   adapter: "docker",
   resourceId: "container-1",
   reference: "ref-1",
   status: "ready",
   endpoint: "unix:///run/sealant/control.sock",
-} as unknown as WorkspaceRuntimeInstance;
+});
 
 const ALICE_KEY = "SHA256:aliceKeyFingerprint";
 
@@ -53,32 +52,41 @@ const ALICE_KEY = "SHA256:aliceKeyFingerprint";
  */
 const harness = (sshUser: string | null) => {
   const row = {
-    current: { id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1", sshUser } as Workspace,
+    current: workspaceRow({ id: "wks_1", ownerUserId: OWNER, latestRunId: "run_1", sshUser }),
   };
   const keys = new Map<string, string>([[ALICE_KEY, OWNER]]);
   const layer = Layer.mergeAll(
-    Layer.succeed(SshKeyRepo, {
-      findActiveSshKeyByFingerprint: (fingerprint: string) => {
-        const ownerUserId = keys.get(fingerprint);
-        return Effect.succeed(
-          ownerUserId === undefined
-            ? undefined
-            : ({ id: `key_${fingerprint}`, ownerUserId, fingerprint } as SshKey),
-        );
-      },
-    } as unknown as SshKeyRepoService),
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: (id: string) =>
-        Effect.succeed(id === row.current.id ? row.current : undefined),
-      setWorkspaceSshUser: (input: { readonly id: string; readonly sshUser: string | null }) => {
-        if (input.id !== row.current.id) return Effect.succeed(null);
-        row.current = { ...row.current, sshUser: input.sshUser };
-        return Effect.succeed(row.current);
-      },
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      getRuntimeInstanceByRunId: () => Effect.succeed(instance),
-    } as unknown as WorkspaceRuntimeInstanceRepoService),
+    Layer.succeed(
+      SshKeyRepo,
+      fakeService<SshKeyRepoService>({
+        findActiveSshKeyByFingerprint: (fingerprint: string) => {
+          const ownerUserId = keys.get(fingerprint);
+          return Effect.succeed(
+            ownerUserId === undefined
+              ? undefined
+              : sshKeyRow({ id: `key_${fingerprint}`, ownerUserId, fingerprint }),
+          );
+        },
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService<WorkspaceRepoService>({
+        getWorkspaceById: (id: string) =>
+          Effect.succeed(id === row.current.id ? row.current : undefined),
+        setWorkspaceSshUser: (input: { readonly id: string; readonly sshUser: string | null }) => {
+          if (input.id !== row.current.id) return Effect.succeed(null);
+          row.current = { ...row.current, sshUser: input.sshUser };
+          return Effect.succeed(row.current);
+        },
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepoService>({
+        getRuntimeInstanceByRunId: () => Effect.succeed(instance),
+      }),
+    ),
   );
   return { row, keys, layer };
 };

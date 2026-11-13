@@ -23,9 +23,9 @@ const extractErrorCode = (cause: unknown): string | undefined => {
     typeof cause === "object" &&
     cause !== null &&
     "code" in cause &&
-    typeof (cause as { code: unknown }).code === "string"
+    typeof cause.code === "string"
   ) {
-    return (cause as { code: string }).code;
+    return cause.code;
   }
 
   return undefined;

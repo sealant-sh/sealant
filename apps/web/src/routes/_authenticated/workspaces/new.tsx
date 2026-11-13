@@ -62,6 +62,32 @@ const getErrorMessage = (error: unknown): string => {
   return "Unknown validation error.";
 };
 
+const SOURCE_MODE_OPTIONS: ReadonlyArray<{
+  readonly value: SourceMode;
+  readonly title: string;
+  readonly detail: string;
+}> = [
+  {
+    value: "git",
+    title: "Raw Git URL",
+    detail: "Paste any public or generic repository URL.",
+  },
+  {
+    value: "github",
+    title: "GitHub App",
+    detail: "Use a granted installation and synced private repository cache.",
+  },
+];
+
+const CONFIG_REPO_MODE_OPTIONS: ReadonlyArray<{
+  readonly value: ConfigRepoMode;
+  readonly label: string;
+}> = [
+  { value: "none", label: "None" },
+  { value: "git", label: "Raw Git URL" },
+  { value: "github", label: "GitHub App" },
+];
+
 const HARNESS_OPTIONS: ReadonlyArray<{ readonly value: HarnessId; readonly label: string }> = [
   { value: "opencode", label: "OpenCode (Standard)" },
   { value: "codex", label: "Codex" },
@@ -499,7 +525,7 @@ function NewWorkspacePage() {
       if (field === "githubInstallationId") {
         return {
           ...current,
-          githubInstallationId: value as string,
+          [field]: value,
           githubInstallationRepositoryId: "",
         };
       }
@@ -533,7 +559,7 @@ function NewWorkspacePage() {
       if (field === "configRepoGitHubInstallationId") {
         return {
           ...current,
-          configRepoGitHubInstallationId: value as string,
+          [field]: value,
           configRepoGitHubInstallationRepositoryId: "",
         };
       }
@@ -549,13 +575,13 @@ function NewWorkspacePage() {
       setGitHubRepositorySearch("");
     }
     if (field === "sourceMode") {
-      setIsSourceGitHubExpanded((value as SourceMode) === "github");
+      setIsSourceGitHubExpanded(value === "github");
     }
     if (field === "configRepoMode" || field === "configRepoGitHubInstallationId") {
       setConfigGitHubRepositorySearch("");
     }
     if (field === "configRepoMode") {
-      setIsConfigRepoExpanded((value as ConfigRepoMode) !== "none");
+      setIsConfigRepoExpanded(value !== "none");
     }
   };
 
@@ -781,7 +807,7 @@ function NewWorkspacePage() {
       <div className="grid min-h-[calc(100svh-9.5rem)] gap-0 xl:grid-cols-[1.45fr_0.65fr]">
         <form
           id="new-workspace-form"
-          onSubmit={handleSubmit}
+          onSubmit={(event) => void handleSubmit(event)}
           className="border-b border-rule-faint xl:border-b-0 xl:border-r"
         >
           <header className="border-b border-rule-faint px-8 py-10 sm:px-10">
@@ -803,18 +829,7 @@ function NewWorkspacePage() {
                 <div className="space-y-5">
                   <LabeledField label="Source Mode">
                     <div className="grid gap-2 sm:grid-cols-2">
-                      {[
-                        {
-                          value: "git",
-                          title: "Raw Git URL",
-                          detail: "Paste any public or generic repository URL.",
-                        },
-                        {
-                          value: "github",
-                          title: "GitHub App",
-                          detail: "Use a granted installation and synced private repository cache.",
-                        },
-                      ].map((option) => {
+                      {SOURCE_MODE_OPTIONS.map((option) => {
                         const isActive = form.sourceMode === option.value;
 
                         return (
@@ -822,7 +837,7 @@ function NewWorkspacePage() {
                             key={option.value}
                             type="button"
                             onClick={() => {
-                              setField("sourceMode", option.value as SourceMode);
+                              setField("sourceMode", option.value);
                             }}
                             className={
                               isActive
@@ -1127,11 +1142,7 @@ function NewWorkspacePage() {
                         <LabeledField label="Config Repo Mode">
                           <div className="space-y-4">
                             <div className="grid gap-2 sm:grid-cols-3">
-                              {[
-                                { value: "none", label: "None" },
-                                { value: "git", label: "Raw Git URL" },
-                                { value: "github", label: "GitHub App" },
-                              ].map((option) => {
+                              {CONFIG_REPO_MODE_OPTIONS.map((option) => {
                                 const isActive = form.configRepoMode === option.value;
 
                                 return (
@@ -1139,7 +1150,7 @@ function NewWorkspacePage() {
                                     key={option.value}
                                     type="button"
                                     onClick={() => {
-                                      setField("configRepoMode", option.value as ConfigRepoMode);
+                                      setField("configRepoMode", option.value);
                                     }}
                                     className={
                                       isActive

@@ -12,7 +12,6 @@ import {
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccountRepoService,
-  type Workspace,
   type WorkspaceAttemptRepoService,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainRepoService,
@@ -21,6 +20,8 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { captureDrainRow, runtimeInstanceRow, workspaceRow } from "@sealant/db/testing/rows";
 import { Effect, Layer, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -78,12 +79,12 @@ const sweep = async (input: {
   const schedules: WorkspaceCaptureDrainSchedule[] = [];
   const statuses: Array<{ runId: string; status: Readonly<Record<string, unknown>> }> = [];
   const ledger = inMemoryCaptureDrainLedger();
-  const drains = {
+  const drains = fakeService<WorkspaceCaptureDrainRepoService>({
     getByRunId: () =>
-      Effect.succeed(input.row === undefined ? undefined : (input.row as WorkspaceCaptureDrain)),
+      Effect.succeed(input.row === undefined ? undefined : captureDrainRow(input.row)),
     recordSchedule: (request: { runId: string; schedule: WorkspaceCaptureDrainSchedule }) => {
       schedules.push(request.schedule);
-      return Effect.succeed({} as WorkspaceCaptureDrain);
+      return Effect.succeed(captureDrainRow());
     },
     // Every status the sampler reads is recorded as evidence (review 5 #3).
     recordStatus: (request: { runId: string; status: Readonly<Record<string, unknown>> }) =>
@@ -91,7 +92,7 @@ const sweep = async (input: {
         statuses.push(request);
         return true;
       }),
-  } as unknown as WorkspaceCaptureDrainRepoService;
+  });
   let row: WorkspaceRuntimeInstance =
     input.pending === true
       ? {
@@ -116,7 +117,7 @@ const sweep = async (input: {
       return row;
     }),
   );
-  const markAttemptFailed = vi.fn(() => Effect.void);
+  const markAttemptFailed = vi.fn(() => Effect.succeed(null));
   const markStopped = vi.fn(() => Effect.succeed({ ...row, status: "stopped" as const }));
   const setWorkspaceStatus = vi.fn(() => Effect.succeed(null));
   const stop = vi.fn(async () => ({
@@ -133,26 +134,35 @@ const sweep = async (input: {
     stop,
     inspect: async () => ({ state: "running" }),
   };
-  const workspace = { id: "ws_vm", latestRunId: "run_vm" } as Workspace;
+  const workspace = workspaceRow({ id: "ws_vm", latestRunId: "run_vm" });
   const layer = Layer.mergeAll(
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      listPreservationCandidates: () => Effect.succeed(candidates),
-      getRuntimeInstanceByRunId: () => Effect.sync(() => row),
-      preemptLaunch,
-      markStopped,
-      markRemoved: () => Effect.void,
-      markStopRequested: () => Effect.void,
-    } as unknown as WorkspaceRuntimeInstanceRepoService),
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceByAttemptId: () => Effect.succeed(workspace),
-      getWorkspaceById: () => Effect.succeed(workspace),
-      setWorkspaceStatus,
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(WorkspaceAttemptRepo, {
-      getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-      markAttemptFailed,
-    } as unknown as WorkspaceAttemptRepoService),
-    Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepoService>({
+        listPreservationCandidates: () => Effect.succeed(candidates),
+        getRuntimeInstanceByRunId: () => Effect.sync(() => row),
+        preemptLaunch,
+        markStopped,
+        markRemoved: () => Effect.void,
+        markStopRequested: () => Effect.void,
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService<WorkspaceRepoService>({
+        getWorkspaceByAttemptId: () => Effect.succeed(workspace),
+        getWorkspaceById: () => Effect.succeed(workspace),
+        setWorkspaceStatus,
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceAttemptRepo,
+      fakeService<WorkspaceAttemptRepoService>({
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+        markAttemptFailed,
+      }),
+    ),
+    Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
     Layer.succeed(WorkspaceCaptureDrainRepo, drains),
     input.daemon.layer,
   );
@@ -439,28 +449,40 @@ describe("preserveBeforeDeadlineEffect · every due runtime makes progress", () 
     const inspected: string[] = [];
     const daemon = fakeCaptureDaemon([captureStatus({ pending: 1, complete: false })]);
     const layer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        listPreservationCandidates: () => Effect.succeed(rows),
-        getRuntimeInstanceByRunId: (runId: string) =>
-          Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
-        markStopRequested: () => Effect.void,
-      } as unknown as WorkspaceRuntimeInstanceRepoService),
-      Layer.succeed(WorkspaceRepo, {
-        getWorkspaceByAttemptId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceRepoService),
-      Layer.succeed(WorkspaceAttemptRepo, {
-        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceAttemptRepoService),
-      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
-      Layer.succeed(WorkspaceCaptureDrainRepo, {
-        getByRunId: (runId: string) =>
-          Effect.sync(() => {
-            sampled.push(runId);
-            return undefined;
-          }),
-        recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
-        recordStatus: () => Effect.succeed(true),
-      } as unknown as WorkspaceCaptureDrainRepoService),
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService<WorkspaceRuntimeInstanceRepoService>({
+          listPreservationCandidates: () => Effect.succeed(rows),
+          getRuntimeInstanceByRunId: (runId: string) =>
+            Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
+          markStopRequested: () => Effect.void,
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRepo,
+        fakeService<WorkspaceRepoService>({
+          getWorkspaceByAttemptId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceAttemptRepo,
+        fakeService<WorkspaceAttemptRepoService>({
+          getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
+      Layer.succeed(
+        WorkspaceCaptureDrainRepo,
+        fakeService<WorkspaceCaptureDrainRepoService>({
+          getByRunId: (runId: string) =>
+            Effect.sync(() => {
+              sampled.push(runId);
+              return undefined;
+            }),
+          recordSchedule: () => Effect.succeed(captureDrainRow()),
+          recordStatus: () => Effect.succeed(true),
+        }),
+      ),
       daemon.layer,
     );
     const adapter: RuntimeAdapter = {
@@ -520,9 +542,7 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
     },
   ) => {
     const requestRecovery = vi.fn((runId: string) =>
-      Effect.succeed(
-        retained ? ({ runId, retainedAt: new Date(NOW) } as WorkspaceCaptureDrain) : undefined,
-      ),
+      Effect.succeed(retained ? captureDrainRow({ runId, retainedAt: new Date(NOW) }) : undefined),
     );
     const stop = vi.fn(async () => ({
       adapter: "docker" as const,
@@ -541,43 +561,55 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
       ...(recovery === undefined ? {} : { recover: recovery.recover }),
     };
     const layer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        listPreservationCandidates: () => Effect.succeed(rows),
-        getRuntimeInstanceByRunId: (runId: string) =>
-          Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
-        markStopRequested: () => Effect.void,
-        markStopped: () => Effect.void,
-        markRemoved: () => Effect.void,
-      } as unknown as WorkspaceRuntimeInstanceRepoService),
-      Layer.succeed(WorkspaceRepo, {
-        getWorkspaceByAttemptId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceRepoService),
-      Layer.succeed(WorkspaceAttemptRepo, {
-        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceAttemptRepoService),
-      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
-      Layer.succeed(WorkspaceCaptureDrainRepo, {
-        getByRunId: () =>
-          Effect.succeed(
-            retained ? ({ retainedAt: new Date(NOW - MIN) } as WorkspaceCaptureDrain) : undefined,
-          ),
-        recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
-        recordStatus: () => Effect.succeed(true),
-        requestRecovery,
-        listRetainedDue: (request: { readonly runIds?: readonly string[] }) =>
-          Effect.succeed(
-            (request.runIds ?? []).map(
-              (runId) =>
-                ({
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService<WorkspaceRuntimeInstanceRepoService>({
+          listPreservationCandidates: () => Effect.succeed(rows),
+          getRuntimeInstanceByRunId: (runId: string) =>
+            Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
+          markStopRequested: () => Effect.void,
+          markStopped: (stopped) =>
+            Effect.succeed(runtimeInstanceRow({ runId: stopped.runId, status: "stopped" })),
+          markRemoved: () => Effect.void,
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRepo,
+        fakeService<WorkspaceRepoService>({
+          getWorkspaceByAttemptId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceAttemptRepo,
+        fakeService<WorkspaceAttemptRepoService>({
+          getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
+      Layer.succeed(
+        WorkspaceCaptureDrainRepo,
+        fakeService<WorkspaceCaptureDrainRepoService>({
+          getByRunId: () =>
+            Effect.succeed(
+              retained ? captureDrainRow({ retainedAt: new Date(NOW - MIN) }) : undefined,
+            ),
+          recordSchedule: () => Effect.succeed(captureDrainRow()),
+          recordStatus: () => Effect.succeed(true),
+          requestRecovery,
+          listRetainedDue: (request: { readonly runIds?: readonly string[] }) =>
+            Effect.succeed(
+              (request.runIds ?? []).map((runId) =>
+                captureDrainRow({
                   runId,
                   retainedAt: new Date(NOW - MIN),
                   recoveryAttempts: 0,
                   captureTokenSealed: "sealed",
-                }) as WorkspaceCaptureDrain,
+                }),
+              ),
             ),
-          ),
-        recordRecoveryAttempt: () => Effect.void,
-      } as unknown as WorkspaceCaptureDrainRepoService),
+          recordRecoveryAttempt: () => Effect.void,
+        }),
+      ),
       fakeCaptureDaemon(["unreachable"]).layer,
     );
     const driven = await Effect.runPromise(
@@ -704,7 +736,7 @@ describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     const finalAt: number[] = [];
-    const daemon: Pick<SealantSession, "captureStatus" | "captureFlush"> = {
+    const daemon = fakeService<SealantSession>({
       // Every status read hangs (a slow or silent daemon); a FINAL answers complete at once.
       captureStatus: () => Effect.never,
       captureFlush: () =>
@@ -712,31 +744,47 @@ describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
           finalAt.push(Date.now() - NOW);
           return savedStatus();
         }),
-    };
+    });
     const layer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        listPreservationCandidates: () => Effect.succeed(rows),
-        getRuntimeInstanceByRunId: (runId: string) =>
-          Effect.succeed(rows.find((row) => row.runId === runId)),
-        markStopRequested: () => Effect.void,
-        markStopped: () => Effect.void,
-        markRemoved: () => Effect.void,
-      } as unknown as WorkspaceRuntimeInstanceRepoService),
-      Layer.succeed(WorkspaceRepo, {
-        getWorkspaceByAttemptId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceRepoService),
-      Layer.succeed(WorkspaceAttemptRepo, {
-        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceAttemptRepoService),
-      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
-      Layer.succeed(WorkspaceCaptureDrainRepo, {
-        getByRunId: () => Effect.succeed(undefined),
-        recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
-        recordStatus: () => Effect.succeed(true),
-      } as unknown as WorkspaceCaptureDrainRepoService),
-      Layer.succeed(SealantRuntime, {
-        connect: () => Effect.succeed(daemon as SealantSession),
-      } as unknown as SealantRuntimeService),
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService<WorkspaceRuntimeInstanceRepoService>({
+          listPreservationCandidates: () => Effect.succeed(rows),
+          getRuntimeInstanceByRunId: (runId: string) =>
+            Effect.succeed(rows.find((row) => row.runId === runId)),
+          markStopRequested: () => Effect.void,
+          markStopped: (stopped) =>
+            Effect.succeed(runtimeInstanceRow({ runId: stopped.runId, status: "stopped" })),
+          markRemoved: () => Effect.void,
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRepo,
+        fakeService<WorkspaceRepoService>({
+          getWorkspaceByAttemptId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceAttemptRepo,
+        fakeService<WorkspaceAttemptRepoService>({
+          getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
+      Layer.succeed(
+        WorkspaceCaptureDrainRepo,
+        fakeService<WorkspaceCaptureDrainRepoService>({
+          getByRunId: () => Effect.succeed(undefined),
+          recordSchedule: () => Effect.succeed(captureDrainRow()),
+          recordStatus: () => Effect.succeed(true),
+        }),
+      ),
+      Layer.succeed(
+        SealantRuntime,
+        fakeService<SealantRuntimeService>({
+          connect: () => Effect.succeed(daemon),
+        }),
+      ),
     );
     const adapter: RuntimeAdapter = {
       id: "docker",
@@ -884,49 +932,67 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
     const removed = new Map<string, number>();
     const logs: string[] = [];
     const layer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        listPreservationCandidates: () => Effect.succeed(input.rows),
-        getRuntimeInstanceByRunId: (runId: string) =>
-          Effect.succeed(input.rows.find((row) => row.runId === runId)),
-        markStopRequested: () => Effect.void,
-        markStopped: () => Effect.void,
-        markRemoved: () => Effect.void,
-      } as unknown as WorkspaceRuntimeInstanceRepoService),
-      Layer.succeed(WorkspaceRepo, {
-        getWorkspaceByAttemptId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceRepoService),
-      Layer.succeed(WorkspaceAttemptRepo, {
-        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
-      } as unknown as WorkspaceAttemptRepoService),
-      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
-      Layer.succeed(WorkspaceCaptureDrainRepo, {
-        getByRunId: () => Effect.succeed(undefined),
-        recordSchedule: (request: { runId: string; schedule: WorkspaceCaptureDrainSchedule }) =>
-          Effect.sync(() => {
-            input.schedules?.push({
-              runId: request.runId,
-              startsAtMs: request.schedule.preservationStartsAt?.getTime(),
-            });
-            return {} as WorkspaceCaptureDrain;
-          }),
-        recordStatus: () => Effect.succeed(true),
-      } as unknown as WorkspaceCaptureDrainRepoService),
-      Layer.succeed(SealantRuntime, {
-        connect: (target: unknown) =>
-          Effect.succeed({
-            // A queue that never empties: every drain stays pending, as in the reproduction.
-            captureStatus: () => Effect.succeed(captureStatus({ pending: 1, complete: false })),
-            captureFlush: () =>
-              Effect.gen(function* () {
-                const socket = socketOf(target);
-                finals.set(socket, [...(finals.get(socket) ?? []), Date.now() - NOW]);
-                yield* Effect.sleep(input.flushTakesMs);
-                return input.stopTakesMs === undefined
-                  ? captureStatus({ pending: 1, complete: false })
-                  : savedStatus();
+      Layer.succeed(
+        WorkspaceRuntimeInstanceRepo,
+        fakeService<WorkspaceRuntimeInstanceRepoService>({
+          listPreservationCandidates: () => Effect.succeed(input.rows),
+          getRuntimeInstanceByRunId: (runId: string) =>
+            Effect.succeed(input.rows.find((row) => row.runId === runId)),
+          markStopRequested: () => Effect.void,
+          markStopped: (stopped) =>
+            Effect.succeed(runtimeInstanceRow({ runId: stopped.runId, status: "stopped" })),
+          markRemoved: () => Effect.void,
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceRepo,
+        fakeService<WorkspaceRepoService>({
+          getWorkspaceByAttemptId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(
+        WorkspaceAttemptRepo,
+        fakeService<WorkspaceAttemptRepoService>({
+          getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.succeed(ConnectedAccountRepo, fakeService<ConnectedAccountRepoService>({})),
+      Layer.succeed(
+        WorkspaceCaptureDrainRepo,
+        fakeService<WorkspaceCaptureDrainRepoService>({
+          getByRunId: () => Effect.succeed(undefined),
+          recordSchedule: (request: { runId: string; schedule: WorkspaceCaptureDrainSchedule }) =>
+            Effect.sync(() => {
+              input.schedules?.push({
+                runId: request.runId,
+                startsAtMs: request.schedule.preservationStartsAt?.getTime(),
+              });
+              return captureDrainRow();
+            }),
+          recordStatus: () => Effect.succeed(true),
+        }),
+      ),
+      Layer.succeed(
+        SealantRuntime,
+        fakeService<SealantRuntimeService>({
+          connect: (target: unknown) =>
+            Effect.succeed(
+              fakeService<SealantSession>({
+                // A queue that never empties: every drain stays pending, as in the reproduction.
+                captureStatus: () => Effect.succeed(captureStatus({ pending: 1, complete: false })),
+                captureFlush: () =>
+                  Effect.gen(function* () {
+                    const socket = socketOf(target);
+                    finals.set(socket, [...(finals.get(socket) ?? []), Date.now() - NOW]);
+                    yield* Effect.sleep(input.flushTakesMs);
+                    return input.stopTakesMs === undefined
+                      ? captureStatus({ pending: 1, complete: false })
+                      : savedStatus();
+                  }),
               }),
-          } as unknown as SealantSession),
-      } as unknown as SealantRuntimeService),
+            ),
+        }),
+      ),
       Logger.layer([
         Logger.make(({ message }) => {
           logs.push(Array.isArray(message) ? message.join(" ") : String(message));

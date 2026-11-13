@@ -101,12 +101,9 @@ export const runExecAsUserQueue = defineJobQueue(runExecAsUserQueueName, {
   activeTimeoutSeconds: 24 * 60 * 60,
 });
 
-const parseCommand = (input: unknown, label: string): RunExecCommand => {
-  const command = input as Record<string, unknown> | undefined;
+const parseCommand = (command: unknown, label: string): RunExecCommand => {
   if (
-    command === undefined ||
-    command === null ||
-    typeof command !== "object" ||
+    !isRecord(command) ||
     typeof command.executable !== "string" ||
     command.executable.length === 0 ||
     !Array.isArray(command.args)
@@ -215,10 +212,10 @@ const parseDotfiles = (input: unknown): RunDotfilesApply => {
 };
 
 export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMessage => {
-  if (typeof input !== "object" || input === null) {
+  if (!isRecord(input)) {
     throw new Error("Invalid run-exec message: not an object.");
   }
-  const obj = input as Record<string, unknown>;
+  const obj = input;
   refuseSecretEnv(obj, "Invalid run-exec message");
   if (obj.kind !== runExecRequestedMessageKind) {
     throw new Error(`Invalid run-exec message: unexpected kind ${String(obj.kind)}.`);

@@ -10,6 +10,7 @@ import {
   OCI_REPOSITORY_MESSAGE,
 } from "@sealant/api-contracts";
 import { splitUrlUserinfo } from "@sealant/validators/url-for-display";
+import { Predicate } from "effect";
 
 import { selectLoadedImageIdentifier } from "./docker-load-output.js";
 
@@ -30,11 +31,11 @@ const parseJsonObject = (value: string): unknown => {
 };
 
 const expectRecord = (value: unknown, message: string): Record<string, unknown> => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!Predicate.isObject(value)) {
     throw new Error(message);
   }
 
-  return value as Record<string, unknown>;
+  return value;
 };
 
 const expectStringArray = (value: unknown, message: string): Array<string> => {
@@ -108,7 +109,7 @@ export const normalizeDigest = (digest: string): string => {
 };
 
 const joinRegistryUrl = (baseUrl: URL, path: string): URL => {
-  const base = `${baseUrl.toString().replace(/\/?$/, "/")}`;
+  const base = baseUrl.toString().replace(/\/?$/, "/");
   const joined = new URL(path.replace(/^\//, ""), base);
   // Belt and braces behind the name grammar: the request stays on the registry's origin and under
   // its /v2/ API, whatever a path segment turned out to contain.

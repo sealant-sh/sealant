@@ -16,7 +16,9 @@ import {
   GitHubInstallationRepo,
   LAUNCH_OWNERSHIP_LOST_MESSAGE,
   LAUNCH_RETAINED_ERROR_CODE,
+  WorkspaceCaptureDrainRepoUnexpectedError,
   WorkspaceRuntimeInstanceRepoInvariantError,
+  WorkspaceRuntimeInstanceRepoUnexpectedError,
   GitHubInstallationRepositoryCacheRepo,
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
@@ -25,19 +27,32 @@ import {
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccountRepoService,
   type ConnectedAccountStatus,
+  type GitHubAppInstallation,
   type GitHubInstallationRepoService,
   type GitHubInstallationRepositoryCacheRepoService,
   type WorkspaceAttemptRepoService,
+  type WorkspaceBuildJob,
   type WorkspaceBuildJobRepoService,
   type WorkspaceCaptureDrainRepoService,
+  type UpsertWorkspaceRuntimeInstanceInput,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import { makeInMemoryCredentialHomes } from "@sealant/db/testing/credential-homes";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import {
+  attemptRow,
+  buildJobRow,
+  connectedAccountRow,
+  githubInstallationRepositoryRow,
+  githubInstallationRow,
+  runtimeInstanceRow,
+} from "@sealant/db/testing/rows";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewWorkspace, WorkspaceBuild, WorkspaceImageProbe } from "@sealant/validators";
-import { Cause, Effect, Exit, Fiber, Layer, Result } from "effect";
+import { Cause, Effect, Exit, Fiber, Layer, Predicate, Result } from "effect";
 import { vi } from "vitest";
 
+import { planWorkspaceImageBuild } from "../buildkit/index.js";
 import {
   createDockerWorkspaceImageBuilder,
   type DockerWorkspaceImageBuilderOptions,
@@ -60,8 +75,8 @@ import {
 
 const workspaceBuildJobRepoStub = (
   overrides: {
-    readonly claimJobById?: () => unknown;
-    readonly getLatestSucceededJobByPlanHash?: () => unknown;
+    readonly claimJobById?: () => WorkspaceBuildJob | null;
+    readonly getLatestSucceededJobByPlanHash?: () => WorkspaceBuildJob | undefined;
   } = {},
 ) => ({
   claimJobById: vi.fn((_input: { id: string; workerId: string; leaseDurationMs: number }) =>
@@ -70,8 +85,10 @@ const workspaceBuildJobRepoStub = (
   getLatestSucceededJobByPlanHash: vi.fn((_input: { registryId: string; planHash: string }) =>
     Effect.succeed(overrides.getLatestSucceededJobByPlanHash?.() ?? undefined),
   ),
-  markJobSucceeded: vi.fn((_input: unknown): Effect.Effect<object | null> => Effect.succeed({})),
-  markJobFailed: vi.fn((_input: unknown) => Effect.succeed({})),
+  markJobSucceeded: vi.fn((_input: unknown) =>
+    Effect.succeed<WorkspaceBuildJob | null>(buildJobRow({ status: "succeeded" })),
+  ),
+  markJobFailed: vi.fn((_input: unknown) => Effect.succeed(buildJobRow({ status: "failed" }))),
   clearSecretEnv: vi.fn((_id: string) => Effect.void),
 });
 
@@ -82,35 +99,40 @@ const workspaceAttemptRepoStub = () => ({
 });
 
 const workspaceRuntimeInstanceRepoStub = () => ({
-  upsertRuntimeInstance: vi.fn((_input: unknown) => Effect.succeed({})),
+  upsertRuntimeInstance: vi.fn((_input: unknown) => Effect.succeed(runtimeInstanceRow())),
   renewLaunchLease: vi.fn((_input: { runId: string; owner: string; leaseMs: number }) =>
     Effect.succeed(true),
   ),
 });
 
-const githubInstallationRepoStub = (options: { status?: string } = {}) => ({
+const githubInstallationRepoStub = (
+  options: { status?: GitHubAppInstallation["status"] } = {},
+) => ({
   getInstallationById: vi.fn((installationId: string) => {
     if (installationId !== "gh_installation_1") {
       return Effect.succeed(undefined);
     }
 
-    return Effect.succeed({
-      id: "gh_installation_1",
-      provider: "github",
-      externalInstallationId: "1001",
-      externalAccountId: "2001",
-      accountLogin: "sealant-ops",
-      accountType: "organization",
-      targetType: "organization",
-      status: options.status ?? "active",
-      permissions: { contents: "read", metadata: "read" },
-      repositorySelection: "all",
-      installedAt: new Date("2026-03-20T12:00:00.000Z"),
-      suspendedAt: options.status === "active" || options.status === undefined ? null : new Date(),
-      lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
-      createdAt: new Date("2026-03-20T12:00:00.000Z"),
-      updatedAt: new Date("2026-03-24T12:00:00.000Z"),
-    });
+    return Effect.succeed(
+      githubInstallationRow({
+        id: "gh_installation_1",
+        provider: "github",
+        externalInstallationId: "1001",
+        externalAccountId: "2001",
+        accountLogin: "sealant-ops",
+        accountType: "organization",
+        targetType: "organization",
+        status: options.status ?? "active",
+        permissions: { contents: "read", metadata: "read" },
+        repositorySelection: "all",
+        installedAt: new Date("2026-03-20T12:00:00.000Z"),
+        suspendedAt:
+          options.status === "active" || options.status === undefined ? null : new Date(),
+        lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+        createdAt: new Date("2026-03-20T12:00:00.000Z"),
+        updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+      }),
+    );
   }),
 });
 
@@ -120,23 +142,25 @@ const githubInstallationRepositoryCacheStub = () => ({
       return Effect.succeed(undefined);
     }
 
-    return Effect.succeed({
-      id: "gh_installation_repo_1",
-      installationId: "gh_installation_1",
-      repositoryId: "repo_core",
-      externalRepositoryId: "3001",
-      owner: "sealant-ops",
-      name: "core",
-      fullName: "sealant-ops/core",
-      defaultBranch: "main",
-      isPrivate: true,
-      isArchived: false,
-      pushedAt: null,
-      lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
-      createdAt: new Date("2026-03-20T12:00:00.000Z"),
-      updatedAt: new Date("2026-03-24T12:00:00.000Z"),
-      removedAt: null,
-    });
+    return Effect.succeed(
+      githubInstallationRepositoryRow({
+        id: "gh_installation_repo_1",
+        installationId: "gh_installation_1",
+        repositoryId: "repo_core",
+        externalRepositoryId: "3001",
+        owner: "sealant-ops",
+        name: "core",
+        fullName: "sealant-ops/core",
+        defaultBranch: "main",
+        isPrivate: true,
+        isArchived: false,
+        pushedAt: null,
+        lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+        createdAt: new Date("2026-03-20T12:00:00.000Z"),
+        updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+        removedAt: null,
+      }),
+    );
   }),
 });
 
@@ -154,7 +178,7 @@ const githubSourceIntegrationStub = (): GitHubSourceIntegration => {
     ),
     getInstallation: vi.fn(() => Effect.die("not implemented")),
     listInstallationRepositories: vi.fn(() => Effect.succeed([])),
-  } as unknown as GitHubSourceIntegration;
+  };
 };
 
 const createRuntimeAdapterStub = (
@@ -332,8 +356,14 @@ const createWorkspaceBuildSpec = (
   };
 };
 
+/** A real resolved plan, for planner stubs whose plan the worker passes on to replaced builders. */
+const plannedImage = planWorkspaceImageBuild({
+  blueprint: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+  platform: "linux/amd64",
+}).imagePlan;
+
 const successRegistryClient = (): RegistryClient =>
-  ({
+  fakeService<RegistryClient>({
     publishOciImage: vi.fn(async () => ({
       repository: "sealant/workspaces/demo",
       tag: "opencode",
@@ -341,43 +371,32 @@ const successRegistryClient = (): RegistryClient =>
       digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
       digest: "sha256:test",
     })),
-  }) as unknown as RegistryClient;
+  });
 
 const provideRepos = (stubs: {
-  readonly jobs: unknown;
-  readonly runtimeInstances: unknown;
-  readonly attempts: unknown;
-  readonly installations?: unknown;
-  readonly installationRepositories?: unknown;
-  readonly connectedAccounts?: unknown;
+  readonly jobs: Partial<WorkspaceBuildJobRepoService>;
+  readonly runtimeInstances: Partial<WorkspaceRuntimeInstanceRepoService>;
+  readonly attempts: Partial<WorkspaceAttemptRepoService>;
+  readonly installations?: Partial<GitHubInstallationRepoService>;
+  readonly installationRepositories?: Partial<GitHubInstallationRepositoryCacheRepoService>;
+  readonly connectedAccounts?: Partial<ConnectedAccountRepoService>;
   /** Where a capture launch keeps its recovery credential; default: every write succeeds. */
-  readonly captureDrains?: unknown;
+  readonly captureDrains?: Partial<WorkspaceCaptureDrainRepoService>;
 }) =>
   Layer.mergeAll(
     Layer.succeed(
       WorkspaceCaptureDrainRepo,
-      (stubs.captureDrains ?? {
-        storeCaptureToken: () => Effect.void,
-      }) as WorkspaceCaptureDrainRepoService,
+      fakeService(stubs.captureDrains ?? { storeCaptureToken: () => Effect.void }),
     ),
-    Layer.succeed(WorkspaceBuildJobRepo, stubs.jobs as WorkspaceBuildJobRepoService),
-    Layer.succeed(
-      WorkspaceRuntimeInstanceRepo,
-      stubs.runtimeInstances as WorkspaceRuntimeInstanceRepoService,
-    ),
-    Layer.succeed(WorkspaceAttemptRepo, stubs.attempts as WorkspaceAttemptRepoService),
-    Layer.succeed(
-      GitHubInstallationRepo,
-      (stubs.installations ?? {}) as GitHubInstallationRepoService,
-    ),
+    Layer.succeed(WorkspaceBuildJobRepo, fakeService(stubs.jobs)),
+    Layer.succeed(WorkspaceRuntimeInstanceRepo, fakeService(stubs.runtimeInstances)),
+    Layer.succeed(WorkspaceAttemptRepo, fakeService(stubs.attempts)),
+    Layer.succeed(GitHubInstallationRepo, fakeService(stubs.installations ?? {})),
     Layer.succeed(
       GitHubInstallationRepositoryCacheRepo,
-      (stubs.installationRepositories ?? {}) as GitHubInstallationRepositoryCacheRepoService,
+      fakeService(stubs.installationRepositories ?? {}),
     ),
-    Layer.succeed(
-      ConnectedAccountRepo,
-      (stubs.connectedAccounts ?? {}) as ConnectedAccountRepoService,
-    ),
+    Layer.succeed(ConnectedAccountRepo, fakeService(stubs.connectedAccounts ?? {})),
   );
 
 /**
@@ -441,6 +460,8 @@ const connectedAccountStub = (input: {
   readonly payload: Record<string, unknown>;
   readonly status?: ConnectedAccountStatus;
 }) => ({
+  ...connectedAccountRow(),
+  isDefault: false,
   id: input.id,
   ownerUserId: "usr_1",
   provider: input.provider,
@@ -466,13 +487,14 @@ describe("processWorkspaceBuildJobEffect", () => {
   it.effect("passes selected packages from the build job to the image compiler", () => {
     const packages = [{ id: "bat" }, { id: "lazygit" }, { id: "python" }];
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_packages",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "arch", packages }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_packages",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "arch", packages }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -498,14 +520,15 @@ describe("processWorkspaceBuildJobEffect", () => {
     "launches nothing when another worker took the job over under the build (review 5 #1)",
     () => {
       const jobs = workspaceBuildJobRepoStub({
-        claimJobById: () => ({
-          id: "job_taken_over",
-          runId: "run_taken_over",
-          attemptCount: 1,
-          repository: "sealant/workspaces/demo",
-          tag: "opencode",
-          requestPayload: createWorkspaceBuildSpec({ osFamily: "arch" }),
-        }),
+        claimJobById: () =>
+          buildJobRow({
+            id: "job_taken_over",
+            runId: "run_taken_over",
+            attemptCount: 1,
+            repository: "sealant/workspaces/demo",
+            tag: "opencode",
+            requestPayload: createWorkspaceBuildSpec({ osFamily: "arch" }),
+          }),
       });
       // The lease expired under the build and another worker claimed the job: the claim-fenced
       // success write answers null.
@@ -565,33 +588,35 @@ describe("processWorkspaceBuildJobEffect", () => {
     const jobs = workspaceBuildJobRepoStub({
       // The new create has its own fresh repository:tag (the SDK stamps a random tag per
       // create) — only the plan hash links it to the prior publish.
-      claimJobById: () => ({
-        id: "job_reuse",
-        runId: null,
-        registryId: "local-zot",
-        repository: "session-bbbb",
-        tag: "sdk-22222222",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
-      }),
-      getLatestSucceededJobByPlanHash: () => ({
-        id: "job_prior",
-        status: "succeeded",
-        registryId: "local-zot",
-        repository: "session-aaaa",
-        tag: "sdk-11111111",
-        resultPayload: {
-          ...createCompileResult({ id: "fedora" }),
-          metadata: {
-            defaultArtifactName: "sealant-workspace-fedora",
-            notes: [],
-            planHash: priorPlanHash,
-            imageProbe: priorProbe,
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_reuse",
+          runId: null,
+          registryId: "local-zot",
+          repository: "session-bbbb",
+          tag: "sdk-22222222",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+        }),
+      getLatestSucceededJobByPlanHash: () =>
+        buildJobRow({
+          id: "job_prior",
+          status: "succeeded",
+          registryId: "local-zot",
+          repository: "session-aaaa",
+          tag: "sdk-11111111",
+          resultPayload: {
+            ...createCompileResult({ id: "fedora" }),
+            metadata: {
+              defaultArtifactName: "sealant-workspace-fedora",
+              notes: [],
+              planHash: priorPlanHash,
+              imageProbe: priorProbe,
+            },
           },
-        },
-        publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
-        publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
-        publishedDigest: "sha256:prior",
-      }),
+          publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+          publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+          publishedDigest: "sha256:prior",
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -599,17 +624,17 @@ describe("processWorkspaceBuildJobEffect", () => {
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
       platform: "linux/amd64" as const,
-      imagePlan: {} as never,
+      imagePlan: plannedImage,
       containerfile: "FROM fedora:41",
       planHash: priorPlanHash,
     }));
     const headManifest = vi.fn(async () => "sha256:prior");
-    const registryClient = {
+    const registryClient = fakeService<RegistryClient>({
       publishOciImage: vi.fn(async () => {
         throw new Error("publishOciImage must not run on the reuse path");
       }),
       headManifest,
-    } as unknown as RegistryClient;
+    });
     const runtimeAdapter = createRuntimeAdapterStub("docker");
 
     return Effect.gen(function* () {
@@ -670,28 +695,30 @@ describe("processWorkspaceBuildJobEffect", () => {
   it.effect("builds fresh when the registry tag no longer points at the recorded digest", () => {
     const priorPlanHash = "b".repeat(64);
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_stale_digest",
-        runId: null,
-        registryId: "local-zot",
-        repository: "session-bbbb",
-        tag: "sdk-22222222",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
-      }),
-      getLatestSucceededJobByPlanHash: () => ({
-        id: "job_prior",
-        status: "succeeded",
-        registryId: "local-zot",
-        repository: "session-aaaa",
-        tag: "sdk-11111111",
-        resultPayload: {
-          ...createCompileResult({ id: "fedora" }),
-          metadata: { notes: [], planHash: priorPlanHash },
-        },
-        publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
-        publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
-        publishedDigest: "sha256:prior",
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_stale_digest",
+          runId: null,
+          registryId: "local-zot",
+          repository: "session-bbbb",
+          tag: "sdk-22222222",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+        }),
+      getLatestSucceededJobByPlanHash: () =>
+        buildJobRow({
+          id: "job_prior",
+          status: "succeeded",
+          registryId: "local-zot",
+          repository: "session-aaaa",
+          tag: "sdk-11111111",
+          resultPayload: {
+            ...createCompileResult({ id: "fedora" }),
+            metadata: { notes: [], planHash: priorPlanHash },
+          },
+          publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+          publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+          publishedDigest: "sha256:prior",
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -699,7 +726,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
       platform: "linux/amd64" as const,
-      imagePlan: {} as never,
+      imagePlan: plannedImage,
       containerfile: "FROM fedora:41",
       planHash: priorPlanHash,
     }));
@@ -710,11 +737,11 @@ describe("processWorkspaceBuildJobEffect", () => {
       digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:fresh",
       digest: "sha256:fresh",
     }));
-    const registryClient = {
+    const registryClient = fakeService<RegistryClient>({
       publishOciImage,
       // The tag was re-pushed (or GC'd) out-of-band: the recorded digest is gone.
       headManifest: vi.fn(async () => "sha256:overwritten"),
-    } as unknown as RegistryClient;
+    });
 
     return Effect.gen(function* () {
       yield* processWorkspaceBuildJobEffect(
@@ -734,14 +761,15 @@ describe("processWorkspaceBuildJobEffect", () => {
   it.effect("publishes a fresh build under plan-keyed coordinates, not the create's name", () => {
     const planHash = "d".repeat(64);
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_plan_named",
-        runId: null,
-        registryId: "local-zot",
-        repository: "wt-1ba1c80a-875b-4c0e-9b9c-2fd0d01f2fe0",
-        tag: "sdk-44444444",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_plan_named",
+          runId: null,
+          registryId: "local-zot",
+          repository: "wt-1ba1c80a-875b-4c0e-9b9c-2fd0d01f2fe0",
+          tag: "sdk-44444444",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -749,7 +777,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
       platform: "linux/amd64" as const,
-      imagePlan: {} as never,
+      imagePlan: plannedImage,
       containerfile: "FROM fedora:41",
       planHash,
     }));
@@ -766,6 +794,7 @@ describe("processWorkspaceBuildJobEffect", () => {
       );
 
       // The worktree's name never reaches the registry: the plan does.
+      // oxlint-disable-next-line typescript/unbound-method -- a vi.fn stub, read to assert on its calls; nothing binds this.
       expect(registryClient.publishOciImage).toHaveBeenCalledWith(
         expect.objectContaining({
           repository: "sealant-workspace-fedora",
@@ -779,34 +808,36 @@ describe("processWorkspaceBuildJobEffect", () => {
   it.effect("HEADs the tag a prior job actually published, not the name it was asked for", () => {
     const priorPlanHash = "e".repeat(64);
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_reuse_plan",
-        runId: null,
-        registryId: "local-zot",
-        repository: "wt-2222",
-        tag: "sdk-22222222",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
-      }),
-      getLatestSucceededJobByPlanHash: () => ({
-        id: "job_prior_plan",
-        status: "succeeded",
-        registryId: "local-zot",
-        // What the client asked for…
-        repository: "wt-1111",
-        tag: "sdk-11111111",
-        resultPayload: {
-          ...createCompileResult({ id: "fedora" }),
-          metadata: {
-            defaultArtifactName: "sealant-workspace-fedora",
-            notes: [],
-            planHash: priorPlanHash,
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_reuse_plan",
+          runId: null,
+          registryId: "local-zot",
+          repository: "wt-2222",
+          tag: "sdk-22222222",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+        }),
+      getLatestSucceededJobByPlanHash: () =>
+        buildJobRow({
+          id: "job_prior_plan",
+          status: "succeeded",
+          registryId: "local-zot",
+          // What the client asked for…
+          repository: "wt-1111",
+          tag: "sdk-11111111",
+          resultPayload: {
+            ...createCompileResult({ id: "fedora" }),
+            metadata: {
+              defaultArtifactName: "sealant-workspace-fedora",
+              notes: [],
+              planHash: priorPlanHash,
+            },
           },
-        },
-        // …and where the worker put it.
-        publishedReference: "127.0.0.1:5000/sealant-workspace-fedora:plan-eeeeeeeeeeee",
-        publishedDigestReference: "127.0.0.1:5000/sealant-workspace-fedora@sha256:prior",
-        publishedDigest: "sha256:prior",
-      }),
+          // …and where the worker put it.
+          publishedReference: "127.0.0.1:5000/sealant-workspace-fedora:plan-eeeeeeeeeeee",
+          publishedDigestReference: "127.0.0.1:5000/sealant-workspace-fedora@sha256:prior",
+          publishedDigest: "sha256:prior",
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -814,17 +845,17 @@ describe("processWorkspaceBuildJobEffect", () => {
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
       platform: "linux/amd64" as const,
-      imagePlan: {} as never,
+      imagePlan: plannedImage,
       containerfile: "FROM fedora:41",
       planHash: priorPlanHash,
     }));
     const headManifest = vi.fn(async () => "sha256:prior");
-    const registryClient = {
+    const registryClient = fakeService<RegistryClient>({
       publishOciImage: vi.fn(async () => {
         throw new Error("publishOciImage must not run on the reuse path");
       }),
       headManifest,
-    } as unknown as RegistryClient;
+    });
 
     return Effect.gen(function* () {
       const published = yield* processWorkspaceBuildJobEffect(
@@ -850,14 +881,15 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("builds fresh when no prior published plan hash exists", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_no_prior",
-        runId: null,
-        registryId: "local-zot",
-        repository: "session-bbbb",
-        tag: "sdk-33333333",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_no_prior",
+          runId: null,
+          registryId: "local-zot",
+          repository: "session-bbbb",
+          tag: "sdk-33333333",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -865,7 +897,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "fedora" as const,
       platform: "linux/amd64" as const,
-      imagePlan: {} as never,
+      imagePlan: plannedImage,
       containerfile: "FROM fedora:41",
       planHash: "c".repeat(64),
     }));
@@ -887,19 +919,20 @@ describe("processWorkspaceBuildJobEffect", () => {
   it.effect("resolves connected-account refs into launch credential env + files", () => {
     const codexAuthJson = JSON.stringify({ tokens: { refresh_token: "rt" } });
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_credentials",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          osFamily: "nix",
-          credentialRefs: [
-            { provider: "claude", ref: "connected-account:cacc_claude" },
-            { provider: "codex", ref: "connected-account:cacc_codex" },
-          ],
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_credentials",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            osFamily: "nix",
+            credentialRefs: [
+              { provider: "claude", ref: "connected-account:cacc_claude" },
+              { provider: "codex", ref: "connected-account:cacc_codex" },
+            ],
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -961,17 +994,18 @@ describe("processWorkspaceBuildJobEffect", () => {
       claudeAiOauth: { accessToken: "sk-ant-oat01-session", expiresAt: 1_750_000_000_000 },
     });
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_claude_session",
-        // A real run id so the launch records its runtime instance row (asserted below).
-        runId: "run_claude_session",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          osFamily: "nix",
-          credentialRefs: [{ provider: "claude", ref: "connected-account:cacc_claude_session" }],
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_claude_session",
+          // A real run id so the launch records its runtime instance row (asserted below).
+          runId: "run_claude_session",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            osFamily: "nix",
+            credentialRefs: [{ provider: "claude", ref: "connected-account:cacc_claude_session" }],
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1056,26 +1090,29 @@ describe("processWorkspaceBuildJobEffect", () => {
         ],
       });
       const jobs = workspaceBuildJobRepoStub({
-        claimJobById: () => ({
-          id: "job_credentials_home",
-          runId: "run_credentials_home",
-          repository: "sealant/workspaces/demo",
-          tag: "opencode",
-          requestPayload: { ...base, runtime: { ...base.runtime, credentialsHome: home } },
-        }),
+        claimJobById: () =>
+          buildJobRow({
+            id: "job_credentials_home",
+            runId: "run_credentials_home",
+            repository: "sealant/workspaces/demo",
+            tag: "opencode",
+            requestPayload: { ...base, runtime: { ...base.runtime, credentialsHome: home } },
+          }),
       });
       const attempts = {
         ...workspaceAttemptRepoStub(),
-        getAttemptById: vi.fn((_id: string) => Effect.succeed({ ownerUserId: "usr_alice" })),
+        getAttemptById: vi.fn((_id: string) =>
+          Effect.succeed(attemptRow({ ownerUserId: "usr_alice" })),
+        ),
       };
       // The home is recorded before the instance reads `ready`, when nobody can act on it yet.
       const homes = makeInMemoryCredentialHomes(() => [], { accounts: () => accountRows });
       let recordedAtReady: number | undefined;
       const runtimeInstances = {
         ...workspaceRuntimeInstanceRepoStub(),
-        upsertRuntimeInstance: vi.fn((input: { readonly status?: string }) => {
+        upsertRuntimeInstance: vi.fn((input: UpsertWorkspaceRuntimeInstanceInput) => {
           if (input.status === "ready") recordedAtReady = homes.rows.size;
-          return Effect.succeed({});
+          return Effect.succeed(runtimeInstanceRow({ runId: input.runId }));
         }),
       };
       const accountRows = [
@@ -1216,17 +1253,20 @@ describe("processWorkspaceBuildJobEffect", () => {
     const home = { path: "/home/m4lice000", uid: 40001, gid: 40000 };
     const base = createWorkspaceBuildSpec({ osFamily: "nix", credentialRefs: [] });
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_empty_home",
-        runId: "run_empty_home",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: { ...base, runtime: { ...base.runtime, credentialsHome: home } },
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_empty_home",
+          runId: "run_empty_home",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: { ...base, runtime: { ...base.runtime, credentialsHome: home } },
+        }),
     });
     const attempts = {
       ...workspaceAttemptRepoStub(),
-      getAttemptById: vi.fn((_id: string) => Effect.succeed({ ownerUserId: "usr_alice" })),
+      getAttemptById: vi.fn((_id: string) =>
+        Effect.succeed(attemptRow({ ownerUserId: "usr_alice" })),
+      ),
     };
     const runtimeAdapter = createRuntimeAdapterStub("docker", {
       launch: vi.fn(async () => ({
@@ -1269,16 +1309,17 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("fails the launch when refs are present but no credentials key is configured", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_no_credentials_key",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          osFamily: "nix",
-          credentialRefs: [{ provider: "claude", ref: "connected-account:cacc_claude" }],
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_no_credentials_key",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            osFamily: "nix",
+            credentialRefs: [{ provider: "claude", ref: "connected-account:cacc_claude" }],
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1305,17 +1346,18 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("mints GitHub installation token auth right before runtime launch", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_github_runtime_auth",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          url: "https://github.com/sealant-ops/core.git",
-          authRef: "github-installation-repository:gh_installation_repo_1",
-          osFamily: "nix",
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_github_runtime_auth",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            url: "https://github.com/sealant-ops/core.git",
+            authRef: "github-installation-repository:gh_installation_repo_1",
+            osFamily: "nix",
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1355,27 +1397,28 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("injects dotfiles GitHub token env for runtime-applied config repos", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_dotfiles_runtime_auth",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          url: "https://github.com/example/repo.git",
-          osFamily: "nix",
-          inputSources: [
-            {
-              id: "dotfiles",
-              kind: "git",
-              purpose: "dotfiles",
-              provider: "github",
-              url: "https://github.com/sealant-ops/core.git",
-              ref: "main",
-              authRef: "github-installation-repository:gh_installation_repo_1",
-            },
-          ],
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_dotfiles_runtime_auth",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            url: "https://github.com/example/repo.git",
+            osFamily: "nix",
+            inputSources: [
+              {
+                id: "dotfiles",
+                kind: "git",
+                purpose: "dotfiles",
+                provider: "github",
+                url: "https://github.com/sealant-ops/core.git",
+                ref: "main",
+                authRef: "github-installation-repository:gh_installation_repo_1",
+              },
+            ],
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1429,16 +1472,17 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("hands the adapter the caller userEnv unchanged through the job payload parse", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_user_env",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          osFamily: "nix",
-          userEnv: { APP_MODE: "review", EMPTY_VALUE: "" },
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_user_env",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            osFamily: "nix",
+            userEnv: { APP_MODE: "review", EMPTY_VALUE: "" },
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1478,14 +1522,15 @@ describe("processWorkspaceBuildJobEffect", () => {
     () => {
       const secretEnv = { DATABASE_URL: "postgres://u:hunter2@h/db", STRIPE_API_KEY: "sk_live_x" };
       const jobs = workspaceBuildJobRepoStub({
-        claimJobById: () => ({
-          id: "job_secret_env",
-          runId: "run_secret_env",
-          repository: "sealant/workspaces/demo",
-          tag: "opencode",
-          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-          secretEnvSealed: `sealed:${JSON.stringify(secretEnv)}`,
-        }),
+        claimJobById: () =>
+          buildJobRow({
+            id: "job_secret_env",
+            runId: "run_secret_env",
+            repository: "sealant/workspaces/demo",
+            tag: "opencode",
+            requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+            secretEnvSealed: `sealed:${JSON.stringify(secretEnv)}`,
+          }),
       });
       const attempts = workspaceAttemptRepoStub();
       const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1557,14 +1602,15 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("fails the launch loudly when a sealed secretEnv arrives without a cipher", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_secret_env_no_cipher",
-        runId: "run_secret_env_no_cipher",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-        secretEnvSealed: "sealed:{}",
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_secret_env_no_cipher",
+          runId: "run_secret_env_no_cipher",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+          secretEnvSealed: "sealed:{}",
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1596,14 +1642,15 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("rejects a sealed secretEnv that fails the policy at the last hop", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_secret_env_bad",
-        runId: "run_secret_env_bad",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-        secretEnvSealed: `sealed:${JSON.stringify({ GITHUB_TOKEN: "ghp_smuggled" })}`,
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_secret_env_bad",
+          runId: "run_secret_env_bad",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+          secretEnvSealed: `sealed:${JSON.stringify({ GITHUB_TOKEN: "ghp_smuggled" })}`,
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1638,21 +1685,22 @@ describe("processWorkspaceBuildJobEffect", () => {
   describe("a capture launch that fails after its executor became ready", () => {
     const captureJob = (id: string) =>
       workspaceBuildJobRepoStub({
-        claimJobById: () => ({
-          id,
-          runId: `run_${id}`,
-          repository: "sealant/workspaces/demo",
-          tag: "opencode",
-          requestPayload: {
-            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
-            sources: {
-              workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
-              inputs: [],
-              mounts: [],
+        claimJobById: () =>
+          buildJobRow({
+            id,
+            runId: `run_${id}`,
+            repository: "sealant/workspaces/demo",
+            tag: "opencode",
+            requestPayload: {
+              ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+              sources: {
+                workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+                inputs: [],
+                mounts: [],
+              },
             },
-          },
-          secretEnvSealed: SEALED_CAPTURE_TOKEN,
-        }),
+            secretEnvSealed: SEALED_CAPTURE_TOKEN,
+          }),
       });
     const identity = {
       adapter: "docker" as const,
@@ -1728,10 +1776,10 @@ describe("processWorkspaceBuildJobEffect", () => {
         const order: string[] = [];
         const runtimeInstances = {
           ...workspaceRuntimeInstanceRepoStub(),
-          upsertRuntimeInstance: vi.fn((input: { readonly status: string }) =>
+          upsertRuntimeInstance: vi.fn((input: UpsertWorkspaceRuntimeInstanceInput) =>
             Effect.sync(() => {
               order.push(`row:${input.status}`);
-              return {};
+              return runtimeInstanceRow({ runId: input.runId });
             }),
           ),
         };
@@ -1837,11 +1885,16 @@ describe("processWorkspaceBuildJobEffect", () => {
         const jobs = captureJob("job_unrecorded");
         const attempts = workspaceAttemptRepoStub();
         const runtimeInstances = {
-          upsertRuntimeInstance: vi.fn(
-            (input: { readonly status: string }): Effect.Effect<object, Error> =>
-              input.status === "ready"
-                ? Effect.fail(new Error("connection terminated"))
-                : Effect.succeed({}),
+          upsertRuntimeInstance: vi.fn((input: UpsertWorkspaceRuntimeInstanceInput) =>
+            input.status === "ready"
+              ? Effect.fail(
+                  new WorkspaceRuntimeInstanceRepoUnexpectedError({
+                    operation: "upsertRuntimeInstance",
+                    message: "connection terminated",
+                    cause: new Error("connection terminated"),
+                  }),
+                )
+              : Effect.succeed(runtimeInstanceRow({ runId: input.runId })),
           ),
           renewLaunchLease: vi.fn(() => Effect.succeed(true)),
         };
@@ -1867,6 +1920,7 @@ describe("processWorkspaceBuildJobEffect", () => {
               resourceId: "container-retained",
             }),
           );
+          // oxlint-disable-next-line typescript/unbound-method -- a vi.fn stub, read to assert on its calls; nothing binds this.
           expect(runtimeAdapter.stop).not.toHaveBeenCalled();
         }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
       },
@@ -1878,25 +1932,26 @@ describe("processWorkspaceBuildJobEffect", () => {
     // the caller policy still governs the caller's entries, and the token reaches the boot file.
     const sealed = { MEND_SESSION_TOKEN: "mst_1", SEALANT_CAPTURE_TOKEN: "mst_1" };
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_capture_token",
-        runId: "run_capture_token",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: {
-          ...createWorkspaceBuildSpec({ osFamily: "nix" }),
-          sources: {
-            workspace: {
-              kind: "capture",
-              endpoint: "https://mend.example.com/session/s1",
-              harnessHome: "/workspace/harness-home",
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_capture_token",
+          runId: "run_capture_token",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: {
+            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+            sources: {
+              workspace: {
+                kind: "capture",
+                endpoint: "https://mend.example.com/session/s1",
+                harnessHome: "/workspace/harness-home",
+              },
+              inputs: [],
+              mounts: [],
             },
-            inputs: [],
-            mounts: [],
           },
-        },
-        secretEnvSealed: `sealed:${JSON.stringify(sealed)}`,
-      }),
+          secretEnvSealed: `sealed:${JSON.stringify(sealed)}`,
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -1966,30 +2021,34 @@ describe("processWorkspaceBuildJobEffect", () => {
       worktreeUid: 40012,
       people: [{ id: "acct_a", uid: 40012 }],
     };
-    const ownerMapJob = (withMap = true, getLatestSucceededJobByPlanHash?: () => unknown) =>
+    const ownerMapJob = (
+      withMap = true,
+      getLatestSucceededJobByPlanHash?: () => WorkspaceBuildJob | undefined,
+    ) =>
       workspaceBuildJobRepoStub({
-        claimJobById: () => ({
-          id: "job_owner_map",
-          runId: "run_owner_map",
-          registryId: "local-zot",
-          repository: "sealant/workspaces/demo",
-          tag: "opencode",
-          requestPayload: {
-            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
-            sources: {
-              workspace: {
-                kind: "capture",
-                endpoint: "https://mend.example.com/session/s1",
-                worktreeId: "wt_1",
-                harnessHome: "/workspace/harness-home",
-                ...(withMap ? { ownerMap } : {}),
+        claimJobById: () =>
+          buildJobRow({
+            id: "job_owner_map",
+            runId: "run_owner_map",
+            registryId: "local-zot",
+            repository: "sealant/workspaces/demo",
+            tag: "opencode",
+            requestPayload: {
+              ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+              sources: {
+                workspace: {
+                  kind: "capture",
+                  endpoint: "https://mend.example.com/session/s1",
+                  worktreeId: "wt_1",
+                  harnessHome: "/workspace/harness-home",
+                  ...(withMap ? { ownerMap } : {}),
+                },
+                inputs: [],
+                mounts: [],
               },
-              inputs: [],
-              mounts: [],
             },
-          },
-          secretEnvSealed: SEALED_CAPTURE_TOKEN,
-        }),
+            secretEnvSealed: SEALED_CAPTURE_TOKEN,
+          }),
         ...(getLatestSucceededJobByPlanHash === undefined
           ? {}
           : { getLatestSucceededJobByPlanHash }),
@@ -2079,17 +2138,19 @@ describe("processWorkspaceBuildJobEffect", () => {
       ["without one reuses it as before", false, false],
     ] as const) {
       it.effect(`on a published plan whose build recorded no probe, a launch ${name}`, () => {
-        const jobs = ownerMapJob(withMap, () => ({
-          id: "job_prior",
-          status: "succeeded",
-          registryId: "local-zot",
-          repository: "session-aaaa",
-          tag: "sdk-11111111",
-          resultPayload: probed(undefined),
-          publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
-          publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
-          publishedDigest: "sha256:prior",
-        }));
+        const jobs = ownerMapJob(withMap, () =>
+          buildJobRow({
+            id: "job_prior",
+            status: "succeeded",
+            registryId: "local-zot",
+            repository: "session-aaaa",
+            tag: "sdk-11111111",
+            resultPayload: probed(undefined),
+            publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+            publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+            publishedDigest: "sha256:prior",
+          }),
+        );
         const attempts = workspaceAttemptRepoStub();
         const runtimeInstances = workspaceRuntimeInstanceRepoStub();
         const runtimeAdapter = createRuntimeAdapterStub("docker");
@@ -2107,14 +2168,14 @@ describe("processWorkspaceBuildJobEffect", () => {
               planWorkspaceSpec: () => ({
                 osFamily: "nix" as const,
                 platform: "linux/amd64" as const,
-                imagePlan: {} as never,
+                imagePlan: plannedImage,
                 containerfile: "FROM nixos/nix",
                 planHash: "d".repeat(64),
               }),
               registryClient: {
                 ...successRegistryClient(),
                 headManifest: vi.fn(async () => "sha256:prior"),
-              } as unknown as RegistryClient,
+              },
             }),
           );
           expect(compileWorkspaceSpec).toHaveBeenCalledTimes(rebuilds ? 1 : 0);
@@ -2154,24 +2215,26 @@ describe("processWorkspaceBuildJobEffect", () => {
       ]
     >) {
       it.effect(`on a published plan whose build recorded no probe, a launch ${name}`, () => {
-        const jobs = ownerMapJob(true, () => ({
-          id: "job_prior",
-          status: "succeeded",
-          registryId: "local-zot",
-          repository: "session-aaaa",
-          tag: "sdk-11111111",
-          resultPayload: probed(undefined),
-          publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
-          publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
-          publishedDigest: "sha256:prior",
-        }));
+        const jobs = ownerMapJob(true, () =>
+          buildJobRow({
+            id: "job_prior",
+            status: "succeeded",
+            registryId: "local-zot",
+            repository: "session-aaaa",
+            tag: "sdk-11111111",
+            resultPayload: probed(undefined),
+            publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+            publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+            publishedDigest: "sha256:prior",
+          }),
+        );
         const attempts = workspaceAttemptRepoStub();
         const runtimeInstances = workspaceRuntimeInstanceRepoStub();
         const runtimeAdapter = createRuntimeAdapterStub("docker");
-        const registryClient = {
+        const registryClient = fakeService<RegistryClient>({
           ...successRegistryClient(),
           headManifest: vi.fn(async () => "sha256:prior"),
-        } as unknown as RegistryClient;
+        });
         const compileWorkspaceSpec = vi.fn(async () => probed(undefined));
         const readProbe = vi.fn(read);
         const imageBuilder: WorkspaceImageBuilder = {
@@ -2182,7 +2245,7 @@ describe("processWorkspaceBuildJobEffect", () => {
             planWorkspaceSpec: () => ({
               osFamily: "nix" as const,
               platform: "linux/amd64" as const,
-              imagePlan: {} as never,
+              imagePlan: plannedImage,
               containerfile: "FROM nixos/nix",
               planHash: "d".repeat(64),
             }),
@@ -2251,21 +2314,22 @@ describe("processWorkspaceBuildJobEffect", () => {
   describe("a capture launch whose recovery credential cannot be kept (review 5 #4)", () => {
     const captureTokenJob = () =>
       workspaceBuildJobRepoStub({
-        claimJobById: () => ({
-          id: "job_token_unkept",
-          runId: "run_token_unkept",
-          repository: "sealant/workspaces/demo",
-          tag: "opencode",
-          requestPayload: {
-            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
-            sources: {
-              workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
-              inputs: [],
-              mounts: [],
+        claimJobById: () =>
+          buildJobRow({
+            id: "job_token_unkept",
+            runId: "run_token_unkept",
+            repository: "sealant/workspaces/demo",
+            tag: "opencode",
+            requestPayload: {
+              ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+              sources: {
+                workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+                inputs: [],
+                mounts: [],
+              },
             },
-          },
-          secretEnvSealed: `sealed:${JSON.stringify({ MEND_SESSION_TOKEN: "mst_1", SEALANT_CAPTURE_TOKEN: "mst_1" })}`,
-        }),
+            secretEnvSealed: `sealed:${JSON.stringify({ MEND_SESSION_TOKEN: "mst_1", SEALANT_CAPTURE_TOKEN: "mst_1" })}`,
+          }),
       });
 
     it.effect("is never launched, and its sealed job secret is kept", () => {
@@ -2278,7 +2342,13 @@ describe("processWorkspaceBuildJobEffect", () => {
         removeAll: vi.fn(async () => undefined),
       };
       const storeCaptureToken = vi.fn(() =>
-        Effect.fail(new Error("injected transient write failure")),
+        Effect.fail(
+          new WorkspaceCaptureDrainRepoUnexpectedError({
+            operation: "storeCaptureToken",
+            message: "injected transient write failure",
+            cause: new Error("injected transient write failure"),
+          }),
+        ),
       );
       const runtimeAdapter = createRuntimeAdapterStub("docker");
 
@@ -2318,7 +2388,15 @@ describe("processWorkspaceBuildJobEffect", () => {
       const storeCaptureToken = vi.fn(() =>
         Effect.suspend(() => {
           calls += 1;
-          return calls === 1 ? Effect.fail(new Error("transient")) : Effect.void;
+          return calls === 1
+            ? Effect.fail(
+                new WorkspaceCaptureDrainRepoUnexpectedError({
+                  operation: "storeCaptureToken",
+                  message: "transient",
+                  cause: new Error("transient"),
+                }),
+              )
+            : Effect.void;
         }),
       );
       const runtimeAdapter = createRuntimeAdapterStub("docker");
@@ -2345,20 +2423,21 @@ describe("processWorkspaceBuildJobEffect", () => {
 
     it.effect("is never launched without a capture token to keep", () => {
       const jobs = workspaceBuildJobRepoStub({
-        claimJobById: () => ({
-          id: "job_no_token",
-          runId: "run_no_token",
-          repository: "sealant/workspaces/demo",
-          tag: "opencode",
-          requestPayload: {
-            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
-            sources: {
-              workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
-              inputs: [],
-              mounts: [],
+        claimJobById: () =>
+          buildJobRow({
+            id: "job_no_token",
+            runId: "run_no_token",
+            repository: "sealant/workspaces/demo",
+            tag: "opencode",
+            requestPayload: {
+              ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+              sources: {
+                workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+                inputs: [],
+                mounts: [],
+              },
             },
-          },
-        }),
+          }),
       });
       const attempts = workspaceAttemptRepoStub();
       const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2380,14 +2459,15 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("still refuses other platform-prefixed names in the sealed channel", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_capture_token_bad",
-        runId: "run_capture_token_bad",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-        secretEnvSealed: `sealed:${JSON.stringify({ SEALANT_WORKSPACE_SOURCE: "mount" })}`,
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_capture_token_bad",
+          runId: "run_capture_token_bad",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+          secretEnvSealed: `sealed:${JSON.stringify({ SEALANT_WORKSPACE_SOURCE: "mount" })}`,
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2421,20 +2501,21 @@ describe("processWorkspaceBuildJobEffect", () => {
   it.effect("stages dotfiles archives and hands the adapter the staging dir", () => {
     const archiveData = Buffer.from("not-a-real-tarball").toString("base64");
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_dotfiles_archives",
-        runId: "run_dotfiles_archives",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          url: "https://github.com/example/repo.git",
-          osFamily: "nix",
-          dotfilesArchives: [
-            { data: archiveData, manager: "copy", bootstrap: false },
-            { data: archiveData, bootstrap: true },
-          ],
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_dotfiles_archives",
+          runId: "run_dotfiles_archives",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            url: "https://github.com/example/repo.git",
+            osFamily: "nix",
+            dotfilesArchives: [
+              { data: archiveData, manager: "copy", bootstrap: false },
+              { data: archiveData, bootstrap: true },
+            ],
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2463,10 +2544,10 @@ describe("processWorkspaceBuildJobEffect", () => {
       const stagedDir = launchInput?.dotfilesArchiveDir;
       expect(stagedDir).toBeDefined();
       if (stagedDir !== undefined) {
-        const manifest = JSON.parse(readFileSync(join(stagedDir, "manifest.json"), "utf8")) as {
-          archives: Array<Record<string, unknown>>;
-        };
-        expect(manifest.archives).toEqual([
+        const manifest: unknown = JSON.parse(
+          readFileSync(join(stagedDir, "manifest.json"), "utf8"),
+        );
+        expect(Predicate.isObject(manifest) ? manifest["archives"] : undefined).toEqual([
           { file: "0.tar.gz", manager: "copy", bootstrap: false },
           { file: "1.tar.gz", bootstrap: true },
         ]);
@@ -2497,13 +2578,14 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("removes all staged launch material exactly once when launch fails", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_launch_cleanup",
-        runId: "run_launch_cleanup",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_launch_cleanup",
+          runId: "run_launch_cleanup",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2550,18 +2632,19 @@ describe("processWorkspaceBuildJobEffect", () => {
   it.effect("stages nothing when the dotfiles apply is disabled", () => {
     const archiveData = Buffer.from("unused").toString("base64");
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_dotfiles_archives_disabled",
-        runId: "run_archives_disabled",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          url: "https://github.com/example/repo.git",
-          osFamily: "nix",
-          applyDotfiles: false,
-          dotfilesArchives: [{ data: archiveData, bootstrap: true }],
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_dotfiles_archives_disabled",
+          runId: "run_archives_disabled",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            url: "https://github.com/example/repo.git",
+            osFamily: "nix",
+            applyDotfiles: false,
+            dotfilesArchives: [{ data: archiveData, bootstrap: true }],
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2592,28 +2675,29 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("mints no dotfiles token when the apply is disabled", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_dotfiles_disabled",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          url: "https://github.com/example/repo.git",
-          osFamily: "nix",
-          applyDotfiles: false,
-          inputSources: [
-            {
-              id: "dotfiles",
-              kind: "git",
-              purpose: "dotfiles",
-              provider: "github",
-              url: "https://github.com/sealant-ops/core.git",
-              ref: "main",
-              authRef: "github-installation-repository:gh_installation_repo_1",
-            },
-          ],
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_dotfiles_disabled",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            url: "https://github.com/example/repo.git",
+            osFamily: "nix",
+            applyDotfiles: false,
+            inputSources: [
+              {
+                id: "dotfiles",
+                kind: "git",
+                purpose: "dotfiles",
+                provider: "github",
+                url: "https://github.com/sealant-ops/core.git",
+                ref: "main",
+                authRef: "github-installation-repository:gh_installation_repo_1",
+              },
+            ],
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2649,13 +2733,14 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("uses startup and SSH values from the request spec", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_defaults",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_defaults",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2677,7 +2762,7 @@ describe("processWorkspaceBuildJobEffect", () => {
         throw new Error("Runtime adapter launch call was not captured.");
       }
 
-      const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
+      const lifecycle = launchCall.blueprint.lifecycle;
       expect(launchCall.blueprint.access.ssh).toEqual({
         enabled: false,
         listenPort: 2222,
@@ -2694,17 +2779,18 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("respects explicit startup and SSH settings from spec", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_explicit",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          osFamily: "nix",
-          sshEnabled: false,
-          startupCommand: "pnpm dev",
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_explicit",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            osFamily: "nix",
+            sshEnabled: false,
+            startupCommand: "pnpm dev",
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2726,7 +2812,7 @@ describe("processWorkspaceBuildJobEffect", () => {
         throw new Error("Runtime adapter launch call was not captured.");
       }
 
-      const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
+      const lifecycle = launchCall.blueprint.lifecycle;
       expect(launchCall.blueprint.access.ssh.enabled).toBe(false);
       expect(lifecycle).toMatchObject({
         startup: {
@@ -2742,13 +2828,14 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("claims, compiles, publishes, and marks a job as succeeded", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_123",
-        runId: "run_123",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_123",
+          runId: "run_123",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2788,13 +2875,14 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("marks a job as failed when compile or publish throws", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_123",
-        runId: "run_123",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_123",
+          runId: "run_123",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2803,7 +2891,7 @@ describe("processWorkspaceBuildJobEffect", () => {
       const error = yield* processWorkspaceBuildJobEffect(
         baseOptions({
           jobId: "job_123",
-          registryClient: {} as RegistryClient,
+          registryClient: fakeService<RegistryClient>({}),
           compileWorkspaceSpec: vi.fn(async () => {
             throw new Error("compile exploded");
           }),
@@ -2824,13 +2912,14 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("marks a job as failed when compilation rejects unsupported target OS", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_123",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_123",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2839,13 +2928,12 @@ describe("processWorkspaceBuildJobEffect", () => {
       const error = yield* processWorkspaceBuildJobEffect(
         baseOptions({
           jobId: "job_123",
-          registryClient: {} as RegistryClient,
+          registryClient: fakeService<RegistryClient>({}),
           compileWorkspaceSpec: vi.fn(async () => {
-            const failure = new Error(
-              "No compiler is available for target.os.family 'fedora'.",
-            ) as Error & { code: string };
-            failure.code = "unsupported-os";
-            throw failure;
+            throw Object.assign(
+              new Error("No compiler is available for target.os.family 'fedora'."),
+              { code: "unsupported-os" },
+            );
           }),
         }),
       ).pipe(Effect.flip);
@@ -2864,16 +2952,17 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("fails unavailable selection before building or recording publication success", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_123",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          runtimeFamily: "k8s",
-          runtimeMode: "require",
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_123",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            runtimeFamily: "k8s",
+            runtimeMode: "require",
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2897,17 +2986,18 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("fails the launch when the GitHub integration is unavailable", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_no_integration",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          url: "https://github.com/sealant-ops/core.git",
-          authRef: "github-installation-repository:gh_installation_repo_1",
-          osFamily: "nix",
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_no_integration",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            url: "https://github.com/sealant-ops/core.git",
+            authRef: "github-installation-repository:gh_installation_repo_1",
+            osFamily: "nix",
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2931,17 +3021,18 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("fails the launch when the GitHub installation repository is unavailable", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_unknown_repo",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          url: "https://github.com/sealant-ops/core.git",
-          authRef: "github-installation-repository:gh_unknown_repo",
-          osFamily: "nix",
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_unknown_repo",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            url: "https://github.com/sealant-ops/core.git",
+            authRef: "github-installation-repository:gh_unknown_repo",
+            osFamily: "nix",
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -2970,17 +3061,18 @@ describe("processWorkspaceBuildJobEffect", () => {
 
   it.effect("records a failed runtime instance when the GitHub installation is inactive", () => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_inactive",
-        runId: "run_inactive",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({
-          url: "https://github.com/sealant-ops/core.git",
-          authRef: "github-installation-repository:gh_installation_repo_1",
-          osFamily: "nix",
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_inactive",
+          runId: "run_inactive",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({
+            url: "https://github.com/sealant-ops/core.git",
+            authRef: "github-installation-repository:gh_installation_repo_1",
+            osFamily: "nix",
+          }),
         }),
-      }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -3021,21 +3113,22 @@ describe("a worker lost after its capture executor started (review 3 #6)", () =>
     // Review 3 #6: the worker was interrupted after `onStarted` recorded the executor; the row
     // stayed `pending` after the job succeeded, outside every preservation sweep.
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_interrupted",
-        runId: "run_interrupted",
-        repository: "sealant/workspaces/demo",
-        tag: "capture",
-        requestPayload: {
-          ...createWorkspaceBuildSpec({ osFamily: "nix" }),
-          sources: {
-            workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
-            inputs: [],
-            mounts: [],
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_interrupted",
+          runId: "run_interrupted",
+          repository: "sealant/workspaces/demo",
+          tag: "capture",
+          requestPayload: {
+            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+            sources: {
+              workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+              inputs: [],
+              mounts: [],
+            },
           },
-        },
-        secretEnvSealed: SEALED_CAPTURE_TOKEN,
-      }),
+          secretEnvSealed: SEALED_CAPTURE_TOKEN,
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -3091,21 +3184,22 @@ describe("a worker lost after its capture executor started (review 3 #6)", () =>
 describe("a launch never waits past its runtime's preservation start (review 4 #6)", () => {
   const captureJob = (jobId: string, runId: string) =>
     workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: jobId,
-        runId,
-        repository: "sealant/workspaces/demo",
-        tag: "capture",
-        requestPayload: {
-          ...createWorkspaceBuildSpec({ osFamily: "nix" }),
-          sources: {
-            workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
-            inputs: [],
-            mounts: [],
+      claimJobById: () =>
+        buildJobRow({
+          id: jobId,
+          runId,
+          repository: "sealant/workspaces/demo",
+          tag: "capture",
+          requestPayload: {
+            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+            sources: {
+              workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+              inputs: [],
+              mounts: [],
+            },
           },
-        },
-        secretEnvSealed: SEALED_CAPTURE_TOKEN,
-      }),
+          secretEnvSealed: SEALED_CAPTURE_TOKEN,
+        }),
     });
   /** An executor that starts (its deadline reported) and whose readiness never comes. */
   const neverReady = (deadline: string) =>
@@ -3161,7 +3255,7 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
     const attempts = {
       ...workspaceAttemptRepoStub(),
       getAttemptById: vi.fn((id: string) =>
-        Effect.succeed({ id, ownerUserId: "user_1", launchId: "launch-named" }),
+        Effect.succeed(attemptRow({ id, ownerUserId: "user_1", launchId: "launch-named" })),
       ),
     };
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
@@ -3235,20 +3329,20 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
   it("writes nothing over a launch its adopter took over, and keeps its launch material", async () => {
     const jobs = captureJob("job_adopted", "run_adopted");
     const attempts = workspaceAttemptRepoStub();
-    const upserts: Array<Record<string, unknown>> = [];
+    const upserts: UpsertWorkspaceRuntimeInstanceInput[] = [];
     const runtimeInstances = {
       ...workspaceRuntimeInstanceRepoStub(),
-      upsertRuntimeInstance: vi.fn((input: Record<string, unknown>) => {
+      upsertRuntimeInstance: vi.fn((input: UpsertWorkspaceRuntimeInstanceInput) => {
         upserts.push(input);
         // Every write fenced on the launch ownership finds it taken (the row was adopted).
-        return input["fenceLaunchOwner"] !== undefined && input["status"] === "failed"
+        return input.fenceLaunchOwner !== undefined && input.status === "failed"
           ? Effect.fail(
               new WorkspaceRuntimeInstanceRepoInvariantError({
                 operation: "upsertRuntimeInstance",
                 message: LAUNCH_OWNERSHIP_LOST_MESSAGE,
               }),
             )
-          : Effect.succeed({});
+          : Effect.succeed(runtimeInstanceRow({ runId: input.runId }));
       }),
       renewLaunchLease: vi.fn(() => Effect.succeed(false)),
     };
@@ -3276,10 +3370,10 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
       ).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })), Effect.exit),
     );
     expect(Exit.isFailure(exit)).toBe(true);
-    const failed = upserts.filter((input) => input["status"] === "failed");
+    const failed = upserts.filter((input) => input.status === "failed");
     expect(failed.length).toBeGreaterThan(0);
     // Only fenced: never an unconditional failed write over the adopter's row.
-    expect(failed.every((input) => typeof input["fenceLaunchOwner"] === "string")).toBe(true);
+    expect(failed.every((input) => typeof input.fenceLaunchOwner === "string")).toBe(true);
     expect(attempts.markAttemptFailed).not.toHaveBeenCalled();
     expect(removed).toEqual([]);
     // The launch is its adopter's: nobody is told to stop it from here.
@@ -3290,20 +3384,21 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
 describe("the daemon build an executor boots, recorded at launch (review 3 #8)", () => {
   const launchWithDaemon = (sealantdImage: string) => {
     const jobs = workspaceBuildJobRepoStub({
-      claimJobById: () => ({
-        id: "job_daemon",
-        runId: "run_daemon",
-        repository: "sealant/workspaces/demo",
-        tag: "capture",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
-      }),
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_daemon",
+          runId: "run_daemon",
+          repository: "sealant/workspaces/demo",
+          tag: "capture",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        }),
     });
     const attempts = workspaceAttemptRepoStub();
     const runtimeInstances = workspaceRuntimeInstanceRepoStub();
     const planWorkspaceSpec = vi.fn(() => ({
       osFamily: "nix" as const,
       platform: "linux/amd64" as const,
-      imagePlan: {} as never,
+      imagePlan: plannedImage,
       containerfile: [
         "FROM nixos/nix:2.24.9",
         `COPY --chmod=755 --from=${sealantdImage} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
@@ -3356,7 +3451,7 @@ describe("processWorkspaceBuildJobEffect: the image-build phase", () => {
   const planned = {
     osFamily: "fedora" as const,
     platform: "linux/amd64" as const,
-    imagePlan: {} as never,
+    imagePlan: plannedImage,
     containerfile: "FROM fedora:41",
     planHash,
   };
@@ -3367,15 +3462,16 @@ describe("processWorkspaceBuildJobEffect: the image-build phase", () => {
     digestReference: "sha256:kept",
     digest: "sha256:kept",
   };
-  const job = () => ({
-    id: "job_phase",
-    runId: null,
-    registryId: "local",
-    repository: "session-cccc",
-    tag: "sdk-33333333",
-    requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
-    attemptCount: 1,
-  });
+  const job = () =>
+    buildJobRow({
+      id: "job_phase",
+      runId: null,
+      registryId: "local",
+      repository: "session-cccc",
+      tag: "sdk-33333333",
+      requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+      attemptCount: 1,
+    });
 
   it.effect(
     "uses the plan's image the store kept when no publish is on record, building nothing",

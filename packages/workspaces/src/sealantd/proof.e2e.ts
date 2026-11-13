@@ -116,7 +116,7 @@ describe("sealantd baked-image e2e proof", () => {
       "docker",
       ["exec", "-i", containerId, "socat", "-", `UNIX-CONNECT:${CONTROL_SOCKET}`],
       { stdio: ["pipe", "pipe", "pipe"] },
-    ) as ChildProcessWithoutNullStreams;
+    );
 
     // Adapt the child's (readable stdout, writable stdin) into a single Duplex transport.
     transport = Duplex.from({ readable: bridge.stdout, writable: bridge.stdin });

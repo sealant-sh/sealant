@@ -16,12 +16,11 @@ export const unwrapEffectCause = (cause: unknown): unknown => {
     typeof cause === "object" &&
     cause !== null &&
     "cause" in cause &&
-    (cause as { cause?: unknown }).cause !== undefined
+    cause.cause !== undefined &&
+    "name" in cause &&
+    (cause.name === "UnknownError" || cause.name === "UnknownException")
   ) {
-    const name = (cause as { name?: unknown }).name;
-    if (name === "UnknownError" || name === "UnknownException") {
-      return (cause as { cause: unknown }).cause;
-    }
+    return cause.cause;
   }
   return cause;
 };

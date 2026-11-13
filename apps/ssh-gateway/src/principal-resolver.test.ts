@@ -18,7 +18,7 @@ afterEach(() => {
 
 describe("createPrincipalResolver", () => {
   it("maps a 200 response to found with the principal id", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({
           principalId: "usr_local",
@@ -36,12 +36,12 @@ describe("createPrincipalResolver", () => {
     expect(result).toEqual({ kind: "found", principalId: "usr_local" });
 
     // The gateway token and the offered key blob must reach the API verbatim.
-    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
-    expect(url.toString()).toBe("http://127.0.0.1:4000/v1/ssh-keys/resolve-principal");
-    expect((init.headers as Record<string, string>)["x-sealant-gateway-token"]).toBe(
-      "test-gateway-token",
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url instanceof URL && url.href).toBe(
+      "http://127.0.0.1:4000/v1/ssh-keys/resolve-principal",
     );
-    expect(JSON.parse(init.body as string)).toEqual({
+    expect(new Headers(init?.headers).get("x-sealant-gateway-token")).toBe("test-gateway-token");
+    expect(typeof init?.body === "string" && JSON.parse(init.body)).toEqual({
       algo: "ssh-ed25519",
       publicKeyBase64: offeredKey.data.toString("base64"),
     });

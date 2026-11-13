@@ -5,7 +5,11 @@
  * (and reconstructed from a stored row by `eventRowToNormalized`); both the ingest path and the
  * rebuild path derive projections from it, which is what guarantees `projection == rebuild`.
  */
-import type { TelemetryEvent } from "@sealant/db";
+import type {
+  TelemetryEvent,
+  TelemetryLossSpanDetectedVia,
+  TelemetryLossSpanKind,
+} from "@sealant/db";
 
 /** The 12 EventEnvelope payload cases, plus `unknown` for an unmodeled/absent oneof. */
 export const payloadCaseValues = [
@@ -139,11 +143,11 @@ export interface LossReport {
   readonly watchOverflowCount: number;
   readonly earlyClose: boolean;
   readonly spans: ReadonlyArray<{
-    readonly kind: string;
+    readonly kind: TelemetryLossSpanKind;
     readonly fromSequence: bigint | null;
     readonly toSequence: bigint | null;
     readonly droppedCount: bigint | null;
-    readonly detectedVia: string;
+    readonly detectedVia: TelemetryLossSpanDetectedVia;
     readonly reason: string | null;
   }>;
 }

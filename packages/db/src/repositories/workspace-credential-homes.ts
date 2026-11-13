@@ -36,6 +36,7 @@ export class WorkspaceCredentialHomeBusyError extends Schema.TaggedError<Workspa
 const isLockTimeout = (cause: unknown, depth = 0): boolean => {
   if (depth > 6 || typeof cause !== "object" || cause === null) return false;
   if ("code" in cause && cause.code === "55P03") return true;
+  // oxlint-disable-next-line typescript/no-base-to-string -- matches whatever rendering the cause gives: Effect's Cause and SqlError define their own toString.
   if (/LockTimeoutError|lock timeout/.test(String(cause))) return true;
   return "cause" in cause ? isLockTimeout(cause.cause, depth + 1) : false;
 };

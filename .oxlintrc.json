@@ -17,6 +17,10 @@
     "import/no-cycle": "error",
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
+    // Off because they mostly flag deliberate patterns: functions that return on every path of an
+    // exhaustive switch, and deliberate spread copies of class instances.
+    "typescript/consistent-return": "off",
+    "typescript/no-misused-spread": "off",
     "unicorn/prefer-node-protocol": "error",
     "no-underscore-dangle": [
       "error",

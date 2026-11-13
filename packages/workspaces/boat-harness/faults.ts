@@ -133,7 +133,7 @@ const BIND = /boat-bind\.mjs/;
 
 export const scenarios = {
   /** Run 6's class: Boat accepts create, but the reply is lost. sealant must adopt the one VM. */
-  async createReplyLost(stack: HarnessStack, project: Project) {
+  createReplyLost: async (stack: HarnessStack, project: Project) => {
     let armed = true;
     await withFaults(
       stack,
@@ -163,7 +163,7 @@ export const scenarios = {
    * Boat's kind, code and request id, and sealant asks for the VM once, never retrying it as a
    * create whose outcome is unknown.
    */
-  async createRefused(stack: HarnessStack, project: Project) {
+  createRefused: async (stack: HarnessStack, project: Project) => {
     await withFaults(
       stack,
       {
@@ -200,7 +200,7 @@ export const scenarios = {
   },
 
   /** Boat never leaves provisioning. sealant must give up within its budget and delete the VM. */
-  async provisioningStuck(stack: HarnessStack, project: Project) {
+  provisioningStuck: async (stack: HarnessStack, project: Project) => {
     await withFaults(
       stack,
       {
@@ -217,7 +217,7 @@ export const scenarios = {
   },
 
   /** Run 7's class: bind exits non-zero in the guest. */
-  async bindExits(stack: HarnessStack, project: Project) {
+  bindExits: async (stack: HarnessStack, project: Project) => {
     await withFaults(
       stack,
       {
@@ -232,7 +232,7 @@ export const scenarios = {
   },
 
   /** A guest command that never finishes inside Boat's timeout. */
-  async bindTimesOut(stack: HarnessStack, project: Project) {
+  bindTimesOut: async (stack: HarnessStack, project: Project) => {
     await withFaults(stack, { command: commandFault(BIND, { kind: "timeout" }) }, () =>
       failedLaunch(stack, project, {
         cause: /bind|exchange|timed?[- ]?out|guest-command/i,
@@ -241,7 +241,7 @@ export const scenarios = {
   },
 
   /** Run 4's class: Boat drops the command's HTTP reply after it ran. */
-  async bindReplyDropped(stack: HarnessStack, project: Project) {
+  bindReplyDropped: async (stack: HarnessStack, project: Project) => {
     await withFaults(stack, { command: commandFault(BIND, { kind: "drop", afterMs: 2000 }) }, () =>
       failedLaunch(stack, project, { cause: /bind|exchange|transport/i }),
     );
@@ -253,7 +253,7 @@ export const scenarios = {
    * period: the sweep's own bind then wins `exchange -> control`. The launch must adopt that
    * result, not fail.
    */
-  async bindSlowerThanSweep(stack: HarnessStack, project: Project) {
+  bindSlowerThanSweep: async (stack: HarnessStack, project: Project) => {
     let first = true;
     await withFaults(
       stack,
@@ -286,7 +286,7 @@ export const scenarios = {
   },
 
   /** Run 8's class, on the agent: the bind succeeded, then nothing listens on the agent's port. */
-  async agentAbsent(stack: HarnessStack, project: Project) {
+  agentAbsent: async (stack: HarnessStack, project: Project) => {
     await withFaults(
       stack,
       {
@@ -338,7 +338,7 @@ export const scenarios = {
     },
 
   /** Run 11's class: dnsmasq starts 8 s late. sealant must wait for the gateway, not race it. */
-  async gatewaySlow(stack: HarnessStack, project: Project) {
+  gatewaySlow: async (stack: HarnessStack, project: Project) => {
     const image = (
       await dockerOk(["image", "inspect", "-f", "{{.Id}}", await slowGatewayImage()])
     ).trim();
@@ -357,7 +357,7 @@ export const scenarios = {
    * sealant may fail the launch with the gateway's cause, or recreate the gateway and go ready; a
    * ready launch must then have a new gateway and a working tunnel (`db:5432`), and stop cleanly.
    */
-  async gatewayCrashes(stack: HarnessStack, project: Project) {
+  gatewayCrashes: async (stack: HarnessStack, project: Project) => {
     let killed: string[] | undefined;
     let killedAt = 0;
     await withFaults(
@@ -436,7 +436,7 @@ export const scenarios = {
    * The agent refuses the tunnel's WebSocket carrier (`/sealant/tunnel` answers 503 through the
    * hosted proxy). The carried tunnel never attaches, so the launch must fail with that cause.
    */
-  async carrierRefused(stack: HarnessStack, project: Project) {
+  carrierRefused: async (stack: HarnessStack, project: Project) => {
     await withFaults(
       stack,
       {
@@ -451,7 +451,7 @@ export const scenarios = {
   },
 
   /** Run 9's preflight case: a person stopped `db`. The launch must not depend on it. */
-  async resourceStopped(stack: HarnessStack, project: Project) {
+  resourceStopped: async (stack: HarnessStack, project: Project) => {
     await project.scope.instances.stop("db", {
       kind: "person",
       by: "boat harness",
@@ -464,7 +464,7 @@ export const scenarios = {
   },
 
   /** S3: the worker dies between durable writes, here right after bind. A restart must converge. */
-  async workerKilled(stack: HarnessStack, project: Project) {
+  workerKilled: async (stack: HarnessStack, project: Project) => {
     let killed: Promise<void> | undefined;
     await withFaults(
       stack,
@@ -497,7 +497,7 @@ export const scenarios = {
    * Mend stops a session that became ready. The shared stop must drain FINAL over the daemon's
    * control channel, save, delete the VM and end the drain.
    */
-  async stopAfterLaunch(stack: HarnessStack, project: Project) {
+  stopAfterLaunch: async (stack: HarnessStack, project: Project) => {
     await readyThenStop(stack, project);
   },
 
@@ -506,7 +506,7 @@ export const scenarios = {
    * tunnel slot and publication pin are held. While Boat says `processing` the VM is not gone, so
    * sealant must keep both; once the deletion completes it must release them.
    */
-  async deletionStuck(stack: HarnessStack, project: Project) {
+  deletionStuck: async (stack: HarnessStack, project: Project) => {
     let stuck: string | undefined;
     await withFaults(
       stack,

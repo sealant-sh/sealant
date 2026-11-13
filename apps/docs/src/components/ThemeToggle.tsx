@@ -1,24 +1,17 @@
 import { type UserTheme, useTheme } from "../lib/ThemeProvider";
 import { Button } from "./ui/button";
 
-const themeConfig: Record<UserTheme, { icon: string; label: string }> = {
-  light: { icon: "☀️", label: "Light" },
-  dark: { icon: "🌙", label: "Dark" },
-  system: { icon: "💻", label: "System" },
+const themeConfig: Record<UserTheme, { icon: string; label: string; next: UserTheme }> = {
+  light: { icon: "☀️", label: "Light", next: "dark" },
+  dark: { icon: "🌙", label: "Dark", next: "system" },
+  system: { icon: "💻", label: "System", next: "light" },
 };
 
 export const ThemeToggle = () => {
   const { userTheme, setTheme } = useTheme();
 
-  const getNextTheme = () => {
-    const themes = Object.keys(themeConfig) as UserTheme[];
-    const currentIndex = themes.indexOf(userTheme);
-    const nextIndex = (currentIndex + 1) % themes.length;
-    return themes[nextIndex] ?? themes[0]!;
-  };
-
   return (
-    <Button onClick={() => setTheme(getNextTheme())} className="w-28">
+    <Button onClick={() => setTheme(themeConfig[userTheme].next)} className="w-28">
       <span className="not-system:light:inline hidden">
         {themeConfig.light.label}
         <span className="ml-1">{themeConfig.light.icon}</span>

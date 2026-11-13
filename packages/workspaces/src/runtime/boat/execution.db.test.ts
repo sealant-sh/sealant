@@ -426,8 +426,9 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
   it("delivers the same authenticated network intent after reply loss and refuses stale epochs, boots and replies", () =>
     test(async ({ executor, repo, target, guest }) => {
       await execute(executor.exchange(target));
+      const operationId: string = randomUUID();
       const input = {
-        network: { epoch: 1, operationId: String(randomUUID()), subnet: "10.98.0.32/27" },
+        network: { epoch: 1, operationId, subnet: "10.98.0.32/27" },
         privateKey: Redacted.make(Buffer.alloc(32, 4).toString("base64")),
         publicKey: Buffer.alloc(32, 5).toString("base64"),
         gatewayKey: Buffer.alloc(32, 6).toString("base64"),

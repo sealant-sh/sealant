@@ -2,6 +2,7 @@ import { Effect, Redacted, type Terminal } from "effect";
 import { Prompt } from "effect/cli";
 
 import { CliFailure } from "./errors.js";
+import { isTerminal } from "./render.js";
 
 /*
  * Prompt helpers with non-TTY degradation: every destructive/upload action gets an explicit
@@ -9,8 +10,7 @@ import { CliFailure } from "./errors.js";
  * instead of hanging on a prompt that can never be answered.
  */
 
-export const isInteractive = (): boolean =>
-  Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+export const isInteractive = (): boolean => isTerminal(process.stdin) && isTerminal(process.stdout);
 
 /** Consent gate: true with --yes, otherwise an interactive confirm (default no). */
 export const confirmStep = (options: {

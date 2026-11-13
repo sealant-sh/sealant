@@ -36,6 +36,7 @@ import {
   removeLabelled,
   type LabelledObjects,
 } from "./docker.js";
+import { describeFailure } from "./failure.js";
 import { FakeBoat } from "./fake-boat.js";
 import { RUN_ENV, acquireHostLock, keepLock, listRuns, releaseLock } from "./reap.js";
 
@@ -220,7 +221,7 @@ const waitFor = async <T>(
     }
     if (Date.now() > deadline)
       throw new Error(
-        `timed out waiting for ${what}${last === undefined ? "" : `: ${String(last)}`}`,
+        `timed out waiting for ${what}${last === undefined ? "" : `: ${describeFailure(last)}`}`,
       );
     await new Promise((done) => setTimeout(done, intervalMs));
   }

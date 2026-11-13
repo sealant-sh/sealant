@@ -11,6 +11,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { Predicate } from "effect";
+
 import type {
   CommandRunner,
   DeleteImageInput,
@@ -74,8 +76,9 @@ export class LocalDockerImageStore implements RegistryClient {
     return result.stdout
       .split("\n")
       .map((line) => line.split("\t"))
-      .filter(([name, tag]) => name === normalized && tag !== undefined && tag !== "<none>")
-      .map(([, tag]) => tag as string);
+      .flatMap(([name, tag]) =>
+        name === normalized && tag !== undefined && tag !== "<none>" ? [tag] : [],
+      );
   }
 
   public async getManifest(
@@ -85,9 +88,12 @@ export class LocalDockerImageStore implements RegistryClient {
     const imageReference = this.imageReference(repository, reference);
     try {
       const result = await this.commandRunner("docker", ["image", "inspect", imageReference]);
-      const [inspected] = JSON.parse(result.stdout) as Array<{ readonly Id?: string }>;
+      const parsed: unknown = JSON.parse(result.stdout);
+      const inspected: unknown = Array.isArray(parsed) ? parsed[0] : undefined;
       return {
-        ...(typeof inspected?.Id === "string" ? { digest: inspected.Id } : {}),
+        ...(Predicate.isObject(inspected) && typeof inspected["Id"] === "string"
+          ? { digest: inspected["Id"] }
+          : {}),
         contentType: "application/vnd.docker.engine.image.inspect+json",
         body: inspected ?? null,
       };

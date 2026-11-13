@@ -15,7 +15,9 @@
     "./testing/native-publications": "./src/testing/native-publications.ts",
     "./testing/workspace-publications": "./src/testing/workspace-publications.ts",
     "./testing/boat-runs": "./src/testing/boat-runs.ts",
-    "./testing/boat-tunnels": "./src/testing/boat-tunnels.ts"
+    "./testing/boat-tunnels": "./src/testing/boat-tunnels.ts",
+    "./testing/fake-service": "./src/testing/fake-service.ts",
+    "./testing/rows": "./src/testing/rows.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
@@ -24,7 +26,7 @@
     "db:seed": "tsx src/seed.ts",
     "db:studio": "drizzle-kit studio",
     "dev": "drizzle-kit studio",
-    "lint": "oxlint .",
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {

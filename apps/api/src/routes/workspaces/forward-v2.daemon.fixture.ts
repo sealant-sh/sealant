@@ -6,7 +6,14 @@ import { fileURLToPath } from "node:url";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
-import { WorkspaceRepo, WorkspaceRuntimeInstanceRepo, WorkspaceSessionRepo } from "@sealant/db";
+import {
+  AccessTokenRepo,
+  WorkspaceRepo,
+  WorkspaceRuntimeInstanceRepo,
+  WorkspaceSessionRepo,
+} from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runtimeInstanceRow, sessionRow, workspaceRow } from "@sealant/db/testing/rows";
 import {
   SealantRuntime,
   SealantRuntimeLive,
@@ -96,35 +103,53 @@ export const liveDaemonServices = (
   sessions: ReadonlyMap<string, LiveSession> = new Map(),
 ) =>
   Layer.mergeAll(
-    Layer.succeed(WorkspaceSessionRepo, {
-      getSessionById: (id: string) => {
-        const session = sessions.get(id);
-        return Effect.succeed(
-          session === undefined
-            ? undefined
-            : { id, workspaceId: LIVE_WORKSPACE, ownerUserId: LIVE_OWNER, ...session },
-        );
-      },
-    } as never),
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: (id: string) =>
-        Effect.succeed(
-          id === LIVE_WORKSPACE
-            ? { id, ownerUserId: LIVE_OWNER, latestRunId: "run_live" }
-            : undefined,
-        ),
-    } as never),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      getRuntimeInstanceByRunId: (runId: string) =>
-        Effect.succeed({
-          runId,
-          status: "ready",
-          adapter: "docker",
-          resourceId: "ctr_live",
-          reference: "ctr",
-          endpoint: null,
-        }),
-    } as never),
+    Layer.succeed(
+      WorkspaceSessionRepo,
+      fakeService({
+        getSessionById: (id: string) => {
+          const session = sessions.get(id);
+          return Effect.succeed(
+            session === undefined
+              ? undefined
+              : sessionRow({
+                  id,
+                  workspaceId: LIVE_WORKSPACE,
+                  ownerUserId: LIVE_OWNER,
+                  ...session,
+                }),
+          );
+        },
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService({
+        getWorkspaceById: (id: string) =>
+          Effect.succeed(
+            id === LIVE_WORKSPACE
+              ? workspaceRow({ id, ownerUserId: LIVE_OWNER, latestRunId: "run_live" })
+              : undefined,
+          ),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService({
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(
+            runtimeInstanceRow({
+              runId,
+              status: "ready",
+              adapter: "docker",
+              resourceId: "ctr_live",
+              reference: "ctr",
+              endpoint: null,
+            }),
+          ),
+      }),
+    ),
+    // A service-key caller presents no access token, so nothing here reads one.
+    Layer.succeed(AccessTokenRepo, fakeService({})),
     runtimeOn(daemon),
   );
 

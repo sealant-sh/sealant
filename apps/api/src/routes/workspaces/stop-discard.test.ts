@@ -12,16 +12,21 @@ import {
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type Workspace,
-  type WorkspaceAttempt,
   type WorkspaceAttemptRepoService,
   type WorkspaceBuildJob,
   type WorkspaceBuildJobRepoService,
-  type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainRepoService,
   type WorkspaceRepoService,
-  type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import {
+  attemptRow,
+  buildJobRow,
+  captureDrainRow,
+  runtimeInstanceRow,
+  workspaceRow,
+} from "@sealant/db/testing/rows";
 import { Effect, Layer, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -58,84 +63,97 @@ const harness = (
   const recoveries: string[] = [];
   const stops: string[] = [];
   const statuses: string[] = [];
-  const workspace = {
+  const workspace = workspaceRow({
     id: "ws_1",
     ownerUserId: "user_owner",
     status,
     latestRunId: "run_1",
-  } as Workspace;
+  });
   const layer = Layer.mergeAll(
-    Layer.succeed(WorkspaceAttemptRepo, {
-      getAttemptById: (id: string) =>
-        Effect.succeed({ id, launchId: options.launchId ?? null } as WorkspaceAttempt),
-      markAttemptCancelled: (input: { id: string; cancelReason: string }) => {
-        cancelledAttempts.push(input);
-        return Effect.succeed(null);
-      },
-    } as unknown as WorkspaceAttemptRepoService),
-    Layer.succeed(WorkspaceBuildJobRepo, {
-      getLatestJobByRunId: () =>
-        Effect.succeed(
-          options.launching === undefined
-            ? undefined
-            : ({
-                id: "job_1",
-                status: options.launching,
-                errorCode: options.launchErrorCode ?? null,
-              } as WorkspaceBuildJob),
-        ),
-      cancelUnbuiltJob: (input: { id: string }) => {
-        cancelledJobs.push(input.id);
-        return Effect.succeed({ id: input.id, status: "failed" } as WorkspaceBuildJob);
-      },
-    } as unknown as WorkspaceBuildJobRepoService),
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: () => Effect.succeed(workspace),
-      setWorkspaceStatus: (input: { status: string }) => {
-        statuses.push(input.status);
-        return Effect.succeed(workspace);
-      },
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      getRuntimeInstanceByRunId: () =>
-        Effect.succeed(
-          options.launching !== undefined
-            ? undefined
-            : ({
-                runId: "run_1",
-                status: "ready",
-                adapter: "docker",
-                resourceId: "container-1",
-                reference: "sealant-run-1",
-              } as WorkspaceRuntimeInstance),
-        ),
-    } as unknown as WorkspaceRuntimeInstanceRepoService),
-    Layer.succeed(WorkspaceCaptureDrainRepo, {
-      requestDiscard: (input: { runId: string; requestedBy: string }) => {
-        discards.push(input);
-        return Effect.succeed({} as WorkspaceCaptureDrain);
-      },
-      getByRunId: () =>
-        Effect.succeed(
-          options.observedEpoch === undefined
-            ? undefined
-            : ({
-                runId: "run_1",
-                lastStatus: { epoch: options.observedEpoch, ...options.observedStatus },
-                lastStatusAt: options.observedAt ?? null,
-              } as unknown as WorkspaceCaptureDrain),
-        ),
-      attestCompletion: (input: { runId: string; executorId: string; epoch: number }) => {
-        attestations.push(input);
-        return Effect.succeed({} as WorkspaceCaptureDrain);
-      },
-      requestRecovery: (runId: string) => {
-        recoveries.push(runId);
-        return Effect.succeed(
-          options.retained === true ? ({ runId } as WorkspaceCaptureDrain) : undefined,
-        );
-      },
-    } as unknown as WorkspaceCaptureDrainRepoService),
+    Layer.succeed(
+      WorkspaceAttemptRepo,
+      fakeService<WorkspaceAttemptRepoService>({
+        getAttemptById: (id: string) =>
+          Effect.succeed(attemptRow({ id, launchId: options.launchId ?? null })),
+        markAttemptCancelled: (input: { id: string; cancelReason: string }) => {
+          cancelledAttempts.push(input);
+          return Effect.succeed(null);
+        },
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceBuildJobRepo,
+      fakeService<WorkspaceBuildJobRepoService>({
+        getLatestJobByRunId: () =>
+          Effect.succeed(
+            options.launching === undefined
+              ? undefined
+              : buildJobRow({
+                  id: "job_1",
+                  status: options.launching,
+                  errorCode: options.launchErrorCode ?? null,
+                }),
+          ),
+        cancelUnbuiltJob: (input: { id: string }) => {
+          cancelledJobs.push(input.id);
+          return Effect.succeed(buildJobRow({ id: input.id, status: "failed" }));
+        },
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService<WorkspaceRepoService>({
+        getWorkspaceById: () => Effect.succeed(workspace),
+        setWorkspaceStatus: (input: { status: string }) => {
+          statuses.push(input.status);
+          return Effect.succeed(workspace);
+        },
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepoService>({
+        getRuntimeInstanceByRunId: () =>
+          Effect.succeed(
+            options.launching !== undefined
+              ? undefined
+              : runtimeInstanceRow({
+                  runId: "run_1",
+                  status: "ready",
+                  adapter: "docker",
+                  resourceId: "container-1",
+                  reference: "sealant-run-1",
+                }),
+          ),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceCaptureDrainRepo,
+      fakeService<WorkspaceCaptureDrainRepoService>({
+        requestDiscard: (input: { runId: string; requestedBy: string }) => {
+          discards.push(input);
+          return Effect.succeed(captureDrainRow({}));
+        },
+        getByRunId: () =>
+          Effect.succeed(
+            options.observedEpoch === undefined
+              ? undefined
+              : captureDrainRow({
+                  runId: "run_1",
+                  lastStatus: { epoch: options.observedEpoch, ...options.observedStatus },
+                  lastStatusAt: options.observedAt ?? null,
+                }),
+          ),
+        attestCompletion: (input: { runId: string; executorId: string; epoch: number }) => {
+          attestations.push(input);
+          return Effect.succeed(captureDrainRow({}));
+        },
+        requestRecovery: (runId: string) => {
+          recoveries.push(runId);
+          return Effect.succeed(options.retained === true ? captureDrainRow({ runId }) : undefined);
+        },
+      }),
+    ),
     Layer.succeed(WorkspaceLifecyclePublisherService, {
       publishStopRequested: ({ runId }) => {
         stops.push(runId);
@@ -265,15 +283,17 @@ describe("stopWorkspace · discardUnsaved", () => {
 
   it("reports the audit on the workspace's captureDrain", () => {
     expect(
-      mapWorkspaceCaptureDrain({
-        runId: "run_1",
-        state: "discarded",
-        detail: "unsaved captures discarded",
-        observedAt: now,
-        preservationStartsAt: null,
-        discardRequestedAt: now,
-        discardRequestedBy: "user_owner",
-      } as WorkspaceCaptureDrain),
+      mapWorkspaceCaptureDrain(
+        captureDrainRow({
+          runId: "run_1",
+          state: "discarded",
+          detail: "unsaved captures discarded",
+          observedAt: now,
+          preservationStartsAt: null,
+          discardRequestedAt: now,
+          discardRequestedBy: "user_owner",
+        }),
+      ),
     ).toEqual({
       state: "discarded",
       detail: "unsaved captures discarded",
@@ -459,7 +479,7 @@ describe("recoverWorkspace", () => {
   it("reports retention and an accepted attestation on the workspace's captureDrain", () => {
     expect(
       mapWorkspaceCaptureDrain(
-        {
+        captureDrainRow({
           runId: "run_1",
           state: "kept",
           detail: "not saved · retained · executor exited",
@@ -476,7 +496,7 @@ describe("recoverWorkspace", () => {
           completionEpoch: 3,
           completionCaptureN: 41,
           completionAttestedAt: now,
-        } as WorkspaceCaptureDrain,
+        }),
         { runId: "run_1", adapter: "k8s", resourceId: "ws-run-1", reference: "ws-run-1" },
       ),
     ).toMatchObject({

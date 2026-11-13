@@ -4,6 +4,8 @@
  *
  *   pnpm exec tsx packages/sdk/examples/demo-run.ts <workspaceId> <ownerUserId>
  */
+import { Predicate } from "effect";
+
 import { Sealant } from "../src/index.js";
 
 const baseUrl = process.env["SEALANT_BASE_URL"] ?? "http://127.0.0.1:4000";
@@ -38,7 +40,12 @@ if (!created.ok) {
   console.error("createRun failed:", created.status, await created.text());
   process.exit(1);
 }
-const { runId } = (await created.json()) as { runId: string };
+const createdBody: unknown = await created.json();
+const runId = Predicate.isObject(createdBody) ? createdBody["runId"] : undefined;
+if (typeof runId !== "string") {
+  console.error("createRun answered without a runId:", createdBody);
+  process.exit(1);
+}
 console.log("created run:", runId);
 
 const sealant = new Sealant({ baseUrl });

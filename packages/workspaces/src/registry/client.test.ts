@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import {
   createZotRegistryClient,
@@ -7,12 +7,20 @@ import {
   RegistryResponseTooLargeError,
 } from "./client.js";
 
+/** The URL (as text) and init a fetch double's call was given; it fails the test if there was none. */
+const fetchCall = (fetchMock: Mock<typeof fetch>, index = 0) => {
+  const call = fetchMock.mock.calls[index];
+  if (call === undefined) throw new Error(`fetch was called fewer than ${index + 1} times`);
+  const [input, init] = call;
+  return { url: input instanceof Request ? input.url : input.toString(), init: init ?? {} };
+};
+
 /** A client under a path prefix whose fetch must stay untouched by a refused name. */
 const neverFetched = () => {
-  const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+  const fetchMock = vi.fn<typeof fetch>(async () => new Response("{}", { status: 200 }));
   const client = createZotRegistryClient({
     baseUrl: "http://127.0.0.1:5000/registry",
-    fetch: fetchMock as unknown as typeof fetch,
+    fetch: fetchMock,
   });
   return { client, fetchMock };
 };
@@ -20,16 +28,16 @@ const neverFetched = () => {
 describe("ZotRegistryClient", () => {
   it("sends a base URL's userinfo as its Basic credential, never in a URL or an error", async () => {
     const SECRET = "registry-secret-marker";
-    const fetchMock = vi.fn(async () => new Response("unavailable", { status: 503 }));
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("unavailable", { status: 503 }));
     const client = createZotRegistryClient({
       baseUrl: `http://robot:${SECRET}@127.0.0.1:5000`,
-      fetch: fetchMock as typeof fetch,
+      fetch: fetchMock,
     });
 
     const failure = await client.ping().catch((error: unknown) => error);
 
-    const [requestUrl, requestInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
-    expect(requestUrl.toString()).toBe("http://127.0.0.1:5000/v2/");
+    const { url: requestUrl, init: requestInit } = fetchCall(fetchMock);
+    expect(requestUrl).toBe("http://127.0.0.1:5000/v2/");
     expect(new Headers(requestInit.headers).get("authorization")).toBe(
       `Basic ${Buffer.from(`robot:${SECRET}`).toString("base64")}`,
     );
@@ -41,22 +49,25 @@ describe("ZotRegistryClient", () => {
     const real = createZotRegistryClient({ baseUrl: `http://robot:${SECRET}@127.0.0.1:1` });
     const refused = await real.ping().catch((error: unknown) => error);
     expect(String(refused)).not.toContain(SECRET);
-    expect(String((refused as { cause?: unknown }).cause ?? "")).not.toContain(SECRET);
+    const cause = refused instanceof Error ? refused.cause : undefined;
+    expect(cause instanceof Error ? cause.toString() : (JSON.stringify(cause) ?? "")).not.toContain(
+      SECRET,
+    );
   });
 
   it("pings the OCI API root", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
     const client = createZotRegistryClient({
       baseUrl: "http://127.0.0.1:5000",
-      fetch: fetchMock as typeof fetch,
+      fetch: fetchMock,
     });
 
     await client.ping();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [requestUrl, requestInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    const { url: requestUrl, init: requestInit } = fetchCall(fetchMock);
 
-    expect(requestUrl.toString()).toBe("http://127.0.0.1:5000/v2/");
+    expect(requestUrl).toBe("http://127.0.0.1:5000/v2/");
     expect(requestInit).toMatchObject({
       method: "GET",
       headers: new Headers(),
@@ -67,10 +78,10 @@ describe("ZotRegistryClient", () => {
   });
 
   it("deletes a manifest by digest and treats an absent one as missing", async () => {
-    const fetchMock = vi.fn(async (url: URL) =>
-      url
-        .toString()
-        .endsWith("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    const fetchMock = vi.fn<typeof fetch>(async (input) =>
+      (input instanceof Request ? input.url : input.toString()).endsWith(
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      )
         ? new Response(null, { status: 404 })
         : new Response(null, { status: 202 }),
     );
@@ -79,7 +90,7 @@ describe("ZotRegistryClient", () => {
     });
     const client = createZotRegistryClient({
       baseUrl: "http://127.0.0.1:5000",
-      fetch: fetchMock as unknown as typeof fetch,
+      fetch: fetchMock,
       commandRunner,
     });
 
@@ -103,8 +114,8 @@ describe("ZotRegistryClient", () => {
       }),
     ).resolves.toBe("missing");
 
-    const [requestUrl, requestInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
-    expect(requestUrl.toString()).toBe(
+    const { url: requestUrl, init: requestInit } = fetchCall(fetchMock);
+    expect(requestUrl).toBe(
       "http://127.0.0.1:5000/v2/sealant-workspace-arch/manifests/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
     expect(requestInit.method).toBe("DELETE");
@@ -223,10 +234,8 @@ describe("ZotRegistryClient", () => {
     const client = createZotRegistryClient({
       baseUrl: "http://zot:5000",
       pushRegistry: "127.0.0.1:5000",
-      fetch: fetchMock as typeof fetch,
-      commandRunner: commandRunner as NonNullable<
-        Parameters<typeof createZotRegistryClient>[0]["commandRunner"]
-      >,
+      fetch: fetchMock,
+      commandRunner,
     });
 
     await expect(
@@ -283,7 +292,7 @@ describe("ZotRegistryClient", () => {
       "Upper/case",
       "a b",
       "a/b:tag",
-      `${"a".repeat(256)}`,
+      "a".repeat(256),
     ])("refuses repository %j without a request", async (repository) => {
       const { client, fetchMock } = neverFetched();
       await expect(client.listTags(repository)).rejects.toBeInstanceOf(RegistryNameError);
@@ -327,17 +336,15 @@ describe("ZotRegistryClient", () => {
     it("reads surrounding slashes as spelling, so a scheme-relative form stays a repository", async () => {
       const { client, fetchMock } = neverFetched();
       await client.listTags("//evil.example/x");
-      const [requestUrl] = fetchMock.mock.calls[0] as unknown as [URL];
-      expect(requestUrl.toString()).toBe(
-        "http://127.0.0.1:5000/registry/v2/evil.example/x/tags/list",
-      );
+      const { url: requestUrl } = fetchCall(fetchMock);
+      expect(requestUrl).toBe("http://127.0.0.1:5000/registry/v2/evil.example/x/tags/list");
     });
 
     it("keeps valid names under the registry's own /v2/ path", async () => {
       const { client, fetchMock } = neverFetched();
       await client.getManifest("/sealant/ws-1.arch__x/", `sha256:${"a".repeat(64)}`);
-      const [requestUrl] = fetchMock.mock.calls[0] as unknown as [URL];
-      expect(requestUrl.toString()).toBe(
+      const { url: requestUrl } = fetchCall(fetchMock);
+      expect(requestUrl).toBe(
         `http://127.0.0.1:5000/registry/v2/sealant/ws-1.arch__x/manifests/sha256:${"a".repeat(64)}`,
       );
     });
@@ -351,7 +358,7 @@ describe("ZotRegistryClient", () => {
       );
       const client = createZotRegistryClient({
         baseUrl: "http://127.0.0.1:5000",
-        fetch: fetchMock as unknown as typeof fetch,
+        fetch: fetchMock,
       });
       await expect(client.listTags("sealant/ws")).rejects.toMatchObject({ status: 307 });
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -361,11 +368,11 @@ describe("ZotRegistryClient", () => {
       const client = createZotRegistryClient({
         baseUrl: "http://127.0.0.1:5000",
         maxResponseBytes: 16,
-        fetch: (async () =>
+        fetch: async () =>
           new Response("{}", {
             status: 200,
             headers: { "content-length": "1000000" },
-          })) as unknown as typeof fetch,
+          }),
       });
       await expect(client.listTags("sealant/ws")).rejects.toBeInstanceOf(
         RegistryResponseTooLargeError,
@@ -383,7 +390,7 @@ describe("ZotRegistryClient", () => {
       const client = createZotRegistryClient({
         baseUrl: "http://127.0.0.1:5000",
         maxResponseBytes: 64,
-        fetch: (async () => new Response(endless, { status: 200 })) as unknown as typeof fetch,
+        fetch: async () => new Response(endless, { status: 200 }),
       });
       await expect(client.listTags("sealant/ws")).rejects.toBeInstanceOf(
         RegistryResponseTooLargeError,
@@ -395,10 +402,10 @@ describe("ZotRegistryClient", () => {
       const client = createZotRegistryClient({
         baseUrl: "http://127.0.0.1:5000",
         requestTimeoutMs: 20,
-        fetch: ((_url: URL, init?: RequestInit) =>
+        fetch: (_input, init) =>
           new Promise<Response>((_resolve, reject) => {
             init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
-          })) as unknown as typeof fetch,
+          }),
       });
       await expect(client.ping()).rejects.toMatchObject({ name: "TimeoutError" });
     });

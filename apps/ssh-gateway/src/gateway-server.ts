@@ -89,13 +89,7 @@ const toOfferedKeyVerifier = (keyData: Buffer): VerifyFunction | undefined => {
     return undefined;
   }
 
-  const key = Array.isArray(parsed) ? parsed[0] : parsed;
-
-  if (key === undefined || typeof key !== "object" || !("verify" in key)) {
-    return undefined;
-  }
-
-  return key.verify.bind(key) as VerifyFunction;
+  return parsed.verify.bind(parsed);
 };
 
 // POSIX signal names (as ssh2 delivers them, e.g. "INT") -> numbers the daemon's `signalProcess`

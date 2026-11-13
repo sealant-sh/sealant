@@ -29,20 +29,12 @@ import {
   SessionUnauthorizedError,
 } from "@sealant/api-contracts";
 import { SealantRuntime } from "@sealant/workspaces";
-import { Effect, Fiber, FiberSet } from "effect";
+import { Effect, Fiber, FiberSet, Predicate } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
 import { admitRawRequest } from "../../services/service-principals.js";
 import { authorize, requireSession, resolveDaemonTarget } from "./sessions.module.js";
-
-/** Client → server control frames (text). Unknown shapes are ignored, not fatal. */
-interface ControlFrame {
-  readonly t?: string;
-  readonly cols?: number;
-  readonly rows?: number;
-  readonly signal?: number;
-}
 
 export const SessionAttachRoute = HttpRouter.add(
   "GET",
@@ -156,18 +148,21 @@ export const SessionAttachRoute = HttpRouter.add(
             if (typeof data !== "string") {
               return daemon.writeSessionInput(daemonSessionId, data).pipe(Effect.ignore);
             }
-            let frame: ControlFrame;
+            let frame: unknown;
             try {
-              frame = JSON.parse(data) as ControlFrame;
+              frame = JSON.parse(data);
             } catch {
               return Effect.void;
             }
             if (
-              frame.t === "resize" &&
-              typeof frame.cols === "number" &&
-              typeof frame.rows === "number"
+              Predicate.isObject(frame) &&
+              frame["t"] === "resize" &&
+              typeof frame["cols"] === "number" &&
+              typeof frame["rows"] === "number"
             ) {
-              return daemon.resizePty(daemonSessionId, frame.cols, frame.rows).pipe(Effect.ignore);
+              return daemon
+                .resizePty(daemonSessionId, frame["cols"], frame["rows"])
+                .pipe(Effect.ignore);
             }
             return Effect.void;
           };

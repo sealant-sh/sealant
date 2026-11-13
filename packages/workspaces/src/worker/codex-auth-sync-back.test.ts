@@ -5,7 +5,12 @@ import {
   ConnectedAccountRepo,
   type ConnectedAccount,
   type ConnectedAccountRepoService,
+  type ReplaceConnectedAccountPayloadInput,
+  type UpdateConnectedAccountSyncStateInput,
+  ConnectedAccountRepoUnexpectedError,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { connectedAccountRow } from "@sealant/db/testing/rows";
 import { newWorkspaceSchema, type NewWorkspace } from "@sealant/validators";
 import { Effect, Layer } from "effect";
 import { vi } from "vitest";
@@ -22,7 +27,7 @@ const fakeCipher: CredentialCipherService = {
 };
 
 const createCodexAccount = (overrides: Partial<ConnectedAccount> = {}): ConnectedAccount =>
-  ({
+  connectedAccountRow({
     id: "cacc_codex",
     ownerUserId: "usr_1",
     provider: "codex",
@@ -40,16 +45,18 @@ const createCodexAccount = (overrides: Partial<ConnectedAccount> = {}): Connecte
     invalidAt: null,
     archivedAt: null,
     ...overrides,
-  }) as ConnectedAccount;
+  });
 
 const connectedAccountRepoStub = (account: ConnectedAccount | undefined) => ({
-  getById: vi.fn((_id: string) => Effect.succeed(account)),
-  replacePayload: vi.fn((_input: unknown) => Effect.succeed(account)),
-  updateSyncState: vi.fn((_input: unknown) => Effect.succeed(account)),
+  getById: vi.fn((_id: string) =>
+    Effect.succeed(account === undefined ? undefined : { ...account, isDefault: false }),
+  ),
+  replacePayload: vi.fn((_input: ReplaceConnectedAccountPayloadInput) => Effect.succeed(account)),
+  updateSyncState: vi.fn((_input: UpdateConnectedAccountSyncStateInput) => Effect.succeed(account)),
 });
 
-const provideAccounts = (stub: unknown) =>
-  Layer.succeed(ConnectedAccountRepo, stub as ConnectedAccountRepoService);
+const provideAccounts = (stub: Partial<ConnectedAccountRepoService>) =>
+  Layer.succeed(ConnectedAccountRepo, fakeService(stub));
 
 const codexBlueprint: NewWorkspace = newWorkspaceSchema.parse({
   sources: { workspace: { url: "https://github.com/example/repo.git" } },
@@ -145,6 +152,8 @@ describe("syncBackCodexAuthJson", () => {
         encryptedPayload: `sealed:${expectedPlaintext}`,
         encryptionKeyId: "k-test",
         payloadSha256: sha256Hex(expectedPlaintext),
+        // A stored account always carries its revision, and the write is fenced on it.
+        expectedRevision: 1,
         metadata: expect.objectContaining({
           lastRefresh: "2026-07-04T12:00:00.000Z",
           // Pre-existing metadata untouched by the parse survives the merge.
@@ -248,8 +257,18 @@ describe("syncBackCodexAuthJson", () => {
 
   it.effect("degrades to a warning when the repo write fails", () => {
     const accounts = {
-      getById: vi.fn((_id: string) => Effect.succeed(createCodexAccount())),
-      replacePayload: vi.fn((_input: unknown) => Effect.fail(new Error("db down"))),
+      getById: vi.fn((_id: string) =>
+        Effect.succeed({ ...createCodexAccount(), isDefault: false }),
+      ),
+      replacePayload: vi.fn((_input: unknown) =>
+        Effect.fail(
+          new ConnectedAccountRepoUnexpectedError({
+            operation: "replacePayload",
+            message: "db down",
+            cause: new Error("db down"),
+          }),
+        ),
+      ),
       updateSyncState: vi.fn((_input: unknown) => Effect.succeed(undefined)),
     };
 
@@ -358,8 +377,18 @@ describe("persistCodexAuthJsonIfNewer", () => {
 
   it.effect("reports 'failed' (never throwing) when the repo write crashes", () => {
     const accounts = {
-      getById: vi.fn((_id: string) => Effect.succeed(createCodexAccount())),
-      replacePayload: vi.fn((_input: unknown) => Effect.fail(new Error("db down"))),
+      getById: vi.fn((_id: string) =>
+        Effect.succeed({ ...createCodexAccount(), isDefault: false }),
+      ),
+      replacePayload: vi.fn((_input: unknown) =>
+        Effect.fail(
+          new ConnectedAccountRepoUnexpectedError({
+            operation: "replacePayload",
+            message: "db down",
+            cause: new Error("db down"),
+          }),
+        ),
+      ),
       updateSyncState: vi.fn((_input: unknown) => Effect.succeed(undefined)),
     };
 

@@ -217,7 +217,7 @@ const fakeEndpoint = (
       headers[key] = value;
     });
     const request: RecordedRequest = {
-      url: String(input),
+      url: input instanceof Request ? input.url : input.toString(),
       method: init?.method,
       headers,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,

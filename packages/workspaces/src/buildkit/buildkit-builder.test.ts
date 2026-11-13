@@ -810,9 +810,9 @@ describe("compileWorkspaceBuildSpec", () => {
       },
     });
 
-    const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
-    const saveCommandArgs = (commandRunner.mock.calls[1]?.[1] ?? []) as string[];
-    const probeCommandArgs = (commandRunner.mock.calls[2]?.[1] ?? []) as string[];
+    const buildCommandArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+    const saveCommandArgs = commandRunner.mock.calls[1]?.[1] ?? [];
+    const probeCommandArgs = commandRunner.mock.calls[2]?.[1] ?? [];
     expect(commandRunner).toHaveBeenCalledTimes(3);
     expect(buildCommandArgs.slice(0, 9)).toEqual([
       "build",
@@ -950,7 +950,7 @@ describe("compileWorkspaceBuildSpec", () => {
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
     const containerfile = await readFile(containerfilePath, "utf8");
-    const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
+    const buildCommandArgs = commandRunner.mock.calls[0]?.[1] ?? [];
 
     expect(containerfile).toContain("RUN sed -i 's/^DownloadUser/#DownloadUser/' /etc/pacman.conf");
     expect(containerfile).toContain(`RUN npm install -g @openai/codex@${HARNESS_VERSIONS.codex}`);

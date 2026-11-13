@@ -5,6 +5,7 @@
  * from the pushed digest.
  */
 import type { V1ConfigMap, V1Job, V1JobStatus, V1Pod, V1Secret } from "@kubernetes/client-node";
+import { fakeService } from "@sealant/db/testing/fake-service";
 import type { WorkspaceImageProbe } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
@@ -144,20 +145,20 @@ const fake = (): Fake => {
 const readers = (api: Fake): V1Job[] =>
   api.created.filter((job) => job.metadata?.labels?.[LABEL_COMPONENT] === COMPONENT_IMAGE_PROBE);
 
-const registry = (
-  digest: string | null,
-): RegistryClient & { headManifest: ReturnType<typeof vi.fn> } =>
-  ({
-    ping: vi.fn(),
-    repositoryExists: vi.fn(),
-    listTags: vi.fn(),
-    getManifest: vi.fn(),
-    headManifest: vi.fn(async () => digest),
-    discoverExtensions: vi.fn(),
-    publishOciImage: vi.fn(async () => {
-      throw new Error("the Kubernetes builder must never call publishOciImage");
+const registry = (digest: string | null) =>
+  Object.assign(
+    fakeService<RegistryClient>({
+      ping: vi.fn(),
+      repositoryExists: vi.fn(),
+      listTags: vi.fn(),
+      getManifest: vi.fn(),
+      discoverExtensions: vi.fn(),
+      publishOciImage: vi.fn(async () => {
+        throw new Error("the Kubernetes builder must never call publishOciImage");
+      }),
     }),
-  }) as unknown as RegistryClient & { headManifest: ReturnType<typeof vi.fn> };
+    { headManifest: vi.fn(async (_repository: string, _reference: string) => digest) },
+  );
 
 const builderFor = (
   api: Fake,

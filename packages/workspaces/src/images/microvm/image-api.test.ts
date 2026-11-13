@@ -19,6 +19,7 @@ const ARN = `arn:aws:lambda:eu-central-1:123456789012:microvm-image:${NAME}`;
 const stubbed = (answer: (command: unknown) => unknown) => {
   const client = new LambdaMicrovmsClient({ region: "eu-central-1" });
   const sent: unknown[] = [];
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the client's send is overloaded per command; this stub answers every command, which no single overload describes.
   vi.spyOn(client, "send").mockImplementation((async (command: unknown) => {
     sent.push(command);
     return answer(command);

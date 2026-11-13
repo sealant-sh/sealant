@@ -348,7 +348,7 @@ function CheckboxField({
     >
       <Checkbox
         aria-invalid={isInvalid || undefined}
-        checked={Boolean(field.state.value)}
+        checked={field.state.value}
         className={controlClassName}
         disabled={disabled}
         id={inputId}
@@ -401,7 +401,7 @@ function SwitchField({
     >
       <Switch
         aria-invalid={isInvalid || undefined}
-        checked={Boolean(field.state.value)}
+        checked={field.state.value}
         className={controlClassName}
         disabled={disabled}
         id={inputId}

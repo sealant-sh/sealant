@@ -9,7 +9,7 @@ export const Route = createFileRoute("/_authenticated/profiles/$profileId/env-va
 });
 
 function ProfileEnvVariablesPage() {
-  const profile = Route.useLoaderData() as ReturnType<typeof getProfileById>;
+  const profile = Route.useLoaderData();
 
   return (
     <ProfileDetailSection

@@ -33,7 +33,7 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { EndpointUrl } from "@sealant/api-contracts";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Predicate } from "effect";
 
 import type { Exchange } from "./exchange.js";
 import {
@@ -180,10 +180,7 @@ const buildCallerToolServer = (
     tools: tools.map((tool) => ({
       name: tool.name,
       description: tool.description ?? "",
-      inputSchema:
-        typeof tool.inputSchema === "object" && tool.inputSchema !== null
-          ? (tool.inputSchema as Record<string, unknown>)
-          : { type: "object" },
+      inputSchema: Predicate.isObject(tool.inputSchema) ? tool.inputSchema : { type: "object" },
     })),
   }));
   server.server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -323,10 +320,11 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
     const sessionId = `inf_${randomUUID()}`;
     const state = new InferenceSessionState(sessionId);
 
-    const useNativeStructuredOutput =
-      input.responseFormat?.type === "json" &&
-      typeof input.responseFormat.schema === "object" &&
-      input.responseFormat.schema !== null;
+    const nativeSchema =
+      input.responseFormat?.type === "json" && Predicate.isObject(input.responseFormat.schema)
+        ? input.responseFormat.schema
+        : undefined;
+    const useNativeStructuredOutput = nativeSchema !== undefined;
     const jsonByInstruction = input.responseFormat?.type === "json" && !useNativeStructuredOutput;
 
     const system = [
@@ -378,14 +376,9 @@ const makeClaudeEngine = (options: ClaudeEngineOptions = {}): InferenceEngineSer
           },
           // Auto-approve exactly the caller's tools; nothing else exists to approve.
           allowedTools: input.tools.map((tool) => `mcp__${CALLER_SERVER_NAME}__${tool.name}`),
-          ...(useNativeStructuredOutput
-            ? {
-                outputFormat: {
-                  type: "json_schema" as const,
-                  schema: input.responseFormat?.schema as Record<string, unknown>,
-                },
-              }
-            : {}),
+          ...(nativeSchema === undefined
+            ? {}
+            : { outputFormat: { type: "json_schema" as const, schema: nativeSchema } }),
         },
       });
     } catch (error) {

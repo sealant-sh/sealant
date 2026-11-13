@@ -64,6 +64,7 @@ const makeStub = (): { client: ControlPlaneClient; calls: StubCalls } => {
     },
   };
   // The derived `ControlPlaneClient` surface is far wider; the narrowing cast is test-only.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
   const client = { system, sshKeys } as unknown as ControlPlaneClient;
   return { client, calls };
 };

@@ -1,9 +1,12 @@
 import {
   GitHubInstallationRepo,
   GitHubInstallationRepositoryCacheRepo,
+  type GitHubAppInstallation,
   type GitHubInstallationRepoService,
   type GitHubInstallationRepositoryCacheRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { githubInstallationRepositoryRow, githubInstallationRow } from "@sealant/db/testing/rows";
 import { newWorkspaceSchema } from "@sealant/validators";
 import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
@@ -33,7 +36,7 @@ const specWithDotfilesAuthRef = (authRef: string, url = "https://github.com/o/do
     harness: { id: "claude-code" },
   });
 
-const installationRepositoryRecord = {
+const installationRepositoryRecord = githubInstallationRepositoryRow({
   id: "ghrepo_1",
   installationId: "ghinst_1",
   repositoryId: "repo_1",
@@ -42,26 +45,25 @@ const installationRepositoryRecord = {
   fullName: "o/dots",
   defaultBranch: "main",
   removedAt: null,
-};
+});
 
 const stubLayers = (overrides: {
   readonly record?: typeof installationRepositoryRecord | undefined;
-  readonly installationStatus?: string;
+  readonly installationStatus?: GitHubAppInstallation["status"];
   readonly hasGrant?: boolean;
 }) => {
-  const installations = {
+  const installations = fakeService<GitHubInstallationRepoService>({
     getInstallationById: (_id: string) =>
-      Effect.succeed({
-        id: "ghinst_1",
-        status: overrides.installationStatus ?? "active",
-      }),
+      Effect.succeed(
+        githubInstallationRow({ id: "ghinst_1", status: overrides.installationStatus ?? "active" }),
+      ),
     userHasInstallationGrant: (_input: { installationId: string; userId: string }) =>
       Effect.succeed(overrides.hasGrant ?? true),
-  } as unknown as GitHubInstallationRepoService;
-  const installationRepositories = {
+  });
+  const installationRepositories = fakeService<GitHubInstallationRepositoryCacheRepoService>({
     getInstallationRepositoryById: (_id: string) =>
       Effect.succeed("record" in overrides ? overrides.record : installationRepositoryRecord),
-  } as unknown as GitHubInstallationRepositoryCacheRepoService;
+  });
   return Layer.mergeAll(
     Layer.succeed(GitHubInstallationRepo, installations),
     Layer.succeed(GitHubInstallationRepositoryCacheRepo, installationRepositories),
@@ -161,10 +163,10 @@ describe("client-supplied authRefs", () => {
     });
     // Empty stubs: any repository call would throw, proving none happens.
     const layers = Layer.mergeAll(
-      Layer.succeed(GitHubInstallationRepo, {} as unknown as GitHubInstallationRepoService),
+      Layer.succeed(GitHubInstallationRepo, fakeService<GitHubInstallationRepoService>({})),
       Layer.succeed(
         GitHubInstallationRepositoryCacheRepo,
-        {} as unknown as GitHubInstallationRepositoryCacheRepoService,
+        fakeService<GitHubInstallationRepositoryCacheRepoService>({}),
       ),
     );
     const result = await run(spec, layers);

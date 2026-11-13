@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 
 import type { SealantForwardChannel } from "@sealant/workspaces";
-import { Effect } from "effect";
+import { Effect, Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { relayBoundedForward } from "./forward-relay.js";
@@ -32,7 +32,7 @@ class BackedUpSocket extends EventEmitter {
   }
 
   progress() {
-    return this.texts.filter((text) => (text as { t?: string }).t === "progress");
+    return this.texts.filter((text) => Predicate.isObject(text) && text["t"] === "progress");
   }
 }
 

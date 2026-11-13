@@ -48,21 +48,32 @@ const toJsonSafe = (value: unknown): Record<string, unknown> => {
   return isRecord(cloned) ? cloned : {};
 };
 
-const streamLabel = (stream: number): string => {
-  switch (stream) {
-    case StreamKind.STDOUT:
-      return "stdout";
-    case StreamKind.STDERR:
-      return "stderr";
-    case StreamKind.STDIN:
-      return "stdin";
-    case StreamKind.PTY_OUTPUT:
-      return "pty-out";
-    case StreamKind.PTY_INPUT:
-      return "pty-in";
-    default:
-      return `stream:${stream}`;
+const STREAM_LABELS: ReadonlyMap<number, string> = new Map([
+  [StreamKind.STDOUT, "stdout"],
+  [StreamKind.STDERR, "stderr"],
+  [StreamKind.STDIN, "stdin"],
+  [StreamKind.PTY_OUTPUT, "pty-out"],
+  [StreamKind.PTY_INPUT, "pty-in"],
+]);
+
+const streamLabel = (stream: number): string => STREAM_LABELS.get(stream) ?? `stream:${stream}`;
+
+/**
+ * A payload field as summary text. Well-formed payload fields are JSON scalars, which read as
+ * `String` would; an object or array (never expected) reads as its JSON.
+ */
+const fieldText = (value: unknown): string => {
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "bigint" ||
+    typeof value === "boolean" ||
+    value === null ||
+    value === undefined
+  ) {
+    return String(value);
   }
+  return JSON.stringify(value);
 };
 
 /**
@@ -93,32 +104,32 @@ const processArgCount = (payload: Record<string, unknown>): number => {
 export const summarize = (payloadCase: PayloadCase, payload: Record<string, unknown>): string => {
   switch (payloadCase) {
     case "ioChunk":
-      return `${streamLabel(asNumber(payload.stream))} ${String(payload.byteCount ?? "0")}B @${String(payload.streamOffset ?? "0")}`;
+      return `${streamLabel(asNumber(payload.stream))} ${fieldText(payload.byteCount ?? "0")}B @${fieldText(payload.streamOffset ?? "0")}`;
     case "processStarted": {
       // Never the arguments themselves: only how many there were (see `withholdProcessArgs`).
       const argCount = processArgCount(payload);
-      return `exec ${String(payload.executable ?? "?")}${argCount === 0 ? "" : ` (${argCount} ${argCount === 1 ? "argument" : "arguments"} not recorded)`}`;
+      return `exec ${fieldText(payload.executable ?? "?")}${argCount === 0 ? "" : ` (${argCount} ${argCount === 1 ? "argument" : "arguments"} not recorded)`}`;
     }
     case "processExited":
-      return `exit code=${payload.exitCode === undefined ? "?" : String(payload.exitCode)}${payload.signal === undefined ? "" : ` signal=${String(payload.signal)}`} reason=${String(payload.reason ?? 0)}`;
+      return `exit code=${payload.exitCode === undefined ? "?" : fieldText(payload.exitCode)}${payload.signal === undefined ? "" : ` signal=${fieldText(payload.signal)}`} reason=${fieldText(payload.reason ?? 0)}`;
     case "networkRequest":
-      return `${String(payload.method ?? "?")} ${String(payload.host ?? "?")}:${String(payload.port ?? 0)}${String(payload.path ?? "")}${payload.status === undefined ? "" : ` -> ${String(payload.status)}`}`;
+      return `${fieldText(payload.method ?? "?")} ${fieldText(payload.host ?? "?")}:${fieldText(payload.port ?? 0)}${fieldText(payload.path ?? "")}${payload.status === undefined ? "" : ` -> ${fieldText(payload.status)}`}`;
     case "networkSourceObserved":
-      return `observed ${String(payload.host ?? "?")}:${String(payload.port ?? 0)}`;
+      return `observed ${fieldText(payload.host ?? "?")}:${fieldText(payload.port ?? 0)}`;
     case "fileChange":
-      return `file kind=${String(payload.kind ?? 0)} ${String(payload.path ?? "")}`;
+      return `file kind=${fieldText(payload.kind ?? 0)} ${fieldText(payload.path ?? "")}`;
     case "fileDiffAvailable":
-      return `diff +${String(payload.added ?? 0)} ~${String(payload.modified ?? 0)} -${String(payload.deleted ?? 0)}`;
+      return `diff +${fieldText(payload.added ?? 0)} ~${fieldText(payload.modified ?? 0)} -${fieldText(payload.deleted ?? 0)}`;
     case "fileSnapshotCompleted":
-      return `snapshot ${String(payload.root ?? "")} (${String(payload.fileCount ?? 0)} files)`;
+      return `snapshot ${fieldText(payload.root ?? "")} (${fieldText(payload.fileCount ?? 0)} files)`;
     case "fileWatchOverflow":
-      return `watch overflow ${String(payload.root ?? "")}`;
+      return `watch overflow ${fieldText(payload.root ?? "")}`;
     case "runtimeStateChanged":
-      return `runtime state=${String(payload.state ?? 0)}${payload.reason === undefined ? "" : ` (${String(payload.reason)})`}`;
+      return `runtime state=${fieldText(payload.state ?? 0)}${payload.reason === undefined ? "" : ` (${fieldText(payload.reason)})`}`;
     case "runtimeHeartbeat":
-      return `heartbeat state=${String(payload.state ?? 0)}`;
+      return `heartbeat state=${fieldText(payload.state ?? 0)}`;
     case "telemetryDropped":
-      return `dropped ${String(payload.count ?? 0)} (${String(payload.reason ?? "")})`;
+      return `dropped ${fieldText(payload.count ?? 0)} (${fieldText(payload.reason ?? "")})`;
     default:
       return "unknown event";
   }

@@ -437,8 +437,10 @@ const labelOf = (value: object): string => {
 };
 
 /** A fresh object with `entries` as own data fields (`__proto__` included, as a plain field). */
-const freshObject = (entries: Iterable<readonly [string, unknown]>): Record<string, unknown> => {
-  const out: Record<string, unknown> = {};
+const freshObject = <V = unknown>(
+  entries: Iterable<readonly [string, NoInfer<V>]>,
+): Record<string, V> => {
+  const out: Record<string, V> = {};
   for (const [key, value] of entries) {
     Object.defineProperty(out, key, {
       value,
@@ -460,7 +462,7 @@ const headersOf = (entries: Iterable<readonly [string, unknown]>): Record<string
       isCredentialName(name) ? REDACTED : redactCredentialsInText(value),
     ]);
   }
-  return freshObject(out) as Record<string, string>;
+  return freshObject<string>(out);
 };
 
 /** A plain object's own string-valued data fields (headers as Effect and Node keep them). */

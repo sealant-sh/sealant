@@ -7,7 +7,7 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "lint": "oxlint .",
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },

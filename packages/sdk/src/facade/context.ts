@@ -15,7 +15,7 @@ export const notImplementedAsyncIterable = <A>(
   [Symbol.asyncIterator]() {
     return {
       next: () => Promise.reject(error),
-      return: () => Promise.resolve({ done: true as const, value: undefined as never }),
+      return: () => Promise.resolve({ done: true as const, value: undefined }),
     };
   },
 });

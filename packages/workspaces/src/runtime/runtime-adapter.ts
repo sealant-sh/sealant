@@ -570,11 +570,8 @@ export const unregisteredRuntimeRefusal = (family: RuntimeAdapterId) => ({
   message: `No runtime adapter is registered for target.runtime.family '${family}'.`,
 });
 
-const createSelectionError = (code: string, message: string): Error & { code: string } => {
-  const error = new Error(message) as Error & { code: string };
-  error.code = code;
-  return error;
-};
+const createSelectionError = (code: string, message: string): Error & { code: string } =>
+  Object.assign(new Error(message), { code });
 
 const candidateAdapterIds = (
   blueprint: RuntimeAdapterBlueprint,

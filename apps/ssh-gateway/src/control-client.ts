@@ -1,13 +1,13 @@
+import type { Duplex } from "node:stream";
+
 import { SealantClient } from "@sealant/runtime-client";
 import type { Channel } from "@sealant/runtime-client";
 import {
   AttachMode,
-  type EnvVar,
-  type SessionOpened,
+  type CommandResult,
   type StreamAttached,
   type ForwardOpened,
   type SftpOpened,
-  type ProcessAttached,
 } from "@sealant/runtime-protocol";
 import {
   openControlTransport,
@@ -58,8 +58,12 @@ export interface ExecSession {
 }
 
 /** Convert an SSH env record into the daemon's repeated `EnvVar`. */
-const toEnvVars = (env: Record<string, string>): EnvVar[] =>
-  Object.entries(env).map(([key, value]) => ({ key, value }) as EnvVar);
+const toEnvVars = (env: Record<string, string>): Array<{ key: string; value: string }> =>
+  Object.entries(env).map(([key, value]) => ({ key, value }));
+
+/** A control command answered with a result other than the one it asked for. */
+const unexpectedResult = (expected: string, result: CommandResult["result"]): Error =>
+  new Error(`expected result ${expected}, got ${String(result.case)}`);
 
 /**
  * One control connection to a single sealantd instance, driven over the §2 transport. Owns the
@@ -85,11 +89,11 @@ export class ControlClient {
    * Build a control client over a pre-existing framed Duplex (test seam / future transports). The
    * `close` finalizer just destroys the stream; callers own its lifecycle.
    */
-  static fromStream(stream: NodeJS.ReadWriteStream): ControlClient {
+  static fromStream(stream: Duplex): ControlClient {
     const transport: ControlTransport = {
-      stream: stream as unknown as ControlTransport["stream"],
+      stream,
       close: () => {
-        (stream as unknown as { destroy: () => void }).destroy();
+        stream.destroy();
       },
     };
     const client = SealantClient.fromStream(transport.stream);
@@ -122,23 +126,22 @@ export class ControlClient {
     /** The Linux user the session runs as (a daemon that names `exec.user`); absent: root. */
     readonly user?: string | undefined;
   }): Promise<ShellSession> {
-    const opened = (await this.#requestResult(
-      {
-        case: "openSession",
-        value: {
-          executionId: input.executionId,
-          user: input.user,
-          shell: LOGIN_SHELL,
-          args: ["-l"],
-          cols: input.cols,
-          rows: input.rows,
-          term: input.term,
-          cwd: input.cwd,
-          env: toEnvVars(input.env),
-        },
+    const result = await this.#request({
+      case: "openSession",
+      value: {
+        executionId: input.executionId,
+        user: input.user,
+        shell: LOGIN_SHELL,
+        args: ["-l"],
+        cols: input.cols,
+        rows: input.rows,
+        term: input.term,
+        cwd: input.cwd,
+        env: toEnvVars(input.env),
       },
-      "sessionOpened",
-    )) as SessionOpened;
+    });
+    if (result.case !== "sessionOpened") throw unexpectedResult("sessionOpened", result);
+    const opened = result.value;
 
     const { channel } = await this.#attachSession(opened.sessionId);
     return { sessionId: opened.sessionId, processId: opened.processId, channel };
@@ -158,22 +161,21 @@ export class ControlClient {
     /** The Linux user the command runs as (a daemon that names `exec.user`); absent: root. */
     readonly user?: string | undefined;
   }): Promise<ExecSession> {
-    const attached = (await this.#requestResult(
-      {
-        case: "exec",
-        value: {
-          executionId: input.executionId,
-          user: input.user,
-          executable: LOGIN_SHELL,
-          args: ["-lc", input.command],
-          cwd: input.cwd,
-          env: toEnvVars(input.env),
-          stdin: true,
-          attach: true,
-        },
+    const result = await this.#request({
+      case: "exec",
+      value: {
+        executionId: input.executionId,
+        user: input.user,
+        executable: LOGIN_SHELL,
+        args: ["-lc", input.command],
+        cwd: input.cwd,
+        env: toEnvVars(input.env),
+        stdin: true,
+        attach: true,
       },
-      "processAttached",
-    )) as ProcessAttached;
+    });
+    if (result.case !== "processAttached") throw unexpectedResult("processAttached", result);
+    const attached = result.value;
 
     const channel = this.#client.openChannel(attached.channelId);
     return { processId: attached.processId, channel };
@@ -251,7 +253,7 @@ export class ControlClient {
 
   /** Resize a session's PTY (§3.3 window-change -> resizePty). */
   async resizePty(sessionId: string, cols: number, rows: number): Promise<void> {
-    await this.#requestResult({ case: "resizePty", value: { sessionId, cols, rows } }, undefined);
+    await this.#request({ case: "resizePty", value: { sessionId, cols, rows } });
   }
 
   /** Deliver a signal to a process/session leader (§3.3 signal -> signalProcess). */
@@ -261,7 +263,7 @@ export class ControlClient {
 
   /** Close a session (best-effort; teardown also happens when the control connection drops). */
   async closeSession(sessionId: string): Promise<void> {
-    await this.#requestResult({ case: "closeSession", value: { sessionId } }, undefined);
+    await this.#request({ case: "closeSession", value: { sessionId } });
   }
 
   /** Open a direct-TCP forward to `host:port` as a byte channel (§3.3 direct-tcpip -> openForward). */
@@ -304,13 +306,12 @@ export class ControlClient {
   }
 
   /**
-   * Drive a non-channel command via the SDK's low-level `request()` and (optionally) assert the
-   * result case, returning its value. Errors surface as the SDK's `SealantError`.
+   * Drive a non-channel command via the SDK's low-level `request()` and return its result, for the
+   * caller to narrow by case. Errors surface as the SDK's `SealantError`.
    */
-  async #requestResult(
+  async #request(
     command: Parameters<SealantClient["request"]>[0],
-    expect: string | undefined,
-  ): Promise<unknown> {
+  ): Promise<CommandResult["result"]> {
     const response = await this.#client.request(command);
     const outcome = response.outcome?.outcome;
     if (outcome?.case === "error") {
@@ -320,13 +321,6 @@ export class ControlClient {
     if (outcome?.case !== "ok") {
       throw new Error("control response had no outcome");
     }
-    if (expect === undefined) {
-      return undefined;
-    }
-    const result = outcome.value.result;
-    if (result.case !== expect) {
-      throw new Error(`expected result ${expect}, got ${String(result.case)}`);
-    }
-    return (result as { value: unknown }).value;
+    return outcome.value.result;
   }
 }

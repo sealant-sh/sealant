@@ -136,7 +136,7 @@ export const resolveDotfilesRuntimeEnv = Effect.fn("resolveDotfilesRuntimeEnv")(
   // A disabled apply must not mint a live token: the image carries no
   // SEALANT_DOTFILES_RUNTIME_APPLY, so an injected token would sit unused in the container env.
   if (!input.spec.customization.applyDotfiles) {
-    return {} as Record<string, string>;
+    return {};
   }
   const dotfilesSource = input.spec.sources.inputs.find((source) => source.purpose === "dotfiles");
 
@@ -151,11 +151,11 @@ export const resolveDotfilesRuntimeEnv = Effect.fn("resolveDotfilesRuntimeEnv")(
   });
 
   if (token === undefined) {
-    return {} as Record<string, string>;
+    return {};
   }
 
   return {
     SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
     SEALANT_DOTFILES_HTTP_TOKEN: token,
-  } as Record<string, string>;
+  };
 });

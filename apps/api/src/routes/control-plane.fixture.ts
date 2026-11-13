@@ -45,8 +45,10 @@ const controlPlane = <Tested extends ControlPlaneGroupName, Provided>(
         (handlers) =>
           // The builder is typed per endpoint name; driven untyped to stub them all without naming
           // each.
+          // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the handler builder is typed per endpoint name; this stubs every endpoint of the group by name at runtime.
           Object.keys(group.endpoints).reduce(
             (acc, endpoint) =>
+              // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the handler builder is typed per endpoint name; this stubs every endpoint of the group by name at runtime.
               (acc as { handle: (n: string, h: unknown) => unknown }).handle(endpoint, () =>
                 Effect.sync(() => options.reached?.(endpoint)).pipe(
                   Effect.andThen(Effect.die("not under test")),

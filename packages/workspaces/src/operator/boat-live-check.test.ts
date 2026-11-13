@@ -16,6 +16,7 @@ import {
   MendProofClient,
   runBoatLiveCheck,
   findProofFailure,
+  messageText,
   type ProofRuntime,
   type BoatProofServices,
 } from "./boat-live-check.js";
@@ -194,7 +195,7 @@ const fixture = async (
           client.send(JSON.stringify({ t: "end" }));
           return;
         }
-        const command = spawn("sh", ["-c", data.toString()], {
+        const command = spawn("sh", ["-c", messageText(data)], {
           cwd: generation === 1 ? source : child,
           stdio: ["ignore", "pipe", "ignore"],
         });

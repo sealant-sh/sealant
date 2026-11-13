@@ -15,6 +15,15 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { finalizeInteractiveRun } from "./run-recorder.js";
 
+/** A listening server's TCP address; it fails the test if the server is not on TCP. */
+const tcpAddress = (server: Server): AddressInfo => {
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("the server is not listening on TCP");
+  }
+  return address;
+};
+
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, encoding: "utf8" });
 
@@ -49,7 +58,7 @@ describe("finalizeInteractiveRun", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
-    const { port } = server.address() as AddressInfo;
+    const { port } = tcpAddress(server);
 
     await finalizeInteractiveRun({
       config: { apiBaseUrl: `http://127.0.0.1:${String(port)}`, gatewayToken: "t" },
@@ -126,6 +135,6 @@ const recordingApi = async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const { port } = server.address() as AddressInfo;
+  const { port } = tcpAddress(server);
   return { bodies, apiBaseUrl: `http://127.0.0.1:${String(port)}` };
 };

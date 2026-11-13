@@ -1,3 +1,5 @@
+import * as Rec from "effect/Record";
+
 export type HarnessId = "opencode" | "codex" | "claude-code" | "pi";
 
 /** The one-shot invocation for a prompt, resolved SERVER-SIDE (the single source of truth). */
@@ -117,10 +119,10 @@ export const imageHarnessIntegrations = (
   return baked.some((integration) => integration.id === primary.id) ? baked : [...baked, primary];
 };
 
-const harnessIds = new Set<HarnessId>(Object.keys(harnessIntegrations) as HarnessId[]);
+const harnessIds: ReadonlySet<string> = new Set(Rec.keys(harnessIntegrations));
 
 export const isHarnessId = (value: string): value is HarnessId => {
-  return harnessIds.has(value as HarnessId);
+  return harnessIds.has(value);
 };
 
 export const listHarnessIntegrations = (): readonly HarnessIntegration[] => {

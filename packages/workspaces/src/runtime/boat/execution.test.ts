@@ -1,6 +1,5 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 
 import { boatExecutionTargetSchema, boatNetworkIntentSchema } from "@sealant/validators";
 import { Effect, Redacted } from "effect";
@@ -248,10 +247,13 @@ const hosted = async (answers: Record<string, { status: number; body: string }>)
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("no address");
-  const local = `http://127.0.0.1:${String((address as AddressInfo).port)}`;
+  const local = `http://127.0.0.1:${String(address.port)}`;
   // The transport checks the hosted origin before it sends; the proxy itself is this server.
   vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) =>
-    realFetch(String(input).replace(HOSTED_ORIGIN, local), init),
+    realFetch(
+      (input instanceof Request ? input.url : input.toString()).replace(HOSTED_ORIGIN, local),
+      init,
+    ),
   );
   return { origin: HOSTED_ORIGIN, local, seen };
 };

@@ -2,7 +2,8 @@
  * Image retention for Lambda MicroVM images: the same keep rules as every other image, deleted with
  * `DeleteMicrovmImage` instead of through a registry, plus the builder's images no build job names.
  */
-import type { PublishedWorkspaceImage, WorkspaceBuildJob } from "@sealant/db";
+import type { DB, PublishedWorkspaceImage, WorkspaceBuildJob } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
 import { describe, expect, it, vi } from "vitest";
 
 import type { MicrovmImageDescription } from "../images/microvm/image-api.js";
@@ -63,25 +64,44 @@ const published: PublishedWorkspaceImage[] = [
 vi.mock("@sealant/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@sealant/db")>();
   const { Effect, Layer } = await import("effect");
-  const jobByRun = new Map<string, Partial<WorkspaceBuildJob>>([
-    ["run-live", { runId: "run-live", publishedDigest: `sha256:${"a".repeat(64)}` }],
+  // The factory runs hoisted above this file's imports, so it imports what it uses itself.
+  const { fakeService: fake } = await import("@sealant/db/testing/fake-service");
+  const { buildJobRow, workspaceRow } = await import("@sealant/db/testing/rows");
+  const jobByRun = new Map<string, WorkspaceBuildJob>([
+    ["run-live", buildJobRow({ runId: "run-live", publishedDigest: `sha256:${"a".repeat(64)}` })],
   ]);
   return {
     ...actual,
-    WorkspaceRepoLive: Layer.succeed(actual.WorkspaceRepo, {
-      listWorkspaces: () =>
-        Effect.succeed([{ id: "ws-live", status: "ready", latestRunId: "run-live" }]),
-    } as never),
-    WorkspaceRuntimeInstanceRepoLive: Layer.succeed(actual.WorkspaceRuntimeInstanceRepo, {
-      listRunningInstances: () => Effect.succeed([]),
-    } as never),
-    WorkspaceBuildJobRepoLive: Layer.succeed(actual.WorkspaceBuildJobRepo, {
-      listPublishedImages: () => Effect.succeed(published),
-      listLatestJobsByRunIds: (runIds: readonly string[]) =>
-        Effect.succeed(
-          new Map(runIds.flatMap((id) => (jobByRun.has(id) ? [[id, jobByRun.get(id)]] : []))),
-        ),
-    } as never),
+    WorkspaceRepoLive: Layer.succeed(
+      actual.WorkspaceRepo,
+      fake({
+        listWorkspaces: () =>
+          Effect.succeed([
+            workspaceRow({ id: "ws-live", status: "ready", latestRunId: "run-live" }),
+          ]),
+      }),
+    ),
+    WorkspaceRuntimeInstanceRepoLive: Layer.succeed(
+      actual.WorkspaceRuntimeInstanceRepo,
+      fake({
+        listRunningInstances: () => Effect.succeed([]),
+      }),
+    ),
+    WorkspaceBuildJobRepoLive: Layer.succeed(
+      actual.WorkspaceBuildJobRepo,
+      fake({
+        listPublishedImages: () => Effect.succeed(published),
+        listLatestJobsByRunIds: (runIds: readonly string[]) =>
+          Effect.succeed(
+            new Map(
+              runIds.flatMap((id) => {
+                const job = jobByRun.get(id);
+                return job === undefined ? [] : [[id, job] as const];
+              }),
+            ),
+          ),
+      }),
+    ),
   };
 });
 
@@ -120,7 +140,7 @@ const registry = () => {
   const deleteImage = vi.fn(
     async (_input: { repository: string; digest: string }) => "deleted" as const,
   );
-  return { deleteImage, registryClient: { deleteImage } as unknown as RegistryClient };
+  return { deleteImage, registryClient: fakeService<RegistryClient>({ deleteImage }) };
 };
 
 describe("reapWorkspaceImages, MicroVM images", () => {
@@ -131,7 +151,7 @@ describe("reapWorkspaceImages, MicroVM images", () => {
     const { deleteImage, registryClient } = registry();
 
     const summary = await reapWorkspaceImages({
-      db: {} as never,
+      db: fakeService<DB>({}),
       registryClient,
       microvmImages: aws.microvmImages,
       retainedPlans: 2,
@@ -163,7 +183,7 @@ describe("reapWorkspaceImages, MicroVM images", () => {
     const aws = account([]);
     try {
       await reapWorkspaceImages({
-        db: {} as never,
+        db: fakeService<DB>({}),
         registryClient: registry().registryClient,
         microvmImages: aws.microvmImages,
         retainedPlans: 0,
@@ -180,7 +200,7 @@ describe("reapWorkspaceImages, MicroVM images", () => {
     const { deleteImage, registryClient } = registry();
 
     await reapWorkspaceImages({
-      db: {} as never,
+      db: fakeService<DB>({}),
       registryClient,
       retainedPlans: 2,
       now,
@@ -209,7 +229,7 @@ describe("reapWorkspaceImages, MicroVM images", () => {
     ]);
 
     const summary = await reapWorkspaceImages({
-      db: {} as never,
+      db: fakeService<DB>({}),
       registryClient: registry().registryClient,
       microvmImages: aws.microvmImages,
       retainedPlans: 10,
@@ -223,7 +243,7 @@ describe("reapWorkspaceImages, MicroVM images", () => {
 
   it("survives an account that cannot be listed or an image that cannot be deleted", async () => {
     const summary = await reapWorkspaceImages({
-      db: {} as never,
+      db: fakeService<DB>({}),
       registryClient: registry().registryClient,
       microvmImages: {
         namePrefix: "sealant-ws",

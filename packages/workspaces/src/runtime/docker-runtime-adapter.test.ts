@@ -12,7 +12,28 @@ import {
   parseRuntimeAdapterSupportInput,
 } from "./runtime-adapter.js";
 
-const createBlueprint = (overrides: Record<string, unknown> = {}) => {
+/** The parts of a blueprint a test changes; each nested object merges over the base's. */
+interface BlueprintOverrides {
+  readonly sources?: {
+    readonly workspace?: Record<string, unknown>;
+    readonly inputs?: unknown;
+    readonly [key: string]: unknown;
+  };
+  readonly access?: { readonly ssh?: Record<string, unknown>; readonly [key: string]: unknown };
+  readonly runtime?: {
+    readonly env?: Record<string, string>;
+    readonly network?: Record<string, unknown>;
+    readonly [key: string]: unknown;
+  };
+  readonly target?: {
+    readonly os?: Record<string, unknown>;
+    readonly runtime?: Record<string, unknown>;
+    readonly [key: string]: unknown;
+  };
+  readonly [key: string]: unknown;
+}
+
+const createBlueprint = (overrides: BlueprintOverrides = {}) => {
   const base = {
     version: "1",
     sources: {
@@ -73,7 +94,7 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
       },
     },
   };
-  const override = overrides as any;
+  const override = overrides;
 
   return parseRuntimeAdapterSupportInput({
     blueprint: {

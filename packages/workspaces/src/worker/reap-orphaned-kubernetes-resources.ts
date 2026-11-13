@@ -159,11 +159,11 @@ const podMayGo = (
     if (!captureSourced) {
       return "not-capture" as const;
     }
-    const inspect = options.adapter.inspect;
+    const inspect = options.adapter.inspect?.bind(options.adapter);
     const runtime: ExecutorRuntimeState =
-      typeof inspect !== "function"
+      inspect === undefined
         ? "unknown"
-        : yield* Effect.tryPromise(() => inspect.call(options.adapter, { resourceId })).pipe(
+        : yield* Effect.tryPromise(() => inspect({ resourceId })).pipe(
             Effect.map((result) => result.state),
             Effect.catchCause(() => Effect.succeed("unknown" as const)),
           );

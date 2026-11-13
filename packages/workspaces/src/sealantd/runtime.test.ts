@@ -13,7 +13,7 @@
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { connect, createServer, type AddressInfo } from "node:net";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -170,7 +170,10 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
       socket.on("end", () => socket.end());
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const port = (server.address() as AddressInfo).port;
+    const address = server.address();
+    if (address === null || typeof address === "string")
+      throw new Error("the server is not on TCP");
+    const port = address.port;
 
     try {
       const echoed = await Effect.runPromise(
@@ -235,7 +238,9 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
     if (Exit.isFailure(exit)) {
       const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
       expect(error).toBeInstanceOf(SealantControlError);
-      expect((error as SealantControlError).operation).toBe("openForward");
+      if (!(error instanceof SealantControlError))
+        throw new Error("expected a SealantControlError");
+      expect(error.operation).toBe("openForward");
     }
   });
 
@@ -313,8 +318,10 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
     if (Exit.isFailure(exit)) {
       const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
       expect(error).toBeInstanceOf(SealantControlError);
-      expect((error as SealantControlError).operation).toBe("exec");
-      expect(typeof (error as SealantControlError).code).toBe("number");
+      if (!(error instanceof SealantControlError))
+        throw new Error("expected a SealantControlError");
+      expect(error.operation).toBe("exec");
+      expect(typeof error.code).toBe("number");
     }
   });
 
@@ -337,8 +344,10 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
       if (Exit.isFailure(exit)) {
         const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
         expect(error).toBeInstanceOf(SealantControlError);
-        expect((error as SealantControlError).operation).toBe("captureFlush");
-        expect((error as SealantControlError).message).toMatch(/capture/i);
+        if (!(error instanceof SealantControlError))
+          throw new Error("expected a SealantControlError");
+        expect(error.operation).toBe("captureFlush");
+        expect(error.message).toMatch(/capture/i);
       }
     },
   );
@@ -362,8 +371,10 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
       if (Exit.isFailure(exit)) {
         const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
         expect(error).toBeInstanceOf(SealantControlError);
-        expect((error as SealantControlError).operation).toBe("captureReplan");
-        expect((error as SealantControlError).message).toMatch(/capture/i);
+        if (!(error instanceof SealantControlError))
+          throw new Error("expected a SealantControlError");
+        expect(error.operation).toBe("captureReplan");
+        expect(error.message).toMatch(/capture/i);
       }
     },
   );

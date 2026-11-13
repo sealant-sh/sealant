@@ -12,14 +12,14 @@ import {
   WorkspaceCaptureDrainRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
-  type Workspace,
   type WorkspaceAttemptRepoService,
-  type WorkspaceAttemptSnapshot,
   type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
-  type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { attemptSnapshotRow, runtimeInstanceRow, workspaceRow } from "@sealant/db/testing/rows";
+import { newWorkspaceSchema } from "@sealant/validators";
 import {
   SealantRuntime,
   SealantUnexpectedError,
@@ -64,8 +64,8 @@ const flushHarness = (
   const calls: string[] = [];
   const recorded: Array<{ runId: string; status: Readonly<Record<string, unknown>> }> = [];
   const fences: string[] = [];
-  const workspace = { id: "ws_1", ownerUserId: "usr_owner", latestRunId: "run_1" } as Workspace;
-  const spec = {
+  const workspace = workspaceRow({ id: "ws_1", ownerUserId: "usr_owner", latestRunId: "run_1" });
+  const spec = newWorkspaceSchema.parse({
     sources: {
       workspace: {
         kind: "capture",
@@ -76,8 +76,8 @@ const flushHarness = (
       },
     },
     harness: { id: "claude-code" },
-  };
-  const daemon = {
+  });
+  const daemon = fakeService<SealantSession>({
     captureFlush: (request?: CaptureFlushRequest) => {
       flushRequests.push(request);
       calls.push("flush");
@@ -100,28 +100,42 @@ const flushHarness = (
       calls.push("replan");
       return Effect.succeed(REPLANNED);
     },
-  } as unknown as SealantSession;
+  });
   const layer = Layer.mergeAll(
-    Layer.succeed(WorkspaceRepo, {
-      getWorkspaceById: () => Effect.succeed(workspace),
-    } as unknown as WorkspaceRepoService),
-    Layer.succeed(WorkspaceAttemptRepo, {
-      getAttemptSnapshotByRunId: () =>
-        Effect.succeed({ resolvedSpecPayload: spec } as unknown as WorkspaceAttemptSnapshot),
-    } as unknown as WorkspaceAttemptRepoService),
-    Layer.succeed(WorkspaceBuildJobRepo, {
-      getLatestJobByRunId: () => Effect.succeed(undefined),
-    } as unknown as WorkspaceBuildJobRepoService),
-    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      getRuntimeInstanceByRunId: () =>
-        Effect.succeed({
-          runId: "run_1",
-          status: "ready",
-          adapter: "docker",
-          endpoint: "unix:///run/sealant/ws_1.sock",
-          resourceId: "container_1",
-        } as WorkspaceRuntimeInstance),
-    } as unknown as WorkspaceRuntimeInstanceRepoService),
+    Layer.succeed(
+      WorkspaceRepo,
+      fakeService<WorkspaceRepoService>({
+        getWorkspaceById: () => Effect.succeed(workspace),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceAttemptRepo,
+      fakeService<WorkspaceAttemptRepoService>({
+        getAttemptSnapshotByRunId: () =>
+          Effect.succeed(attemptSnapshotRow({ resolvedSpecPayload: spec })),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceBuildJobRepo,
+      fakeService<WorkspaceBuildJobRepoService>({
+        getLatestJobByRunId: () => Effect.succeed(undefined),
+      }),
+    ),
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepoService>({
+        getRuntimeInstanceByRunId: () =>
+          Effect.succeed(
+            runtimeInstanceRow({
+              runId: "run_1",
+              status: "ready",
+              adapter: "docker",
+              endpoint: "unix:///run/sealant/ws_1.sock",
+              resourceId: "container_1",
+            }),
+          ),
+      }),
+    ),
     Layer.succeed(SealantRuntime, {
       connect: () => Effect.succeed(daemon),
       openForwardConnection: () => Effect.die("forwards are unused here"),

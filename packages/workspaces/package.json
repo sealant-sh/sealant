@@ -12,7 +12,7 @@
     "./testing/fake-boat": "./boat-harness/fake-boat.ts"
   },
   "scripts": {
-    "lint": "oxlint .",
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "test": "vitest run",
     "test:boat-harness": "vitest run --config vitest.boat-harness.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",

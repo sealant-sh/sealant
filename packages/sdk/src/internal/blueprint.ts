@@ -21,6 +21,7 @@ import {
   parseWorkspaceEnv,
   parseWorkspaceSecretEnv,
 } from "@sealant/api-contracts/workspace-environment";
+import { Predicate } from "effect";
 
 import { SealantError } from "../errors.js";
 import type { CreateOptions } from "../types.js";
@@ -42,7 +43,7 @@ export const toGitUrl = (repository: string): string => {
 export const buildCreateWorkspaceRequest = (
   options: CreateOptions,
   config: SealantInternalConfig,
-): { readonly payload: CreateWorkspaceRequest } => {
+) => {
   if (
     options.runtime !== undefined &&
     !["docker", "k8s", "k3s", "cloudflare", "microvm", "boat"].includes(options.runtime)
@@ -361,6 +362,13 @@ export const buildCreateWorkspaceRequest = (
       // The capture credential is the one secret outside `secretEnv`: sealed and delivered the
       // same way by the control plane, under its platform-owned name.
       ...(options.source?.kind === "capture" ? { captureToken: options.source.token } : {}),
-    },
+    } satisfies CreateWorkspaceRequest,
   };
+};
+
+/** The harness id a workspace's spec names (`harness.id`, as `buildCreateWorkspaceRequest` writes it). */
+export const specHarnessId = (spec: unknown): string | undefined => {
+  const harness = Predicate.isObject(spec) ? spec["harness"] : undefined;
+  const id = Predicate.isObject(harness) ? harness["id"] : undefined;
+  return typeof id === "string" ? id : undefined;
 };

@@ -831,11 +831,8 @@ const withLiveSession = <A, E>(
       assertedOwnerUserId: input.assertedOwnerUserId,
     });
     const session = yield* requireSession(input.sessionId, principal);
-    if (
-      session.status !== "running" ||
-      session.daemonSessionId === null ||
-      session.daemonProcessId === null
-    ) {
+    const { daemonSessionId, daemonProcessId } = session;
+    if (session.status !== "running" || daemonSessionId === null || daemonProcessId === null) {
       return yield* new SessionConflictError({
         message: `Session ${session.id} is not running (status: ${session.status}).`,
       });
@@ -848,7 +845,7 @@ const withLiveSession = <A, E>(
       });
     }
     return yield* withDaemon(target, (daemon) =>
-      f(daemon, session as WorkspaceSession & { daemonSessionId: string; daemonProcessId: string }),
+      f(daemon, { ...session, daemonSessionId, daemonProcessId }),
     ).pipe(
       Effect.catchIf(isDaemonSessionGone, () =>
         reconcileSession(session).pipe(

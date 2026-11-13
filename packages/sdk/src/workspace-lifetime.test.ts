@@ -61,16 +61,14 @@ const makeStub = (
       return Effect.succeed({ workspaceId: "ws_1", state: "requested", recoverable: true });
     },
   };
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
   return { client: { workspaces } as unknown as ControlPlaneClient, stops, recovers };
 };
 
 const makeCtx = (client: ControlPlaneClient): SdkContext => ({
   runtime: {
-    run: <A, E, R extends SdkServices>(effect: Effect.Effect<A, E, R>): Promise<A> =>
-      // The stub provides all of SdkServices; see run-lifecycle.test.ts for the same narrowing.
-      Effect.runPromise(
-        Effect.provideService(effect, SealantApiClient, client) as Effect.Effect<A, E>,
-      ),
+    run: <A, E>(effect: Effect.Effect<A, E, SdkServices>): Promise<A> =>
+      Effect.runPromise(Effect.provideService(effect, SealantApiClient, client)),
     dispose: () => Promise.resolve(),
   } satisfies SdkRuntime,
   config: resolveInternalConfig({ baseUrl: "http://stub.invalid" }),

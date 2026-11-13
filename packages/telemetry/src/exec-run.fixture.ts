@@ -5,7 +5,7 @@
  * `refused` (the daemon refuses it, error 3). Every other exec (the changes reading, a sync-back
  * read) exits with `readExitCode`. A call nothing scripts dies, naming itself.
  */
-import { create } from "@bufbuild/protobuf";
+import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import {
   ConnectedAccountRepo,
   type ConnectedAccountRepoService,
@@ -25,11 +25,13 @@ import {
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import {
+  type Capabilities,
   CapabilitiesSchema,
   type EventEnvelope,
   EventEnvelopeSchema,
   type ExecAccepted,
   ExecAcceptedSchema,
+  type HealthReport,
   HealthReportSchema,
 } from "@sealant/runtime-protocol";
 import {
@@ -59,6 +61,25 @@ export const FAKE_CIPHER: NonNullable<SyncBackWorkspaceCredentialsInput["credent
   encrypt: unscripted("encrypt"),
   decrypt: unscripted("decrypt"),
 };
+
+/** What a test gives to build a daemon event: any envelope field, the payload included. */
+export type DaemonEventInit = MessageInitShape<typeof EventEnvelopeSchema>;
+
+/** A daemon event as a session yields it. */
+export const daemonEvent = (init: DaemonEventInit): EventEnvelope =>
+  create(EventEnvelopeSchema, init);
+
+/** The daemon's health answer. */
+export const healthReport = (runtimeId: string): HealthReport =>
+  create(HealthReportSchema, { runtimeId });
+
+/** The daemon's capabilities answer, naming what it supports. */
+export const capabilitiesReport = (supports: readonly string[]): Capabilities =>
+  create(CapabilitiesSchema, { supports: [...supports] });
+
+/** The daemon's answer to an exec it started. */
+export const execAccepted = (processId: string, pid: number): ExecAccepted =>
+  create(ExecAcceptedSchema, { processId, pid });
 
 /** The daemon's `processExited` for one process. */
 export const exitedEvent = (

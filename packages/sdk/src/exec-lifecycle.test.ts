@@ -95,16 +95,15 @@ const makeStub = (
       })),
     getRunChanges: () => Effect.sync(() => ({ files: [], diff: "" })),
   };
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
   const client = { workspaces, runs } as unknown as ControlPlaneClient;
   return { client, requests };
 };
 
 const makeCtx = (client: ControlPlaneClient): SdkContext => ({
   runtime: {
-    run: <A, E, R extends SdkServices>(effect: Effect.Effect<A, E, R>): Promise<A> =>
-      Effect.runPromise(
-        Effect.provideService(effect, SealantApiClient, client) as Effect.Effect<A, E>,
-      ),
+    run: <A, E>(effect: Effect.Effect<A, E, SdkServices>): Promise<A> =>
+      Effect.runPromise(Effect.provideService(effect, SealantApiClient, client)),
     dispose: () => Promise.resolve(),
   } satisfies SdkRuntime,
   config: resolveInternalConfig({ baseUrl: "http://stub.invalid" }),
@@ -314,6 +313,7 @@ describe("workspace.exec()", () => {
 
   it("passes on that the run's changes were not read, never an apparently empty change", async () => {
     const { client } = makeStub({ getRun: () => wireRun("completed", { exitCode: 0 }) });
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
     const unread = {
       ...client,
       runs: {

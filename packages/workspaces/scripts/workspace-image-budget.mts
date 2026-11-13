@@ -191,6 +191,7 @@ const timeStart = async (image: string): Promise<number> => {
       "-c",
       `i=0; while [ ! -S ${SOCKET} ]; do i=$((i+1)); [ $i -gt 6000 ] && exit 1; sleep 0.005; done`,
     ]);
+    // oxlint-disable-next-line typescript/no-unnecessary-type-conversion -- the subtraction is a bigint and Number makes it a number; this script is outside the package's tsconfig, so the checker cannot see its types.
     return Number(process.hrtime.bigint() - started) / 1e6;
   } finally {
     await run("docker", ["rm", "-f", id]).catch(() => "");

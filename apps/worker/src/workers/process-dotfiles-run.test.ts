@@ -5,8 +5,10 @@
  * that exit code or failed with the daemon's words. Driven against a fake daemon session, sink and
  * run repository; nothing reaches Docker or Postgres.
  */
-import { RunRepo, type RunRepoService } from "@sealant/db";
-import { TelemetrySink, type TelemetrySinkService } from "@sealant/telemetry";
+import { RunRepo } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { TelemetrySink } from "@sealant/telemetry";
+import { daemonEvent, healthReport, type DaemonEventInit } from "@sealant/telemetry/testing";
 import {
   SealantControlError,
   SealantRuntime,
@@ -34,14 +36,14 @@ const DOTFILES = {
 } as const;
 
 let sequence = 0n;
-/** A daemon event as the session yields it (the fields the normalizer reads; test-only shape). */
+/** A daemon event as the session yields it. */
 const event = (fields: {
   readonly executionId?: string;
   readonly processId: string;
-  readonly payload: { readonly case: string; readonly value: Record<string, unknown> };
+  readonly payload: NonNullable<DaemonEventInit["payload"]>;
 }): EventEnvelope => {
   sequence += 1n;
-  const shaped = {
+  return daemonEvent({
     schemaVersion: 1,
     eventId: `evt_${sequence.toString()}`,
     runtimeId: "rt_1",
@@ -51,10 +53,7 @@ const event = (fields: {
     captureMethod: 1,
     confidence: 1,
     ...fields,
-  };
-  // The protobuf message type carries `$typeName` brands a plain object cannot; the normalizer
-  // reads only the fields above.
-  return shaped as unknown as EventEnvelope;
+  });
 };
 
 const started = (processId: string, executionId?: string) =>
@@ -86,8 +85,8 @@ const world = (daemon: {
   const cleanups: string[] = [];
   const epochs: string[] = [];
 
-  const session = {
-    health: Effect.succeed({ runtimeId: "rt_1" }),
+  const session = fakeService<SealantSession>({
+    health: Effect.succeed(healthReport("rt_1")),
     dotfilesApply: (args: SealantDotfilesApplyArgs) => {
       applied.push(args);
       return daemon.apply(args);
@@ -97,33 +96,45 @@ const world = (daemon: {
       signals.push({ processId, signal });
       return Effect.void;
     },
-  } as unknown as SealantSession;
+  });
   const runtime = Layer.succeed(SealantRuntime, {
     connect: () => Effect.succeed(session),
     openForwardConnection: () => Effect.die("forwards are unused here"),
   });
-  const sink = Layer.succeed(TelemetrySink, {
-    openEpoch: () => Effect.sync(() => epochs.push("open")),
-    appendBatch: (input: { readonly batch: ReadonlyArray<{ readonly processId?: string }> }) =>
-      Effect.sync(() => {
-        for (const normalized of input.batch) appended.push(normalized.processId);
-        return [];
-      }),
-    closeEpoch: (input: { readonly closeReason: string }) =>
-      Effect.sync(() => epochs.push(`close:${input.closeReason}`)),
-  } as unknown as TelemetrySinkService);
-  const runs = Layer.succeed(RunRepo, {
-    markRunCompleted: (input: Record<string, unknown>) =>
-      Effect.sync(() => {
-        outcomes.push({ status: "completed", ...input });
-        return null;
-      }),
-    markRunFailed: (input: Record<string, unknown>) =>
-      Effect.sync(() => {
-        outcomes.push({ status: "failed", ...input });
-        return null;
-      }),
-  } as unknown as RunRepoService);
+  const sink = Layer.succeed(
+    TelemetrySink,
+    fakeService({
+      openEpoch: () =>
+        Effect.sync(() => {
+          epochs.push("open");
+          return { epochId: "tep_1", resumeFromSequence: null };
+        }),
+      appendBatch: (input) =>
+        Effect.sync(() => {
+          for (const normalized of input.batch) appended.push(normalized.processId);
+          return [];
+        }),
+      closeEpoch: (input) =>
+        Effect.sync(() => {
+          epochs.push(`close:${input.closeReason}`);
+        }),
+    }),
+  );
+  const runs = Layer.succeed(
+    RunRepo,
+    fakeService({
+      markRunCompleted: (input) =>
+        Effect.sync(() => {
+          outcomes.push({ status: "completed", ...input });
+          return null;
+        }),
+      markRunFailed: (input) =>
+        Effect.sync(() => {
+          outcomes.push({ status: "failed", ...input });
+          return null;
+        }),
+    }),
+  );
   const stageChannel: DotfilesStageChannel = {
     stage: () => Effect.die("unused"),
     run: (_target, script) =>

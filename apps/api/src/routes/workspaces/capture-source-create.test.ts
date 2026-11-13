@@ -38,6 +38,7 @@ import {
   UserRepo,
   type PersonBinding,
 } from "@sealant/db";
+import { buildJobRow } from "@sealant/db/testing/rows";
 import {
   seedImageScope,
   revokeImageScope,
@@ -72,13 +73,34 @@ import { cancelWorkspaceCreate, createWorkspace, getWorkspaceCreate } from "./wo
 
 const now = new Date("2026-09-16T12:00:00.000Z");
 
+type CaptureMounts = ReadonlyArray<{
+  readonly hostPath: string;
+  readonly mountPath: string;
+  readonly bindable?: boolean;
+}>;
+
+/** A capture source's spec, as a create sends it. */
+const captureSpec = (
+  harnessHome: string,
+  mounts: CaptureMounts = [],
+  workingDirectory?: string,
+) => ({
+  sources: {
+    workspace: {
+      kind: "capture",
+      endpoint: "https://mend.example.com/session/s1",
+      worktreeId: "wt_1",
+      harnessHome,
+    },
+    ...(mounts.length === 0 ? {} : { mounts }),
+  },
+  harness: { id: "claude-code" },
+  ...(workingDirectory === undefined ? {} : { runtime: { workingDirectory } }),
+});
+
 const capturePayload = (
   harnessHome: string,
-  mounts: ReadonlyArray<{
-    readonly hostPath: string;
-    readonly mountPath: string;
-    readonly bindable?: boolean;
-  }> = [],
+  mounts: CaptureMounts = [],
   workingDirectory?: string,
 ): CreateWorkspaceRequest => ({
   ownerUserId: "usr_capture",
@@ -87,19 +109,7 @@ const capturePayload = (
   tag: "capture",
   captureToken: "channel_secret",
   secretEnv: { MEND_SESSION_TOKEN: "mend_secret" },
-  spec: {
-    sources: {
-      workspace: {
-        kind: "capture",
-        endpoint: "https://mend.example.com/session/s1",
-        worktreeId: "wt_1",
-        harnessHome,
-      },
-      ...(mounts.length === 0 ? {} : { mounts }),
-    },
-    harness: { id: "claude-code" },
-    ...(workingDirectory === undefined ? {} : { runtime: { workingDirectory } }),
-  },
+  spec: captureSpec(harnessHome, mounts, workingDirectory),
 });
 
 interface RecordingState {
@@ -361,7 +371,7 @@ const makeRecordingLayer = (
     getLatestJobByRunId: (runId) =>
       Effect.succeed(
         state.existingJobStatus !== undefined && state.existingByKey?.latestRunId === runId
-          ? ({
+          ? buildJobRow({
               id: "job_first",
               runId,
               status: state.existingJobStatus,
@@ -374,7 +384,7 @@ const makeRecordingLayer = (
               publishedReference: null,
               publishedDigestReference: null,
               publishedDigest: null,
-            } as unknown as WorkspaceBuildJob)
+            })
           : undefined,
       ),
     getLatestSucceededJobByPlanHash: () => Effect.die("unused"),
@@ -1018,9 +1028,7 @@ describe("createWorkspace · the workspace's SSH user (Mend ADR 0016)", () => {
     ownerMap: boolean = true,
   ): CreateWorkspaceRequest => {
     const base = capturePayload("/workspace/harness-home");
-    const spec = base.spec as {
-      readonly sources: { readonly workspace: Record<string, unknown> };
-    } & Record<string, unknown>;
+    const spec = captureSpec("/workspace/harness-home");
     return {
       ...base,
       sshAsOwner: true,

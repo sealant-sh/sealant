@@ -14,6 +14,8 @@ import {
   type WorkspaceAttemptRepoService,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { attemptSnapshotRow, sourceSpec } from "@sealant/db/testing/rows";
 import { Effect, Layer, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -64,23 +66,25 @@ const runtimeInstance = (
   ...overrides,
 });
 
-const workspaceRow = (overrides: Partial<Workspace> = {}): Workspace =>
-  ({
-    id: "ws_1",
-    name: "demo",
-    ownerUserId: "user_1",
-    repositoryId: null,
-    repositoryProfileRevisionId: null,
-    profileRevisionId: null,
-    requestedByUserId: null,
-    status: "queued",
-    latestRunId: "run_old",
-    expiresAt: null,
-    createdAt: new Date("2026-07-01T00:00:00.000Z"),
-    updatedAt: new Date("2026-07-01T00:00:00.000Z"),
-    archivedAt: null,
-    ...overrides,
-  }) as Workspace;
+const workspaceRow = (overrides: Partial<Workspace> = {}): Workspace => ({
+  id: "ws_1",
+  name: "demo",
+  ownerUserId: "user_1",
+  repositoryId: null,
+  repositoryProfileRevisionId: null,
+  profileRevisionId: null,
+  requestedByUserId: null,
+  status: "queued",
+  latestRunId: "run_old",
+  expiresAt: null,
+  createdAt: new Date("2026-07-01T00:00:00.000Z"),
+  updatedAt: new Date("2026-07-01T00:00:00.000Z"),
+  archivedAt: null,
+  binds: [],
+  idempotencyKey: null,
+  sshUser: null,
+  ...overrides,
+});
 
 /** A Docker-like adapter: it keeps an ended executor's remains, so a stop is made in two phases. */
 const stubAdapter = (
@@ -174,19 +178,22 @@ const makeHarness = (input: {
 
   // The pre-teardown credential sync-back consults the attempt snapshot before the adapter stop;
   // returning undefined makes it a logged no-op without touching accounts or the exec bridge.
-  const getAttemptSnapshotByRunId = vi.fn((_runId: string) =>
+  const getAttemptSnapshotByRunId = vi.fn((runId: string) =>
     Effect.succeed(
       input.captureSourced === true
-        ? { blueprintPayload: { sources: { workspace: { kind: "capture" } } } }
+        ? attemptSnapshotRow({ runId, blueprintPayload: sourceSpec("capture") })
         : undefined,
     ),
   );
-  const attemptRepoLayer = Layer.succeed(WorkspaceAttemptRepo, {
-    getAttemptSnapshotByRunId,
-  } as unknown as WorkspaceAttemptRepoService);
+  const attemptRepoLayer = Layer.succeed(
+    WorkspaceAttemptRepo,
+    fakeService<WorkspaceAttemptRepoService>({
+      getAttemptSnapshotByRunId,
+    }),
+  );
   const connectedAccountRepoLayer = Layer.succeed(
     ConnectedAccountRepo,
-    {} as ConnectedAccountRepoService,
+    fakeService<ConnectedAccountRepoService>({}),
   );
   const sealantRuntimeLayer =
     input.daemon ??

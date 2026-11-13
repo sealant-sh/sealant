@@ -36,7 +36,8 @@ import {
   type ConnectedAccountRepoService,
   type ProfileRepoService,
 } from "@sealant/db";
-import { Cause, Effect, Fiber, Layer, Logger } from "effect";
+import { connectedAccountRow } from "@sealant/db/testing/rows";
+import { Cause, Effect, Fiber, Layer, Logger, Predicate } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -85,7 +86,7 @@ const claudeCredentialsJson = JSON.stringify({
 });
 
 const account = (overrides: Partial<ConnectedAccount>): ConnectedAccount =>
-  ({
+  connectedAccountRow({
     id: "cacc_test",
     ownerUserId: "usr_1",
     provider: "codex",
@@ -104,7 +105,7 @@ const account = (overrides: Partial<ConnectedAccount>): ConnectedAccount =>
     archivedAt: null,
     credentialRevision: 1,
     ...overrides,
-  }) as ConnectedAccount;
+  });
 
 const codexAccount = account({ provider: "codex", id: "cacc_codex" });
 const claudeAccount = account({
@@ -168,11 +169,6 @@ const profilesStub = () => ({
   ),
 });
 
-interface EngineStubs {
-  readonly claudeStart: ReturnType<typeof vi.fn>;
-  readonly codexStart: ReturnType<typeof vi.fn>;
-}
-
 const doneTurn = (text: string): InferenceEngineTurn => ({
   sessionId: "inf_stub",
   turn: { type: "done", text, usage: { inputTokens: 1, outputTokens: 1 } },
@@ -210,7 +206,9 @@ const makeLayers = (input: {
   );
 
   const layer = Layer.mergeAll(
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- vi.fn spies whose answers each case swaps (partial rows, plain errors); typing them would rewrite every case.
     Layer.succeed(ConnectedAccountRepo, input.accounts as unknown as ConnectedAccountRepoService),
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- vi.fn spies whose answers each case swaps (partial rows, plain errors); typing them would rewrite every case.
     Layer.succeed(ProfileRepo, profilesStub() as unknown as ProfileRepoService),
     Layer.succeed(CredentialCipher, fakeCipher),
     Layer.succeed(
@@ -232,7 +230,7 @@ const makeLayers = (input: {
     }),
   );
 
-  const engines: EngineStubs = { claudeStart, codexStart };
+  const engines = { claudeStart, codexStart };
   return { layer, engines, recorded };
 };
 
@@ -253,18 +251,17 @@ const stubEngine = (
   };
 };
 
-const run = <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect);
+const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> => Effect.runPromise(effect);
 
-const runFlipped = async (effect: Effect.Effect<unknown, unknown, never>): Promise<unknown> =>
+const runFlipped = async (effect: Effect.Effect<unknown, unknown>): Promise<unknown> =>
   run(Effect.flip(effect));
 
-const newExchange = (overrides: Partial<InferenceRespondRequest>): InferenceRespondRequest =>
-  ({
-    ownerUserId: "usr_1",
-    prompt: "name this session",
-    credentials: { codex: "cacc_codex" },
-    ...overrides,
-  }) as InferenceRespondRequest;
+const newExchange = (overrides: Partial<InferenceRespondRequest>): InferenceRespondRequest => ({
+  ownerUserId: "usr_1",
+  prompt: "name this session",
+  credentials: { codex: "cacc_codex" },
+  ...overrides,
+});
 
 const continuation = (ownerUserId: string): InferenceRespondRequest => ({
   ownerUserId,
@@ -284,7 +281,8 @@ describe("inference.module provider routing", () => {
     expect(response.turn).toEqual(expect.objectContaining({ type: "text", text: "codex answer" }));
     expect(engines.claudeStart).not.toHaveBeenCalled();
     expect(engines.codexStart).toHaveBeenCalledOnce();
-    const startInput = engines.codexStart.mock.calls[0]?.[0] as CodexInferenceStartInput;
+    const startInput = engines.codexStart.mock.calls[0]?.[0];
+    if (startInput === undefined) throw new Error("the codex engine was not started");
     expect(startInput.model).toBe("lunna");
     expect(startInput.system).toBe("sys");
     expect(startInput.prompt).toBe("name this session");
@@ -438,9 +436,9 @@ describe("inference.module provider routing", () => {
       accounts,
       codexStart: async (startInput) => {
         home = startInput.codexHome;
-        seen = (
-          JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) as { tokens?: typeof seen }
-        ).tokens;
+        const written: unknown = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"));
+        const tokens = Predicate.isObject(written) ? written["tokens"] : undefined;
+        seen = Predicate.isObject(tokens) ? tokens : undefined;
         // Even a CLI that rewrote the file (it cannot refresh a copy) is never read back.
         writeFileSync(
           join(home, "auth.json"),

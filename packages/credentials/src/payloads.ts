@@ -3,7 +3,7 @@ import {
   endpointHostOf,
   type ConnectedAccountLoginClass,
 } from "@sealant/api-contracts";
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 
 /*
 Provider credential payload shapes — the JSON that gets encrypted at rest (see design doc §3–4).
@@ -16,13 +16,8 @@ export type ConnectedAccountProvider = (typeof connectedAccountProviders)[number
 
 export const connectedAccountProviderSchema = Schema.Literals(connectedAccountProviders);
 
-const asRecord = (value: unknown): Record<string, unknown> | undefined => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-
-  return value as Record<string, unknown>;
-};
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+  Predicate.isObject(value) ? value : undefined;
 
 const asNonEmptyString = (value: unknown): string | undefined => {
   return typeof value === "string" && value.length > 0 ? value : undefined;
