@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { CredentialCipher, type CredentialCipherService } from "@sealant/credentials";
 import {
@@ -25,6 +25,9 @@ const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
 const KEY_A = "organization-a-key-for-tests";
 const KEY_A_NEXT = "organization-a-next-key-tests";
 const KEY_B = "organization-b-key-for-tests";
+
+/** Boat's VM id alphabet (`bx_` and eight of these). */
+const SANDBOX_ID_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 
 let routes: typeof import("./boat-accounts.module.js");
 let availability: typeof import("../../services/boat-availability.js");
@@ -89,7 +92,10 @@ describe.skipIf(DATABASE_URL === undefined)("Boat accounts API (Postgres)", () =
     if (account === undefined) throw new Error("no account");
     const owner = `usr_${randomUUID()}`;
     const runId = randomUUID();
-    const sandboxId = `bx_${"23456789abcdefghjkmnpqrstuvwxyz".charAt(Math.floor(Math.random() * 31))}${"a".repeat(7)}`;
+    // Unique per run: two runs of one account must never share a VM id (the table refuses it).
+    const sandboxId = `bx_${Array.from(randomBytes(8), (byte) =>
+      SANDBOX_ID_ALPHABET.charAt(byte % SANDBOX_ID_ALPHABET.length),
+    ).join("")}`;
     const target = await Effect.runPromise(
       Effect.gen(function* () {
         yield* db
