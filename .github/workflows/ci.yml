@@ -292,9 +292,6 @@ jobs:
       fromJSON('["self-hosted","box","linux","x64"]') || matrix.runner }}
     timeout-minutes: 45
     steps:
-      - name: Throwaway failure to prove the checks roll-up goes red (SLNT-950, reverted next)
-        run: exit 1
-
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
