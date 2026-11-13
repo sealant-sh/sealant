@@ -9,13 +9,13 @@ import {
   boatKeyReportSchema,
   BudgetExceededError,
 } from "@sealant/api-contracts";
-import { Option, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 
 import { SealantApiError, SealantBudgetExceededError, SealantError } from "../errors.js";
 import type { InferenceReceipt } from "../types.js";
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+  Predicate.isObject(value) ? value : undefined;
 
 const extractStatus = (record: Record<string, unknown> | undefined): number | undefined => {
   if (record === undefined) {

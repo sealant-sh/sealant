@@ -69,6 +69,7 @@ const makeStub = (
     },
   };
   return {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
     client: {
       workspaces,
       system: {
@@ -92,11 +93,8 @@ const makeStub = (
 
 const makeCtx = (client: ControlPlaneClient): SdkContext => ({
   runtime: {
-    run: <A, E, R extends SdkServices>(effect: Effect.Effect<A, E, R>): Promise<A> =>
-      // The stub provides all of SdkServices; see run-lifecycle.test.ts for the same narrowing.
-      Effect.runPromise(
-        Effect.provideService(effect, SealantApiClient, client) as Effect.Effect<A, E>,
-      ),
+    run: <A, E>(effect: Effect.Effect<A, E, SdkServices>): Promise<A> =>
+      Effect.runPromise(Effect.provideService(effect, SealantApiClient, client)),
     dispose: () => Promise.resolve(),
   } satisfies SdkRuntime,
   config: resolveInternalConfig({ baseUrl: "http://stub.invalid", ownerUserId: "usr_owner" }),
@@ -181,6 +179,7 @@ describe("workspace.credentials", () => {
       ...home,
       accounts: { ...home.accounts, pi: { connectedAccountId: "cacc_codex", name: "default" } },
     };
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
     const listed = await workspaceOver({
       workspaces: {
         listWorkspaceCredentials: () =>
@@ -192,6 +191,7 @@ describe("workspace.credentials", () => {
 
   it("sends a partial put and reports the providers it left out", async () => {
     const requests: unknown[] = [];
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
     const client = {
       workspaces: {
         putWorkspaceCredentials: (request: { payload: PutWorkspaceCredentialsRequest }) => {

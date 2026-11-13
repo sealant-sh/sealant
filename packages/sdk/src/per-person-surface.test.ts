@@ -84,16 +84,14 @@ const makeStub = (features: Record<string, boolean> = { processUserRoutes: true 
         features,
       }),
   };
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
   return { client: { workspaces, sessions, system } as unknown as ControlPlaneClient, requests };
 };
 
 const makeCtx = (client: ControlPlaneClient): SdkContext => ({
   runtime: {
-    run: <A, E, R extends SdkServices>(effect: Effect.Effect<A, E, R>): Promise<A> =>
-      // The stub provides all of SdkServices; see run-lifecycle.test.ts for the same narrowing.
-      Effect.runPromise(
-        Effect.provideService(effect, SealantApiClient, client) as Effect.Effect<A, E>,
-      ),
+    run: <A, E>(effect: Effect.Effect<A, E, SdkServices>): Promise<A> =>
+      Effect.runPromise(Effect.provideService(effect, SealantApiClient, client)),
     dispose: () => Promise.resolve(),
   } satisfies SdkRuntime,
   config,
@@ -271,16 +269,13 @@ describe("the control plane's feature answer", () => {
     try {
       const { client, requests } = makeStub();
       let reads = 0;
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
       const flaky = {
         ...client,
         system: {
           getIndex: () => {
             reads += 1;
-            return reads === 1
-              ? Effect.fail(new Error("unreachable"))
-              : (
-                  client as unknown as { system: { getIndex: () => Effect.Effect<unknown> } }
-                ).system.getIndex();
+            return reads === 1 ? Effect.fail(new Error("unreachable")) : client.system.getIndex();
           },
         },
       } as unknown as ControlPlaneClient;
@@ -378,6 +373,7 @@ describe("the image's per-person capability", () => {
 });
 
 const withIndex = (features: unknown) =>
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
   ({
     system: {
       getIndex: () =>
@@ -392,6 +388,7 @@ const withIndex = (features: unknown) =>
   }) as unknown as ControlPlaneClient;
 
 const withDetails = (processUser: WorkspaceDetails["processUser"]) =>
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
   ({
     workspaces: {
       getWorkspace: () =>
@@ -489,6 +486,7 @@ describe("features()", () => {
   });
 
   it("rejects when the control plane could not be asked", async () => {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- stubs only the client methods this test calls; HttpApiClient methods are generic over a response mode a stub cannot answer.
     const failing = {
       system: { getIndex: () => Effect.fail(new Error("unreachable")) },
     } as unknown as ControlPlaneClient;

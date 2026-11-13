@@ -19,7 +19,7 @@ export type SdkServices = SealantApiClient;
 
 export interface SdkRuntime {
   /** Provide the app context and run an operation effect, surfacing plain `SealantError`s. */
-  readonly run: <A, E, R extends SdkServices>(effect: Effect.Effect<A, E, R>) => Promise<A>;
+  readonly run: <A, E>(effect: Effect.Effect<A, E, SdkServices>) => Promise<A>;
   /** Dispose the runtime scope (the HTTP client). Idempotent. */
   readonly dispose: () => Promise<void>;
 }
@@ -61,11 +61,9 @@ export const makeSdkRuntime = (config: SealantInternalConfig): SdkRuntime => {
   };
 
   return {
-    run: async <A, E, R extends SdkServices>(effect: Effect.Effect<A, E, R>): Promise<A> => {
+    run: async <A, E>(effect: Effect.Effect<A, E, SdkServices>): Promise<A> => {
       const { context } = await build();
-      // R extends SdkServices and the context provides SdkServices, so all requirements are met
-      // (TS can't reduce Exclude<R, SdkServices> to never for a generic R).
-      const provided = Effect.provide(effect, context) as Effect.Effect<A, E>;
+      const provided = Effect.provide(effect, context);
       const exit = await Effect.runPromiseExit(provided);
       if (Exit.isSuccess(exit)) {
         return exit.value;

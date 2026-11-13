@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ForwardResetError } from "./errors.js";
@@ -213,7 +214,7 @@ describe("a bounded forward's acknowledgements", () => {
     for (let frame = 0; frame < 32; frame++) core.data(1);
     for (let frame = 0; frame < 32; frame++) await reader.read();
     const progressSent = () =>
-      core.texts().filter((text) => (text as { t?: string }).t === "progress").length;
+      core.texts().filter((text) => Predicate.isObject(text) && text["t"] === "progress").length;
     expect(progressSent()).toBe(1);
 
     core.bufferedAmount = 0;

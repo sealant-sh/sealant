@@ -15,6 +15,7 @@ import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
 import { makeRun, toRunChangesData } from "../facade/run.js";
 import type { RunHarnessFn, WorkspaceInit } from "../facade/workspace.js";
+import { specHarnessId } from "../internal/blueprint.js";
 import { elapsed } from "../internal/clock.js";
 import { toSealantError } from "../internal/map-error.js";
 import type { Run } from "../types.js";
@@ -55,8 +56,7 @@ const createHarnessRunEffect = (
     }
 
     const details = yield* getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId);
-    const spec = details.spec as { harness?: { id?: string } } | undefined;
-    const harnessId = spec?.harness?.id;
+    const harnessId = specHarnessId(details.spec);
     if (harnessId === undefined) {
       return yield* Effect.fail(
         new SealantError(
