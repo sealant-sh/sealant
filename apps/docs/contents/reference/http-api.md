@@ -41,7 +41,7 @@ The shipped resource groups and their operations:
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | System                   | `GET /`, `GET /healthz`, `GET /readyz`, `GET /v1/system/setup-state`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Packages                 | `GET /v1/packages/resolve?query=&targetOs=`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Workspaces               | `POST /v1/workspaces`, `POST /v1/workspaces/image`, `POST /v1/workspaces/:workspaceId/exec`, `POST /v1/workspaces/:workspaceId/dotfiles`, `POST /v1/workspaces/:workspaceId/stop`, `POST /v1/workspaces/:workspaceId/restart`, `POST`, `DELETE` and `GET /v1/workspaces/:workspaceId/credentials`, `POST /v1/workspaces/:workspaceId/expire`, `PATCH /v1/workspaces/:workspaceId/name`, `DELETE /v1/workspaces/:workspaceId/ssh-user`, `GET /v1/workspaces`, `GET /v1/workspaces/:workspaceId`, `GET /v1/workspaces/:workspaceId/attempts`, `GET /v1/workspaces/:workspaceId/events`, `GET /v1/workspaces/:workspaceId/ssh-target`                                                                                                                                                                                            |
+| Workspaces               | `POST /v1/workspaces`, `GET /v1/workspaces/runtimes`, `POST /v1/workspaces/image`, `POST /v1/workspaces/:workspaceId/exec`, `POST /v1/workspaces/:workspaceId/dotfiles`, `POST /v1/workspaces/:workspaceId/stop`, `POST /v1/workspaces/:workspaceId/restart`, `POST`, `DELETE` and `GET /v1/workspaces/:workspaceId/credentials`, `POST /v1/workspaces/:workspaceId/expire`, `PATCH /v1/workspaces/:workspaceId/name`, `DELETE /v1/workspaces/:workspaceId/ssh-user`, `GET /v1/workspaces`, `GET /v1/workspaces/:workspaceId`, `GET /v1/workspaces/:workspaceId/attempts`, `GET /v1/workspaces/:workspaceId/events`, `GET /v1/workspaces/:workspaceId/ssh-target`                                                                                                                                                             |
 | SSH keys                 | `POST /v1/ssh-keys`, `GET /v1/ssh-keys`, `DELETE /v1/ssh-keys/:sshKeyId`, `POST /v1/ssh-keys/resolve-principal`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Users                    | `POST /v1/users` (idempotent on email), `POST /v1/users/:userId/person`, `GET /v1/users/:userId` — identity rows for service principals acting on behalf of their own users                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Boat accounts            | `POST /v1/boat-accounts`, `GET /v1/boat-accounts`, `PUT /v1/boat-accounts/:boatAccountId/key`, `DELETE /v1/boat-accounts/:boatAccountId`, `POST /v1/boat-accounts/:boatAccountId/check`, `GET`/`POST /v1/boat-accounts/install-key` — the Boat keys an install keeps beside its default one, and their checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -149,6 +149,44 @@ itself. The same values again answer `created: false`. Another person for a boun
 route. An operator who must change a binding deletes that user's row in `user_person_binding` (a
 change to the database, which your database audit records) and binds again. Every new binding is
 logged at info with the user id, person id and uid.
+
+## Runtimes
+
+`GET /v1/workspaces/runtimes` answers, before any create, which runtimes this install launches
+workspaces on and what each supports: `{ default, runtimes: [...] }`. `default` is the runtime a
+create that names none (`target.runtime.family: "auto"`) runs on, and it is listed first. Boat is
+listed only where a worker reports launching Boat workspaces and an account can run one, as the
+create decides; its `resources` is unsupported when no launching worker has the resource gateway. A
+runtime that is not listed is one this install cannot launch; a runtime the worker serves beside the
+default, which the API cannot see, is not listed either.
+
+Each entry is the runtime's row of the table the create is refused from:
+
+| Field              | What it says                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| `runtime`          | `docker`, `k8s`, `k3s`, `cloudflare`, `microvm` or `boat`                                           |
+| `os`               | One item per managed OS family: `ubuntu`, `nix`, `arch`, `fedora`                                   |
+| `customImage`      | A base image of the workspace's own (`target.os.family: "custom"`)                                  |
+| `hostDirectories`  | Directories of the install's own servers bound in (a `mount` or `standby` source, `sources.mounts`) |
+| `docker`           | Docker inside the workspace (`tooling.services.docker`)                                             |
+| `gvisor`           | The workspace run under gVisor (`runtime.ociRuntime: "runsc"`)                                      |
+| `clusterEnv`       | Kubernetes Secrets, ConfigMaps and a service account (`runtime.envFrom`, `runtime.kubernetes`)      |
+| `gitSource`        | A workspace started by cloning a repository (a `git` source or a `sourceSelection`)                 |
+| `dotfilesArchives` | Dotfiles sent with the create as archives (`runtime.dotfilesArchives`)                              |
+| `screen`           | A screen (an X display) inside the workspace, with the CPU `architectures` it runs on               |
+| `reservedPorts`    | Ports inside the workspace the runtime holds for itself (Boat's guest agent: 8080)                  |
+| `resources`        | A project's resources linked to the workspace, with `attach`: `live` or `next-start`                |
+| `idleCost`         | `{ charged, message }`: whether a workspace that sits idle costs money                              |
+
+An item is `{ supported: true }` or `{ supported: false, message }`; `screen` and `resources` add
+their detail when supported. `message` is the sentence to show a person who asks for the item. A
+create (and a restart) that asks a runtime for an item it marks unsupported is refused with that
+same sentence before anything is reserved: `422` with code `runtime-os-unsupported` for an OS
+family, `workspace-docker-unsupported` for Docker, `runtime-env-references-unsupported` for
+Kubernetes references outside Kubernetes (the message then names them), and
+`runtime-requirement-unsupported` for the rest. Kubernetes reports port 7443 and gVisor as
+supported: the worker's own `SEALANT_K8S_CONTROL_PORT` and gVisor runtime class are not visible to
+the API, and the worker still refuses gVisor where the cluster has no runtime class for it.
 
 ## Boat accounts
 

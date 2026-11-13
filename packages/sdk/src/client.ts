@@ -38,6 +38,7 @@ import {
   getWorkspaceOp,
   inferenceRespondOp,
   inspectWorkspaceImageOp,
+  listWorkspaceRuntimesOp,
   listBoatAccountsOp,
   listConnectedAccountsOp,
   listSshKeysOp,
@@ -88,6 +89,7 @@ import type {
   Workspace,
   WorkspaceCreateState,
   WorkspaceImageInspection,
+  WorkspaceRuntimes,
   WorkspaceSshNamespace,
   SealantConfig,
   UsersNamespace,
@@ -247,6 +249,28 @@ export class Sealant {
      */
     imageKey: (options: CreateOptions): string =>
       imageSpecKey(buildCreateWorkspaceRequest(options, this.#ctx.config).payload.spec),
+
+    /**
+     * The runtimes this control plane launches workspaces on, and what each supports, read before
+     * any create: OS families, a custom base image, host directories, Docker inside, gVisor,
+     * Kubernetes references, the source and dotfiles a workspace may start from, a screen, the ports
+     * the runtime holds, how resources attach, and whether an idle workspace costs money. A create
+     * that asks a runtime for an item it marks unsupported is refused with that item's `message`:
+     * both answers come from one table. `default` is the runtime a create that names none runs on.
+     */
+    runtimes: async (): Promise<WorkspaceRuntimes> => {
+      const answered = await this.#runtime.run(listWorkspaceRuntimesOp());
+      return {
+        default: answered.default,
+        runtimes: answered.runtimes.map((support) => ({
+          ...support,
+          screen: support.screen.supported
+            ? { supported: true, architectures: [...support.screen.architectures] }
+            : support.screen,
+          reservedPorts: [...support.reservedPorts],
+        })),
+      };
+    },
 
     /**
      * What `create(options)` would build, read before the create: the spec is planned exactly as
