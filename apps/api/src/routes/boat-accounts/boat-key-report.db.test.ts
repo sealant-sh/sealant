@@ -14,7 +14,7 @@ import {
 } from "@sealant/db";
 import { BoatSecret, HttpBoatApi } from "@sealant/workspaces";
 import { FakeBoat } from "@sealant/workspaces/testing/fake-boat";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer, Schema } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
@@ -104,7 +104,6 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
       routes.createBoatAccount({ label: "Org A", apiKey: `  ${ACCOUNT_KEY}\n` }),
     );
     expect(created).toMatchObject({
-      source: "stored",
       organization: null,
       report: {
         identity: { observed: true, login: "fake-owner", accountStatus: "active" },
@@ -204,21 +203,38 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
     expect(opened).toEqual(["team_acme", "team_acme"]);
   });
 
-  it("lists the install's own key, checks it, and refuses to rotate or remove it", async () => {
-    const before = await run(routes.listBoatAccounts());
-    expect(before.items[0]).toMatchObject({
-      boatAccountId: "default",
-      source: "environment",
-      state: "active",
-      organization: null,
+  it("keeps list() decodable by the released SDK (0.40.0-next.868)", async () => {
+    await run(routes.createBoatAccount({ label: "Decodable", apiKey: ACCOUNT_KEY }));
+    const listed = await run(routes.listBoatAccounts());
+    expect(listed.items.length).toBeGreaterThan(0);
+    // The released contract's account, as @sealant/api-contracts-next@0.40.0-next.868 ships it:
+    // a UUID-only id. Its decode ignores the fields added since.
+    const released = Schema.Struct({
+      items: Schema.Array(
+        Schema.Struct({
+          boatAccountId: Schema.String.check(
+            Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+          ),
+          label: Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed()),
+          state: Schema.Literals(["active", "removing"]),
+          createdAt: Schema.String,
+          keyRotatedAt: Schema.NullOr(Schema.String),
+        }),
+      ),
     });
-    const checked = await run(routes.checkBoatAccount("default"));
+    const wire: unknown = JSON.parse(JSON.stringify(listed));
+    expect(Exit.isSuccess(Schema.decodeUnknownExit(released)(wire))).toBe(true);
+  });
+
+  it("reads and checks the install's own key apart from list(), and refuses to rotate or remove it", async () => {
+    const before = await run(routes.listBoatAccounts());
+    expect(before.items.map((item) => item.boatAccountId)).not.toContain("default");
+    const checked = await run(routes.checkBoatInstallKey());
     expect(checked).toMatchObject({
-      boatAccountId: "default",
       report: { identity: { observed: true }, permissions: { observed: true, missing: [] } },
     });
-    const after = await run(routes.listBoatAccounts());
-    expect(after.items[0]?.report).toEqual(checked.report);
+    expect(await run(routes.getBoatInstallKey())).toEqual(checked);
+    expect(JSON.stringify(checked)).not.toContain(INSTALL_KEY);
     expect(
       await refusal(routes.rotateBoatAccountKey("default", { apiKey: ACCOUNT_KEY })),
     ).toMatchObject({ _tag: "BoatAccountConflictError", code: "boat-account-environment" });
@@ -240,6 +256,19 @@ describe.skipIf(DATABASE_URL === undefined)("Boat key reports (Postgres, fake Bo
     account.faults = { refuse: () => "no-answer" };
     expect(await refusal(routes.checkBoatAccount(created.boatAccountId))).toMatchObject({
       code: "boat-key-unverified",
+    });
+    // A rate limit says nothing about the key either (SLNT-781 review).
+    account.faults = {
+      refuse: () => ({
+        status: 429,
+        code: "rate_limited",
+        fields: { retryAfterSeconds: 30 },
+        retryAfter: 30,
+      }),
+    };
+    expect(await refusal(routes.checkBoatAccount(created.boatAccountId))).toMatchObject({
+      code: "boat-key-unverified",
+      boat: { kind: "rate-limited", retryAfterSeconds: 30 },
     });
     // The last report stands.
     const listed = await run(routes.listBoatAccounts());

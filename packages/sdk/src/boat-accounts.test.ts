@@ -55,8 +55,8 @@ describe("Boat accounts", () => {
       label: "Organization A",
       apiKey: "fixture-boat-key-not-real",
     });
-    // An older control plane sends no source, organization or report: stored, none, not checked.
-    const read = { ...account, source: "stored", organization: null, report: null };
+    // An older control plane sends no organization or report: none named, not checked.
+    const read = { ...account, organization: null, report: null };
     expect(created).toEqual(read);
     expect(await sealant.boatAccounts.list()).toEqual([read]);
     expect(

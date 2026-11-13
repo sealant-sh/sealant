@@ -44,7 +44,7 @@ The shipped resource groups and their operations:
 | Workspaces               | `POST /v1/workspaces`, `POST /v1/workspaces/image`, `POST /v1/workspaces/:workspaceId/exec`, `POST /v1/workspaces/:workspaceId/dotfiles`, `POST /v1/workspaces/:workspaceId/stop`, `POST /v1/workspaces/:workspaceId/restart`, `POST`, `DELETE` and `GET /v1/workspaces/:workspaceId/credentials`, `POST /v1/workspaces/:workspaceId/expire`, `PATCH /v1/workspaces/:workspaceId/name`, `DELETE /v1/workspaces/:workspaceId/ssh-user`, `GET /v1/workspaces`, `GET /v1/workspaces/:workspaceId`, `GET /v1/workspaces/:workspaceId/attempts`, `GET /v1/workspaces/:workspaceId/events`, `GET /v1/workspaces/:workspaceId/ssh-target`                                                                                                                                                                                            |
 | SSH keys                 | `POST /v1/ssh-keys`, `GET /v1/ssh-keys`, `DELETE /v1/ssh-keys/:sshKeyId`, `POST /v1/ssh-keys/resolve-principal`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Users                    | `POST /v1/users` (idempotent on email), `POST /v1/users/:userId/person`, `GET /v1/users/:userId` — identity rows for service principals acting on behalf of their own users                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Boat accounts            | `POST /v1/boat-accounts`, `GET /v1/boat-accounts`, `PUT /v1/boat-accounts/:boatAccountId/key`, `DELETE /v1/boat-accounts/:boatAccountId` — the Boat API keys an install keeps beside its default one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Boat accounts            | `POST /v1/boat-accounts`, `GET /v1/boat-accounts`, `PUT /v1/boat-accounts/:boatAccountId/key`, `DELETE /v1/boat-accounts/:boatAccountId`, `POST /v1/boat-accounts/:boatAccountId/check`, `GET`/`POST /v1/boat-accounts/install-key` — the Boat keys an install keeps beside its default one, and their checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Resource domains         | `POST /v1/resource-domains` (idempotent on its `<application>:<name>` key), `GET /v1/resource-domains/:resourceDomainId`, `POST /v1/resource-domains/:resourceDomainId/members/:userId/grant` and `/revoke` (each at the application's own rising `version`; an older one gets `409`), `GET /v1/resource-domains/:resourceDomainId/members/:userId`, `GET /v1/resource-domains/:resourceDomainId/members` (paged by `limit` and `cursor`), `GET` and `PUT /v1/resource-domains/:resourceDomainId/budget` (CPU, memory and storage ceilings with what is used and reserved and a warning at 80% and 95%; a change names the `revision` it read, and a stale one gets `409`) — owners that are projects, not people. A service key only: any other bearer gets `401`, and a body field the contract does not declare gets `400` |
 | Connected accounts       | `POST /v1/connected-accounts`, `GET /v1/connected-accounts`, `PUT /v1/connected-accounts/defaults/:provider`, `DELETE /v1/connected-accounts/:connectedAccountId`, `POST /v1/connected-accounts/:connectedAccountId/mark-invalid`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Profiles                 | `GET /v1/profiles`, `GET /v1/profiles/:profileId/credential-bindings`, `PUT /v1/profiles/:profileId/credential-bindings`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -158,7 +158,7 @@ stores alone. A product that serves several organizations stores one Boat accoun
 so each organization's Boat VMs run in, and are billed to, its own Boat account. Core has no notion
 of organizations: it knows each account by id, and the caller keeps the mapping. These routes need a
 service key, and the install's credential key (`SEALANT_CREDENTIALS_KEY`; `503` otherwise). With no
-env key, `check("default")` answers `404`.
+env key, both `install-key` routes answer `503` and say so.
 
 - `POST /v1/boat-accounts { label, apiKey, organization? }` checks the key with Boat by read-only
   calls before it stores anything (whitespace around a pasted key is trimmed). A key Boat refuses
@@ -170,21 +170,23 @@ env key, `check("default")` answers `404`.
   id or name): Core stores it and sends it as `X-Boat-Org` on every request for the account, so
   billing never follows the key's active wallet. The key is sealed with the install's credential key
   (`SEALANT_CREDENTIALS_KEY`) and is never returned by any route, logged or named in an error. The
-  answer is
-  `{ boatAccountId, label, state, createdAt, keyRotatedAt, source, organization, report }`.
-- `GET /v1/boat-accounts` lists the install's own key first, as `boatAccountId` `default` with
-  `source: "environment"`, then every stored account not removed (`source: "stored"`). `state` is
-  `active` or `removing`. Each carries its key's last `report`, null until it is checked.
-- `POST /v1/boat-accounts/:boatAccountId/check` checks the key again (`default` for the install's
-  own key) and stores and answers the new report. A key Boat now refuses, or that lacks a
-  permission, is reported, not refused; Boat not answering is `422` `boat-key-unverified`, and the
-  last report stands.
+  answer is `{ boatAccountId, label, state, createdAt, keyRotatedAt, organization, report }`.
+- `GET /v1/boat-accounts` lists every stored account not removed. `state` is `active` or `removing`.
+  Each carries its key's last `report`, null until it is checked.
+- `POST /v1/boat-accounts/:boatAccountId/check` checks a stored account's key again and stores and
+  answers the new report. A key Boat now refuses, or that lacks a permission, is reported, not
+  refused; Boat not answering, or asking to wait (a rate limit), is `422` `boat-key-unverified`, and
+  the last report stands.
+- `GET /v1/boat-accounts/install-key` answers the install's own key (its env key, which workspaces
+  run in when they name no account) as `{ label, report }`; never the key.
+  `POST /v1/boat-accounts/install-key` checks it with Boat now, as a stored account's check does. It
+  is not in the list.
 - `PUT /v1/boat-accounts/:boatAccountId/key { apiKey }` replaces the key, checked as on create and
   billing the organization the account was stored with. The new key must see every VM of the
   account's live runs and every saved image its launches use, so a key of another Boat account is
   refused (`409`, code `boat-key-cannot-see`, with the count in `unseen`). Running workspaces stay
-  in the account and use the new key from then on. Rotating or removing `default` is refused (`409`,
-  code `boat-account-environment`): that key is set in the install's environment.
+  in the account and use the new key from then on. Rotating or removing `default`, the install's own
+  key, is refused (`409`, code `boat-account-environment`): it is set in the install's environment.
 
 A key's `report` says what Core observed of it, from Boat's own answers, and when (`observedAt`).
 Each fact is `{ observed: true, … }` or `{ observed: false, reason, boat? }`, where `reason` is

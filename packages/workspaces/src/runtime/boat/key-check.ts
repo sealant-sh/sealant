@@ -45,6 +45,16 @@ const KEY_REFUSALS: ReadonlySet<BoatFailure["kind"]> = new Set([
   "sandbox-outside-key",
 ]);
 
+/** Refusals for the account, not the key: Boat authenticated the key to say so. */
+const ACCOUNT_REFUSALS: ReadonlySet<BoatFailure["kind"]> = new Set([
+  "account-suspended",
+  "billing-required",
+  "running-limit",
+  "member-cap",
+  "trial-restricted",
+  "snapshot-allowance-full",
+]);
+
 const notObserved = (error: BoatApiError): BoatKeyNotObserved => {
   const failure = error.boat;
   if (error.code === "invalid_response")
@@ -101,12 +111,14 @@ export const checkBoatKey = async (
   const provenMissing: string[] = [];
   if (!verified.ok) {
     const failure = verified.error.boat;
-    if (failure === undefined || failure.kind === "no-answer")
-      return { kind: "unverified", ...(failure === undefined ? {} : { failure }) };
+    if (failure === undefined) return { kind: "unverified" };
     if (KEY_REFUSALS.has(failure.kind)) return { kind: "refused", failure };
     if (failure.kind === "permission-missing")
       provenMissing.push(failure.permission ?? "sandbox.read");
-    else if (failure.kind !== "account-suspended") return { kind: "refused", failure };
+    // Boat accepted the key and refused for the account (suspended, billing, a limit, a trial):
+    // the check goes on, and the report shows it. Anything else (a rate limit, no machine, no
+    // answer, a refusal Core does not classify) says nothing about the key: unverified.
+    else if (!ACCOUNT_REFUSALS.has(failure.kind)) return { kind: "unverified", failure };
   }
   const [me, orgs, limits, keys, allowance] = await Promise.all([
     settle(() => client.me()),

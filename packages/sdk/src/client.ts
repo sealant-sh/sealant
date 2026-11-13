@@ -22,6 +22,8 @@ import {
   cancelWorkspaceCreateOp,
   createAccessTokenOp,
   checkBoatAccountOp,
+  checkBoatInstallKeyOp,
+  getBoatInstallKeyOp,
   createBoatAccountOp,
   createConnectedAccountOp,
   createSshKeyOp,
@@ -105,8 +107,7 @@ const mapBoatAccount = (wire: BoatAccountWire): BoatAccount => ({
   state: wire.state,
   createdAt: wire.createdAt,
   keyRotatedAt: wire.keyRotatedAt,
-  // An older control plane sends neither: every account it lists is stored, with no report.
-  source: wire.source ?? "stored",
+  // An older control plane sends neither: no organization named, no report.
   organization: wire.organization ?? null,
   report: wire.report ?? null,
 });
@@ -410,6 +411,8 @@ export class Sealant {
       mapBoatAccount(await this.#runtime.run(rotateBoatAccountKeyOp(boatAccountId, { apiKey }))),
     check: async (boatAccountId) =>
       mapBoatAccount(await this.#runtime.run(checkBoatAccountOp(boatAccountId))),
+    installKey: async () => await this.#runtime.run(getBoatInstallKeyOp()),
+    checkInstallKey: async () => await this.#runtime.run(checkBoatInstallKeyOp()),
     remove: async (boatAccountId) =>
       mapBoatAccount(await this.#runtime.run(removeBoatAccountOp(boatAccountId))),
   };

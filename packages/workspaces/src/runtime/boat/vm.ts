@@ -167,10 +167,10 @@ const uncertainCreate: BoatLaunchDiagnostic = {
 };
 
 /**
- * Boat's refusals of a create that no later try with the same key and request can turn into a VM:
- * the key, its permissions, the account, billing and plan limits. A replay under an accepted
- * idempotency key is answered with the VM, never with these, so they prove Boat holds none. A
- * rate limit, a missing machine or no answer stay ambiguous: the launch retries them.
+ * Boat's refusals of a launch's first create that prove it made no VM: the key, its permissions,
+ * the account, billing and plan limits. The first create under a key is the only one sent with
+ * it, so a refusal of it leaves nothing. A rate limit, a missing machine or no answer stay
+ * ambiguous: the launch retries them.
  */
 const DEFINITE_REFUSALS: ReadonlySet<BoatFailureKind> = new Set([
   "key-refused",
@@ -187,16 +187,26 @@ const DEFINITE_REFUSALS: ReadonlySet<BoatFailureKind> = new Set([
 ]);
 
 /**
- * Boat refused a create outright: what it was asked for cannot be made (source snapshot gone,
- * account or plan limits, no machine). A replay under an accepted key is answered with that VM,
- * never with these, so they prove Boat holds no VM for the key.
+ * Boat refused a replay of a create for what the request itself names: its source snapshot is
+ * gone. An earlier acceptance under the key would have been answered with its VM, so Boat holds
+ * none. Nothing else proves that on a replay: Boat does not document that it looks the key up
+ * before it checks limits, billing or the key itself, and a key can expire, or a running limit
+ * fill, after Boat accepted the first create. Those stay ambiguous on a replay.
  */
-const createRejected = (error: BoatApiError) =>
+const replayRejected = (error: BoatApiError) =>
   error.status !== null &&
   error.status >= 400 &&
   error.status < 500 &&
-  (["snapshot_not_found", "snapshot_data_expired"].includes(error.code) ||
-    (error.boat !== undefined && DEFINITE_REFUSALS.has(error.boat.kind)));
+  ["snapshot_not_found", "snapshot_data_expired"].includes(error.code);
+
+/** Boat refused a launch's first create outright (`DEFINITE_REFUSALS`, or its source is gone). */
+const firstCreateRejected = (error: BoatApiError) =>
+  replayRejected(error) ||
+  (error.status !== null &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.boat !== undefined &&
+    DEFINITE_REFUSALS.has(error.boat.kind));
 
 const notFound = (error: BoatApiError) =>
   error.status === 404 && ["not_found", "sandbox_not_found"].includes(error.code);
@@ -352,9 +362,12 @@ const make: Effect.Effect<
       if (reply === undefined || !reply.ok) {
         const diagnostic =
           reply === undefined ? uncertainCreate : boatLaunchDiagnostic(reply.error, "create");
-        // A definite refusal: nothing was created. The next drive's replay records it.
-        if (reply !== undefined && createRejected(reply.error))
+        // A definite refusal of the only create sent under this key: Boat holds no VM for it.
+        // Recorded now, because a replay's refusal could not prove it.
+        if (reply !== undefined && firstCreateRejected(reply.error)) {
+          yield* runs.recordNeverCreated(runId);
           return yield* Effect.fail(new BoatAllocationError("provider-unavailable", diagnostic));
+        }
         // Boat may have accepted it (a lost reply, a 5xx). The launch keeps its row: its next
         // attempt finds the VM by label, or replays under the same key, and continues.
         return yield* Effect.fail(new BoatAllocationError("allocation-pending", diagnostic));
@@ -416,7 +429,7 @@ const make: Effect.Effect<
         phase === "issued" &&
         replay !== undefined &&
         !replay.ok &&
-        createRejected(replay.error)
+        replayRejected(replay.error)
       ) {
         // A definite refusal of this key: an earlier acceptance would have been replayed, so
         // Boat holds no VM for the launch.

@@ -274,10 +274,10 @@ These call the live API and work end-to-end:
   included. A key goes in and never comes out; Boat checks it before it is stored, and each account
   carries its key's last `report` (`BoatKeyReport`: who the key is, which wallet it bills, its
   permissions and the missing ones, its expiry, whether the wallet can start a VM and why not, and
-  its snapshot slots, each observed or not with Boat's reason). `list()` includes the install's own
-  key as `default` (`source: "environment"`), which `check` reads and `rotateKey` and `remove`
-  refuse. A refused key rejects with `SealantApiError`, whose `boat`, `missingPermissions` and
-  `boatKeyReport` say why. Needs a service key. See
+  its snapshot slots, each observed or not with Boat's reason). The control plane's own key is not
+  in `list()`: `.installKey()` reads its last report and `.checkInstallKey()` checks it now
+  (`BoatInstallKey`: `label`, `report`). A refused key rejects with `SealantApiError`, whose `boat`,
+  `missingPermissions` and `boatKeyReport` say why. Needs a service key. See
   [Boat accounts](/docs/reference/http-api#boat-accounts) for what each call refuses.
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately

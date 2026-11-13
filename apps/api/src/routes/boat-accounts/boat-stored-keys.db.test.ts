@@ -158,7 +158,7 @@ describe.skipIf(DATABASE_URL === undefined)(
         const created = await run(
           routes.createBoatAccount({ label: "Org S", apiKey: ACCOUNT_KEY }),
         );
-        expect(created).toMatchObject({ source: "stored", state: "active" });
+        expect(created).toMatchObject({ state: "active" });
         expect(created.report?.identity).toMatchObject({ observed: true });
         expect(await run(availability.boatLaunchable)).toBe(true);
 
@@ -168,8 +168,12 @@ describe.skipIf(DATABASE_URL === undefined)(
         const checked = await run(routes.checkBoatAccount(created.boatAccountId));
         expect(checked.report?.observedAt).toBeDefined();
         // The install has no key of its own to check.
-        expect(await refusal(routes.checkBoatAccount("default"))).toMatchObject({
-          _tag: "BoatAccountNotFoundError",
+        expect(await refusal(routes.checkBoatInstallKey())).toMatchObject({
+          _tag: "BoatAccountServiceUnavailableError",
+          message: expect.stringContaining("no Boat key of its own"),
+        });
+        expect(await refusal(routes.getBoatInstallKey())).toMatchObject({
+          _tag: "BoatAccountServiceUnavailableError",
         });
 
         // A create that names the account is accepted; one that names none is refused, since no

@@ -196,6 +196,34 @@ describe("a Boat key's check", () => {
     });
   });
 
+  it("does not read a rate limit, no machine or an unclassified refusal as a refused key", async () => {
+    const { fake, api } = await start();
+    for (const refusal of [
+      BOAT_REFUSALS["rate-limited"],
+      BOAT_REFUSALS["no-machine"],
+      BOAT_REFUSALS.refused,
+    ]) {
+      fake.faults = { refuse: (call) => (call.path === "/sandboxes" ? refusal : undefined) };
+      expect(await checkBoatKey(api, { organization: null, now })).toMatchObject({
+        kind: "unverified",
+        failure: { code: refusal.code },
+      });
+    }
+  });
+
+  it("goes on when Boat refuses for the account, not the key, and reports it", async () => {
+    const { fake, api } = await start();
+    fake.faults = {
+      refuse: (call) =>
+        call.path === "/sandboxes" ? BOAT_REFUSALS["billing-required"] : undefined,
+    };
+    expect(await checkBoatKey(api, { organization: null, now })).toMatchObject({
+      kind: "checked",
+      missingPermissions: [],
+      report: { identity: { observed: true }, start: { observed: true } },
+    });
+  });
+
   it("names the permission Boat refused the inventory read for", async () => {
     const { fake, api } = await start();
     fake.faults = {

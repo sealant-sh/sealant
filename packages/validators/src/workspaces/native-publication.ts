@@ -1,3 +1,4 @@
+import type { BoatFailureKind } from "@sealant/api-contracts";
 import { z } from "zod";
 
 import { workspaceImageProbeSchema } from "./workspace-image-probe.js";
@@ -139,6 +140,21 @@ export const nativeCatalogClaimSchema = z.object({
   purpose: z.enum(["build", "reconcile", "remove"]),
   expiresAt: z.date(),
 });
+/**
+ * The Boat failure kinds after which a build may pass on a later try with the same key and
+ * account, so the next launch spends the one fresh reservation on it: Boat did not answer, a rate
+ * limit, no machine, the plan's running limit (it frees when a session stops), and a refusal Core
+ * does not classify. Every other kind (the key, its permissions, the account, billing, a trial,
+ * the snapshot allowance) needs a person; the build stays quarantined with that kind as its reason.
+ */
+export const NATIVE_REBUILD_BOAT_FAILURES = [
+  "native-boat-no-answer",
+  "native-boat-rate-limited",
+  "native-boat-no-machine",
+  "native-boat-running-limit",
+  "native-boat-refused",
+] as const satisfies readonly `native-boat-${BoatFailureKind}`[];
+
 /** Only completed construction failures may spend one fresh reservation. Integrity and cleanup stay closed. */
 export const nativeBuildRetryReasonSchema = z.enum([
   "native-provider-transport_error",
@@ -147,6 +163,7 @@ export const nativeBuildRetryReasonSchema = z.enum([
   "native-sandbox-failed",
   "native-save-failed",
   "native-interrupted",
+  ...NATIVE_REBUILD_BOAT_FAILURES,
 ]);
 const reservation = z.object({
   buildAttempt: z.number().int().min(1).max(2).default(1),
