@@ -72,9 +72,7 @@ its PR, use the `verify` skill in `.agents/skills/verify/`.
 
 ## Code
 
-- All backend code is Effect v4. Load the `effect` skill (`../agent-home/.agents/skills/effect/`)
-  before writing or changing Effect code, and follow it where older code differs. Check every API
-  against the `effect` installed in `node_modules`.
+- All backend code is Effect v4; see Effect below.
 - Write TypeScript to the `coding-standards` skill
   (`../agent-home/.agents/skills/coding-standards/`), including its rules on `any` and casts.
 - Before any non-tiny UI change in `apps/web`, read `apps/web/DESIGN.md` and follow it as the design
@@ -82,6 +80,12 @@ its PR, use the `verify` skill in `.agents/skills/verify/`.
 - This repo is not Next.js: write no `"use client"` directives.
 - In React, derive data from props, state and loaders; reach for `useEffect` only when no cleaner
   data flow exists.
+
+## Effect
+
+Before writing Effect code, load the home repo's `effect` skill. It covers services, layers, the
+composition root, entrypoints, testing with layers, concurrency and the everyday Effect APIs. Check
+every API against the `effect` version installed in `node_modules`, not memory or upstream `main`.
 
 <!-- intent-skills:start -->
 
