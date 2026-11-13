@@ -22,12 +22,20 @@ export {
   type ForwardDialReason,
   ForwardResetError,
   SealantApiError,
+  SealantBoatError,
   SealantBudgetExceededError,
   SealantError,
   SealantNotImplementedError,
   SealantRuntimeError,
 } from "./errors.js";
 export type * from "./types.js";
+// Why Boat refused a call for a Boat workspace (`SealantBoatError.boat`): a closed set of kinds.
+export {
+  BOAT_FAILURE_KINDS,
+  BOAT_RETRYABLE_FAILURE_KINDS,
+  type BoatFailure,
+  type BoatFailureKind,
+} from "@sealant/api-contracts";
 export type {
   EnsuredScope,
   ScopeBudget,

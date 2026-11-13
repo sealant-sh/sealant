@@ -12,6 +12,7 @@ import { Effect, Redacted } from "effect";
 import { expect } from "vitest";
 import { z } from "zod";
 
+import { boatErrorEnvelope, type FakeBoatRefusal } from "../../../boat-harness/fake-boat.js";
 import {
   BoatTunnelError,
   boatTunnelName,
@@ -73,6 +74,8 @@ export class ProviderFixture {
   scheduled = false;
   foreign = false;
   inventoryUnavailable = false;
+  /** Fault: Boat refuses every create with this refusal, in its error envelope. */
+  createRefusal: FakeBoatRefusal | undefined;
   snapshotMismatch = false;
   bootReadUnavailable = false;
   beforeCreateReply: () => Promise<void> = async () => {};
@@ -104,6 +107,10 @@ export class ProviderFixture {
       const body = z.record(z.string(), z.unknown()).parse(JSON.parse(raw));
       const header = request.headers["idempotency-key"];
       this.creates.push({ key: typeof header === "string" ? header : undefined, body });
+      if (this.createRefusal !== undefined) {
+        send(boatErrorEnvelope(this.createRefusal), this.createRefusal.status);
+        return;
+      }
       if (!this.noAllocation) this.labels = z.record(z.string(), z.string()).parse(body.labels);
       await this.beforeCreateReply();
       if (this.lostCreate) {

@@ -78,6 +78,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { BOAT_REFUSALS } from "../../../boat-harness/refusals.js";
 import { boatProofConfigSchema } from "../../operator/boat-live-check.js";
 import { makeBoatProofCore } from "../../operator/boat-proof-core.js";
 import {
@@ -157,6 +158,7 @@ import {
   boatExecutionLayer,
   type BoatLaunchMaterial,
 } from "./execution.js";
+import { boatFailureInMessage } from "./failure.js";
 import { BoatAllocationProvider } from "./provider.js";
 import { RecordedBoat } from "./recorded-boat.fixture.js";
 import {
@@ -166,7 +168,7 @@ import {
   boatRemovalLayerNoDeps,
 } from "./removal.js";
 import { BoatTunnelCarrier, type BoatTunnelCarrierInput } from "./tunnel-carrier.js";
-import { BoatVm, boatVmLayer, boatVmLayerNoDeps } from "./vm.js";
+import { BoatAllocationError, BoatVm, boatVmLayer, boatVmLayerNoDeps } from "./vm.js";
 
 const databaseUrl = process.env.SEALANT_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -2943,6 +2945,45 @@ describe.runIf(databaseUrl !== undefined)(
         expect(s.provider.creates).toHaveLength(1);
         expect(s.guest.targets).toHaveLength(1);
       }));
+    it.each(["key-expired", "permission-missing"] as const)(
+      "ends a launch Boat refused for %s after one create, with Boat's reason, never as an ambiguous create (SLNT-782)",
+      (kind) =>
+        test(async (s) => {
+          s.provider.createRefusal = BOAT_REFUSALS[kind];
+          const failure = await execute(s.allocations.prepare(s.input)).catch(
+            (error: unknown) => error,
+          );
+          expect(failure).toBeInstanceOf(BoatAllocationError);
+          expect(failure).toMatchObject({
+            code: "provider-unavailable",
+            diagnostic: {
+              step: "create",
+              provider: {
+                operation: "create",
+                status: 403,
+                boat: {
+                  kind,
+                  code: BOAT_REFUSALS[kind].code,
+                  retryable: false,
+                  requestId: expect.stringMatching(/^req_/),
+                  ...(kind === "permission-missing" ? { permission: "sandbox.create" } : {}),
+                },
+              },
+            },
+          });
+          // Not retried as a create whose outcome is unknown: one create, nothing replayed.
+          expect(s.provider.creates).toHaveLength(1);
+          // The message the runtime row keeps carries it, as the API reads it back for the SDK.
+          expect(
+            failure instanceof Error ? boatFailureInMessage(failure.message)?.kind : undefined,
+          ).toBe(kind);
+          // The next drive's replay records that Boat holds no VM for the launch.
+          s.provider.createRefusal = BOAT_REFUSALS[kind];
+          await execute(s.allocations.prepare(s.input)).catch(() => undefined);
+          expect(await vmOf(s, s.input.consumer.runId)).toMatchObject({ sandboxId: null });
+          expect(s.provider.creates).toHaveLength(2);
+        }),
+    );
     it("adopts a lost create response from the complete paginated inventory after restarting the service", () =>
       test(async (s) => {
         // The create reply is lost and Boat's inventory stays unreachable, so the launch gives up.

@@ -112,9 +112,11 @@ describe("native provider failure diagnostics", () => {
           operation: "execute",
           status: 200,
           causeClass: "UND_ERR_BODY_TIMEOUT",
+          // Boat did not answer: the kind, with nothing of the exception's text.
+          boat: { kind: "no-answer", retryable: true, operation: "execute", status: 200 },
         });
         expect(error.message).toBe(
-          "Boat request failed during execute: transport_error (HTTP 200); cause UND_ERR_BODY_TIMEOUT",
+          "Boat request failed during execute: transport_error (HTTP 200); cause UND_ERR_BODY_TIMEOUT; no-answer",
         );
         const unknown = new BoatApiError("execute", null, "transport_error", {
           name: privateText,

@@ -707,7 +707,9 @@ describe("Boat complete ownership discovery through HTTP", () => {
             {
               ok: false,
               code: mode === "denied" ? "unauthorized" : "private-payload",
-              message: "private-payload",
+              // Boat's own message is kept for the caller; nothing else of its body is.
+              message: "Boat's own words",
+              internal: "private-payload",
             },
             mode === "denied" ? 403 : 503,
           );
@@ -1075,7 +1077,9 @@ describe("Boat API boundary", () => {
     );
     const result = await api.get(id);
     if (result.ok) throw new Error("expected API failure");
+    // A code shaped like a key is not kept as Boat's code; the message loses it too.
     expect(result.error).toMatchObject({ operation: "get", status: 403, code: "provider_error" });
+    expect(result.error.boat).toMatchObject({ kind: "refused", message: "[REDACTED]" });
     expect(`${inspect(result.error)}${JSON.stringify(result.error)}`).not.toContain(secret);
     trusted = true;
     const second = await api.saveSnapshot(

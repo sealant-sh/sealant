@@ -204,9 +204,14 @@ describe("fake Boat API", () => {
       sandboxId: trialId,
       name: "kept",
     });
-    expect(refused).toEqual({
+    expect(refused).toMatchObject({
       status: 403,
-      body: { ok: false, code: "trial_saved_snapshots_not_allowed" },
+      body: {
+        ok: false,
+        code: "trial_saved_snapshots_not_allowed",
+        error: { code: "trial_saved_snapshots_not_allowed", status: 403 },
+        requestId: expect.stringMatching(/^req_/),
+      },
     });
   });
 

@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import { boatFailureSchema } from "./boat-failures.js";
 import { BudgetExceededError } from "./budgets.js";
 import { connectedAccountProviderSchema } from "./connected-accounts.js";
 import { EndpointUrl } from "./endpoint-url.js";
@@ -193,6 +194,11 @@ export type WorkspacePublication = typeof workspacePublicationSchema.Type;
 export const workspaceErrorSchema = Schema.Struct({
   message: Schema.String,
   code: Schema.optional(NonEmptyString),
+  /**
+   * Why Boat refused, or did not answer, the call that failed this Boat workspace's launch or image
+   * build: the kind, and Boat's own code, message and request id. Absent for any other failure.
+   */
+  boat: Schema.optional(boatFailureSchema),
 });
 
 export const githubWorkspaceSourceSelectionSchema = Schema.Struct({

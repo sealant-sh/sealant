@@ -207,6 +207,19 @@ const failure = (error: unknown, path?: string) =>
     : new NativeBuildError("native-local-io-failed", path);
 
 const noop = () => undefined;
+/** A save Boat answered with a refusal (4xx) other than a save already under way. */
+const savedNothing = (error: unknown) => {
+  if (!(error instanceof NativeBuildError)) return false;
+  const status = error.providerFailure?.status ?? null;
+  return (
+    status !== null &&
+    status >= 400 &&
+    status < 500 &&
+    error.providerFailure?.boat !== undefined &&
+    !["save_in_progress", "idempotency_in_progress"].includes(error.providerFailure.boat.code ?? "")
+  );
+};
+
 const awaitProviderResponse = async <T>(
   request: () => Promise<BoatResult<T>>,
   signal: AbortSignal,
@@ -429,13 +442,15 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         return;
       } catch (error) {
         last = error;
+        // Retried: Boat did not answer, is still settling this key, or asked to wait (a rate
+        // limit, no machine now). A refusal no retry can change (the key, its permissions,
+        // billing, the plan) ends the build with Boat's reason.
         if (
           !(error instanceof NativeBuildError) ||
-          ![
-            "native-provider-transport_error",
-            "native-provider-idempotency_in_progress",
-            "native-provider-provider_error",
-          ].includes(error.code)
+          !(
+            error.code === "native-provider-idempotency_in_progress" ||
+            error.providerFailure?.boat?.retryable === true
+          )
         )
           throw error;
         await pause(this.#options.pollIntervalMs ?? 1500, signal);
@@ -536,7 +551,12 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
     const saved = await awaitProviderResponse(
       () => this.#options.api.saveSnapshot(save.sourceSandboxId, save.name),
       signal,
-    ).catch(async () => this.#observeSave(journal, path, signal));
+    ).catch(async (error: unknown) => {
+      // Boat refused the save outright (the snapshot allowance, billing, the key): it holds no
+      // snapshot for it, and its reason is the build's. Any other outcome may have saved one.
+      if (savedNothing(error)) throw error;
+      return this.#observeSave(journal, path, signal);
+    });
     if (
       saved.name !== save.name ||
       saved.sourceSandboxId !== save.sourceSandboxId ||

@@ -82,6 +82,7 @@ export const DEFECTS = {
     "worker killed after bind": undefined,
     "Stop after the launch": undefined,
     "deletion stuck in processing": undefined,
+    "create refused: Boat key expired": undefined,
   },
 } as const satisfies {
   readonly happyPath: Defect | undefined;

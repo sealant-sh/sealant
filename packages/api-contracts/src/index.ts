@@ -22,6 +22,7 @@ export * from "./core-api/ssh-keys.js";
 export * from "./core-api/system.js";
 export * from "./core-api/users.js";
 export * from "./core-api/boat-accounts.js";
+export * from "./core-api/boat-failures.js";
 export * from "./workspace-environment.js";
 export * from "./capture-owner-map.js";
 export * from "./connected-account-selector.js";

@@ -3,6 +3,8 @@ import { inspect } from "node:util";
 import { nativeBuildOwnershipSchema, type NativeBuildOwnership } from "@sealant/validators";
 import { z } from "zod";
 
+import { boatFailureSchema, boatNoAnswer, type BoatFailure } from "./failure.js";
+
 const causeClassSchema = z.enum([
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT",
@@ -74,24 +76,38 @@ export const boatProviderFailureSchema = z.object({
     .catch("unknown"),
   status: z.number().int().min(100).max(599).nullable(),
   causeClass: causeClassSchema.nullable(),
+  /** Why Boat refused, or did not answer: the kind and Boat's own code, message and request id. */
+  boat: boatFailureSchema.optional(),
 });
 export type BoatProviderFailure = z.infer<typeof boatProviderFailureSchema>;
+
+/** Codes for a call Boat did not answer, or answered with a reply Core cannot read. */
+const NO_ANSWER_CODES = new Set(["transport_error", "invalid_response"]);
 
 export class BoatApiError extends Error {
   readonly _tag = "BoatApiError";
   readonly causeClass;
+  /**
+   * Boat's reason, when the call reached Boat (or tried to): set for every refusal Boat answered
+   * and for a call it did not answer. Absent for a request Core refused itself before sending.
+   */
+  readonly boat: BoatFailure | undefined;
 
   constructor(
     readonly operation: string,
     readonly status: number | null,
     readonly code: string,
     cause?: unknown,
+    boat?: BoatFailure,
   ) {
     const classified = cause === undefined ? null : providerCauseClass(cause);
+    const failure =
+      boat ?? (NO_ANSWER_CODES.has(code) ? boatNoAnswer(operation, status) : undefined);
     super(
-      `Boat request failed during ${operation}: ${code}${status === null ? "" : ` (HTTP ${status})`}${classified === null ? "" : `; cause ${classified}`}`,
+      `Boat request failed during ${operation}: ${code}${status === null ? "" : ` (HTTP ${status})`}${classified === null ? "" : `; cause ${classified}`}${failure === undefined ? "" : `; ${failure.kind}${failure.requestId === undefined ? "" : ` (${failure.requestId})`}`}`,
     );
     this.causeClass = classified;
+    this.boat = failure;
   }
 }
 

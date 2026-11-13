@@ -174,6 +174,34 @@ because Core cannot tell whether it does, rejects with the refusal's own code,
 `owner-map-unsupported` or `owner-map-unverified`. A control plane that predates launch phases
 reports none; `readyTimeoutMs` then bounds the whole wait, image build included.
 
+A Boat workspace that failed because Boat refused, or did not answer, a call Core made for it (its
+VM create, its image build's VM or saved snapshot) rejects with `SealantBoatError`, still with code
+`workspace_not_ready`. Its `boat` says why, as one of `BOAT_FAILURE_KINDS` (exported, with the
+`BoatFailure` and `BoatFailureKind` types):
+
+| `boat.kind`               | What Boat said                                                                      |
+| ------------------------- | ----------------------------------------------------------------------------------- |
+| `key-refused`             | It does not accept the Boat key (401: unknown, revoked or malformed)                |
+| `key-expired`             | The key's lifetime ended (`api_key_expired`)                                        |
+| `permission-missing`      | The key lacks a permission; `boat.permission` names it (`api_key_action_forbidden`) |
+| `sandbox-outside-key`     | The key is limited to other VMs or environments (`api_key_sandbox_forbidden`)       |
+| `organization-mismatch`   | The key belongs to another Boat organization (`api_key_org_mismatch`, `_forbidden`) |
+| `account-suspended`       | The Boat account or organization is suspended (`org_suspended`)                     |
+| `billing-required`        | The wallet must be paid first; `boat.billingUrl` is Boat's link when it sent one    |
+| `running-limit`           | The plan's limit of running VMs is reached (`limit_reached`)                        |
+| `member-cap`              | The organization's member cap is reached                                            |
+| `rate-limited`            | Too many starts in a window; `boat.retryAfterSeconds` and `boat.retryAt` say when   |
+| `trial-restricted`        | The call needs a paid plan (`trial_*`, `machine_class_plan_required`)               |
+| `no-machine`              | Boat has no machine of the size right now (`no_ready_machine`, `out_of_capacity`)   |
+| `snapshot-allowance-full` | The wallet keeps all its included saved snapshots and cannot pay for another        |
+| `no-answer`               | Boat did not answer, or answered with a server error                                |
+| `refused`                 | Another refusal; `boat.code` is Boat's own                                          |
+
+`boat.retryable` is `false` when the same key and request cannot succeed later; Core does not retry
+those itself. `boat.code`, `boat.message` and `boat.requestId` are Boat's own code, message
+(bounded, with anything shaped like a secret removed) and request id, the one to give Boat's
+support. Nothing else of Boat's answer is kept, and no part of the key is in it.
+
 An image is built once per plan (the rendered Containerfile): a later launch of the same plan reuses
 the published image, and on Docker a worker whose database has no record of the plan reuses the
 `sealant-workspace-<os-family>:plan-<hash>` image the Engine kept instead of building it again, once

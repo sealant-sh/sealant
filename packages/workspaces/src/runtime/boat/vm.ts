@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import type { BoatFailureKind } from "@sealant/api-contracts";
 import { BoatRunRepo, BoatRunRepoLive, BoatRunStoreError, type SealantDB } from "@sealant/db";
 import {
   boatExecutionTargetSchema,
@@ -166,6 +167,26 @@ const uncertainCreate: BoatLaunchDiagnostic = {
 };
 
 /**
+ * Boat's refusals of a create that no later try with the same key and request can turn into a VM:
+ * the key, its permissions, the account, billing and plan limits. A replay under an accepted
+ * idempotency key is answered with the VM, never with these, so they prove Boat holds none. A
+ * rate limit, a missing machine or no answer stay ambiguous: the launch retries them.
+ */
+const DEFINITE_REFUSALS: ReadonlySet<BoatFailureKind> = new Set([
+  "key-refused",
+  "key-expired",
+  "permission-missing",
+  "sandbox-outside-key",
+  "organization-mismatch",
+  "account-suspended",
+  "billing-required",
+  "running-limit",
+  "member-cap",
+  "trial-restricted",
+  "snapshot-allowance-full",
+]);
+
+/**
  * Boat refused a create outright: what it was asked for cannot be made (source snapshot gone,
  * account or plan limits, no machine). A replay under an accepted key is answered with that VM,
  * never with these, so they prove Boat holds no VM for the key.
@@ -174,15 +195,8 @@ const createRejected = (error: BoatApiError) =>
   error.status !== null &&
   error.status >= 400 &&
   error.status < 500 &&
-  [
-    "snapshot_not_found",
-    "snapshot_data_expired",
-    "insufficient_balance",
-    "machine_class_plan_required",
-    "trial_auto_stop_required",
-    "trial_saved_snapshots_not_allowed",
-    "no_ready_machine",
-  ].includes(error.code);
+  (["snapshot_not_found", "snapshot_data_expired"].includes(error.code) ||
+    (error.boat !== undefined && DEFINITE_REFUSALS.has(error.boat.kind)));
 
 const notFound = (error: BoatApiError) =>
   error.status === 404 && ["not_found", "sandbox_not_found"].includes(error.code);
@@ -368,7 +382,12 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatAllocationError("allocation-held"));
     }
     if (discovered.kind === "unknown" && discovered.reason === "inventory-unavailable")
-      return yield* Effect.fail(new BoatAllocationError("provider-unavailable"));
+      return yield* Effect.fail(
+        new BoatAllocationError(
+          "provider-unavailable",
+          boatLaunchDiagnostic(discovered.error, "discover"),
+        ),
+      );
     let sandbox = discovered.kind === "found" ? discovered.sandbox : undefined;
     if (sandbox === undefined) {
       // Boat keeps an idempotency key for 24 hours. Past that, a replay could create a second VM

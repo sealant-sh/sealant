@@ -6,6 +6,7 @@ import {
 } from "@sealant/db";
 import { parsePersistedWorkspacePublication, type RuntimeAdapterId } from "@sealant/validators";
 
+import { boatFailureInMessage, type BoatFailure } from "../runtime/boat/failure.js";
 import {
   personLayoutCapability,
   type PersonLayoutCapability,
@@ -53,7 +54,14 @@ export interface WorkspacePublishedImage {
 export interface WorkspaceErrorDetails {
   readonly message: string;
   readonly code?: string;
+  /** Why Boat refused the call that failed a Boat launch or image build (see `BoatFailure`). */
+  readonly boat?: BoatFailure;
 }
+
+const withBoatFailure = (details: WorkspaceErrorDetails): WorkspaceErrorDetails => {
+  const boat = boatFailureInMessage(details.message);
+  return boat === undefined ? details : { ...details, boat };
+};
 
 /**
  * Whether the run's executor is RETAINED: kept, with its disk, because it holds work not
@@ -355,17 +363,17 @@ export const resolveWorkspaceError = (
   runtimeInstance?: WorkspaceRuntimeInstance,
 ): WorkspaceErrorDetails | undefined => {
   if (latestJob !== undefined && latestJob.errorMessage !== null) {
-    return {
+    return withBoatFailure({
       message: latestJob.errorMessage,
       ...(latestJob.errorCode === null ? {} : { code: latestJob.errorCode }),
-    };
+    });
   }
 
   if (runtimeInstance?.status === "failed" && runtimeInstance.errorMessage !== null) {
-    return {
+    return withBoatFailure({
       message: runtimeInstance.errorMessage,
       ...(runtimeInstance.errorCode === null ? {} : { code: runtimeInstance.errorCode }),
-    };
+    });
   }
 
   return undefined;
