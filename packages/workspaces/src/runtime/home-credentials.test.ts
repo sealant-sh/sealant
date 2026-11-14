@@ -160,6 +160,10 @@ const world = (
     .join("");
   const env = {
     ...process.env,
+    // Not a top-level shell: a bash built to source the system and user bashrc when sshd seems to
+    // have started it (stdin a socket, as Node's spawnSync input is, and SHLVL below 1) would
+    // otherwise run this machine's shell setup first, which can put its own PATH before ours.
+    SHLVL: "1",
     ...options.env,
     PATH: `${prefix}${process.env["PATH"] ?? SYSTEM_PATH}`,
   };

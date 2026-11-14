@@ -9,7 +9,7 @@
     "build": "vite build",
     "cf-typegen": "wrangler types",
     "deploy": "vite build && wrangler deploy",
-    "dev": "vite dev --port 3000",
+    "dev": "vite dev --port 3001",
     "docs:generate": "fumadocs-mdx source.config.ts .source",
     "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "prebuild": "pnpm run docs:generate",

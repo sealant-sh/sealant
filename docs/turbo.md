@@ -29,8 +29,3 @@ exactly and upgrade on purpose.
 
 - `test` keeps `dependsOn: ["^test"]`. A transit node would let the test tasks run in parallel, but
   jobs, telemetry and worker share one test database.
-- `packages/workspaces` `home-credentials.test.ts` "sh (bash)" fails under turbo and passes on its
-  own. It depends on the inherited `SHLVL`, which strict mode strips. It fails the same way on
-  2.9.18; the fix belongs in the test.
-- `pnpm dev` cannot start every app at once. `@sealant/docs` and `@sealant/web` both use port 3000,
-  and docs and marketing both take the Cloudflare Vite plugin's inspector port 9229.
