@@ -255,7 +255,7 @@ describe("attempt-owned durable native cleanup", () => {
       ...f.journal,
       runtime: {
         ...f.journal.runtime,
-        source: f.journal.runtime.source.replace("next.180", "next.100"),
+        source: f.journal.runtime.source.replace(/-next\.\d+@/, "-next.100@"),
         manifest: "d".repeat(64),
         sealantd: "e".repeat(64),
       },
