@@ -15,6 +15,8 @@ import { resolveInternalConfig } from "./internal/config.js";
 
 const SMOKE_BASE_URL = process.env["SEALANT_SMOKE_BASE_URL"];
 const baseUrl = SMOKE_BASE_URL ?? "http://127.0.0.1:4000";
+// GitHub's own sample repository: public, tiny, and kept by GitHub (the SDK examples use it too).
+const SMOKE_REPOSITORY = "github.com/octocat/Hello-World";
 
 // Created via `POST /v1/runs`; requires the seeded FK parents `usr_local` + `ws_test`.
 const createRunViaApi = async (): Promise<string | undefined> => {
@@ -81,7 +83,7 @@ describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-
     const sealant = new Sealant({ baseUrl });
     try {
       const workspace = await sealant.workspaces.create({
-        repository: "github.com/sindresorhus/is-odd",
+        repository: SMOKE_REPOSITORY,
         harness: opencode(),
         wait: false,
       });
@@ -97,7 +99,7 @@ describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-
     const sealant = new Sealant({ baseUrl });
     try {
       const workspace = await sealant.workspaces.create({
-        repository: "github.com/sindresorhus/is-odd",
+        repository: SMOKE_REPOSITORY,
         harness: opencode(),
         env: { WORKSPACE_ENV_PROOF: "sdk-smoke-canary" },
         wait: false,
@@ -121,7 +123,7 @@ describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-
       let workspace;
       try {
         workspace = await sealant.workspaces.create({
-          repository: "github.com/sindresorhus/is-odd",
+          repository: SMOKE_REPOSITORY,
           harness: opencode(),
           env: { WORKSPACE_ENV_PROOF: "sdk-smoke-canary" },
         });
