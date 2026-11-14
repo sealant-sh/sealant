@@ -43,11 +43,13 @@
     "build": "tsc -p tsconfig.build.json",
     "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "prepublishOnly": "pnpm run build",
+    "test": "vitest run",
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "effect": "^4.0.5"

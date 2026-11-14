@@ -7,18 +7,22 @@ import {
   OCI_REFERENCE_MESSAGE,
   OCI_REPOSITORY_MESSAGE,
 } from "./oci-names.js";
+import { refusalWords } from "./refusal-words.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 /** Refused, never repaired: these become registry URL path segments (CORE-08). */
 const OciRepository = NonEmptyString.check(
-  Schema.makeFilter((value: string) =>
-    isOciRepository(value) ? undefined : `repository ${OCI_REPOSITORY_MESSAGE}`,
+  Schema.makeFilter(
+    (value: string) =>
+      isOciRepository(value) ? undefined : `repository ${OCI_REPOSITORY_MESSAGE}`,
+    refusalWords(`repository ${OCI_REPOSITORY_MESSAGE}`),
   ),
 );
 const OciReference = NonEmptyString.check(
-  Schema.makeFilter((value: string) =>
-    isOciReference(value) ? undefined : `reference ${OCI_REFERENCE_MESSAGE}`,
+  Schema.makeFilter(
+    (value: string) => (isOciReference(value) ? undefined : `reference ${OCI_REFERENCE_MESSAGE}`),
+    refusalWords(`reference ${OCI_REFERENCE_MESSAGE}`),
   ),
 );
 

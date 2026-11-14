@@ -42,6 +42,7 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api
 import * as Rec from "effect/Record";
 
 import { PersonId, RESOURCE_DOMAIN_ID_PREFIX } from "./person-id.js";
+import { refusalWords } from "./refusal-words.js";
 
 const RESOURCE_DOMAIN_ID_PATTERN = new RegExp(
   `^${RESOURCE_DOMAIN_ID_PREFIX}[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
@@ -49,17 +50,21 @@ const RESOURCE_DOMAIN_ID_PATTERN = new RegExp(
 
 const RESOURCE_DOMAIN_KEY_PATTERN = /^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._:/@+=-]{1,223}$/;
 
+const NOT_A_DOMAIN_ID = "must be a resource domain id (rdm:<uuid>)";
+const NOT_A_DOMAIN_KEY =
+  "must be <application>:<name>: a lower-case application name (letters, digits, '-'), a colon, then at most 223 letters, digits, '.', '_', ':', '/', '@', '+', '=' or '-'";
+
 export const ResourceDomainId = Schema.String.check(
-  Schema.makeFilter((id: string) =>
-    RESOURCE_DOMAIN_ID_PATTERN.test(id) ? undefined : "must be a resource domain id (rdm:<uuid>)",
+  Schema.makeFilter(
+    (id: string) => (RESOURCE_DOMAIN_ID_PATTERN.test(id) ? undefined : NOT_A_DOMAIN_ID),
+    refusalWords(NOT_A_DOMAIN_ID),
   ),
 );
 
 const ResourceDomainKey = Schema.String.check(
-  Schema.makeFilter((key: string) =>
-    RESOURCE_DOMAIN_KEY_PATTERN.test(key)
-      ? undefined
-      : "must be <application>:<name>: a lower-case application name (letters, digits, '-'), a colon, then at most 223 letters, digits, '.', '_', ':', '/', '@', '+', '=' or '-'",
+  Schema.makeFilter(
+    (key: string) => (RESOURCE_DOMAIN_KEY_PATTERN.test(key) ? undefined : NOT_A_DOMAIN_KEY),
+    refusalWords(NOT_A_DOMAIN_KEY),
   ),
 );
 

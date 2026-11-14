@@ -17,6 +17,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import { PersonId } from "./person-id.js";
+import { refusalWords } from "./refusal-words.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
@@ -132,7 +133,19 @@ export const sessionArgvIssue = (argv: readonly string[]): string | undefined =>
  * the whole array, because Effect's own length and whitespace checks quote the offending value.
  */
 export const sessionArgvSchema = Schema.Array(Schema.String).check(
-  Schema.makeFilter(sessionArgvIssue),
+  Schema.makeFilter(
+    sessionArgvIssue,
+    // Only positions, counts and sizes vary.
+    refusalWords(
+      "argv is empty: argv[0] must name the program",
+      /argv has \d+ words; the maximum is \d+/,
+      "argv[0], the program, must be non-empty with no leading or trailing whitespace",
+      /argv\[\d+\] contains a NUL byte, which no process argument can carry/,
+      /argv\[\d+\] is not well-formed Unicode \(a lone surrogate\)/,
+      /argv\[\d+\] is \d+ bytes; the maximum per word is \d+/,
+      /argv totals \d+ bytes; the maximum is \d+/,
+    ),
+  ),
 );
 
 export const createSessionRequestSchema = Schema.Struct({

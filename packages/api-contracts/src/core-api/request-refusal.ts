@@ -7,12 +7,21 @@
  * excerpt of a malformed body; Effect 4 reports input only to a parse that asks for it. A request
  * body can carry a process's arguments, a script or a credential, so `RequestRefusal`, applied to
  * the whole API, answers `400` `RequestRefusedError` instead, with a reason that names where the
- * request is wrong and never what it held, and Effect's failure goes no further. `describeRequestIssue` words
- * that reason from the decode issue alone: field names the contract declares, array positions, and
- * what was expected; a key the caller chose (an `env` or `metadata` name) reads `[…]`.
+ * request is wrong and never what it held, and Effect's failure goes no further.
+ *
+ * `describeRequestIssue` words that reason from the decode issue alone, and says only words that
+ * existed before the request did: field names the contract declares, array positions, what the
+ * schema expected (`expected` and `message` annotations, set when the contract is built), and its
+ * own wording. A key the caller chose (an `env` or `metadata` name) reads `[…]`. Text a check
+ * returns while decoding is said only when the check declared it up front (`refusal-words.ts`):
+ * that text is computed from the value, so whether it quotes the value cannot be told from the text
+ * itself. Anything else reads "is invalid". The rule does not depend on where Effect keeps the
+ * rejected value, which it does not report at all to a parse that does not ask (SLNT-960).
  */
 import { Schema, SchemaAST, SchemaIssue } from "effect";
 import { HttpApiMiddleware } from "effect/http-api";
+
+import { REFUSAL_WORDS, type RefusalWord } from "./refusal-words.js";
 
 export class RequestRefusedError extends Schema.TaggedError<RequestRefusedError>()(
   "RequestRefusedError",
@@ -67,65 +76,90 @@ const stringAnnotation = (annotations: unknown, key: string): string | undefined
   return typeof value === "string" ? value : undefined;
 };
 
-/**
- * A schema author's own words for a failed check, unless they quote the rejected value (a guard
- * against a future check that interpolates its input; no check in the contract does today).
- */
-const authoredMessage = (message: string | undefined, actual: unknown): string | undefined => {
-  if (message === undefined) return undefined;
-  if (typeof actual === "string" && actual.length >= 3 && message.includes(actual)) {
-    return undefined;
-  }
-  return message;
+/** A check's declared words (`refusal-words.ts`), or none. */
+const declaredWords = (annotations: unknown): ReadonlyArray<RefusalWord> => {
+  if (typeof annotations !== "object" || annotations === null) return [];
+  const words: unknown = Reflect.get(annotations, REFUSAL_WORDS);
+  return Array.isArray(words)
+    ? words.filter(
+        (word: unknown): word is RefusalWord => typeof word === "string" || word instanceof RegExp,
+      )
+    : [];
 };
 
-/** A path segment: a declared field by name, a position by index, anything else as `[…]`. */
+const matchesWhole = (pattern: RegExp, text: string): boolean => {
+  const match = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, "")).exec(text);
+  return match !== null && match.index === 0 && match[0].length === text.length;
+};
+
+/** Text a check returned while decoding, when it is one of the words the check declared. */
+const declared = (
+  text: string | undefined,
+  words: ReadonlyArray<RefusalWord>,
+): string | undefined =>
+  text !== undefined &&
+  words.some((word) => (typeof word === "string" ? word === text : matchesWhole(word, text)))
+    ? text
+    : undefined;
+
+/**
+ * A path segment: a field its object declares by name, a position in an array by index, anything
+ * else (a key the caller chose, a path a check built) as `[…]`.
+ */
 const segment = (key: PropertyKey, parent: SchemaAST.AST | undefined): string => {
-  if (typeof key === "number") return `[${key}]`;
-  const declared =
+  if (typeof key === "number") {
+    return parent !== undefined && SchemaAST.isArrays(parent) ? `[${key}]` : "[…]";
+  }
+  const named =
+    typeof key === "string" &&
     parent !== undefined &&
     SchemaAST.isObjects(parent) &&
     parent.propertySignatures.some((signature) => signature.name === key);
-  return declared && typeof key === "string" ? `.${key}` : "[…]";
+  return named ? `.${key}` : "[…]";
 };
 
 const leaf = (path: string, message: string): Reason[] => [{ path, message }];
 
+/**
+ * `words` are those the nearest check declared: text inside its issue is said only when it is one
+ * of them. A transformation declares none.
+ */
 const reasonsOf = (
   issue: SchemaIssue.Issue,
   path: string,
   parent: SchemaAST.AST | undefined,
+  words: ReadonlyArray<RefusalWord>,
 ): Reason[] => {
   if (issue instanceof SchemaIssue.Composite) {
-    return issue.issues.flatMap((inner) => reasonsOf(inner, path, issue.ast));
+    return issue.issues.flatMap((inner) => reasonsOf(inner, path, issue.ast, words));
   }
   if (issue instanceof SchemaIssue.Pointer) {
     const at = issue.path.reduce<string>((acc, key) => acc + segment(key, parent), path);
-    return reasonsOf(issue.issue, at, undefined);
+    return reasonsOf(issue.issue, at, undefined, words);
   }
   if (issue instanceof SchemaIssue.Encoding) {
-    return reasonsOf(issue.issue, path, parent);
+    return reasonsOf(issue.issue, path, parent, []);
   }
   if (issue instanceof SchemaIssue.AnyOf) {
     return issue.issues.length === 0
       ? leaf(path, `must be ${expectedOf(issue.ast) ?? "one of the allowed values"}`)
-      : issue.issues.flatMap((inner) => reasonsOf(inner, path, parent));
+      : issue.issues.flatMap((inner) => reasonsOf(inner, path, parent, words));
   }
   if (issue instanceof SchemaIssue.Filter) {
-    const inner =
+    const { annotations } = issue.filter;
+    const own = declaredWords(annotations);
+    const returned =
       issue.issue instanceof SchemaIssue.InvalidValue
-        ? stringAnnotation(issue.issue.annotations, "message")
+        ? declared(stringAnnotation(issue.issue.annotations, "message"), own)
         : undefined;
-    const message = authoredMessage(
-      inner ?? stringAnnotation(issue.filter.annotations, "message"),
-      issue.input,
-    );
+    const message = returned ?? stringAnnotation(annotations, "message");
     if (message !== undefined) return leaf(path, message);
-    const expected = stringAnnotation(issue.filter.annotations, "expected");
+    const expected = stringAnnotation(annotations, "expected");
     if (expected !== undefined) return leaf(path, `must be ${expected}`);
+    // The check's own path is the check's to choose: its keys read `[…]`.
     return issue.issue instanceof SchemaIssue.InvalidValue
       ? leaf(path, "is invalid")
-      : reasonsOf(issue.issue, path, parent);
+      : reasonsOf(issue.issue, path, undefined, own);
   }
   if (issue instanceof SchemaIssue.InvalidType) {
     return leaf(path, `must be ${expectedOf(issue.ast) ?? "present"}`);
@@ -134,7 +168,7 @@ const reasonsOf = (
   if (issue instanceof SchemaIssue.InvalidValue) {
     return leaf(
       path,
-      authoredMessage(stringAnnotation(issue.annotations, "message"), issue.input) ?? "is invalid",
+      declared(stringAnnotation(issue.annotations, "message"), words) ?? "is invalid",
     );
   }
   if (issue instanceof SchemaIssue.OneOf) return leaf(path, "matches more than one allowed shape");
@@ -146,7 +180,7 @@ const reasonsOf = (
  * decode issue: up to three places, each with what was expected. Never a value the request held.
  */
 export const describeRequestIssue = (part: string, issue: SchemaIssue.Issue): string => {
-  const reasons = reasonsOf(issue, "", undefined);
+  const reasons = reasonsOf(issue, "", undefined, []);
   const shown = reasons.slice(0, MAX_REASONS).map(({ path, message }) => {
     const where = path === "" ? `the request ${part}` : path.replace(/^\./, "");
     // A check that names its own position (`argv[1] contains a NUL byte`) needs no prefix.
