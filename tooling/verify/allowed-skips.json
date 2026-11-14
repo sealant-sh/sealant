@@ -1,0 +1,64 @@
+{
+  "$comment": "The only tests allowed to skip without making a `pnpm verify` step `skipped`, by file (globs; the first entry that matches decides). `allowedIn` names the verbs where the skip is allowed, and even there it is refused when the diff owes the entry's `suite` (tooling/verify/obligations.json). A test that skips and is not here makes the step `skipped`. Keep this list short.",
+  "skips": [
+    {
+      "files": ["packages/workspaces/src/images/boat/catalog.db.test.ts"],
+      "gate": ["SEALANT_BOAT_CATALOG_TEST_DATABASE_URL", "SEALANT_BOAT_RUNTIME_BUNDLE"],
+      "suite": "boat-catalog",
+      "allowedIn": ["check"],
+      "reason": "Needs its own migrated database and the staged Boat runtime bundle"
+    },
+    {
+      "files": [
+        "packages/workspaces/src/images/boat/retention.db.test.ts",
+        "packages/workspaces/src/images/boat/assets.test.ts"
+      ],
+      "gate": ["SEALANT_TEST_DATABASE_URL", "SEALANT_BOAT_RUNTIME_BUNDLE"],
+      "suite": "boat-catalog",
+      "allowedIn": ["check"],
+      "reason": "Needs the staged Boat runtime bundle (and retention a migrated database)"
+    },
+    {
+      "files": ["packages/workspaces/src/worker/native-publication.db.test.ts"],
+      "gate": ["SEALANT_TEST_DATABASE_URL", "SEALANT_BOAT_RUNTIME_BUNDLE"],
+      "suite": "database",
+      "allowedIn": ["check"],
+      "reason": "Needs a migrated database and the staged Boat runtime bundle; CI's Runtime proofs job runs it"
+    },
+    {
+      "files": ["packages/workspaces/src/sealantd/runtime.test.ts"],
+      "gate": ["a sealantd binary at ../sealantd/target/debug/sealantd"],
+      "suite": "sealantd-runtime",
+      "allowedIn": ["check"],
+      "reason": "Spawns a real local sealantd"
+    },
+    {
+      "files": ["packages/jobs/src/service.test.ts"],
+      "gate": ["SEALANT_JOBS_TEST_DATABASE_URL"],
+      "suite": "database",
+      "allowedIn": ["check"],
+      "reason": "The pg-boss queue against a real Postgres; CI's Tests job runs it"
+    },
+    {
+      "files": ["**/*.db.test.ts"],
+      "gate": ["SEALANT_TEST_DATABASE_URL"],
+      "suite": "database",
+      "allowedIn": ["check"],
+      "reason": "Queries and transactions against a real, migrated Postgres; CI's Tests job runs them"
+    },
+    {
+      "files": ["packages/sdk/src/smoke.live.test.ts"],
+      "gate": ["SEALANT_SMOKE_BASE_URL"],
+      "suite": "sdk-live-smoke",
+      "allowedIn": ["check"],
+      "reason": "Smoke-tests a deployed control plane; nothing local stands in for it"
+    },
+    {
+      "files": ["packages/workspaces/src/runtime/home-credentials.test.ts"],
+      "gate": ["the shell under test installed (CI fails instead of skipping)"],
+      "suite": "shells",
+      "allowedIn": ["check"],
+      "reason": "One case per login shell; a machine without zsh or fish skips that shell's case"
+    }
+  ]
+}
