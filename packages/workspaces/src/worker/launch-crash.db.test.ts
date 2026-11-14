@@ -4,12 +4,15 @@
  * the executor — running, with the session writing into it — sat outside every sweep for good.
  * Review 3's launch ownership covers an executor the launch recorded (`onStarted`); this pins the
  * whole sequence, and the window before that record: a worker lost between creating the executor
- * and recording it. Gated on SEALANT_TEST_DATABASE_URL (a disposable database with the migrations
- * applied; it writes rows under fresh ids and leaves them).
+ * and recording it. Gated on SEALANT_TEST_DATABASE_URL. It runs in a database of its own, made and
+ * migrated from that one and dropped after: an unscoped sweep adopts every stranded launch in its
+ * database, so on the shared one it would adopt other suites' fixtures.
  *
  *   SEALANT_TEST_DATABASE_URL=postgresql://… pnpm exec vitest run src/worker/launch-crash.db.test.ts
  */
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 
 import {
   ConnectedAccountRepoLive,
@@ -28,8 +31,9 @@ import {
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
 } from "@sealant/db";
+import { runMigrations } from "@sealant/db/migrate";
 import { Effect, Layer } from "effect";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { executorIsRetained, resolveWorkspaceStatus } from "../api/workspace.js";
 import type { RuntimeLaunchIdentity } from "../runtime/launch-retention.js";
@@ -41,6 +45,11 @@ import { databaseCaptureDrainLedger } from "./capture-drain-ledger.js";
 import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
+const migrationsFolder = join(
+  dirname(createRequire(import.meta.url).resolve("@sealant/db/migrate")),
+  "..",
+  "drizzle",
+);
 
 const SETTINGS = {
   pollIntervalMs: 5,
@@ -49,7 +58,7 @@ const SETTINGS = {
   requestTimeoutMs: 1_000,
 };
 
-/** Every sweep here looks at this test's runs only: other tests share the database. */
+/** A runtime that knows this test's runs only, so a sweep that asks it never finds another's. */
 const adapterFor = (
   mine: ReadonlySet<string>,
   located: ReadonlyMap<string, RuntimeLaunchIdentity>,
@@ -74,6 +83,11 @@ const adapterFor = (
 });
 
 describe.skipIf(DATABASE_URL === undefined)("a worker lost mid-launch (Postgres)", () => {
+  const databaseName = `sealant_launch_crash_${randomUUID().replaceAll("-", "")}`;
+  const admin = new URL(DATABASE_URL ?? "postgresql://unused");
+  const own = new URL(admin);
+  own.pathname = `/${databaseName}`;
+  let adminDb: DB;
   let db: DB;
   const userId = `user_launch_crash_${randomUUID()}`;
 
@@ -127,9 +141,18 @@ describe.skipIf(DATABASE_URL === undefined)("a worker lost mid-launch (Postgres)
     );
 
   beforeAll(async () => {
-    db = await createSealantDB(DATABASE_URL ?? "");
+    adminDb = await createSealantDB(admin.toString());
+    await Effect.runPromise(adminDb.execute(`CREATE DATABASE "${databaseName}"`));
+    await runMigrations({ databaseUrl: own.toString(), migrationsFolder, log: () => {} });
+    db = await createSealantDB(own.toString());
     await Effect.runPromise(
       db.insert(user).values({ id: userId, name: "crash", email: `${userId}@example.test` }),
+    );
+  });
+
+  afterAll(async () => {
+    await Effect.runPromise(
+      adminDb.execute(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`),
     );
   });
 
