@@ -31,7 +31,8 @@
     "test:watch": "vitest",
     "typecheck": "turbo typecheck --ui=tui",
     "typecheck:root": "tsrs -p tsconfig.json --noEmit --checkers 1",
-    "typecheck:tui": "turbo typecheck --ui=tui"
+    "typecheck:tui": "turbo typecheck --ui=tui",
+    "verify": "node tooling/verify/verify.mjs"
   },
   "dependencies": {
     "dotenv-cli": "catalog:",

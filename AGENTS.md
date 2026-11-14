@@ -42,14 +42,20 @@ spans repos.
 
 ## Checks Before a PR
 
-CI runs lint, typecheck and the tests. Run these before pushing and see them pass, formatting last:
+CI runs lint, typecheck and the tests. Before pushing, run these and see each one exit 0:
 
 ```sh
-pnpm lint
-pnpm typecheck
-pnpm --filter <package> test   # for each package the change touches
+pnpm verify plan    # what this diff owes: gated suites, models, screenshots, the CI jobs it runs
 pnpm format:fix
+pnpm verify check   # forced typecheck and lint, the affected packages' tests, formatting
 ```
+
+`verify check` passes only when nothing skipped that the diff owes: a suite that skips itself (a
+missing database, bundle or binary) makes it `skipped`, never `passed`, and it names each skipped
+test with its gate and the command that runs it. The tests allowed to skip are in
+`tooling/verify/allowed-skips.json`; what a path owes is in `tooling/verify/obligations.json`.
+`pnpm verify status --markdown` prints the receipt for the PR body: each obligation and whether this
+commit, from a clean tree, has a passing result. Every run is kept under `.verify/`.
 
 A PR merges on two results: `checks`, the roll-up of every CI job, and `e2e checks`, the roll-up of
 every Kubernetes e2e job. A new job in either workflow goes in its roll-up's `needs`;

@@ -156,6 +156,11 @@ jobs:
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
 
+      # `pnpm verify` itself: the result schema, the status roll-up and exit codes, the skip rule,
+      # and the obligations map against the workflows' path filters.
+      - name: The verify tool
+        run: node --test tooling/verify/*.test.mjs
+
   # Real daemons, real Docker: each step is one proof against the runner's own Docker daemon.
   runtime-proofs:
     name: Runtime proofs
