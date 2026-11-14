@@ -142,6 +142,7 @@ export {
 export {
   answerCovers,
   compareExecutorOrigins,
+  drainLabelsOutranking,
   executorOriginFromStored,
   nextUnsavedObservations,
   statusSupersedes,
@@ -149,6 +150,7 @@ export {
   storedStatusOrigin,
   type ExecutorOrigin,
   type ExecutorOriginOrder,
+  type TerminalDrainLabel,
   type UnsavedObservation,
 } from "./capture-evidence-order.js";
 

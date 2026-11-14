@@ -1,7 +1,11 @@
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
-import { nextUnsavedObservations, statusSupersedes } from "../capture-evidence-order.js";
+import {
+  drainLabelsOutranking,
+  nextUnsavedObservations,
+  statusSupersedes,
+} from "../capture-evidence-order.js";
 import { SealantDB, type DB } from "../client.js";
 import {
   workspaceCaptureDrains,
@@ -134,9 +138,10 @@ export interface WorkspaceCaptureDrainRepoService {
    * discard ended the runtime); the lease is untouched. The state is the writer's: a removal made
    * on the owner's discard is written `discarded` by whoever made it, and one made because the
    * work was saved is written `stopped` even when a discard was requested meanwhile. One thing is
-   * kept here: a row that already reads `discarded` is not relabelled by a later `stopped` or
-   * `gone` (a pass that finds the runtime gone after the discard's removal); its state and detail
-   * stay as the discard left them.
+   * kept here: a terminal label never replaces a stronger one (`drainLabelsOutranking`). A row
+   * that reads `discarded` is not relabelled by a later `stopped` or `gone`, nor one that reads
+   * `stopped` by a later `gone` (a pass that finds the runtime gone after the removal); its state
+   * and detail stay as the stronger writer left them.
    */
   readonly recordObservation: (input: {
     readonly runId: string;
@@ -649,6 +654,10 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
             // The executor was removed (or found gone): nothing is retained any more.
             const endsRetention =
               input.state === "stopped" || input.state === "discarded" || input.state === "gone";
+            // A terminal label never replaces a stronger one (`drainLabelsOutranking`): a pass
+            // that finds the runtime gone after a removal recorded on evidence, or after the
+            // owner's discard, does not relabel the run.
+            const outranking = endsRetention ? drainLabelsOutranking(input.state) : [];
             const set = {
               state: input.state,
               detail: input.detail,
@@ -663,15 +672,13 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               .onConflictDoUpdate({
                 target: workspaceCaptureDrains.runId,
                 set:
-                  input.state === "stopped" || input.state === "gone"
+                  outranking.length > 0
                     ? {
                         ...set,
-                        // A run that ended on its owner's discard keeps reading so: a later pass
-                        // that finds the runtime gone does not relabel it.
-                        state: sql<WorkspaceCaptureDrainState>`case when ${workspaceCaptureDrains.state} = 'discarded' then 'discarded' else ${input.state} end`,
+                        state: sql<WorkspaceCaptureDrainState>`case when ${inArray(workspaceCaptureDrains.state, outranking)} then ${workspaceCaptureDrains.state} else ${input.state} end`,
                         detail: sql<
                           string | null
-                        >`case when ${workspaceCaptureDrains.state} = 'discarded' then ${workspaceCaptureDrains.detail} else ${input.detail} end`,
+                        >`case when ${inArray(workspaceCaptureDrains.state, outranking)} then ${workspaceCaptureDrains.detail} else ${input.detail} end`,
                       }
                     : set,
               });
