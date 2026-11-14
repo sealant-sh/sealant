@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 
 import {
   codexLoginFile,
@@ -16,12 +18,18 @@ import {
   user,
   type DB,
 } from "@sealant/db";
+import { runMigrations } from "@sealant/db/migrate";
 import { Effect, Layer } from "effect";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 process.env["SEALANT_CREDENTIALS_KEY"] = Buffer.alloc(32, 7).toString("base64");
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
+const migrationsFolder = join(
+  dirname(createRequire(import.meta.url).resolve("@sealant/db/migrate")),
+  "..",
+  "drizzle",
+);
 
 let conversion: typeof import("./codex-api-key-conversion.js");
 let accountsModule: typeof import("../routes/connected-accounts/connected-accounts.module.js");
@@ -41,12 +49,28 @@ const codexKey = "sk-proj-FAKEcodexkeyforthetests0000wxyz";
 describe.skipIf(DATABASE_URL === undefined)(
   "Codex rows that held a key in an auth.json (Postgres)",
   () => {
+    // The conversion reads every Codex row in its database, and a row it cannot convert stays
+    // behind for the next pass: on a shared database, other runs' rows would be counted here.
+    const databaseName = `sealant_codex_conversion_${randomUUID().replaceAll("-", "")}`;
+    const admin = new URL(DATABASE_URL ?? "postgresql://unused");
+    const own = new URL(admin);
+    own.pathname = `/${databaseName}`;
+    let adminDb: DB;
     let db: DB;
 
     beforeAll(async () => {
       conversion = await import("./codex-api-key-conversion.js");
       accountsModule = await import("../routes/connected-accounts/connected-accounts.module.js");
-      db = await createSealantDB(DATABASE_URL ?? "");
+      adminDb = await createSealantDB(admin.toString());
+      await Effect.runPromise(adminDb.execute(`CREATE DATABASE "${databaseName}"`));
+      await runMigrations({ databaseUrl: own.toString(), migrationsFolder, log: () => {} });
+      db = await createSealantDB(own.toString());
+    });
+
+    afterAll(async () => {
+      await Effect.runPromise(
+        adminDb.execute(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`),
+      );
     });
 
     const layer = () =>
