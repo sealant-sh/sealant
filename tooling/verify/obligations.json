@@ -15,7 +15,7 @@
         {
           "kind": "tests",
           "suite": "database",
-          "command": "pnpm verify db",
+          "command": "pnpm verify db database",
           "proof": "db:database",
           "ci": "CI"
         }

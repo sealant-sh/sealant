@@ -139,7 +139,17 @@ export async function runCommandStep({ root, id, title, argv, env, logFile, echo
  * the diff changes (`changed`), or on the whole repo with `all`: main carries files its bots write
  * unformatted (changelogs, migration snapshots), and CI does not check formatting.
  */
-export async function runCheck({ root, head, all, owed, changed, logDirectory, echo = true }) {
+export async function runCheck({
+  root,
+  head,
+  all,
+  owed,
+  changed,
+  logDirectory,
+  workers,
+  echo = true,
+}) {
+  const concurrency = workers === undefined ? [] : [`--concurrency=${workers}`];
   const log = (name) => path.join(logDirectory, `check-${name}.log`);
   const steps = [];
   const next = [];
@@ -148,7 +158,15 @@ export async function runCheck({ root, head, all, owed, changed, logDirectory, e
       root,
       id: "typecheck",
       title: "Typecheck, every package (forced)",
-      argv: ["pnpm", "exec", "turbo", "typecheck", "--force", "--output-logs=errors-only"],
+      argv: [
+        "pnpm",
+        "exec",
+        "turbo",
+        "typecheck",
+        "--force",
+        "--output-logs=errors-only",
+        ...concurrency,
+      ],
       logFile: log("typecheck"),
       echo,
     }),
@@ -158,7 +176,15 @@ export async function runCheck({ root, head, all, owed, changed, logDirectory, e
       root,
       id: "lint",
       title: "Lint, every package (forced)",
-      argv: ["pnpm", "exec", "turbo", "lint", "--force", "--output-logs=errors-only"],
+      argv: [
+        "pnpm",
+        "exec",
+        "turbo",
+        "lint",
+        "--force",
+        "--output-logs=errors-only",
+        ...concurrency,
+      ],
       logFile: log("lint"),
       echo,
     }),
@@ -169,7 +195,17 @@ export async function runCheck({ root, head, all, owed, changed, logDirectory, e
     root,
     id: "tests",
     title: affected ? "Tests of the affected packages" : "Tests of every package",
-    argv: ["pnpm", "exec", "turbo", "test", "--force", ...(affected ? ["--affected"] : []), "--"],
+    argv: [
+      "pnpm",
+      "exec",
+      "turbo",
+      "test",
+      "--force",
+      ...concurrency,
+      ...(affected ? ["--affected"] : []),
+      "--",
+      ...(workers === undefined ? [] : [`--maxWorkers=${workers}`]),
+    ],
     env: affected ? { TURBO_SCM_BASE: head.mergeBase } : {},
     logFile: log("tests"),
     context: "check",
