@@ -11,6 +11,7 @@ export * from "./core-api/budgets.js";
 export * from "./core-api/oci-names.js";
 export * from "./core-api/registries.js";
 export * from "./core-api/runs.js";
+export * from "./core-api/refusal-words.js";
 export * from "./core-api/request-refusal.js";
 export * from "./core-api/resource-domains.js";
 export * from "./core-api/resource-instances.js";

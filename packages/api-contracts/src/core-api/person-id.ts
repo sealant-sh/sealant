@@ -11,6 +11,8 @@
  */
 import { Schema } from "effect";
 
+import { refusalWords } from "./refusal-words.js";
+
 export const RESOURCE_DOMAIN_ID_PREFIX = "rdm:";
 
 export const isResourceDomainId = (id: string): boolean => id.startsWith(RESOURCE_DOMAIN_ID_PREFIX);
@@ -22,5 +24,8 @@ export const NOT_A_PERSON =
 export const PersonId = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isTrimmed(),
-  Schema.makeFilter((id: string) => (isResourceDomainId(id) ? NOT_A_PERSON : undefined)),
+  Schema.makeFilter(
+    (id: string) => (isResourceDomainId(id) ? NOT_A_PERSON : undefined),
+    refusalWords(NOT_A_PERSON),
+  ),
 );

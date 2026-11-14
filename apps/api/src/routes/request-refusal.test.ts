@@ -12,9 +12,9 @@ import {
   type CreateSessionRequest,
   type SessionWire,
 } from "@sealant/api-contracts";
-import { Cause, Effect, ErrorReporter, Exit, Layer, Logger, Tracer } from "effect";
+import { Cause, Effect, ErrorReporter, Exit, Layer, Logger, Schema, Tracer } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
-import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
+import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { RequestBudgetLive } from "./request-budget.js";
@@ -81,8 +81,14 @@ const stubs = Layer.mergeAll(
   ),
 ) as unknown as Layer.Layer<HttpApiGroup.ToService<"sealantControlPlaneApi", ControlPlaneGroups>>;
 
-/** A server with every observer captured: log lines, reported errors, ended spans' exits. */
-const serve = (refusal: Layer.Layer<RequestRefusal>) => {
+/** `api` served, with every observer captured: log lines, reported errors, ended spans' exits. */
+const observe = (
+  api: Layer.Layer<
+    never,
+    never,
+    HttpRouter.HttpRouter | Layer.Success<typeof HttpServer.layerServices>
+  >,
+) => {
   const observed: string[] = [];
   const logger = Logger.make((options) => {
     observed.push(`log ${JSON.stringify(options.message)} ${Cause.pretty(options.cause)}`);
@@ -105,22 +111,22 @@ const serve = (refusal: Layer.Layer<RequestRefusal>) => {
   });
   const { handler, dispose } = HttpRouter.toWebHandler(
     Layer.mergeAll(
-      HttpApiBuilder.layer(ControlPlaneAPI).pipe(
-        Layer.provide(stubs),
-        Layer.provide(refusal),
-        Layer.provide(RequestBudgetLive),
-        Layer.provide(HttpServer.layerServices),
-      ),
+      api.pipe(Layer.provide(HttpServer.layerServices)),
       Logger.layer([logger]),
       ErrorReporter.layer([reporter]),
       Layer.succeed(Tracer.Tracer, tracer),
     ),
   );
-  const send = async (method: string, path: string, body?: string) => {
+  const send = async (
+    method: string,
+    path: string,
+    body?: string,
+    headers: Record<string, string> = {},
+  ) => {
     const response = await handler(
       new Request(`http://localhost${path}`, {
         method,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...headers },
         ...(body === undefined ? {} : { body }),
       }),
     );
@@ -131,6 +137,15 @@ const serve = (refusal: Layer.Layer<RequestRefusal>) => {
   };
   return { send, observed, dispose };
 };
+
+const serve = (refusal: Layer.Layer<RequestRefusal>) =>
+  observe(
+    HttpApiBuilder.layer(ControlPlaneAPI).pipe(
+      Layer.provide(stubs),
+      Layer.provide(refusal),
+      Layer.provide(RequestBudgetLive),
+    ),
+  );
 
 let disposers: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -372,5 +387,129 @@ describe("RequestRefusal", () => {
         .map(([name]) => `${group}.${name}`),
     );
     expect(missing).toEqual([]);
+  });
+});
+
+/**
+ * No check in the contract puts the value it rejects in its own words, so this API has one that
+ * does, in every part of a request the contract decodes (SLNT-960). A value is refused when it is
+ * not `ok…`.
+ */
+const quotingToken = Schema.String.check(
+  Schema.makeFilter((value: string) => (value.startsWith("ok") ? undefined : `bad token ${value}`)),
+);
+
+const ProbeAPI = HttpApi.make("probe")
+  .add(
+    HttpApiGroup.make("probe").add(
+      HttpApiEndpoint.post("probe", "/probe/:token", {
+        params: Schema.Struct({ token: quotingToken }),
+        query: Schema.Struct({ token: Schema.optional(quotingToken) }),
+        headers: Schema.Struct({ "x-token": Schema.optional(quotingToken) }),
+        payload: Schema.Struct({
+          token: Schema.optional(quotingToken),
+          tokens: Schema.optional(Schema.Array(quotingToken)),
+          nested: Schema.optional(Schema.Struct({ token: quotingToken })),
+          env: Schema.optional(Schema.Record(Schema.String, quotingToken)),
+        }),
+        success: Schema.Struct({ ok: Schema.Boolean }),
+      }),
+    ),
+  )
+  .middleware(RequestRefusal);
+
+const serveProbe = () =>
+  observe(
+    HttpApiBuilder.layer(ProbeAPI).pipe(
+      Layer.provide(
+        HttpApiBuilder.group(ProbeAPI, "probe", (handlers) =>
+          handlers.handle("probe", () => Effect.succeed({ ok: true })),
+        ),
+      ),
+      Layer.provide(RequestRefusalLive),
+    ),
+  );
+
+/** The span attributes that hold the request's URL, recorded for every request, refused or not. */
+const URL_ATTRIBUTES = new Set(["url.full", "url.path", "url.query", "http.url", "http.target"]);
+
+/** Every observed line, with the span's URL attributes left out. */
+const observedBesidesUrl = (observed: ReadonlyArray<string>) =>
+  observed.map((line) => {
+    const match = /^(span \S+ [\s\S]*) (\[\[[\s\S]*\]\])$/.exec(line);
+    if (match === null) return line;
+    const attributes: unknown = JSON.parse(match[2] ?? "[]");
+    const kept = Array.isArray(attributes)
+      ? attributes.filter(
+          (entry: unknown) =>
+            !(Array.isArray(entry) && typeof entry[0] === "string" && URL_ATTRIBUTES.has(entry[0])),
+        )
+      : [];
+    return `${match[1]} ${JSON.stringify(kept)}`;
+  });
+
+const body = (payload: object) => JSON.stringify(payload);
+
+describe("a check that quotes the value it refuses", () => {
+  const positions: ReadonlyArray<
+    readonly [string, string, string | undefined, Record<string, string>, string]
+  > = [
+    ["a field's value", "/probe/ok", body({ token: MARKER }), {}, "token is invalid"],
+    ["an array item", "/probe/ok", body({ tokens: ["ok", MARKER] }), {}, "tokens[1] is invalid"],
+    [
+      "a nested object",
+      "/probe/ok",
+      body({ nested: { token: MARKER } }),
+      {},
+      "nested.token is invalid",
+    ],
+    [
+      "a key the caller chose",
+      "/probe/ok",
+      body({ env: { [MARKER]: MARKER } }),
+      {},
+      "env[…] is invalid",
+    ],
+    [
+      "the whole body",
+      "/probe/ok",
+      JSON.stringify(MARKER),
+      {},
+      "the request body must be an object",
+    ],
+    ["a header", "/probe/ok", body({}), { "x-token": MARKER }, "x-token is invalid"],
+    ["a query parameter", `/probe/ok?token=${MARKER}`, body({}), {}, "token is invalid"],
+    ["a path parameter", `/probe/${MARKER}`, body({}), {}, "token is invalid"],
+  ];
+
+  for (const [position, path, payload, headers, reason] of positions) {
+    it(`in ${position}: answers 400 "${reason}", and no log, report or span quotes it`, async () => {
+      const server = serveProbe();
+      disposers.push(server.dispose);
+      const response = await server.send("POST", path, payload, headers);
+      expect(response.status).toBe(400);
+      expect(JSON.parse(response.text)).toEqual({ _tag: "RequestRefusedError", message: reason });
+      // The failure an ErrorReporter receives is the refusal; the log and the span carry no reason.
+      const reported = server.observed.filter((line) => line.startsWith("report "));
+      expect(reported.join("\n")).toContain(`RequestRefusedError: ${reason}`);
+      expect(server.observed.some((line) => line.startsWith("log "))).toBe(true);
+      const spans = server.observed.filter((line) => line.startsWith("span "));
+      expect(spans.join("\n")).toContain('"http.response.status_code",400');
+      // The request's URL is recorded on its span for every request; nothing else names the value.
+      expect(observedBesidesUrl(server.observed).join("\n")).not.toContain(MARKER);
+      if (!path.includes(MARKER)) expect(server.observed.join("\n")).not.toContain(MARKER);
+    });
+  }
+
+  it("takes a request whose every part holds what the checks allow", async () => {
+    const server = serveProbe();
+    disposers.push(server.dispose);
+    const response = await server.send(
+      "POST",
+      "/probe/ok-path?token=ok-query",
+      body({ token: "ok", tokens: ["ok"], nested: { token: "ok" }, env: { NAME: "ok" } }),
+      { "x-token": "ok-header" },
+    );
+    expect(response.status).toBe(200);
   });
 });

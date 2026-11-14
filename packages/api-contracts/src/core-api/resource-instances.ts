@@ -13,6 +13,7 @@
 import { Result, Schema } from "effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 
+import { refusalWords } from "./refusal-words.js";
 import { describeRequestIssue } from "./request-refusal.js";
 import {
   ResourceDomainForbiddenError,
@@ -28,7 +29,10 @@ const RESOURCE_INSTANCE_ID_PATTERN = new RegExp(
 );
 
 const matching = (pattern: RegExp, message: string) =>
-  Schema.makeFilter((value: string) => (pattern.test(value) ? undefined : message));
+  Schema.makeFilter(
+    (value: string) => (pattern.test(value) ? undefined : message),
+    refusalWords(message),
+  );
 
 export const ResourceInstanceId = Schema.String.check(
   matching(RESOURCE_INSTANCE_ID_PATTERN, "must be a resource instance id (rin:<uuid>)"),
@@ -74,27 +78,37 @@ const VolumeName = Schema.String.check(
   matching(/^[a-z][a-z0-9-]{0,30}$/, "must be 1 to 31 lower-case letters, digits or '-'"),
 );
 
+const MOUNT_PATH = {
+  relative: "must be an absolute path other than '/'",
+  unnormalized: "must be a normalized absolute path",
+  system: "must not be under /proc, /sys or /dev",
+} as const;
+
 const isMountPath = (path: string): string | undefined => {
-  if (!path.startsWith("/") || path === "/") return "must be an absolute path other than '/'";
+  if (!path.startsWith("/") || path === "/") return MOUNT_PATH.relative;
   const segments = path.slice(1).split("/");
   if (
     segments.some(
       (segment) => segment === "." || segment === ".." || !/^[A-Za-z0-9._@+-]+$/.test(segment),
     )
   ) {
-    return "must be a normalized absolute path";
+    return MOUNT_PATH.unnormalized;
   }
   if (["/proc", "/sys", "/dev"].some((root) => path === root || path.startsWith(`${root}/`)))
-    return "must not be under /proc, /sys or /dev";
+    return MOUNT_PATH.system;
   return undefined;
 };
-const MountPath = Schema.String.check(Schema.makeFilter(isMountPath));
+const MountPath = Schema.String.check(
+  Schema.makeFilter(isMountPath, refusalWords(...Object.values(MOUNT_PATH))),
+);
 
 const EnvName = Schema.String.check(
   matching(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/, "must be an environment variable name"),
 );
-const withoutNul = Schema.makeFilter((value: string) =>
-  value.includes("\u0000") ? "must not contain a NUL byte" : undefined,
+const HAS_NUL = "must not contain a NUL byte";
+const withoutNul = Schema.makeFilter(
+  (value: string) => (value.includes("\u0000") ? HAS_NUL : undefined),
+  refusalWords(HAS_NUL),
 );
 const EnvValue = Schema.String.check(withoutNul, Schema.isMaxLength(32_768));
 const Argument = Schema.String.check(withoutNul);
@@ -153,8 +167,14 @@ export const resourceInstanceSpecSchema = Schema.Struct({
   env: Schema.Record(EnvName, EnvValue),
   /** Named volumes only. Every image `VOLUME` this does not cover gets a named volume too. */
   volumes: Schema.Array(resourceInstanceVolumeSchema).check(
-    Schema.makeFilter(distinct((volume) => volume.name, "volume names must be distinct")),
-    Schema.makeFilter(distinct((volume) => volume.mountPath, "mount paths must be distinct")),
+    Schema.makeFilter(
+      distinct((volume) => volume.name, "volume names must be distinct"),
+      refusalWords("volume names must be distinct"),
+    ),
+    Schema.makeFilter(
+      distinct((volume) => volume.mountPath, "mount paths must be distinct"),
+      refusalWords("mount paths must be distinct"),
+    ),
     Schema.isMaxLength(16),
   ),
   limits: Schema.Struct({
