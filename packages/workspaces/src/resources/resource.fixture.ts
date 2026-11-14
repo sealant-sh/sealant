@@ -24,7 +24,14 @@ export const postgresSpec = (
     env: { POSTGRES_HOST_AUTH_METHOD: "trust", PGDATA: "/var/lib/postgresql/18/docker" },
     volumes: [{ name: "data", mountPath: "/var/lib/postgresql" }],
     limits: { cpuMillicores: 1500, memoryBytes: 1024 * 1024 * 1024 },
-    ready: { kind: "exec", argv: ["pg_isready", "-U", "postgres"], user: "postgres" },
+    // Over TCP, not the socket: on a fresh data directory the image first runs a server for its
+    // init scripts that listens on the socket only, then stops it and starts the real one. A
+    // socket probe can answer from that first server, and the next connection finds no server.
+    ready: {
+      kind: "exec",
+      argv: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
+      user: "postgres",
+    },
     idleStopAfterSeconds: 1800,
     ...overrides,
   });

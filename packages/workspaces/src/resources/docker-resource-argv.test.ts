@@ -193,6 +193,8 @@ describe("network, exec and probe argv", () => {
       "postgres",
       "sealres-x",
       "pg_isready",
+      "-h",
+      "127.0.0.1",
       "-U",
       "postgres",
     ]);
