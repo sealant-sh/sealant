@@ -11,6 +11,7 @@ import {
   BoatRunRepo,
   BoatRunRepoLive,
   BoatTunnelRepo,
+  type BoatTunnelStoreError,
   DatabaseTransactionLive,
   LAUNCH_RETAINED_ERROR_CODE,
   WorkspaceCaptureDrainRepo,
@@ -578,6 +579,14 @@ const test = async (
     gateway: GatewayFixture;
     /** Runs when a release of what an absent VM held is about to release its publication pin. */
     pin: { beforeRelease: () => Promise<void> };
+    /**
+     * Runs in the shared paths' tunnel store (not the link job's): `afterGet` once a read of a
+     * reservation has been made and before it is returned, `afterFreeze` with each freeze's outcome.
+     */
+    tunnelCalls: {
+      afterGet: () => Promise<void>;
+      afterFreeze: (outcome: "frozen" | BoatTunnelStoreError["code"]) => void;
+    };
     repo: BoatRunRepo["Service"];
     catalog: NativePublicationRepo["Service"];
     runtimes: WorkspaceRuntimeInstanceRepo["Service"];
@@ -664,6 +673,10 @@ const test = async (
         );
         const gateway = new GatewayFixture();
         const pin = { beforeRelease: async (): Promise<void> => {} };
+        const tunnelCalls = {
+          afterGet: async (): Promise<void> => {},
+          afterFreeze: (_outcome: "frozen" | BoatTunnelStoreError["code"]): void => {},
+        };
         const gatewayHostId = randomUUID();
         // Every tunnel is carried: the carrier records what the host asked it to keep open.
         const carried: BoatTunnelCarrierInput[] = [];
@@ -784,7 +797,20 @@ const test = async (
                       ),
                   }),
                   Layer.succeed(BoatRunRepo, repo),
-                  Layer.succeed(BoatTunnelRepo, tunnels),
+                  Layer.succeed(BoatTunnelRepo, {
+                    ...tunnels,
+                    get: (id) =>
+                      tunnels
+                        .get(id)
+                        .pipe(Effect.tap(() => Effect.promise(() => tunnelCalls.afterGet()))),
+                    freeze: (previous, closeId) =>
+                      tunnels.freeze(previous, closeId).pipe(
+                        Effect.tap(() => Effect.sync(() => tunnelCalls.afterFreeze("frozen"))),
+                        Effect.tapError((error) =>
+                          Effect.sync(() => tunnelCalls.afterFreeze(error.code)),
+                        ),
+                      ),
+                  }),
                   Layer.succeed(WorkspaceCaptureDrainRepo, captureRepo),
                   Layer.succeed(WorkspaceRuntimeInstanceRepo, runtimes),
                   Layer.succeed(BoatExecution, executor),
@@ -848,6 +874,7 @@ const test = async (
             resources,
             gateway,
             pin,
+            tunnelCalls,
             repo,
             catalog,
             runtimes,
@@ -5930,6 +5957,48 @@ describe.runIf(databaseUrl !== undefined)("Boat resource links applied at once (
         phase: "deleted",
         removal: { kind: "operation", id: s.provider.deletionId, completed: true },
       });
+    }));
+
+  it("a stop whose read of the tunnel is overtaken by the link job saving its update and unlocking freezes on a fresh read and ends stopped in one pass (SLNT-971)", () =>
+    test(async (s) => {
+      const { target, changed } = await linkedRun(s);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      s.gateway.beforeReply = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      await execute(s.resources.link(changed));
+      const applied = execute(s.resourceOwner.apply(target.runId));
+      await entered.promise;
+      await execute(s.runtimes.markStopRequested({ runId: target.runId, stopReason: "user" }));
+      s.gateway.allowRemoval = true;
+      // Once the stop has met the job's lock, its next read of the reservation is held until the
+      // job has saved its update and unlocked: the read it then returns is stale.
+      const freezes: string[] = [];
+      let overtaken = false;
+      s.tunnelCalls.afterFreeze = (outcome) => freezes.push(outcome);
+      s.tunnelCalls.afterGet = async () => {
+        if (overtaken || !freezes.includes("operation-held")) return;
+        overtaken = true;
+        release.resolve();
+        await applied;
+      };
+      const { paths, daemon } = await execute(
+        s.final([savedStatus()], undefined, undefined, undefined, { waitMs: 10_000, pollMs: 20 }),
+      );
+      try {
+        expect(await execute(paths.stop(target))).toBe("stopped");
+      } finally {
+        release.resolve();
+      }
+      expect(await applied).toBe("held");
+      // The stale read lost the compare-and-set once; the fresh read froze the tunnel.
+      expect(freezes).toEqual(["operation-held", "stale-transition", "frozen"]);
+      expect(daemon.flushRequests.map((request) => request?.kind)).toEqual(["final"]);
+      expect(s.gateway.removeCalls).toBe(1);
+      expect(s.provider.deleteCalls).toBe(1);
+      expect(await tunnelRecord(s, target)).toMatchObject({ updates: [], released: true });
     }));
 
   it("a stop still fails when a link job holds the gateway host past the bound, with the work saved and nothing deleted, and the next pass stops it", () =>

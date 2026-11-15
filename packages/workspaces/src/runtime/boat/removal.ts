@@ -389,9 +389,12 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
         // `operation-held` is the host lock, taken by a configuration at its gateway mutation.
         // Only this removal waits, and it lets nothing through meanwhile: the run is fenced and
         // the stop recorded, and a configuration reads both before it dispatches, again under
-        // the lock. Every other failure, and the lock still held at the bound, fails.
+        // the lock. `stale-transition`: that configuration settled its update and let the lock
+        // go between this try's read and its freeze, so the next try reads it afresh. Every
+        // other failure, and either still met at the bound, fails.
         if (
-          frozen.failure.code !== "operation-held" ||
+          (frozen.failure.code !== "operation-held" &&
+            frozen.failure.code !== "stale-transition") ||
           (yield* Clock.currentTimeMillis) >= freezeBy
         )
           return yield* Effect.fail(frozen.failure);
