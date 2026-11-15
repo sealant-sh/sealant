@@ -2459,6 +2459,10 @@ const SKIPPED_TOGETHER = new Map([
   ["next.yml image-tag", "skipped exactly when plan decided not to publish"],
   ["next.yml pack", "skipped exactly when plan decided not to publish"],
   ["next.yml publish", "skipped exactly when plan decided not to publish"],
+  [
+    "version.yml approve-checks",
+    "version skips only on a fork; nothing it did not push to approve",
+  ],
 ]);
 
 test("no workflow job is skipped behind a job its own path expected to skip, unless reviewed", () => {
