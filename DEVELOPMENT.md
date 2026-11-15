@@ -291,8 +291,8 @@ The pieces:
 - **Worker / ssh-gateway run from a built image** — after a code change (or merging `main`), you
   must `docker compose --profile apps up -d --build <svc>`. A `restart` runs stale code.
 - **`db:seed` needs `DATABASE_URL`** (no default). Run it from the Nix shell, or inline it.
-- **Bare `pnpm dev`** starts _every_ workspace (web + docs both bind :3000, mobile/expo, …). Scope
-  with `--filter`.
+- **Bare `pnpm dev`** starts _every_ workspace (web on :3000, docs on :3001, marketing on :3002,
+  mobile/expo, …). Scope with `--filter`.
 - **"Connection closed" right after the gateway banner** is authorization, not SSH: check
   `docker compose logs --tail=5 ssh-gateway`. Usually the principal ≠ owner (above), the key isn't
   registered (Settings → SSH keys), or the workspace isn't running.
