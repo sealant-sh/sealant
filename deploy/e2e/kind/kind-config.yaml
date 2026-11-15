@@ -2,11 +2,18 @@
 # Mend stand-in writing linked worktrees onto the RWX claim), another hosts workspace Pods.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+# Every node runs kind v0.31.0's Kubernetes 1.32 image, which ships containerd 2.2. Older
+# containerd (kind v0.27's v1.32.2 image has 2.0) never starts again when up.sh's restart lands
+# while a pod sandbox is half created: "failed to recover state: failed to get metadata for
+# stored sandbox". containerd 2.0.6, 2.1.4 and later drop that sandbox and start.
 nodes:
   - role: control-plane
+    image: kindest/node:v1.32.11@sha256:5fc52d52a7b9574015299724bd68f183702956aa4a2116ae75a63cb574b35af8
   - role: worker
+    image: kindest/node:v1.32.11@sha256:5fc52d52a7b9574015299724bd68f183702956aa4a2116ae75a63cb574b35af8
     labels: { sealant.sh/e2e-role: store }
   - role: worker
+    image: kindest/node:v1.32.11@sha256:5fc52d52a7b9574015299724bd68f183702956aa4a2116ae75a63cb574b35af8
     labels: { sealant.sh/e2e-role: workspace }
 containerdConfigPatches:
   # Enable hosts.d registry config (containerd 2.x plugin name); up.sh writes a per-registry

@@ -140,7 +140,8 @@ jobs:
         uses: helm/kind-action@v1
         with:
           install_only: true
-          version: v0.27.0
+          # v0.31.0 for its kindest/node:v1.32.11 (containerd 2.2), pinned in kind-config.yaml.
+          version: v0.31.0
 
       - name: Chart renders the workspace image platform
         run: deploy/helm/image-platform.test.sh
