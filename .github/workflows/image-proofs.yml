@@ -7,10 +7,6 @@ name: Image proofs
 # image. The Arch image job in CI covers every catalog package on Arch on every pull request; these
 # cover the rest.
 on:
-  # TEMPORARY: proves the jobs on this pull request; removed before merge.
-  pull_request:
-    paths:
-      - .github/workflows/image-proofs.yml
   schedule:
     - cron: "41 2 * * *"
   workflow_dispatch:
