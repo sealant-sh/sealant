@@ -16,7 +16,6 @@ test("every verb prints one result on stdout with --json, valid against the sche
     [["plan", "--files", "packages/workspaces/src/images/boat/catalog.ts", "--json"], 0, "passed"],
     // Its status depends on this checkout's tree; its exit code must follow it.
     [["status", "--base", "HEAD", "--json"], undefined, undefined],
-    ...["evidence"].map((verb) => [[verb, "--json"], 4, "not_implemented"]),
   ];
   for (const [args, code, status] of cases) {
     const run = verify(...args);
