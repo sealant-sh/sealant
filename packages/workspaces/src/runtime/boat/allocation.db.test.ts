@@ -1299,6 +1299,55 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         await f.runtime.dispose();
       }
     }));
+  it.each([
+    [
+      "Boat's read of the VM",
+      "observe-sandbox",
+      (s: AllocationFixture, hold: () => Promise<void>) => {
+        s.provider.beforeSandboxRead = hold;
+      },
+    ],
+    [
+      "the boot-id command",
+      "read-boot-id",
+      (s: AllocationFixture, hold: () => Promise<void>) => {
+        s.provider.beforeCommand = hold;
+      },
+    ],
+  ] as const)(
+    "names the step that was running when a launch's VM preparation ran out of its 120 s: %s (SLNT-958)",
+    (_name, step, stall) =>
+      test(async (s) => {
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        stall(s, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        const log = logRecorder();
+        try {
+          const failure = await execute(
+            Effect.gen(function* () {
+              const fiber = yield* Effect.forkChild(s.allocations.prepare(s.input));
+              yield* Effect.promise(() => entered.promise);
+              yield* TestClock.adjust(120_001);
+              return yield* Fiber.join(fiber).pipe(Effect.flip);
+            }).pipe(Effect.provide(TestClock.layer()), Effect.provide(log.recorder)),
+          );
+          expect(failure).toMatchObject({
+            code: "allocation-pending",
+            diagnostic: { step, errorClass: "TimeoutError" },
+          });
+          expect(log.logged).toEqual([
+            expect.stringContaining(
+              `ran out of its 120 s at ${step}, while ${step} was still running after 120000 ms`,
+            ),
+          ]);
+        } finally {
+          release.resolve();
+        }
+      }),
+  );
   it("keeps the exact observed state and failure code on a terminal pre-bind refusal", () =>
     test(async (s) => {
       const f = await adapterFixture(s);

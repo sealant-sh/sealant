@@ -11,7 +11,7 @@ import {
   type BoatRunAbsentBasis,
   type BoatRunInput,
 } from "@sealant/validators";
-import { Cause, Context, Effect, Layer, Schedule } from "effect";
+import { Cause, Clock, Context, Effect, Exit, Layer, Schedule } from "effect";
 import { z } from "zod";
 
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
@@ -159,6 +159,9 @@ const CREATING: ReadonlySet<BoatSandbox["state"]> = new Set([
   "cloning",
 ]);
 
+/** How long a launch's VM preparation may take, every attempt and the waits between them. */
+const PREPARE_BUDGET_MS = 120_000;
+
 /** A create whose outcome sealant could not read at all. */
 const uncertainCreate: BoatLaunchDiagnostic = {
   step: "create",
@@ -235,6 +238,58 @@ const provider = <A>(step: BoatLaunchDiagnostic["step"], run: () => Promise<Boat
           ),
     ),
   );
+/** One Boat call a launch's VM preparation made: its step, how long it took, and whether the
+ * preparation's budget ran out while it was still running. */
+interface PrepareCall {
+  readonly step: BoatLaunchDiagnostic["step"];
+  readonly ms: number;
+  readonly interrupted: boolean;
+}
+
+/** One attempt of a launch's VM preparation: what Boat said of the VM, and the calls it made. */
+interface PrepareAttempt {
+  sandboxState?: string;
+  hydrated?: boolean;
+  readonly calls: PrepareCall[];
+}
+
+/** A launch's VM preparation as it goes, attempt by attempt (SLNT-958). Steps, states, flags and
+ * durations only: nothing a request or reply carried. */
+interface PrepareTrace {
+  readonly attempts: PrepareAttempt[];
+}
+
+const CurrentPrepareTrace = Context.Reference<PrepareTrace | undefined>(
+  "@sealant/workspaces/boat/CurrentPrepareTrace",
+  { defaultValue: () => undefined },
+);
+
+/** Records `effect` as a call of `step` on the current attempt of a launch's preparation, if any. */
+const traced = <A, E, R>(step: BoatLaunchDiagnostic["step"], effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const entry = (yield* CurrentPrepareTrace)?.attempts.at(-1);
+    if (entry === undefined) return yield* effect;
+    const started = yield* Clock.currentTimeMillis;
+    return yield* effect.pipe(
+      Effect.onExit((exit) =>
+        Effect.map(Clock.currentTimeMillis, (now) => {
+          entry.calls.push({ step, ms: now - started, interrupted: Exit.hasInterrupts(exit) });
+        }),
+      ),
+    );
+  });
+
+const describeAttempt = (entry: PrepareAttempt, index: number) =>
+  `attempt ${index + 1}: VM ${entry.sandboxState ?? "unread"}, hydrated ${
+    entry.hydrated === undefined ? "unknown" : String(entry.hydrated)
+  }; ${
+    entry.calls.length === 0
+      ? "no Boat call"
+      : entry.calls
+          .map((call) => `${call.step} ${call.ms} ms${call.interrupted ? " (still running)" : ""}`)
+          .join(", ")
+  }`;
+
 /** The agent manifest digest the installation receipt recorded: what every bind request names. */
 const manifestOf = (input: BoatRunInput) => {
   const publication = input.publication;
@@ -280,9 +335,10 @@ const make: Effect.Effect<
     if (run.sandboxId === null) return { kind: "unknown", reason: "no-sandbox" } as const;
     const id = boatSandboxIdSchema.safeParse(run.sandboxId);
     if (!id.success) return { kind: "unknown", reason: "foreign" } as const;
-    const read = yield* Effect.tryPromise(() => api.get(id.data)).pipe(
-      Effect.orElseSucceed(() => undefined),
-    );
+    const read = yield* traced(
+      "observe-sandbox",
+      Effect.tryPromise(() => api.get(id.data)),
+    ).pipe(Effect.orElseSucceed(() => undefined));
     if (read === undefined) return { kind: "unknown", reason: "unreadable" } as const;
     if (read.ok) {
       if (read.value.id !== id.data || !boatRunMatches(run, read.value))
@@ -347,7 +403,10 @@ const make: Effect.Effect<
       if (launch === undefined)
         return yield* Effect.fail(new BoatAllocationError("allocation-pending"));
       const expected = launch.publication.snapshot.identity;
-      const snapshot = yield* provider("read-source", () => api.getSnapshot(expected.name));
+      const snapshot = yield* traced(
+        "read-source",
+        provider("read-source", () => api.getSnapshot(expected.name)),
+      );
       if (
         snapshot.status !== "ready" ||
         snapshot.name !== expected.name ||
@@ -358,7 +417,9 @@ const make: Effect.Effect<
         return yield* Effect.fail(new BoatAllocationError("source-mismatch"));
       // Only the winner of this statement may issue create. Redelivery after it only discovers.
       yield* runs.issueCreate(runId);
-      const reply = yield* Effect.tryPromise(create).pipe(Effect.orElseSucceed(() => undefined));
+      const reply = yield* traced("create", Effect.tryPromise(create)).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
       if (reply === undefined || !reply.ok) {
         const diagnostic =
           reply === undefined ? uncertainCreate : boatLaunchDiagnostic(reply.error, "create");
@@ -378,11 +439,14 @@ const make: Effect.Effect<
         return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
       return yield* runs.adopt(runId, reply.value.id);
     }
-    const discovered = yield* Effect.tryPromise({
-      try: () => api.discover(ownership),
-      catch: (error) =>
-        new BoatAllocationError("provider-unavailable", boatLaunchDiagnostic(error, "discover")),
-    });
+    const discovered = yield* traced(
+      "discover",
+      Effect.tryPromise({
+        try: () => api.discover(ownership),
+        catch: (error) =>
+          new BoatAllocationError("provider-unavailable", boatLaunchDiagnostic(error, "discover")),
+      }),
+    );
     if (discovered.kind === "conflict") {
       const conflictingSandboxes = [
         ...new Set(
@@ -439,7 +503,9 @@ const make: Effect.Effect<
             code: "allocation-held",
           }),
         );
-      const replay = yield* Effect.tryPromise(create).pipe(Effect.orElseSucceed(() => undefined));
+      const replay = yield* traced("create", Effect.tryPromise(create)).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
       if (
         phase === "issued" &&
         replay !== undefined &&
@@ -499,6 +565,11 @@ const make: Effect.Effect<
             ),
       );
     const observed = presence.sandbox;
+    const current = (yield* CurrentPrepareTrace)?.attempts.at(-1);
+    if (current !== undefined) {
+      current.sandboxState = observed.state;
+      if (observed.hydrated !== undefined) current.hydrated = observed.hydrated;
+    }
     const observationDiagnostic: BoatLaunchDiagnostic = {
       step: "observe-sandbox",
       errorClass: "BoatAllocationError",
@@ -532,10 +603,13 @@ const make: Effect.Effect<
           code: "run-stopped",
         }),
       );
-    const reply = yield* provider("read-boot-id", () =>
-      api.execute(sandboxId, "/usr/bin/cat /proc/sys/kernel/random/boot_id", {
-        timeoutSeconds: 10,
-      }),
+    const reply = yield* traced(
+      "read-boot-id",
+      provider("read-boot-id", () =>
+        api.execute(sandboxId, "/usr/bin/cat /proc/sys/kernel/random/boot_id", {
+          timeoutSeconds: 10,
+        }),
+      ),
     );
     const bootId = yield* Effect.try({
       try: () => {
@@ -579,37 +653,86 @@ const make: Effect.Effect<
       );
     if (run.target === null)
       return yield* Effect.fail(new BoatAllocationError("allocation-pending"));
-    yield* execution.exchange(run.target);
+    yield* traced("bind-exchange", execution.exchange(run.target));
     return run.target;
   });
   // Create is an asynchronous acceptance (202). The row is read again on each attempt, so a retry
-  // never replays issuance from what an earlier attempt read.
+  // never replays issuance from what an earlier attempt read. Each attempt is traced: what Boat
+  // said of the VM and how long each call took, logged as it ends, and the step the budget ran
+  // out in names the timeout (SLNT-958).
   const prepared = (input: BoatRunInput) =>
-    drive(input).pipe(
-      Effect.retry({
-        times: 119,
-        schedule: Schedule.spaced("1 second"),
-        while: (error) =>
-          error instanceof BoatAllocationError &&
-          error.code === "allocation-pending" &&
-          // A create whose outcome is unknown: the next attempt discovers or replays it.
-          (error.diagnostic?.step === "create" ||
-            (error.diagnostic?.step === "observe-sandbox" &&
-              (["init", "provisioning", "provisioned", "cloning"].includes(
-                error.diagnostic.sandboxState ?? "",
-              ) ||
-                error.diagnostic.hydrated === false))),
-      }),
-      Effect.timeout(120_000),
-      Effect.mapError((error) =>
-        Cause.isTimeoutError(error)
-          ? new BoatAllocationError(
-              "allocation-pending",
-              boatLaunchDiagnostic(error, "observe-sandbox"),
-            )
-          : error,
-      ),
-    );
+    Effect.gen(function* () {
+      const runId = input.consumer.runId;
+      const trace: PrepareTrace = { attempts: [] };
+      const once = Effect.gen(function* () {
+        trace.attempts.push({ calls: [] });
+        const index = trace.attempts.length - 1;
+        return yield* drive(input).pipe(
+          Effect.onExit((exit) => {
+            const entry = trace.attempts[index];
+            return entry === undefined || Exit.hasInterrupts(exit)
+              ? Effect.void
+              : Effect.logDebug(
+                  `Boat launch · run ${runId}: VM preparation ${describeAttempt(entry, index)}; ${
+                    Exit.isSuccess(exit) ? "prepared" : "not yet"
+                  }.`,
+                );
+          }),
+        );
+      });
+      return yield* once.pipe(
+        Effect.retry({
+          times: 119,
+          schedule: Schedule.spaced("1 second"),
+          while: (error) =>
+            error instanceof BoatAllocationError &&
+            error.code === "allocation-pending" &&
+            // A create whose outcome is unknown: the next attempt discovers or replays it.
+            (error.diagnostic?.step === "create" ||
+              (error.diagnostic?.step === "observe-sandbox" &&
+                (["init", "provisioning", "provisioned", "cloning"].includes(
+                  error.diagnostic.sandboxState ?? "",
+                ) ||
+                  error.diagnostic.hydrated === false))),
+        }),
+        Effect.provideService(CurrentPrepareTrace, trace),
+        Effect.timeout(PREPARE_BUDGET_MS),
+        Effect.catchIf(Cause.isTimeoutError, (error) =>
+          Effect.gen(function* () {
+            // The step the budget ran out in: a call still running, or else the last one made
+            // (the attempts were waiting a second between them).
+            const last = trace.attempts.at(-1);
+            const call = last?.calls.at(-1);
+            const step = call?.step ?? "observe-sandbox";
+            const where =
+              call === undefined
+                ? "before any Boat call"
+                : call.interrupted
+                  ? `while ${step} was still running after ${call.ms} ms`
+                  : `between attempts, the last ending at ${step}`;
+            const slowest = trace.attempts
+              .flatMap((entry) => entry.calls)
+              .reduce<PrepareCall | undefined>(
+                (worst, next) => (worst === undefined || next.ms > worst.ms ? next : worst),
+                undefined,
+              );
+            yield* Effect.logWarning(
+              `Boat launch · run ${runId}: VM preparation ran out of its ${PREPARE_BUDGET_MS / 1000} s at ${step}, ${where}; ${trace.attempts.length} attempt${trace.attempts.length === 1 ? "" : "s"}${
+                slowest === undefined ? "" : `, slowest call ${slowest.step} ${slowest.ms} ms`
+              }. Last attempts: ${trace.attempts
+                .slice(-3)
+                .map((entry, offset) =>
+                  describeAttempt(entry, Math.max(trace.attempts.length - 3, 0) + offset),
+                )
+                .join(" | ")}.`,
+            );
+            return yield* Effect.fail(
+              new BoatAllocationError("allocation-pending", boatLaunchDiagnostic(error, step)),
+            );
+          }),
+        ),
+      );
+    });
   const prepare = Effect.fn("BoatVm.prepare")(function* (raw: BoatRunInput) {
     const input = yield* attempt(() => boatRunInputSchema.parse(raw));
     if (!ours({ deploymentId: input.deploymentId, accountId: input.accountId ?? null }))

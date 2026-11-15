@@ -39,6 +39,8 @@ export class ProviderFixture {
   bootId = randomUUID();
   sandboxMissing = false;
   beforeSandboxRead: () => Promise<void> = async () => {};
+  /** Runs before a command sent to the VM is answered. */
+  beforeCommand: () => Promise<void> = async () => {};
   deleteCalls = 0;
   deletionReads = 0;
   deletionCompleted = true;
@@ -206,6 +208,7 @@ export class ProviderFixture {
       return;
     }
     if (url.pathname.endsWith("/commands")) {
+      await this.beforeCommand();
       if (this.bootReadUnavailable) {
         send({ code: "unavailable" }, 503);
         return;
