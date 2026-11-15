@@ -15,7 +15,7 @@ test("every verb prints one result on stdout with --json, valid against the sche
     [["plan", "--files", "packages/workspaces/src/images/boat/catalog.ts", "--json"], 0, "passed"],
     // Its status depends on this checkout's tree; its exit code must follow it.
     [["status", "--base", "HEAD", "--json"], undefined, undefined],
-    ...["db", "formal", "stack", "runtime", "boat-harness", "evidence"].map((verb) => [
+    ...["formal", "stack", "runtime", "boat-harness", "evidence"].map((verb) => [
       [verb, "--json"],
       4,
       "not_implemented",
@@ -41,4 +41,6 @@ test("no verb, or help, lists the verbs; a wrong verb or option is a usage error
   assert.equal(verify("deploy").status, 2);
   assert.equal(verify("check", "--files", "x").status, 2);
   assert.equal(verify("plan", "--nope").status, 2);
+  assert.equal(verify("db", "everything").status, 2, "db names only the suites it has");
+  assert.equal(verify("db", "--workers", "0").status, 2);
 });

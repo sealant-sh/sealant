@@ -7,12 +7,13 @@
  * wrapper drives the same request/response/event machinery as the production docker path, without
  * mocking the wire protocol.
  *
- * The debug sealantd binary built for the dev host runs natively here (macOS/arm64), and we connect
- * as the same uid that launched it, so the daemon's `SO_PEERCRED` check admits us. If the binary is
- * absent the suite is skipped rather than failed (CI without a prebuilt daemon).
+ * The daemon runs natively here, and we connect as the same uid that launched it, so the daemon's
+ * `SO_PEERCRED` check admits us. Without a binary the suite skips; `pnpm verify db sealantd-runtime`
+ * (which CI's Tests job runs) supplies the pinned one and refuses the skip.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import type { Duplex } from "node:stream";
@@ -30,6 +31,7 @@ import {
 } from "@sealant/runtime-protocol";
 import { Cause, Effect, Exit, Layer, Option, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   captureFlushReportFromWire,
@@ -43,27 +45,46 @@ import {
   type SealantTransportService,
 } from "./runtime.js";
 
-/** Absolute path of the dev-host sealantd debug binary (sibling `sealantd` checkout). */
-const SEALANTD_BIN = fileURLToPath(
-  new URL("../../../../../sealantd/target/debug/sealantd", import.meta.url),
-);
+/**
+ * The sealantd to drive: `SEALANTD_BIN` when set (`pnpm verify db` and CI pass the pinned one from
+ * the staged Boat bundle), else the dev-host debug binary of a sibling `sealantd` checkout.
+ */
+const SEALANTD_BIN =
+  process.env.SEALANTD_BIN ??
+  fileURLToPath(new URL("../../../../../sealantd/target/debug/sealantd", import.meta.url));
 
 const hasBinary = existsSync(SEALANTD_BIN);
 
+const versionIn = (text: string): { major: number; minor: number } | null => {
+  const version = /(\d+)\.(\d+)\.(\d+)/.exec(text);
+  return version === null ? null : { major: Number(version[1]), minor: Number(version[2]) };
+};
+
 /**
- * The local daemon's reported version, or null when there is no binary or it prints none. Capture
- * commands are versioned: an older daemon never answers an unknown command, so each round-trip
- * test below only runs against a binary that reports at least the version that added it.
+ * The local daemon's version, or null when there is no binary or it is unknown. Capture commands
+ * are versioned: an older daemon never answers an unknown command, so each round-trip test below
+ * only runs against a binary known to be at least the version that added it. Every sealantd build
+ * reports `0.0.0` (SLNT-981), so the pinned release is known by its bytes, as the Boat bundle pins
+ * it, and takes the version of its pinned tag.
  */
 const daemonVersion = (() => {
   if (!hasBinary) {
     return null;
   }
+  const pin = z
+    .object({ source: z.string(), sealantd: z.string() })
+    .parse(
+      JSON.parse(readFileSync(new URL("../images/boat/runtime-pin.json", import.meta.url), "utf8")),
+    );
+  if (createHash("sha256").update(readFileSync(SEALANTD_BIN)).digest("hex") === pin.sealantd) {
+    // `ghcr.io/…/sealantd-next:0.21.0-next.187@sha256:…`: the first x.y.z is the tag's.
+    return versionIn(pin.source);
+  }
   const printed = spawnSync(SEALANTD_BIN, ["--print-capabilities"], {
     encoding: "utf8",
   });
-  const version = /"daemonVersion":\s*"(\d+)\.(\d+)\.(\d+)/.exec(printed.stdout);
-  return version === null ? null : { major: Number(version[1]), minor: Number(version[2]) };
+  const reported = /"daemonVersion":\s*"([^"]*)"/.exec(printed.stdout)?.[1];
+  return reported === undefined || reported === "0.0.0" ? null : versionIn(reported);
 })();
 const daemonAtLeast = (major: number, minor: number): boolean =>
   daemonVersion !== null &&

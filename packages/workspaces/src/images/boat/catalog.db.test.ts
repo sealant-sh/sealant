@@ -119,6 +119,23 @@ const throughCatalog = <A, E>(
     ),
   );
 
+// Every describe below writes to the catalog database, so it is migrated once, before any of them
+// runs; a migration inside one describe left the ones above it on an empty database.
+beforeAll(async () => {
+  if (!enabled) return;
+  if (
+    databaseUrl === undefined ||
+    !/^postgresql:\/\/stage2a:stage2a_fake_password@127\.0\.0\.1:\d+\/stage2a$/.test(databaseUrl)
+  )
+    throw new Error("explicit disposable loopback database required");
+  const result = await runMigrations({
+    databaseUrl,
+    migrationsFolder: fileURLToPath(new URL("../../../../db/drizzle", import.meta.url)),
+    log: () => undefined,
+  });
+  expect(result.applied).toBeDefined();
+}, 90000);
+
 describe.skipIf(!enabled)("a Boat refusal of a build's VM (SLNT-782 review)", () => {
   for (const { name, refusal, kind } of [
     { name: "no machine now", refusal: BOAT_REFUSALS["no-machine"], kind: "no-machine" },
@@ -604,20 +621,6 @@ describe.skipIf(!enabled)("native publication ownership in migrated disposable P
       }),
     ),
   );
-  beforeAll(async () => {
-    if (
-      databaseUrl === undefined ||
-      !/^postgresql:\/\/stage2a:stage2a_fake_password@127\.0\.0\.1:\d+\/stage2a$/.test(databaseUrl)
-    )
-      throw new Error("explicit disposable loopback database required");
-    const result = await runMigrations({
-      databaseUrl,
-      migrationsFolder: fileURLToPath(new URL("../../../../db/drizzle", import.meta.url)),
-      log: () => undefined,
-    });
-    expect(result.applied).toBeDefined();
-  }, 90000);
-
   it.live(
     "coalesces concurrent same-scope reservations and separates owner/resource-domain/deployment scope",
     () =>

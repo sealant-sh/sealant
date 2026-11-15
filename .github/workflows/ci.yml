@@ -156,6 +156,21 @@ jobs:
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
 
+      # The suites the step above skips for want of a gate: the Boat catalog and retention cases
+      # (their own database and the staged runtime bundle) and the Effect runtime over the pinned
+      # sealantd. `pnpm verify db` starts its own Postgres, stages the bundle, sets every gate and
+      # fails on any skip, the same command an agent runs locally.
+      - name: Gated suites, never skipped
+        run: pnpm verify db boat-catalog sealantd-runtime
+
+      - name: Keep the gated suites' logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-db
+          path: .verify/
+          include-hidden-files: true
+
       # `pnpm verify` itself: the result schema, the status roll-up and exit codes, the skip rule,
       # and the obligations map against the workflows' path filters.
       - name: The verify tool

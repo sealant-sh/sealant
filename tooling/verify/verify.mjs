@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { runCheck } from "./check.mjs";
+import { runDb, SUITES } from "./db.mjs";
 import { ciJobsFor, loadObligations, owedFor, printable } from "./plan.mjs";
 import { changedFiles, readHead, REPO_ROOT } from "./repo.mjs";
 import { EXIT_CODES, makeResult, writeResult } from "./result.mjs";
@@ -17,14 +18,14 @@ const VERBS = {
   plan: "What this diff owes (tests, gated suites, models, screenshots) and which CI jobs it runs",
   check: "The pre-PR checks: forced typecheck and lint, affected tests (skips named), formatting",
   status: "For each obligation, whether a passing result exists for this exact commit (--markdown)",
-  db: "Not yet: a throwaway Postgres with every gated database suite switched on",
+  db: "A throwaway Postgres, the Boat bundle and every gate set; runs gated suites, no skips",
   formal: "Not yet: the formal models whose covered paths the diff touches, and their drift",
   stack: "Not yet: the local stack, up, status and down",
   runtime: "Not yet: a live Boat launch (requires an external observer without credentials)",
   "boat-harness": "Not yet: the Boat harness preflight and lock status",
   evidence: "Not yet: screenshots and transcripts, secret-scanned, and the verdict file",
 };
-const IMPLEMENTED = new Set(["plan", "check", "status"]);
+const IMPLEMENTED = new Set(["plan", "check", "status", "db"]);
 
 class UsageError extends Error {}
 
@@ -36,7 +37,9 @@ function usage() {
     ...Object.entries(VERBS).map(([verb, what]) => `  ${verb.padEnd(width)}  ${what}`),
     "",
     "Options: --json (one result on stdout), --base <ref> (default origin/main),",
-    "plan: --files <path>... ; check: --all ; status: --markdown",
+    "plan: --files <path>... ; check: --all ; status: --markdown ;",
+    `db: [suite...] of ${Object.keys(SUITES).join(", ")} (all when none) ;`,
+    "check, db: --workers <n> (at most n test workers and turbo tasks)",
   ].join("\n");
 }
 
@@ -51,6 +54,7 @@ function parse(argv) {
         files: { type: "boolean", default: false },
         all: { type: "boolean", default: false },
         markdown: { type: "boolean", default: false },
+        workers: { type: "string" },
       },
     });
   } catch (error) {
@@ -78,7 +82,16 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
   if (verb === undefined || verb === "help") return { help: usage() };
   if (!(verb in VERBS)) throw new UsageError(`unknown verb "${verb}"\n\n${usage()}`);
   if (values.files && verb !== "plan") throw new UsageError("--files is a plan option");
-  if (!values.files && rest.length > 0 && IMPLEMENTED.has(verb)) {
+  const workers = values.workers === undefined ? undefined : Number(values.workers);
+  if (workers !== undefined && !(Number.isInteger(workers) && workers > 0)) {
+    throw new UsageError("--workers takes a whole number above 0");
+  }
+  if (verb === "db") {
+    const unknown = rest.find((suite) => !(suite in SUITES));
+    if (unknown !== undefined) {
+      throw new UsageError(`unknown suite "${unknown}"; db runs ${Object.keys(SUITES).join(", ")}`);
+    }
+  } else if (!values.files && rest.length > 0 && IMPLEMENTED.has(verb)) {
     throw new UsageError(`unexpected argument "${rest[0]}"`);
   }
   const startedAt = new Date();
@@ -134,6 +147,7 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
       owed,
       changed,
       logDirectory,
+      workers,
       echo,
     });
     return makeResult({
@@ -146,6 +160,30 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
       ),
       next,
       proves: ["check"],
+      invocation,
+    });
+  }
+
+  if (verb === "db") {
+    const suites = rest.length === 0 ? Object.keys(SUITES) : [...new Set(rest)];
+    const { steps, next, left } = await runDb({
+      root,
+      suites,
+      logDirectory: path.join(root, ".verify", "logs"),
+      workers,
+      echo,
+    });
+    return makeResult({
+      verb,
+      head,
+      startedAt,
+      steps,
+      evidence: steps.flatMap((step) =>
+        step.log === undefined ? [] : [{ kind: "log", path: step.log }],
+      ),
+      cleanup: { status: left.length === 0 ? "clean" : "left", left },
+      next,
+      proves: suites.map((suite) => `db:${suite}`),
       invocation,
     });
   }

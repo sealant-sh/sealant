@@ -53,7 +53,10 @@ pnpm verify check   # forced typecheck and lint, the affected packages' tests, f
 `verify check` passes only when nothing skipped that the diff owes: a suite that skips itself (a
 missing database, bundle or binary) makes it `skipped`, never `passed`, and it names each skipped
 test with its gate and the command that runs it. The tests allowed to skip are in
-`tooling/verify/allowed-skips.json`; what a path owes is in `tooling/verify/obligations.json`.
+`tooling/verify/allowed-skips.json`; what a path owes is in `tooling/verify/obligations.json`. When
+`check` or `plan` owes a gated suite, `pnpm verify db <suite>` runs it (Docker needed): a throwaway
+Postgres, migrated, the Boat runtime bundle staged and every gate set, with no skip allowed; it
+removes what it started. CI's Tests job runs the Boat and sealantd suites the same way.
 `pnpm verify status --markdown` prints the receipt for the PR body: each obligation and whether this
 commit, from a clean tree, has a passing result. Every run is kept under `.verify/`.
 
