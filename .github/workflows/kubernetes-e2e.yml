@@ -39,8 +39,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Whether this pull request touches anything the e2e jobs cover: the `kubernetes-e2e` entry of
+  # tooling/verify/obligations.json, the same map `pnpm verify plan` reads. A pull request that
+  # touches none of it skips both jobs, and `e2e checks` still reports (it allows exactly those
+  # skips). A push to main and a dispatch run everything.
+  changes:
+    name: What the e2e jobs cover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      # Depth 2: the merge commit and its first parent, the base branch the diff is taken against.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: { fetch-depth: 2 }
+      - id: gate
+        run: node tooling/verify/gate.mjs kubernetes-e2e
+
   docker:
     name: Docker runtime e2e
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on:
       ${{ inputs.runner == 'box' && fromJSON('["self-hosted","box","linux","x64"]') ||
       'ubuntu-24.04' }}
@@ -78,6 +97,8 @@ jobs:
 
   kubernetes:
     name: Kubernetes cross-node e2e (kind, generic RWX)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on:
       ${{ inputs.runner == 'box' && fromJSON('["self-hosted","box","linux","x64"]') ||
       'ubuntu-24.04' }}
@@ -172,7 +193,7 @@ jobs:
   # tooling/scripts/workflow-checks.test.mjs fails when a job is missing from `needs`.
   e2e-checks:
     name: e2e checks
-    needs: [docker, kubernetes]
+    needs: [changes, docker, kubernetes]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -181,9 +202,9 @@ jobs:
       - name: Require every e2e job
         env:
           RESULTS: ${{ toJSON(needs) }}
-          # The jobs allowed to be skipped on purpose (a path filter, a condition). None is today, so
-          # every job must succeed.
-          MAY_SKIP: "[]"
+          # The jobs allowed to be skipped on purpose: the two `changes` gates, when the pull request
+          # touches nothing they cover (obligations.test.mjs keeps this list and the map together).
+          MAY_SKIP: '["docker", "kubernetes"]'
         run: |
           node --input-type=module <<'NODE'
           const results = JSON.parse(process.env.RESULTS);
