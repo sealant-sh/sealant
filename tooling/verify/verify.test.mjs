@@ -4,6 +4,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { decodeResult, EXIT_CODES } from "./result.mjs";
+import { BOAT_LIVE_ENV } from "./runtime.mjs";
 
 const CLI = fileURLToPath(new URL("verify.mjs", import.meta.url));
 const verify = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
@@ -15,11 +16,7 @@ test("every verb prints one result on stdout with --json, valid against the sche
     [["plan", "--files", "packages/workspaces/src/images/boat/catalog.ts", "--json"], 0, "passed"],
     // Its status depends on this checkout's tree; its exit code must follow it.
     [["status", "--base", "HEAD", "--json"], undefined, undefined],
-    ...["stack", "runtime", "boat-harness", "evidence"].map((verb) => [
-      [verb, "--json"],
-      4,
-      "not_implemented",
-    ]),
+    ...["boat-harness", "evidence"].map((verb) => [[verb, "--json"], 4, "not_implemented"]),
   ];
   for (const [args, code, status] of cases) {
     const run = verify(...args);
@@ -43,4 +40,23 @@ test("no verb, or help, lists the verbs; a wrong verb or option is a usage error
   assert.equal(verify("plan", "--nope").status, 2);
   assert.equal(verify("db", "everything").status, 2, "db names only the suites it has");
   assert.equal(verify("db", "--workers", "0").status, 2);
+  assert.equal(verify("stack", "sideways").status, 2);
+  assert.equal(verify("runtime", "--runtime", "boat").status, 2, "--live is required");
+  assert.equal(verify("runtime", "--runtime", "docker", "--live").status, 2);
+});
+
+test("verify runtime without Boat credentials exits 4 as requires_external_observer", () => {
+  const env = { ...process.env };
+  for (const name of BOAT_LIVE_ENV) delete env[name];
+  const run = spawnSync(
+    process.execPath,
+    [CLI, "runtime", "--runtime", "boat", "--live", "--json"],
+    {
+      encoding: "utf8",
+      env,
+    },
+  );
+  assert.equal(run.status, 4, run.stderr);
+  const result = decodeResult(JSON.parse(run.stdout));
+  assert.equal(result.status, "requires_external_observer");
 });
