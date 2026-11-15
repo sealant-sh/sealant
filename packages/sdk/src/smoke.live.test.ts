@@ -9,6 +9,7 @@ import { Effect, Predicate } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { SealantApiClient } from "./effect/api-client.js";
+import { getWorkspaceOp } from "./effect/operations.js";
 import { makeSdkRuntime } from "./effect/runtime.js";
 import { opencode, Sealant } from "./index.js";
 import { resolveInternalConfig } from "./internal/config.js";
@@ -18,8 +19,11 @@ const baseUrl = SMOKE_BASE_URL ?? "http://127.0.0.1:4000";
 // GitHub's own sample repository: public, tiny, and kept by GitHub (the SDK examples use it too).
 const SMOKE_REPOSITORY = "github.com/octocat/Hello-World";
 
-// Created via `POST /v1/runs`; requires the seeded FK parents `usr_local` + `ws_test`.
-const createRunViaApi = async (): Promise<string | undefined> => {
+// Created via `POST /v1/runs`; requires the seeded FK parents `usr_local` + `ws_test`. Answers the
+// run id, or why none was made.
+const createRunViaApi = async (): Promise<
+  { readonly runId: string } | { readonly refused: string }
+> => {
   const response = await fetch(`${baseUrl}/v1/runs`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -31,11 +35,29 @@ const createRunViaApi = async (): Promise<string | undefined> => {
     }),
   });
   if (!response.ok) {
-    return undefined;
+    return { refused: `POST /v1/runs answered ${response.status}` };
   }
   const body: unknown = await response.json();
   const runId = Predicate.isObject(body) ? body["runId"] : undefined;
-  return typeof runId === "string" ? runId : undefined;
+  return typeof runId === "string" ? { runId } : { refused: "POST /v1/runs answered no runId" };
+};
+
+/**
+ * The caller's env of the workspace as the control plane stored it: `spec.runtime.userEnv`, where
+ * the SDK's `env` lands (the blueprint's `env` is the legacy, unvalidated field).
+ */
+const storedEnv = async (workspaceId: string): Promise<unknown> => {
+  const config = resolveInternalConfig({ baseUrl });
+  const runtime = makeSdkRuntime(config);
+  try {
+    // The owner the facade sends on this read: the host-local default the workspace was made for.
+    const details = await runtime.run(getWorkspaceOp(workspaceId, config.hostLocal.ownerUserId));
+    const spec: unknown = details.spec;
+    const specRuntime = Predicate.isObject(spec) ? spec["runtime"] : undefined;
+    return Predicate.isObject(specRuntime) ? specRuntime["userEnv"] : undefined;
+  } finally {
+    await runtime.dispose();
+  }
 };
 
 describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-plane API)", () => {
@@ -52,12 +74,14 @@ describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-
     }
   });
 
-  it("reads a run and its (empty) record through the fluent facade", async () => {
-    const runId = await createRunViaApi();
-    if (runId === undefined) {
-      // FK parents not seeded in this environment — nothing to assert against.
+  it("reads a run and its (empty) record through the fluent facade", async (ctx) => {
+    const created = await createRunViaApi();
+    if ("refused" in created) {
+      // The FK parents are not seeded here: say so as a skip, never pass with nothing asserted.
+      ctx.skip(`no run to read (${created.refused}); seed usr_local and ws_test`);
       return;
     }
+    const { runId } = created;
     const sealant = new Sealant({ baseUrl });
     try {
       const run = await sealant.runs.get(runId);
@@ -95,7 +119,7 @@ describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-
     }
   });
 
-  it("accepts `env` on create and the map survives a handle reacquired via workspaces.get()", async () => {
+  it("keeps `env` from create in the stored spec, read again for a handle from workspaces.get()", async () => {
     const sealant = new Sealant({ baseUrl });
     try {
       const workspace = await sealant.workspaces.create({
@@ -107,6 +131,7 @@ describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-
       expect(workspace.id).toBeTruthy();
       const reacquired = await sealant.workspaces.get(workspace.id);
       expect(reacquired.id).toBe(workspace.id);
+      expect(await storedEnv(reacquired.id)).toEqual({ WORKSPACE_ENV_PROOF: "sdk-smoke-canary" });
     } finally {
       await sealant.close();
     }

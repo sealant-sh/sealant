@@ -46,6 +46,7 @@ import {
 } from "@sealant/db/testing/workspace-publications";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
 import {
+  parseWorkspaceBlueprint,
   runtimeAdapterIds,
   runtimeSupport,
   type NativePublicationKey,
@@ -1585,5 +1586,27 @@ describe("createWorkspace · the runtime table (GET /v1/workspaces/runtimes)", (
       supported: false,
       message: expect.stringContaining("its worker has no resource gateway"),
     });
+  });
+});
+
+// The create payload takes a `credentials` key that the worker's blueprint schema refuses: the
+// module lowers it into `runtime.credentialRefs` and must drop it from what it stores, or every
+// build of such a workspace fails at `parseWorkspaceBlueprint` (hit on 0.7.0).
+describe("createWorkspace credentials key", () => {
+  it("stores a launch spec without the key, which the worker's blueprint schema accepts", async () => {
+    const state: RecordingState = {};
+    await Effect.runPromise(
+      createWorkspace({
+        payload: {
+          ...capturePayload("/workspace/harness-home"),
+          spec: { ...captureSpec("/workspace/harness-home"), credentials: {} },
+        },
+        headers: {},
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+    if (state.job === undefined) throw new Error("no job was queued");
+    expect(Object.hasOwn(state.job, "credentials")).toBe(false);
+    expect(Object.hasOwn(state.snapshot ?? {}, "credentials")).toBe(false);
+    expect(parseWorkspaceBlueprint(state.job).sources.workspace.kind).toBe("capture");
   });
 });
