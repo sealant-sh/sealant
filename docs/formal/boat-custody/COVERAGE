@@ -1,0 +1,25 @@
+# Boat custody: the code BoatRunLedger.tla and BoatKeyProof.tla mirror, one SQL statement or HTTP
+# call per step (the boat-custody skill says how to read a hunk against them).
+#
+# `sync` is the commit the models were last confirmed to describe. A pull request that changes a
+# covered path also changes the models or moves `sync` (CI's drift guard, `pnpm verify formal`).
+# Move it only after reading every covered hunk since it against the models.
+sync dd39b9de8a9dfef9c0f082d69f06abfa7ecdb76f
+
+path packages/workspaces/src/runtime/boat/vm.ts
+path packages/workspaces/src/runtime/boat/api.ts
+path packages/workspaces/src/runtime/boat/failure.ts
+path packages/workspaces/src/runtime/boat/removal.ts
+path packages/workspaces/src/runtime/boat/convergence.ts
+path packages/workspaces/src/runtime/boat/adapter.ts
+path packages/workspaces/src/runtime/boat/key-proof.ts
+path packages/workspaces/src/runtime/boat/accounts.ts
+path packages/db/src/repositories/boat-runs.ts
+path packages/db/src/repositories/boat-key-proofs.ts
+path packages/db/src/repositories/boat-accounts.ts
+path packages/db/src/repositories/workspace-runtime-instances.ts
+path packages/validators/src/workspaces/boat-run.ts
+path packages/workspaces/src/worker/process-workspace-build-job.ts
+path packages/workspaces/src/worker/process-workspace-stop.ts
+path apps/worker/src/workers/boat-assembly.ts
+path apps/api/src/routes/boat-accounts/boat-accounts.module.ts

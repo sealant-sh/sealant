@@ -340,13 +340,95 @@ jobs:
       - name: Build and run an Arch workspace image
         run: pnpm --filter @sealant/workspaces test:e2e src/buildkit/arch-native.e2e.ts
 
+  # Which formal models (docs/formal/<area>/COVERAGE) this pull request touches: a model's covered
+  # code or the model itself. It installs nothing; formal.mjs reads COVERAGE and git only.
+  formal-scope:
+    name: Formal scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      touched: ${{ steps.scope.outputs.touched }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      # A dispatch has no base to diff against, so it checks every model.
+      - name: Does the diff touch a model's covered paths?
+        id: scope
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ -z "$BASE" ]; then
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+          else
+            node tooling/verify/formal.mjs scope "origin/$BASE" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The touched models at their quick bounds (hosted runners have four cores; every bound runs in
+  # formal-nightly.yml), and the drift guard: covered code that changed while neither its model nor
+  # its COVERAGE sync commit did fails here. Skipped when the diff touches no model.
+  formal:
+    name: Formal models (quick bounds)
+    needs: formal-scope
+    if: needs.formal-scope.outputs.touched == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The TLA+ tools the repository's flake.lock pins (TLC 2.19, tools 1.7.4), on the runner's Java:
+      # the pinned state counts in each case hold only for that TLC.
+      - name: TLC
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" |
+            sha256sum -c -
+          java -version
+
+      - name: Quick bounds and the drift guard
+        env:
+          TLA2TOOLS_JAR: ${{ runner.temp }}/tla2tools.jar
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ -z "$BASE" ]; then
+            pnpm verify formal --all
+          else
+            pnpm verify formal --base "origin/$BASE"
+          fi
+
+      - name: Keep the model's output
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-formal
+          path: .verify/
+          include-hidden-files: true
+
   # The one result branch protection requires from this workflow. Requiring each job by name leaves
   # a check pending forever when a job is skipped, renamed or re-matrixed, so this job reads every
   # other job's result instead. `always()`, not `!cancelled()`: a skipped roll-up would count as
   # passed. tooling/scripts/workflow-checks.test.mjs fails when a job is missing from `needs`.
   checks:
     name: checks
-    needs: [lint, typecheck, tests, runtime-proofs, arch-native]
+    needs: [lint, typecheck, tests, runtime-proofs, arch-native, formal-scope, formal]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -355,9 +437,9 @@ jobs:
       - name: Require every CI job
         env:
           RESULTS: ${{ toJSON(needs) }}
-          # The jobs allowed to be skipped on purpose (a path filter, a condition). None is today, so
-          # every job must succeed.
-          MAY_SKIP: "[]"
+          # The jobs allowed to be skipped on purpose (a path filter, a condition): `formal` runs only
+          # when formal-scope finds a model the diff touches. Every other job must succeed.
+          MAY_SKIP: '["formal"]'
         run: |
           node --input-type=module <<'NODE'
           const results = JSON.parse(process.env.RESULTS);

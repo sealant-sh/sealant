@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 
 import { runCheck } from "./check.mjs";
 import { runDb, SUITES } from "./db.mjs";
+import { runFormal } from "./formal.mjs";
 import { ciJobsFor, loadObligations, owedFor, printable } from "./plan.mjs";
 import { changedFiles, readHead, REPO_ROOT } from "./repo.mjs";
 import { EXIT_CODES, makeResult, writeResult } from "./result.mjs";
@@ -19,13 +20,13 @@ const VERBS = {
   check: "The pre-PR checks: forced typecheck and lint, affected tests (skips named), formatting",
   status: "For each obligation, whether a passing result exists for this exact commit (--markdown)",
   db: "A throwaway Postgres, the Boat bundle and every gate set; runs gated suites, no skips",
-  formal: "Not yet: the formal models whose covered paths the diff touches, and their drift",
+  formal: "The formal models whose covered paths the diff touches (quick bounds), and their drift",
   stack: "Not yet: the local stack, up, status and down",
   runtime: "Not yet: a live Boat launch (requires an external observer without credentials)",
   "boat-harness": "Not yet: the Boat harness preflight and lock status",
   evidence: "Not yet: screenshots and transcripts, secret-scanned, and the verdict file",
 };
-const IMPLEMENTED = new Set(["plan", "check", "status", "db"]);
+const IMPLEMENTED = new Set(["plan", "check", "status", "db", "formal"]);
 
 class UsageError extends Error {}
 
@@ -39,7 +40,8 @@ function usage() {
     "Options: --json (one result on stdout), --base <ref> (default origin/main),",
     "plan: --files <path>... ; check: --all ; status: --markdown ;",
     `db: [suite...] of ${Object.keys(SUITES).join(", ")} (all when none) ;`,
-    "check, db: --workers <n> (at most n test workers and turbo tasks)",
+    "formal: --all (every model), --full (every bound, not the quick ones) ;",
+    "check, db, formal: --workers <n> (at most n test workers, turbo tasks or checker threads)",
   ].join("\n");
 }
 
@@ -55,6 +57,7 @@ function parse(argv) {
         all: { type: "boolean", default: false },
         markdown: { type: "boolean", default: false },
         workers: { type: "string" },
+        full: { type: "boolean", default: false },
       },
     });
   } catch (error) {
@@ -184,6 +187,35 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
       cleanup: { status: left.length === 0 ? "clean" : "left", left },
       next,
       proves: suites.map((suite) => `db:${suite}`),
+      invocation,
+    });
+  }
+
+  if (verb === "formal") {
+    const files = head.mergeBase === null ? [] : changedFiles(root, head.mergeBase);
+    if (head.mergeBase === null && !values.all) {
+      throw new UsageError(`no merge base with ${head.base}; fetch it, pass --base, or use --all`);
+    }
+    const { steps, next, proves } = await runFormal({
+      root,
+      mergeBase: head.mergeBase,
+      files,
+      all: values.all,
+      full: values.full,
+      workers,
+      logDirectory: path.join(root, ".verify", "logs"),
+      echo,
+    });
+    return makeResult({
+      verb,
+      head,
+      startedAt,
+      steps,
+      evidence: steps.flatMap((step) =>
+        step.log === undefined ? [] : [{ kind: "log", path: step.log }],
+      ),
+      next,
+      proves,
       invocation,
     });
   }

@@ -4792,7 +4792,7 @@ const lostCreate = async (s: AllocationFixture, o: Awaited<ReturnType<typeof obs
 };
 
 /**
- * The two orders of P1-A's race (docs/verification/boat-custody, SLNT-825). `replay-first`: the
+ * The two orders of P1-A's race (docs/formal/boat-custody, SLNT-825). `replay-first`: the
  * sweep's replay is on its way to Boat when the first create's refusal comes back. `refusal-first`:
  * the refusal comes back while the sweep is between its discovery and its replay.
  */

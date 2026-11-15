@@ -3,11 +3,15 @@
 # check's ledger (BoatKeyProof.tla). Each case in cases/ names its module, the verdict it must give,
 # its group and, if it must pass, the distinct states it must reach.
 #
-#   docs/verification/boat-custody/check.sh                the fast cases (about three minutes on 32 cores)
-#   docs/verification/boat-custody/check.sh --deep         the fast and the deep cases (about 40 minutes)
-#   docs/verification/boat-custody/check.sh ledger         the named cases only
-#   ... --trace                                            also print the counterexample of expected failures
-#   ... --engine tlx                                       any of these with tlx instead of TLC
+#   docs/formal/boat-custody/check.sh                the fast cases (about three minutes on 32 cores)
+#   docs/formal/boat-custody/check.sh --deep         the fast and the deep cases (about 40 minutes)
+#   docs/formal/boat-custody/check.sh ledger         the named cases only
+#   ... --trace                                      also print the counterexample of expected failures
+#   ... --engine tlx                                 any of these with tlx instead of TLC
+#
+# `pnpm verify formal` runs the fast cases when a diff touches a path in COVERAGE, and CI runs them on
+# such a pull request; `--deep` runs nightly. FORMAL_WORKERS caps the checker's threads (default: one
+# per core).
 #
 # Exit status 0: every case gave its expected verdict, and every case that must pass reached the
 # distinct-state count its `states` header pins. 1: one did not; a wrong verdict prints its
@@ -138,7 +142,7 @@ for cfg in "${cases[@]}"; do
   pinned=$(header "$cfg" states | tr -d ,)
   out="$scratch/$name.out"
   started=$(date +%s)
-  (cd "$here" && "${checker[@]}" -workers auto -metadir "$scratch/meta-$name" -config "$cfg" "$module.tla") \
+  (cd "$here" && "${checker[@]}" -workers "${FORMAL_WORKERS:-auto}" -metadir "$scratch/meta-$name" -config "$cfg" "$module.tla") \
     >"$out" 2>&1 || true
   seconds=$(($(date +%s) - started))
   if [[ $version_shown -eq 0 ]]; then

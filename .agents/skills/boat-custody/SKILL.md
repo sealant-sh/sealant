@@ -10,7 +10,7 @@ description:
 
 # Boat custody
 
-Two TLA+ models in `docs/verification/boat-custody/` hold sealant to two promises:
+Two TLA+ models in `docs/formal/boat-custody/` hold sealant to two promises:
 
 - **Run ledger** (`BoatRunLedger.tla`, invariant `NoForgottenVM`): sealant never records a run as
   absent, and so never stops tracking it, while Boat may hold a VM for it.
@@ -20,29 +20,26 @@ Two TLA+ models in `docs/verification/boat-custody/` hold sealant to two promise
 
 Each step of a model is one SQL statement or one HTTP call of the code, named in the comment above
 it; Boat is an adversary bounded by its docs. The record of what is verified, the bounds, the
-assumptions, Boat's silences and the open findings is `docs/verification/boat-custody/README.md`.
-Read it before you judge a counterexample.
+assumptions, Boat's silences and the open findings is `docs/formal/boat-custody/README.md`. Read it
+before you judge a counterexample.
 
-**Sync commit: `dd39b9de`.** The models were last confirmed to describe the code there.
-sealant#648's change since (`markReplay` and `recordFirstCreateRefused`, the fix of P1-A) is
-mirrored in `BoatRunLedger.tla`. The hunks sealant#641 made in the covered files (each object's
-wallet, the `unreachable` absence) are not yet read against the models: read them before you move
-this commit.
+**Coverage and sync commit: `docs/formal/boat-custody/COVERAGE`.** It lists the covered files and
+the commit the models were last confirmed to describe (`sync`). sealant#648's change since
+(`markReplay` and `recordFirstCreateRefused`, the fix of P1-A) is mirrored in `BoatRunLedger.tla`.
+The hunks sealant#641 made in the covered files (each object's wallet, the `unreachable` absence)
+are not yet read against the models: read them before you move this commit.
 
 ## 1. Does the change touch it?
 
 List what changed in the covered files since the sync commit, the working tree included:
 
 ```bash
-git diff --stat dd39b9de -- \
-  packages/workspaces/src/runtime/boat/{vm,api,failure,removal,convergence,adapter,key-proof,accounts}.ts \
-  packages/db/src/repositories/boat-{runs,key-proofs,accounts}.ts \
-  packages/db/src/repositories/workspace-runtime-instances.ts \
-  packages/validators/src/workspaces/boat-run.ts \
-  packages/workspaces/src/worker/process-workspace-{build-job,stop}.ts \
-  apps/worker/src/workers/boat-assembly.ts \
-  apps/api/src/routes/boat-accounts/boat-accounts.module.ts
+pnpm verify formal --all
 ```
+
+Its `drift:boat-custody` step names every covered file that differs from `sync`. `pnpm verify plan`
+already owes this model when the diff touches a covered file, and CI's `formal` job fails a pull
+request that changes covered code but neither the model nor `sync` (the drift guard).
 
 Empty: the models still describe the code; run step 3 if you want the evidence, and stop. Otherwise
 read each changed hunk against the coverage record below. A hunk that changes what a covered
@@ -82,14 +79,16 @@ If the change fixes an open finding, switch its fix on in the model, set the fin
 ## 3. Run the check
 
 ```bash
-docs/verification/boat-custody/check.sh
+docs/formal/boat-custody/check.sh
 ```
 
-About three minutes on 32 cores (15 cases). Done when the last line is
-`Every case gave its expected verdict.` and the exit status is 0. `--deep` adds five longer cases
-(about 40 minutes on 32 cores): run it before merging a change from step 2. `--trace` also prints
-the counterexample of the cases that are meant to fail. Name cases to run only those
-(`check.sh ledger proof`).
+About three minutes on 32 cores (15 cases). `pnpm verify formal` runs the same fast cases when the
+diff touches a covered file, CI's `formal` job runs them on such a pull request, and
+`formal-nightly.yml` runs `--deep` every night. `FORMAL_WORKERS` caps TLC's threads on a shared
+machine. Done when the last line is `Every case gave its expected verdict.` and the exit status
+is 0. `--deep` adds five longer cases (about 40 minutes on 32 cores): run it before merging a change
+from step 2. `--trace` also prints the counterexample of the cases that are meant to fail. Name
+cases to run only those (`check.sh ledger proof`).
 
 The checker is TLC 2.19 (TLA+ tools 1.7.4) from the nixpkgs this repository's `flake.lock` pins; the
 script builds it with `nix` the first time. Without Nix, set `TLA2TOOLS_JAR` to `tla2tools.jar`
@@ -139,12 +138,13 @@ schedule: find out why before you flip its expectation.
 
 Once the models describe the code at your commit and `check.sh` (and `--deep`) give their expected
 verdicts on TLC, update each `states` pin your change moved to the count TLC reached (never tlx's),
-the coverage record below and the record's findings. Then move the sync commit, in this file and in
-the record, to that commit. Move it only after reading every covered hunk since the old one.
+the coverage record below and the record's findings. Then move `sync` in `COVERAGE`, and the
+record's "Confirmed against" line, to that commit. Move it only after reading every covered hunk
+since the old one.
 
 ## Coverage record
 
-Files as named in step 1's list. Run ledger, `BoatRunLedger.tla`:
+Files as listed in `COVERAGE`. Run ledger, `BoatRunLedger.tla`:
 
 | Code                                                                                                                                                                                                                           | Model                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

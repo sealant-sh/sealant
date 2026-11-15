@@ -1,0 +1,63 @@
+name: Formal models (every bound)
+
+# Every formal model under docs/formal/ at every bound (`check.sh --deep`), which is too slow for a
+# pull request: about 40 minutes on 32 cores, so hours on a hosted runner's four. Pull requests run
+# the quick bounds of the models they touch (ci.yml's `formal` job); this catches what only the
+# deep cases reach, nightly and on demand.
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  formal:
+    name: Formal models (every bound)
+    runs-on: ubuntu-24.04
+    # GitHub stops a hosted job at six hours.
+    timeout-minutes: 355
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The same TLC as ci.yml's `formal` job: the version the repository's flake.lock pins.
+      - name: TLC
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" |
+            sha256sum -c -
+          java -version
+
+      - name: Every bound of every model
+        env:
+          TLA2TOOLS_JAR: ${{ runner.temp }}/tla2tools.jar
+        run: pnpm verify formal --all --full
+
+      - name: Keep the models' output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-formal-nightly
+          path: .verify/
+          include-hidden-files: true

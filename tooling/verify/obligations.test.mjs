@@ -233,3 +233,11 @@ test("a gated entry's paths cover every file its jobs' suites import", () => {
     assert.deepEqual(uncovered, [], `${entry.id} leaves files its suites import uncovered`);
   }
 });
+
+const formalJobs = (files) =>
+  ciJobsFor(REPO_ROOT, files).filter(({ job }) => job.startsWith("Formal models"));
+
+test("the plan lists ci.yml's formal job only when the diff touches a formal model", () => {
+  assert.equal(formalJobs(["docs/turbo.md"]).length, 0);
+  assert.equal(formalJobs(["packages/db/src/repositories/boat-runs.ts"]).length, 1);
+});
