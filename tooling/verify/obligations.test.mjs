@@ -58,11 +58,15 @@ test("a change to a Boat image file owes the catalog suite, the harness and noth
   assert.ok(!ids.some((id) => id.startsWith("web-ui")));
 });
 
-test("a covered Boat custody file owes the model; a docs-only change owes only the pre-PR checks", () => {
+test("a covered Boat custody or removal ledger file owes its model; a docs-only change owes only the pre-PR checks", () => {
   const custody = owedFor(obligations, ["packages/db/src/repositories/boat-runs.ts"]).map(
     (item) => item.id,
   );
   assert.ok(custody.includes("boat-custody:formal:boat-custody"));
+  const ledger = owedFor(obligations, ["packages/workspaces/src/worker/capture-drain.ts"]).map(
+    (item) => item.id,
+  );
+  assert.ok(ledger.includes("capture-removal:formal:capture-removal"));
   assert.deepEqual(
     owedFor(obligations, ["docs/turbo.md"]).map((item) => item.id),
     ["pre-pr:tests"],
