@@ -1,5 +1,5 @@
 {
-  "$comment": "What a change owes, by the paths it touches. `pnpm verify plan` matches a diff against `paths` (globs) or, for a path-filtered workflow, against that workflow's own `on.pull_request.paths` (`pathsFrom`), so this map and CI cannot disagree (obligations.test.mjs). An entry with `gates` decides whether those jobs of its workflow run on a pull request: the workflow's `changes` job runs gate.mjs on the entry's own `paths`, the jobs skip when it says so, and the workflow's roll-up allows exactly those skips, so the required roll-up reports on every pull request. `proof` names what discharges an owed item in `pnpm verify status`: a passing result for this commit whose `proves` lists it.",
+  "$comment": "What a change owes, by the paths it touches. `pnpm verify plan` matches a diff against `paths` (globs) or, for a path-filtered workflow, against that workflow's own `on.pull_request.paths` (`pathsFrom.workflow`), or a formal model's COVERAGE (`pathsFrom.formal`), so this map and CI cannot disagree (obligations.test.mjs). An entry with `gates` decides whether those jobs of its workflow run on a pull request: the workflow's `changes` job runs gate.mjs on the entry's own `paths`, the jobs skip when it says so, and the workflow's roll-up allows exactly those skips, so the required roll-up reports on every pull request. `proof` names what discharges an owed item in `pnpm verify status`: a passing result for this commit whose `proves` lists it.",
   "obligations": [
     {
       "id": "pre-pr",
@@ -53,33 +53,15 @@
     },
     {
       "id": "boat-custody",
-      "paths": [
-        "packages/workspaces/src/runtime/boat/vm.ts",
-        "packages/workspaces/src/runtime/boat/api.ts",
-        "packages/workspaces/src/runtime/boat/failure.ts",
-        "packages/workspaces/src/runtime/boat/removal.ts",
-        "packages/workspaces/src/runtime/boat/convergence.ts",
-        "packages/workspaces/src/runtime/boat/adapter.ts",
-        "packages/workspaces/src/runtime/boat/key-proof.ts",
-        "packages/workspaces/src/runtime/boat/accounts.ts",
-        "packages/db/src/repositories/boat-runs.ts",
-        "packages/db/src/repositories/boat-key-proofs.ts",
-        "packages/db/src/repositories/boat-accounts.ts",
-        "packages/db/src/repositories/workspace-runtime-instances.ts",
-        "packages/validators/src/workspaces/boat-run.ts",
-        "packages/workspaces/src/worker/process-workspace-build-job.ts",
-        "packages/workspaces/src/worker/process-workspace-stop.ts",
-        "apps/worker/src/workers/boat-assembly.ts",
-        "apps/api/src/routes/boat-accounts/boat-accounts.module.ts",
-        "docs/verification/boat-custody/**"
-      ],
+      "pathsFrom": { "formal": "boat-custody" },
       "why": "Boat custody, model-checked: a VM is never forgotten while Boat may hold it, and a full key check leaves nothing behind (the boat-custody skill)",
       "owes": [
         {
           "kind": "formal",
           "model": "boat-custody",
-          "command": "docs/verification/boat-custody/check.sh",
-          "proof": "formal:boat-custody"
+          "command": "pnpm verify formal",
+          "proof": "formal:boat-custody",
+          "ci": "CI"
         }
       ]
     },

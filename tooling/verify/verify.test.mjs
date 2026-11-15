@@ -8,14 +8,14 @@ import { decodeResult, EXIT_CODES } from "./result.mjs";
 const CLI = fileURLToPath(new URL("verify.mjs", import.meta.url));
 const verify = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
 
-// `verify check` is not run here (it runs the repo's whole lint, typecheck and test suite); its
-// result is built by the same makeResult, which validates, and check.test.mjs covers its steps.
+// `verify check`, `db` and `formal` are not run here (they run suites, Postgres and a model checker);
+// their results are built by the same makeResult, which validates, and their own tests cover them.
 test("every verb prints one result on stdout with --json, valid against the schema, with its exit code", () => {
   const cases = [
     [["plan", "--files", "packages/workspaces/src/images/boat/catalog.ts", "--json"], 0, "passed"],
     // Its status depends on this checkout's tree; its exit code must follow it.
     [["status", "--base", "HEAD", "--json"], undefined, undefined],
-    ...["formal", "stack", "runtime", "boat-harness", "evidence"].map((verb) => [
+    ...["stack", "runtime", "boat-harness", "evidence"].map((verb) => [
       [verb, "--json"],
       4,
       "not_implemented",

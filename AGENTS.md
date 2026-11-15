@@ -56,9 +56,12 @@ test with its gate and the command that runs it. The tests allowed to skip are i
 `tooling/verify/allowed-skips.json`; what a path owes is in `tooling/verify/obligations.json`. When
 `check` or `plan` owes a gated suite, `pnpm verify db <suite>` runs it (Docker needed): a throwaway
 Postgres, migrated, the Boat runtime bundle staged and every gate set, with no skip allowed; it
-removes what it started. CI's Tests job runs the Boat and sealantd suites the same way.
-`pnpm verify status --markdown` prints the receipt for the PR body: each obligation and whether this
-commit, from a clean tree, has a passing result. Every run is kept under `.verify/`.
+removes what it started. CI's Tests job runs the Boat and sealantd suites the same way. When it owes
+a formal model (`docs/formal/<area>/`, covered paths in its `COVERAGE`), `pnpm verify formal` runs
+its quick bounds and the drift guard CI's `formal` job runs: changed covered code fails unless the
+model or its `sync` commit moved with it. `pnpm verify status --markdown` prints the receipt for the
+PR body: each obligation and whether this commit, from a clean tree, has a passing result. Every run
+is kept under `.verify/`.
 
 A PR merges on two results: `checks`, the roll-up of every CI job, and `e2e checks`, the roll-up of
 every Kubernetes e2e job. A new job in either workflow goes in its roll-up's `needs`;

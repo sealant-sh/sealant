@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { parse } from "yaml";
 
+import { formalAreas, obligationPaths, touchedAreas } from "./formal.mjs";
 import { gateHit, matchesAny } from "./paths.mjs";
 
 export { globToRegExp, matchesAny } from "./paths.mjs";
@@ -34,6 +35,15 @@ export function loadObligations(root) {
   const map = JSON.parse(readFileSync(path.join(root, "tooling/verify/obligations.json"), "utf8"));
   return map.obligations.map((entry) => {
     if (entry.pathsFrom === undefined) return entry;
+    if (entry.pathsFrom.formal !== undefined) {
+      const area = formalAreas(root).find((candidate) => candidate.area === entry.pathsFrom.formal);
+      if (area === undefined) {
+        throw new Error(
+          `obligations.json: ${entry.id} reads docs/formal/${entry.pathsFrom.formal}, which has no COVERAGE`,
+        );
+      }
+      return { ...entry, paths: obligationPaths(area) };
+    }
     const trigger = pullRequestTrigger(readWorkflow(root, entry.pathsFrom.workflow));
     if (trigger?.paths === undefined) {
       throw new Error(
@@ -73,8 +83,9 @@ export function owedFor(obligations, files) {
 /**
  * The CI jobs a pull request with these changed files runs: every job of every workflow whose
  * pull_request trigger matches, less the jobs a map entry gates (`gates`) when the files touch
- * none of its paths. Those jobs run under the same rule in CI (gate.mjs); no other job-level `if:`
- * is evaluated.
+ * none of its paths (those jobs run under the same rule in CI, gate.mjs), and less ci.yml's `formal`
+ * when the files touch no formal model (formal.mjs, in its formal-scope job). No other job-level
+ * `if:` is evaluated.
  */
 export function ciJobsFor(root, files) {
   const obligations = loadObligations(root);
@@ -104,6 +115,10 @@ export function ciJobsFor(root, files) {
         const hit = gateHit(obligations, gate.id, files);
         if (hit === undefined) continue;
         jobWhy = `${gate.id} covers ${hit}`;
+      } else if (String(job.if ?? "").includes("needs.formal-scope.outputs.touched")) {
+        const touched = touchedAreas(formalAreas(root), files);
+        if (touched.length === 0) continue;
+        jobWhy = `the diff touches formal model ${touched.map((area) => area.area).join(", ")}`;
       }
       // A matrix job is one check per `include` entry, named with that entry's values.
       const include = job.strategy?.matrix?.include;

@@ -317,7 +317,7 @@ tlx is version 0.1, about a month old, with no releases. It comes from
 ```sh
 git clone https://github.com/tlaplus-x/tlx && cd tlx && git checkout 8d5f082b0f
 nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c cargo build --release   # or plain cargo
-BOAT_CUSTODY_TLX=$PWD/target/release/tlx docs/verification/boat-custody/check.sh --engine tlx
+BOAT_CUSTODY_TLX=$PWD/target/release/tlx docs/formal/boat-custody/check.sh --engine tlx
 ```
 
 Without `BOAT_CUSTODY_TLX`, `check.sh --engine tlx` runs `tlx` from `PATH`, and stops with exit 2
@@ -351,8 +351,9 @@ TLC's `ledger-fixes` time is from a run of the same model before sealant#648 (sa
 `ledger-two-sweeps` and the whole `--deep` are the times the cases and the skill record;
 `ledger-lease-lapse` was not timed alone on TLC.
 
-## In CI (not added)
+## In CI
 
-A job that installs Nix and runs `docs/verification/boat-custody/check.sh` on pull requests touching
-the files in the skill's coverage record would take about three minutes; `--deep` (about 40 minutes
-on 32 cores) suits a nightly run.
+A pull request that touches a path in `COVERAGE` (or the models) runs the fast cases in CI's
+`formal` job, on TLC 2.19 / tools 1.7.4 and a hosted runner's four cores, with the drift guard: the
+job fails when covered code changed and neither a model nor `sync` did. `formal-nightly.yml` runs
+`--deep` every night. Locally, `pnpm verify formal` does what the PR job does.
