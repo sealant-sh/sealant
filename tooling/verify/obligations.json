@@ -1,5 +1,5 @@
 {
-  "$comment": "What a change owes, by the paths it touches. `pnpm verify plan` matches a diff against `paths` (globs) or, for a path-filtered workflow, against that workflow's own `on.pull_request.paths` (`pathsFrom`), so this map and CI cannot disagree (obligations.test.mjs). `proof` names what discharges an owed item in `pnpm verify status`: a passing result for this commit whose `proves` lists it.",
+  "$comment": "What a change owes, by the paths it touches. `pnpm verify plan` matches a diff against `paths` (globs) or, for a path-filtered workflow, against that workflow's own `on.pull_request.paths` (`pathsFrom`), so this map and CI cannot disagree (obligations.test.mjs). An entry with `gates` decides whether those jobs of its workflow run on a pull request: the workflow's `changes` job runs gate.mjs on the entry's own `paths`, the jobs skip when it says so, and the workflow's roll-up allows exactly those skips, so the required roll-up reports on every pull request. `proof` names what discharges an owed item in `pnpm verify status`: a passing result for this commit whose `proves` lists it.",
   "obligations": [
     {
       "id": "pre-pr",
@@ -106,6 +106,39 @@
           "kind": "external",
           "what": "a live Boat launch, stop and resume on the provider (packages/workspaces/scripts/boat-live-check.ts)",
           "proof": "runtime:boat-live"
+        }
+      ]
+    },
+    {
+      "id": "kubernetes-e2e",
+      "paths": [
+        "packages/workspaces/**",
+        "packages/db/**",
+        "packages/jobs/**",
+        "packages/credentials/**",
+        "packages/validators/**",
+        "packages/api-contracts/**",
+        "packages/source-integrations/**",
+        "packages/typescript/**",
+        "apps/ssh-gateway/**",
+        "deploy/**",
+        "tooling/scripts/pin-sealantd.mjs",
+        "tooling/verify/gate.mjs",
+        "tooling/verify/paths.mjs",
+        "tooling/verify/obligations.json",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        ".github/workflows/kubernetes-e2e.yml"
+      ],
+      "gates": { "workflow": "kubernetes-e2e.yml", "jobs": ["docker", "kubernetes"] },
+      "why": "The workspace runtime against a real sealantd on Docker and on a kind cluster. The paths are the packages its suites import (obligations.test.mjs recomputes that) plus what builds the image and the cluster",
+      "owes": [
+        {
+          "kind": "external",
+          "what": "the Docker runtime and kind cross-node e2e suites (.github/workflows/kubernetes-e2e.yml)",
+          "proof": "runtime:kubernetes-e2e",
+          "ci": "Kubernetes e2e"
         }
       ]
     },

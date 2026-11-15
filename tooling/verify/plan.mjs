@@ -4,40 +4,11 @@ import path from "node:path";
 
 import { parse } from "yaml";
 
+import { gateHit, matchesAny } from "./paths.mjs";
+
+export { globToRegExp, matchesAny } from "./paths.mjs";
+
 const WORKFLOWS = ".github/workflows";
-
-/**
- * A glob as GitHub's path filters read it: `*` and `?` stay within one path segment, `**` crosses
- * them, `{a,b}` is either, and a leading dot is an ordinary character (node's `path.matchesGlob`
- * would let `**` skip `.github/`).
- */
-export function globToRegExp(glob) {
-  let source = "";
-  let braces = 0;
-  for (let index = 0; index < glob.length; index += 1) {
-    const char = glob[index];
-    if (char === "*" && glob[index + 1] === "*") {
-      const slash = glob[index + 2] === "/";
-      source += slash ? "(?:.*/)?" : ".*";
-      index += slash ? 2 : 1;
-    } else if (char === "*") source += "[^/]*";
-    else if (char === "?") source += "[^/]";
-    else if (char === "{") {
-      braces += 1;
-      source += "(?:";
-    } else if (char === "}" && braces > 0) {
-      braces -= 1;
-      source += ")";
-    } else if (char === "," && braces > 0) source += "|";
-    else source += char.replace(/[.+^$()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${source}$`);
-}
-
-/** Whether `file` (a repo-relative path) matches any of `globs`. */
-export function matchesAny(file, globs) {
-  return globs.some((glob) => globToRegExp(glob).test(file));
-}
 
 function readWorkflow(root, file) {
   return parse(readFileSync(path.join(root, WORKFLOWS, file), "utf8"));
@@ -101,10 +72,12 @@ export function owedFor(obligations, files) {
 
 /**
  * The CI jobs a pull request with these changed files runs: every job of every workflow whose
- * pull_request trigger matches. Job-level `if:` conditions are not evaluated; none of sealant's
- * pull-request jobs has one today.
+ * pull_request trigger matches, less the jobs a map entry gates (`gates`) when the files touch
+ * none of its paths. Those jobs run under the same rule in CI (gate.mjs); no other job-level `if:`
+ * is evaluated.
  */
 export function ciJobsFor(root, files) {
+  const obligations = loadObligations(root);
   const jobs = [];
   for (const file of readdirSync(path.join(root, WORKFLOWS)).toSorted()) {
     if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
@@ -123,7 +96,15 @@ export function ciJobsFor(root, files) {
     ) {
       continue;
     }
+    const gates = obligations.filter((entry) => entry.gates?.workflow === file);
     for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
+      const gate = gates.find((entry) => entry.gates.jobs.includes(id));
+      let jobWhy = why;
+      if (gate !== undefined) {
+        const hit = gateHit(obligations, gate.id, files);
+        if (hit === undefined) continue;
+        jobWhy = `${gate.id} covers ${hit}`;
+      }
       // A matrix job is one check per `include` entry, named with that entry's values.
       const include = job.strategy?.matrix?.include;
       const variants = Array.isArray(include) && include.length > 0 ? include : [{}];
@@ -131,7 +112,7 @@ export function ciJobsFor(root, files) {
         const name = (job.name ?? id).replace(/\$\{\{\s*matrix\.([\w-]+)\s*\}\}/g, (whole, key) =>
           key in variant ? String(variant[key]) : whole,
         );
-        jobs.push({ workflow: workflow.name ?? file, job: name, why });
+        jobs.push({ workflow: workflow.name ?? file, job: name, why: jobWhy });
       }
     }
   }
