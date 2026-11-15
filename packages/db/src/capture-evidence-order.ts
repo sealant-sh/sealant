@@ -240,3 +240,25 @@ export const nextUnsavedObservations = <S extends object>(input: {
     ? kept
     : [...kept, { status: input.incoming, recordedAt: input.recordedAt }];
 };
+
+/**
+ * The drain labels that end a run's record, from the weakest claim about its work to the
+ * strongest: `gone` (nothing on record says the work was saved), `stopped` (the executor was
+ * removed on the evidence recorded with it), `discarded` (its owner discarded the unsaved work).
+ */
+const TERMINAL_DRAIN_LABELS = ["gone", "stopped", "discarded"] as const;
+
+export type TerminalDrainLabel = (typeof TERMINAL_DRAIN_LABELS)[number];
+
+/**
+ * The labels a record keeps when `incoming` is written over it: every stronger one. A drain record
+ * belongs to one run, and one run to one executor, so once it reads `stopped` or `discarded` that
+ * executor is removed and nothing of it is left to lose: a later pass that finds the runtime
+ * missing (`gone`) has learned nothing new, and a weaker label never replaces a stronger one. A
+ * stronger label replaces a weaker one (`gone`, then a removal recorded on evidence, reads
+ * `stopped`), and a label replaces itself.
+ */
+export const drainLabelsOutranking = (
+  incoming: TerminalDrainLabel,
+): readonly TerminalDrainLabel[] =>
+  TERMINAL_DRAIN_LABELS.slice(TERMINAL_DRAIN_LABELS.indexOf(incoming) + 1);

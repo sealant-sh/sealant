@@ -26,6 +26,7 @@ import {
   EMPTY_CAPTURE_DRAIN_ENTRY,
   InMemoryCaptureDrainStore,
   inMemoryCaptureDrainLedger,
+  removalState,
   type CaptureDrainEntry,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
@@ -2052,6 +2053,32 @@ describe("processWorkspaceStopEffect · what a runtime declares to the shared st
       );
     },
   );
+
+  it("keeps a run stopped when recovery removed its executor on recorded evidence and a racing stop then finds it missing (SLNT-968)", async () => {
+    // A Boat launch that never reached its guest: recovery finds nothing to save, deletes the VM
+    // and records the run `stopped`. Boat withdraws the VM at once, so a stop that read the run
+    // before recovery marked it stopped finds it missing, and a runtime that reports missing as
+    // lost weighs only the ledger's evidence: `gone`. It must not replace recovery's `stopped`.
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const ledger = inMemoryCaptureDrainLedger();
+    const recovered = "the retained executor was removed: its recovery boot found nothing to save";
+    const adapter = adapterOf({ reportsMissingAsLost: true }, stoppedInOneCall, async () => {
+      // Recovery's write lands after the stop read the run and before it reads the runtime.
+      await Effect.runPromise(
+        ledger.observe("run_old", { state: removalState("nothing-to-save"), detail: recovered }),
+      );
+      return { state: "missing" };
+    });
+    expect(await stopOf(harness, adapter, ledger)).toBe("stopped");
+    expect(ledger.store.rows.get("run_old")?.observation).toEqual({
+      state: "stopped",
+      detail: recovered,
+    });
+  });
 
   it.each([
     ["a runtime that declares it", { reportsMissingAsLost: true }],

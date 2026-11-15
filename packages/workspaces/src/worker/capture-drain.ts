@@ -56,6 +56,7 @@
  * the API reports while a stop is in progress.
  */
 import {
+  drainLabelsOutranking,
   nextUnsavedObservations,
   statusSupersedes,
   type ExecutorOrigin,
@@ -1060,13 +1061,14 @@ export const inMemoryCaptureDrainLedger = (
     observe: (runId, observation) =>
       Effect.sync(() => {
         const row = rowOf(runId);
-        const terminal = observationEndsRetention(observation.state);
-        // A run that ended on its owner's discard keeps reading so: a later pass that finds the
-        // runtime gone does not relabel it.
-        const relabels =
-          row.observation?.state === "discarded" &&
-          (observation.state === "stopped" || observation.state === "gone");
-        if (!relabels) row.observation = observation;
+        const incoming = observation.state;
+        const terminal = observationEndsRetention(incoming);
+        // A terminal label never replaces a stronger one, as the database's record keeps it.
+        const current = row.observation?.state;
+        const outranked =
+          (incoming === "stopped" || incoming === "discarded" || incoming === "gone") &&
+          drainLabelsOutranking(incoming).some((label) => label === current);
+        if (!outranked) row.observation = observation;
         if (terminal) {
           row.entry = { ...row.entry, retained: undefined };
         }

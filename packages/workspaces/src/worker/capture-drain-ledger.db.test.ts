@@ -223,7 +223,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(read.readable && read.entry?.discardRequested?.by).toBe("user_owner");
   });
 
-  it("writes the state its writer gives, discard requested or not, and never relabels a record that already reads discarded as stopped or gone (#613)", async () => {
+  it("writes the state its writer gives, discard requested or not, and never relabels a record with a weaker terminal label: discarded as stopped or gone (#613), stopped as gone (SLNT-968)", async () => {
     const saved = await newRun();
     const discarded = await newRun();
     const plain = await newRun();
@@ -259,9 +259,13 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       state: "stopped",
       detail: "the runtime was removed: the final flush was complete",
     });
-    // So does `gone`, written by a pass that found nothing of it left.
+    // And a later pass that finds nothing of it left does not relabel it `gone`: a weaker label
+    // never replaces a stronger one (SLNT-968).
     await observe(saved, "gone", "nothing of it is left");
-    expect((await row(saved)).state).toBe("gone");
+    expect(await row(saved)).toEqual({
+      state: "stopped",
+      detail: "the runtime was removed: the final flush was complete",
+    });
 
     // A run removed on its owner's discard reads discarded, and a later pass that finds the
     // runtime gone, or removes its remains, does not relabel it: state and detail both stay.
