@@ -66,6 +66,20 @@
       ]
     },
     {
+      "id": "capture-removal",
+      "pathsFrom": { "formal": "capture-removal" },
+      "why": "The capture removal ledger, model-checked: an executor is removed only on current evidence with no observation in flight, and nothing is asked of it between that decision and its removal (the capture-removal skill)",
+      "owes": [
+        {
+          "kind": "formal",
+          "model": "capture-removal",
+          "command": "pnpm verify formal",
+          "proof": "formal:capture-removal",
+          "ci": "CI"
+        }
+      ]
+    },
+    {
       "id": "boat-harness",
       "pathsFrom": { "workflow": "boat-harness.yml" },
       "why": "Boat lifecycle end to end against a fake Boat provider: one VM per run, FINAL before deletion, nothing left owned",
