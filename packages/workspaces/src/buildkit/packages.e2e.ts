@@ -148,17 +148,17 @@ describe("selected packages in an Arch workspace image", () => {
   }, 60_000);
 });
 
-// The Ubuntu list uses the CONCRETE apt package names the API's standardization pass would
-// produce (python → python3, fd → fd-find, github-cli → gh, bat's binary is batcat) — the
-// compiler receives resolved names in production, not catalog ids.
+// Catalog ids, as a blueprint names them: the catalog resolves each to Ubuntu's own package
+// (python → python3, github-cli → gh, fd → fd-find) and links Debian's renamed binaries (batcat,
+// fdfind) to the names the other families use.
 const ubuntuSelectedPackages = [
-  "python3",
-  "gh",
+  "python",
+  "github-cli",
   "bat",
   "curl",
   "jq",
   "ripgrep",
-  "fd-find",
+  "fd",
   "fzf",
   "neovim",
   "tmux",
@@ -200,10 +200,12 @@ describe("selected packages in an Ubuntu workspace image", () => {
         "command -v python3",
         "command -v gh",
         "command -v batcat",
+        "command -v bat",
         "command -v curl",
         "command -v jq",
         "command -v rg",
         "command -v fdfind",
+        "command -v fd",
         "command -v fzf",
         "command -v nvim",
         "command -v tmux",
