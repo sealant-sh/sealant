@@ -39,7 +39,14 @@ CONSTANTS
     ReleaseNeedsBound,
     CompleteOnlyOnSuccess,
     AuthorizeRefusesDeleted,
-    AuthorizeChecksRecovery
+    AuthorizeChecksRecovery,
+    \* The drain label (`workspace_capture_drains.state`).
+    StopJobs,         \* the deleters that are the stop job: they hold the drain claim, write `stop-failed`
+    Drains,           \* the observers that are drains: under the drain claim, they `save` a label
+    LabelRanked,              \* recordObservation: a terminal label never replaces a stronger one
+    UnrankedKeepsTerminal,    \* the proposed fix: markRetained, `stop-failed`, `save` keep a terminal label
+    MissingNeedsGoneRuntime,  \* a removal on basis `missing` only once the runtime said it has nothing
+    TrackLabel        \* FALSE: the label and the drain claim are left out (the removal cases' bounds)
 
 \* main's code, as `WorkspaceCaptureDrainRepoLive` writes it.
 CodeIssueChecksEvidence == TRUE        \* issueDeletion: `deletionEvidenceCurrent` before every request
@@ -51,10 +58,16 @@ CodeReleaseNeedsBound == TRUE          \* reconcileIssuedDeletion: `released` on
 CodeCompleteOnlyOnSuccess == TRUE      \* removeUnderDeletion: completeDeletion on the call's success only
 CodeAuthorizeRefusesDeleted == TRUE    \* authorizeDeletion: `deleted` answers deleted
 CodeAuthorizeChecksRecovery == TRUE    \* authorizeDeletion: `recovering` under another's live claim
+CodeLabelRanked == TRUE                \* recordObservation: `drainLabelsOutranking`
+CodeUnrankedKeepsTerminal == FALSE     \* markRetained, recordProgress: write the state whatever it was
+CodeMissingNeedsGoneRuntime == TRUE    \* decideExecutorDeletion: `missing` only on the runtime's word
 
 Actors == Deleters \cup RecoveryActors
 Tokens == 1..MaxTokens
 NoTok == 0
+
+\* A step that only writes the drain label: skipped when the label is left out (TrackLabel).
+LabelStep(x) == IF TrackLabel THEN x ELSE "done"
 
 VARIABLES
     \* The ledger row.
@@ -69,6 +82,8 @@ VARIABLES
     reqs,        \* deletion_requests: each token's request outcome
     lastIssued,  \* the request deletion_issued_at belongs to
     rec,         \* recovery_lease_*: none, live, lapsed
+    label,       \* state: the drain label (none, draining, saved, kept, stop-failed, gone, stopped)
+    claimBy,     \* lease_owner: who holds the run's drain claim (`ledger.claim`), or none
     \* The runtime.
     exec,        \* present or gone
     rt,          \* each request as the runtime has it: none, pending, acted, refused
@@ -92,10 +107,12 @@ ledgerVars == <<fence, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued, re
 runtimeVars == <<exec, rt, elapsed, late>>
 actorVars == <<pc, tok, seenCur, seenRt, wantDelete, admitted>>
 ghostVars == <<askedSince, basisCur, issuedL, sentOk, everDeleted, bad>>
-vars == <<ledgerVars, runtimeVars, actorVars, opc, nextTok, attests, crashes, ghostVars>>
+labelVars == <<label, claimBy>>
+vars == <<ledgerVars, runtimeVars, actorVars, opc, nextTok, attests, crashes, ghostVars, labelVars>>
 
-PCs == {"claim", "admit", "look", "read", "auth", "settle", "issue", "send", "await",
-        "done", "end"}
+PCs == {"sclaim", "claim", "admit", "look", "read", "auth", "settle", "issue", "send", "await",
+        "retain", "failed", "label", "missing", "done", "end"}
+Labels == {"none", "draining", "saved", "kept", "stop-failed", "gone", "stopped"}
 
 TypeOK ==
     /\ fence \in [Observers -> {"none", "open", "lapsed"}]
@@ -107,6 +124,8 @@ TypeOK ==
     /\ reqs \in [Tokens -> {"none", "unknown", "refused", "done", "fenced"}]
     /\ lastIssued \in Tokens \cup {NoTok}
     /\ rec \in {"none", "live", "lapsed"}
+    /\ label \in Labels
+    /\ claimBy \in StopJobs \cup Drains \cup {"none"}
     /\ exec \in {"present", "gone"}
     /\ rt \in [Tokens -> {"none", "pending", "acted", "refused"}]
     /\ elapsed \in [Tokens -> BOOLEAN]
@@ -117,14 +136,15 @@ TypeOK ==
     /\ seenRt \in [Actors -> {"present", "gone"}]
     /\ wantDelete \in [Actors -> BOOLEAN]
     /\ admitted \in BOOLEAN
-    /\ opc \in [Observers -> {"idle", "asked", "done"}]
+    /\ opc \in [Observers -> {"idle", "claimed", "asked", "save", "done"}]
     /\ nextTok \in 0..MaxTokens
     /\ askedSince \in [Tokens -> BOOLEAN]
     /\ basisCur \in [Tokens -> BOOLEAN]
     /\ issuedL \in [Tokens -> BOOLEAN]
     /\ sentOk \in [Tokens -> BOOLEAN]
     /\ everDeleted \in BOOLEAN
-    /\ bad \subseteq {"stale-act", "untracked-act", "over-recovery", "asked-deleted"}
+    /\ bad \subseteq {"stale-act", "untracked-act", "over-recovery", "asked-deleted",
+                      "label-weakened"}
 
 Init ==
     /\ fence = [o \in Observers |-> "none"]
@@ -133,11 +153,13 @@ Init ==
     /\ reqs = [t \in Tokens |-> "none"]
     /\ lastIssued = NoTok
     /\ rec = "none"
+    /\ label = "none" /\ claimBy = "none"
     /\ exec = "present"
     /\ rt = [t \in Tokens |-> "none"]
     /\ elapsed = [t \in Tokens |-> FALSE]
     /\ late = [t \in Tokens |-> FALSE]
-    /\ pc = [a \in Actors |-> IF a \in RecoveryActors THEN "claim" ELSE "look"]
+    /\ pc = [a \in Actors |-> IF a \in RecoveryActors THEN "claim"
+                             ELSE IF a \in StopJobs /\ TrackLabel THEN "sclaim" ELSE "look"]
     /\ tok = [a \in Actors |-> NoTok]
     /\ seenCur = [a \in Actors |-> FALSE]
     /\ seenRt = [a \in Actors |-> "present"]
@@ -198,7 +220,7 @@ Look(a) ==
     /\ pc[a] = "look"
     /\ seenRt' = [seenRt EXCEPT ![a] = exec]
     /\ pc' = [pc EXCEPT ![a] = "read"]
-    /\ UNCHANGED <<ledgerVars, runtimeVars, tok, seenCur, wantDelete, admitted, opc, nextTok, attests,
+    /\ UNCHANGED <<labelVars, ledgerVars, runtimeVars, tok, seenCur, wantDelete, admitted, opc, nextTok, attests,
                    crashes, ghostVars>>
 
 \* `ledger.read`, then `decide` on what it read. A removal issued with no recorded outcome is
@@ -211,22 +233,29 @@ Read(a) ==
     /\ IF dstate = "issued"
          THEN /\ \E w \in BOOLEAN : wantDelete' = [wantDelete EXCEPT ![a] = w]
               /\ pc' = [pc EXCEPT ![a] = "settle"]
-         ELSE /\ \E next \in {"auth", "keep"} :
-                   pc' = [pc EXCEPT ![a] =
+         ELSE /\ \E next \in {"auth", "keep", "missing"} :
+                   /\ next = "missing" => (seenRt[a] = "gone" \/ ~MissingNeedsGoneRuntime)
+                   \* `decideExecutorDeletion` never keeps an executor the runtime no longer has.
+                   /\ next = "keep" => seenRt[a] = "present"
+                   /\ pc' = [pc EXCEPT ![a] =
                             IF next = "auth" THEN "auth"
+                            ELSE IF next = "missing" THEN LabelStep("missing")
                             \* Recovery kept it on its first decision: it asks to start it.
                             ELSE IF a \in RecoveryActors /\ ~admitted THEN "admit"
-                            ELSE "done"]
+                            ELSE IF a \in RecoveryActors THEN "done"
+                            \* Kept: recorded retained (`markRetained`).
+                            ELSE LabelStep("retain")]
               /\ UNCHANGED wantDelete
-    /\ UNCHANGED <<ledgerVars, runtimeVars, tok, seenRt, admitted, opc, nextTok, attests, crashes,
+    /\ UNCHANGED <<labelVars, ledgerVars, runtimeVars, tok, seenRt, admitted, opc, nextTok, attests, crashes,
                    ghostVars>>
 
 \* authorizeDeletion: one transaction under the row lock.
 Authorize(a) ==
     /\ pc[a] = "auth"
     /\ CASE dstate = "deleted" /\ AuthorizeRefusesDeleted ->
-              \* `deleted`: the runtime call is repeated with nothing held (idempotent).
-              /\ pc' = [pc EXCEPT ![a] = "done"]
+              \* `deleted`: the runtime call is repeated with nothing held (idempotent), and the
+              \* removal recorded on the drain (`removalObservation`).
+              /\ pc' = [pc EXCEPT ![a] = LabelStep("label")]
               /\ UNCHANGED <<ledgerVars, tok, nextTok, basisCur, bad>>
          [] dstate = "issued" ->
               \* `held` while its issuer holds it; `unresolved` otherwise: settled next attempt.
@@ -256,7 +285,7 @@ Authorize(a) ==
                           THEN bad \cup {"over-recovery"} ELSE bad
               /\ pc' = [pc EXCEPT ![a] = "issue"]
               /\ UNCHANGED <<fence, lapsedAt, rec>>
-    /\ UNCHANGED <<runtimeVars, seenCur, seenRt, wantDelete, admitted, opc, attests, crashes, askedSince,
+    /\ UNCHANGED <<labelVars, runtimeVars, seenCur, seenRt, wantDelete, admitted, opc, attests, crashes, askedSince,
                    issuedL, sentOk, everDeleted>>
 
 \* What reconcileIssuedDeletion reissues on: the evidence the removal was authorized on stands,
@@ -313,7 +342,7 @@ Settle(a) ==
               /\ Bump
               /\ pc' = [pc EXCEPT ![a] = "read"]
               /\ UNCHANGED <<fence, lapsedAt, rec, tok, nextTok>>
-    /\ UNCHANGED <<runtimeVars, seenRt, wantDelete, admitted, opc, attests, crashes, askedSince,
+    /\ UNCHANGED <<labelVars, runtimeVars, seenRt, wantDelete, admitted, opc, attests, crashes, askedSince,
                    issuedL, sentOk, everDeleted, bad>>
 
 \* issueDeletion, RIGHT BEFORE the runtime call. `false` sends nothing; `deleteOnEvidence`
@@ -341,7 +370,7 @@ Issue(a) ==
               /\ sentOk' = [sentOk EXCEPT ![t] = basisCur[t] /\ NoFence]
               /\ pc' = [pc EXCEPT ![a] = "send"]
               /\ UNCHANGED <<fence, lapsedAt, dtok, dcur, rec>>
-    /\ UNCHANGED <<runtimeVars, tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok, attests,
+    /\ UNCHANGED <<labelVars, runtimeVars, tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok, attests,
                    crashes, askedSince, basisCur, everDeleted, bad>>
 
 \* releaseDeletion(t): the request `t` sent was refused, or never made. No version bump.
@@ -366,15 +395,15 @@ Send(a) ==
     /\ rt' = [rt EXCEPT ![tok[a]] = "pending"]
     /\ late' = [late EXCEPT ![tok[a]] = elapsed[tok[a]]]
     /\ pc' = [pc EXCEPT ![a] = "await"]
-    /\ UNCHANGED <<ledgerVars, exec, elapsed, tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok,
+    /\ UNCHANGED <<labelVars, ledgerVars, exec, elapsed, tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok,
                    attests, crashes, ghostVars>>
 
 \* The call failed before anything was sent (`isRemovalRefusal`: nothing was sent).
 NotSent(a) ==
     /\ pc[a] = "send"
     /\ Release(tok[a])
-    /\ pc' = [pc EXCEPT ![a] = "done"]
-    /\ UNCHANGED <<fence, lapsedAt, rec, runtimeVars, tok, seenCur, seenRt, wantDelete, admitted,
+    /\ pc' = [pc EXCEPT ![a] = LabelStep("failed")]
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, rec, runtimeVars, tok, seenCur, seenRt, wantDelete, admitted,
                    opc, nextTok, attests, crashes, ghostVars>>
 
 \* confirmDeletion, the hold renewed while the call runs; a lapsed hold is live again.
@@ -383,7 +412,7 @@ Renew(a) ==
     /\ dtok = tok[a] /\ ~dlive
     /\ dstate = "issued" \/ (dstate = "deleting" /\ DeletionCurrent)
     /\ dlive' = TRUE
-    /\ UNCHANGED <<fence, lapsedAt, dstate, dtok, dcur, reqs, lastIssued, rec, runtimeVars,
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, dstate, dtok, dcur, reqs, lastIssued, rec, runtimeVars,
                    actorVars, opc, nextTok, attests, crashes, ghostVars>>
 
 \* completeDeletion: the runtime call succeeded. Written whoever holds it; the version bumped.
@@ -395,8 +424,8 @@ Succeed(a) ==
     /\ reqs' = [reqs EXCEPT ![t] = IF @ = "unknown" THEN "done" ELSE @]
     /\ Bump
     /\ everDeleted' = TRUE
-    /\ pc' = [pc EXCEPT ![a] = "done"]
-    /\ UNCHANGED <<fence, lapsedAt, lastIssued, rec, runtimeVars, tok, seenRt, wantDelete, admitted, opc,
+    /\ pc' = [pc EXCEPT ![a] = LabelStep("label")]
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, lastIssued, rec, runtimeVars, tok, seenRt, wantDelete, admitted, opc,
                    nextTok, attests, crashes, askedSince, issuedL, sentOk, bad>>
 
 \* lapseIssuedDeletion: the call ended with an outcome nobody knows, or the runtime accepted
@@ -406,8 +435,8 @@ Unknown(a) ==
     /\ pc[a] = "await"
     /\ rt[t] \in {"pending", "acted"}
     /\ dlive' = IF dstate = "issued" /\ dtok = t THEN FALSE ELSE dlive
-    /\ pc' = [pc EXCEPT ![a] = "done"]
-    /\ UNCHANGED <<fence, lapsedAt, dstate, dtok, dcur, reqs, lastIssued, rec, runtimeVars,
+    /\ pc' = [pc EXCEPT ![a] = LabelStep("failed")]
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, dstate, dtok, dcur, reqs, lastIssued, rec, runtimeVars,
                    tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok, attests, crashes, ghostVars>>
 
 \* releaseDeletion: the runtime answered and did not act.
@@ -415,8 +444,8 @@ Refused(a) ==
     /\ pc[a] = "await"
     /\ rt[tok[a]] = "refused"
     /\ Release(tok[a])
-    /\ pc' = [pc EXCEPT ![a] = "done"]
-    /\ UNCHANGED <<fence, lapsedAt, rec, runtimeVars, tok, seenCur, seenRt, wantDelete, admitted,
+    /\ pc' = [pc EXCEPT ![a] = LabelStep("failed")]
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, rec, runtimeVars, tok, seenCur, seenRt, wantDelete, admitted,
                    opc, nextTok, attests, crashes, ghostVars>>
 
 \* A deleter's process dies holding a removal (authorized, issued, or with its call out).
@@ -425,7 +454,7 @@ CrashDeleter(a) ==
     /\ crashes < MaxCrashes
     /\ crashes' = crashes + 1
     /\ pc' = [pc EXCEPT ![a] = "done"]
-    /\ UNCHANGED <<ledgerVars, runtimeVars, tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok,
+    /\ UNCHANGED <<labelVars, ledgerVars, runtimeVars, tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok,
                    attests, ghostVars>>
 
 -----------------------------------------------------------------------------
@@ -437,15 +466,20 @@ Claim(a) ==
     /\ rec \in {"none", "lapsed"}
     /\ rec' = "live"
     /\ pc' = [pc EXCEPT ![a] = "look"]   \* first decided on what is on record
-    /\ UNCHANGED <<fence, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued,
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued,
                    runtimeVars, tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok, attests,
                    crashes, ghostVars>>
 
 \* admitRecovery: may the attempt start the executor?
 Admit(a) ==
     /\ pc[a] = "admit"
-    /\ CASE dstate = "deleted" \/ dstate = "issued" \/ (dstate = "deleting" /\ dlive) ->
-              /\ pc' = [pc EXCEPT ![a] = "done"]      \* `deleted` / `deleting`
+    /\ CASE dstate = "deleted" ->
+              \* `deleted`: removed by another path; its retention ends, recorded `stopped`.
+              /\ pc' = [pc EXCEPT ![a] = LabelStep("label")]
+              /\ UNCHANGED <<dstate, dtok, dcur, dlive, reqs, lastIssued, seenCur, basisCur,
+                             askedSince, admitted>>
+         [] dstate = "issued" \/ (dstate = "deleting" /\ dlive) ->
+              /\ pc' = [pc EXCEPT ![a] = "done"]      \* `deleting`
               /\ UNCHANGED <<dstate, dtok, dcur, dlive, reqs, lastIssued, seenCur, basisCur,
                              askedSince, admitted>>
          [] rec # "live" ->
@@ -463,7 +497,7 @@ Admit(a) ==
               /\ admitted' = TRUE
               /\ pc' = [pc EXCEPT ![a] = "look"]
               /\ UNCHANGED <<dstate, dtok, dcur, dlive, reqs, lastIssued, seenCur, basisCur>>
-    /\ UNCHANGED <<fence, lapsedAt, rec, runtimeVars, tok, seenRt, wantDelete, opc,
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, rec, runtimeVars, tok, seenRt, wantDelete, opc,
                    nextTok, attests, crashes, issuedL, sentOk, everDeleted, bad>>
 
 \* releaseRecovery when the attempt ends (fenced on its token).
@@ -471,13 +505,13 @@ EndRecovery(a) ==
     /\ a \in RecoveryActors /\ pc[a] = "done"
     /\ rec' = IF rec = "live" THEN "none" ELSE rec
     /\ pc' = [pc EXCEPT ![a] = "end"]
-    /\ UNCHANGED <<fence, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued,
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued,
                    runtimeVars, tok, seenCur, seenRt, wantDelete, admitted, opc, nextTok, attests,
                    crashes, ghostVars>>
 
 ClaimLapses ==
     /\ rec = "live" /\ rec' = "lapsed"
-    /\ UNCHANGED <<fence, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued,
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued,
                    runtimeVars, actorVars, opc, nextTok, attests, crashes, ghostVars>>
 
 -----------------------------------------------------------------------------
@@ -486,13 +520,16 @@ ClaimLapses ==
 (* the answer, close it when nothing came, end it when the answer could not be   *)
 (* recorded.                                                                     *)
 
-\* openObservation.
+\* What an observer does once its question is over: a drain records its outcome (`save`).
+AfterAsk(o) == IF o \in Drains /\ TrackLabel THEN "save" ELSE "done"
+
+\* openObservation. A drain asks only under the drain claim.
 Open(o) ==
-    /\ opc[o] = "idle"
+    /\ opc[o] = IF o \in Drains /\ TrackLabel THEN "claimed" ELSE "idle"
     /\ IF \/ dstate = "deleted" /\ OpenRefusedWhenDeleted
           \/ dstate = "issued" /\ OpenRefusedWhileIssued
           \/ dstate = "deleting" /\ dlive
-         THEN /\ opc' = [opc EXCEPT ![o] = "done"]      \* refused: nothing is asked
+         THEN /\ opc' = [opc EXCEPT ![o] = AfterAsk(o)]  \* refused: nothing is asked
               /\ UNCHANGED <<fence, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued,
                              seenCur, basisCur, askedSince, bad>>
          ELSE /\ fence' = [fence EXCEPT ![o] = "open"]
@@ -502,7 +539,7 @@ Open(o) ==
               /\ Ask
               /\ bad' = IF dstate = "deleted" THEN bad \cup {"asked-deleted"} ELSE bad
               /\ opc' = [opc EXCEPT ![o] = "asked"]
-    /\ UNCHANGED <<rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, nextTok, attests, crashes,
+    /\ UNCHANGED <<labelVars, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, nextTok, attests, crashes,
                    issuedL, sentOk, everDeleted>>
 
 \* recordStatus with its fence: resolves it and every fence that lapsed before it was opened;
@@ -513,8 +550,8 @@ Record(o) ==
                 ELSE [p \in Observers |->
                         IF p = o \/ p \in lapsedAt[o] THEN "none" ELSE fence[p]]
     /\ BumpVoiding(dstate = "deleting")
-    /\ opc' = [opc EXCEPT ![o] = "done"]
-    /\ UNCHANGED <<lapsedAt, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, nextTok, attests,
+    /\ opc' = [opc EXCEPT ![o] = AfterAsk(o)]
+    /\ UNCHANGED <<labelVars, lapsedAt, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, nextTok, attests,
                    crashes, askedSince, issuedL, sentOk, everDeleted, bad>>
 
 \* closeObservation: nothing was received. The version bumped.
@@ -522,8 +559,8 @@ Close(o) ==
     /\ opc[o] = "asked"
     /\ fence' = [fence EXCEPT ![o] = "none"]
     /\ BumpVoiding(FALSE)
-    /\ opc' = [opc EXCEPT ![o] = "done"]
-    /\ UNCHANGED <<lapsedAt, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, nextTok, attests,
+    /\ opc' = [opc EXCEPT ![o] = AfterAsk(o)]
+    /\ UNCHANGED <<labelVars, lapsedAt, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, nextTok, attests,
                    crashes, askedSince, issuedL, sentOk, everDeleted, bad>>
 
 \* endObservation: an answer came and could not be recorded; its fence lapses now.
@@ -533,8 +570,8 @@ End(o) ==
          THEN UNCHANGED <<fence, dstate, dtok, dcur, dlive, reqs, lastIssued, seenCur, basisCur>>
          ELSE /\ fence' = [fence EXCEPT ![o] = "lapsed"]
               /\ BumpVoiding(FALSE)
-    /\ opc' = [opc EXCEPT ![o] = "done"]
-    /\ UNCHANGED <<lapsedAt, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, nextTok, attests,
+    /\ opc' = [opc EXCEPT ![o] = AfterAsk(o)]
+    /\ UNCHANGED <<labelVars, lapsedAt, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, nextTok, attests,
                    crashes, askedSince, issuedL, sentOk, everDeleted, bad>>
 
 \* The observer's process dies: its fence stays until it lapses and a later answer resolves it.
@@ -542,12 +579,12 @@ CrashObserver(o) ==
     /\ opc[o] = "asked" /\ crashes < MaxCrashes
     /\ crashes' = crashes + 1
     /\ opc' = [opc EXCEPT ![o] = "done"]
-    /\ UNCHANGED <<ledgerVars, runtimeVars, actorVars, nextTok, attests, ghostVars>>
+    /\ UNCHANGED <<labelVars, ledgerVars, runtimeVars, actorVars, nextTok, attests, ghostVars>>
 
 \* The fence's TTL passes (`ttlMs`, the round trip's bound plus a margin).
 FenceLapses(o) ==
     /\ fence[o] = "open" /\ fence' = [fence EXCEPT ![o] = "lapsed"]
-    /\ UNCHANGED <<lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued, rec, runtimeVars,
+    /\ UNCHANGED <<labelVars, lapsedAt, dstate, dtok, dcur, dlive, reqs, lastIssued, rec, runtimeVars,
                    actorVars, opc, nextTok, attests, crashes, ghostVars>>
 
 -----------------------------------------------------------------------------
@@ -558,14 +595,14 @@ Attest ==
     /\ attests < MaxAttests
     /\ attests' = attests + 1
     /\ BumpVoiding(FALSE)
-    /\ UNCHANGED <<fence, lapsedAt, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, opc, nextTok,
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, rec, runtimeVars, pc, tok, seenRt, wantDelete, admitted, opc, nextTok,
                    crashes, askedSince, issuedL, sentOk, everDeleted, bad>>
 
 \* A removal's hold expires (DELETION_HOLD_MS without a renewal).
 HoldLapses ==
     /\ dstate \in {"deleting", "issued"} /\ dlive
     /\ dlive' = FALSE
-    /\ UNCHANGED <<fence, lapsedAt, dstate, dtok, dcur, reqs, lastIssued, rec, runtimeVars,
+    /\ UNCHANGED <<labelVars, fence, lapsedAt, dstate, dtok, dcur, reqs, lastIssued, rec, runtimeVars,
                    actorVars, opc, nextTok, attests, crashes, ghostVars>>
 
 -----------------------------------------------------------------------------
@@ -580,13 +617,13 @@ RuntimeActs(t) ==
                 THEN bad \cup (IF askedSince[t] THEN {"stale-act"} ELSE {})
                          \cup (IF dstate # "issued" THEN {"untracked-act"} ELSE {})
                 ELSE bad
-    /\ UNCHANGED <<ledgerVars, elapsed, late, actorVars, opc, nextTok, attests, crashes, askedSince,
+    /\ UNCHANGED <<labelVars, ledgerVars, elapsed, late, actorVars, opc, nextTok, attests, crashes, askedSince,
                    basisCur, issuedL, sentOk, everDeleted>>
 
 RuntimeRefuses(t) ==
     /\ rt[t] = "pending"
     /\ rt' = [rt EXCEPT ![t] = "refused"]
-    /\ UNCHANGED <<ledgerVars, exec, elapsed, late, actorVars, opc, nextTok, attests, crashes,
+    /\ UNCHANGED <<labelVars, ledgerVars, exec, elapsed, late, actorVars, opc, nextTok, attests, crashes,
                    ghostVars>>
 
 \* The runtime's bound on request `t` passes. Measured from when it was recorded issued; the
@@ -597,11 +634,109 @@ BoundPasses(t) ==
        \/ SendMayOutliveBound
        \/ ~\E a \in Actors : pc[a] = "send" /\ tok[a] = t
     /\ elapsed' = [elapsed EXCEPT ![t] = TRUE]
-    /\ UNCHANGED <<ledgerVars, exec, rt, late, actorVars, opc, nextTok, attests, crashes, ghostVars>>
+    /\ UNCHANGED <<labelVars, ledgerVars, exec, rt, late, actorVars, opc, nextTok, attests, crashes, ghostVars>>
+
+-----------------------------------------------------------------------------
+(* The drain label (`workspace_capture_drains.state`) and the drain claim.     *)
+(* recordObservation (`ledger.observe`) ranks a terminal label: gone, then      *)
+(* stopped (`drainLabelsOutranking`). markRetained (`kept`), the stop job's     *)
+(* `stop-failed` (through observe, but not terminal, so not ranked) and a       *)
+(* drain's `save` (recordProgress, fenced on its claim) write whatever was      *)
+(* there.                                                                       *)
+
+Terminal(l) == l \in {"gone", "stopped"}
+Rank(l) == CASE l = "gone" -> 1 [] l = "stopped" -> 2 [] OTHER -> 0
+
+\* recordObservation with a terminal label.
+Ranked(l) == IF LabelRanked /\ Rank(label) > Rank(l) THEN label ELSE l
+\* A write that does not rank. UnrankedKeepsTerminal: the proposed fix, it keeps a terminal label.
+Unranked(l) == IF UnrankedKeepsTerminal /\ Terminal(label) THEN label ELSE l
+
+\* Every label write, recording whether it weakened a terminal label.
+WriteLabel(new) ==
+    /\ label' = IF TrackLabel THEN new ELSE label
+    /\ bad' = IF TrackLabel /\ Terminal(label) /\ Rank(new) < Rank(label)
+                THEN bad \cup {"label-weakened"} ELSE bad
+
+labelOther == <<ledgerVars, runtimeVars, tok, seenCur, seenRt, wantDelete, admitted, nextTok,
+                attests, crashes, askedSince, basisCur, issuedL, sentOk, everDeleted>>
+
+\* The stop job claims the run's drain before it looks at the executor
+\* (process-workspace-stop.ts); held elsewhere: `busy`, it leaves the run.
+StopClaims(a) ==
+    /\ pc[a] = "sclaim"
+    /\ IF claimBy = "none" \/ ~TrackLabel
+         THEN claimBy' = (IF TrackLabel THEN a ELSE claimBy) /\ pc' = [pc EXCEPT ![a] = "look"]
+         ELSE UNCHANGED claimBy /\ pc' = [pc EXCEPT ![a] = "end"]
+    /\ UNCHANGED <<labelOther, opc, label, bad>>
+
+\* It releases the claim when it ends (fenced on its token).
+StopReleases(a) ==
+    /\ TrackLabel /\ a \in StopJobs /\ pc[a] = "done"
+    /\ claimBy' = IF claimBy = a THEN "none" ELSE claimBy
+    /\ pc' = [pc EXCEPT ![a] = "end"]
+    /\ UNCHANGED <<labelOther, opc, label, bad>>
+
+\* markRetained: the deleter decided to keep the executor (reconcile-runtime-exits.ts,
+\* process-workspace-stop.ts, the reaper).
+MarkRetained(a) ==
+    /\ pc[a] = "retain"
+    /\ WriteLabel(Unranked("kept"))
+    /\ pc' = [pc EXCEPT ![a] = "done"]
+    /\ UNCHANGED <<labelOther, opc, claimBy>>
+
+\* The runtime call failed: the stop job records `stop-failed`; any other deleter writes nothing.
+StopFailed(a) ==
+    /\ pc[a] = "failed"
+    /\ IF a \in StopJobs THEN WriteLabel(Unranked("stop-failed")) ELSE UNCHANGED <<label, bad>>
+    /\ pc' = [pc EXCEPT ![a] = "done"]
+    /\ UNCHANGED <<labelOther, opc, claimBy>>
+
+\* The removal is recorded on the drain: `stopped` (`removalObservation`, on recorded evidence).
+LabelStopped(a) ==
+    /\ pc[a] = "label"
+    /\ WriteLabel(Ranked("stopped"))
+    /\ pc' = [pc EXCEPT ![a] = "done"]
+    /\ UNCHANGED <<labelOther, opc, claimBy>>
+
+\* The runtime has nothing of the executor (basis `missing`): `gone`, or `stopped` when the
+\* evidence on record says its work was saved (`terminalCaptureState`).
+LabelMissing(a) ==
+    /\ pc[a] = "missing"
+    /\ \E l \in {"gone", "stopped"} : WriteLabel(Ranked(l))
+    /\ pc' = [pc EXCEPT ![a] = "done"]
+    /\ UNCHANGED <<labelOther, opc, claimBy>>
+
+\* A drain claims the run (`drainCaptureBeforeStop`); held elsewhere: `busy`.
+DrainClaims(o) ==
+    /\ o \in Drains /\ TrackLabel /\ opc[o] = "idle"
+    /\ IF claimBy = "none" \/ ~TrackLabel
+         THEN claimBy' = (IF TrackLabel THEN o ELSE claimBy) /\ opc' = [opc EXCEPT ![o] = "claimed"]
+         ELSE UNCHANGED claimBy /\ opc' = [opc EXCEPT ![o] = "done"]
+    /\ UNCHANGED <<labelOther, pc, label, bad>>
+
+\* `persist`: recordProgress with the drain's outcome, written only while its claim holds (`gone`
+\* only when the runtime has nothing of the executor); then the claim is released.
+DrainSaves(o) ==
+    /\ opc[o] = "save"
+    /\ IF claimBy = o /\ TrackLabel
+         \* `draining` stands for every outcome a drain records that is not terminal (`saved`,
+         \* `kept`): they rank the same, below every terminal label.
+         THEN \E l \in {"draining"} \cup (IF exec = "gone" THEN {"gone"} ELSE {}) :
+                WriteLabel(Unranked(l))
+         ELSE UNCHANGED <<label, bad>>
+    /\ claimBy' = IF claimBy = o THEN "none" ELSE claimBy
+    /\ opc' = [opc EXCEPT ![o] = "done"]
+    /\ UNCHANGED <<labelOther, pc>>
+
+\* A drain claim's lease lapses (its holder stalled or died).
+DrainClaimLapses ==
+    /\ TrackLabel /\ claimBy # "none" /\ claimBy' = "none"
+    /\ UNCHANGED <<labelOther, pc, opc, label, bad>>
 
 -----------------------------------------------------------------------------
 
-Next ==
+OldNext ==
     \/ \E a \in Actors :
           \/ Look(a) \/ Read(a) \/ Authorize(a) \/ Settle(a) \/ Issue(a) \/ Send(a)
           \/ NotSent(a) \/ Renew(a) \/ Succeed(a) \/ Unknown(a) \/ Refused(a)
@@ -610,6 +745,14 @@ Next ==
           Open(o) \/ Record(o) \/ Close(o) \/ End(o) \/ CrashObserver(o) \/ FenceLapses(o)
     \/ \E t \in Tokens : RuntimeActs(t) \/ RuntimeRefuses(t) \/ BoundPasses(t)
     \/ Attest \/ HoldLapses \/ ClaimLapses
+
+Next ==
+    \/ OldNext
+    \/ \E a \in Actors :
+          \/ StopClaims(a) \/ StopReleases(a) \/ MarkRetained(a) \/ StopFailed(a)
+          \/ LabelStopped(a) \/ LabelMissing(a)
+    \/ \E o \in Observers : DrainClaims(o) \/ DrainSaves(o)
+    \/ DrainClaimLapses
 
 Spec == Init /\ [][Next]_vars
 
@@ -637,5 +780,12 @@ NothingAskedOfDeleted == "asked-deleted" \notin bad
 
 \* 6. While a recovery claim is live, only that recovery is authorized to remove the executor.
 RecoveryExclusive == "over-recovery" \notin bad
+
+\* 7. Once the drain label is terminal (`gone`, `stopped`), no write weakens it: not to a weaker
+\*    terminal label, not to a non-terminal one (`kept`, `stop-failed`, `draining`, `saved`).
+LabelNeverWeakened == "label-weakened" \notin bad
+
+\* 8. A terminal label means the runtime no longer has the executor.
+TerminalLabelMeansRemoved == Terminal(label) => exec = "gone"
 
 =============================================================================

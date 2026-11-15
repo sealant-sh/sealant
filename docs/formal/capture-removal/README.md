@@ -6,7 +6,7 @@ The `capture-removal` skill (`.agents/skills/capture-removal/SKILL.md`) says how
 result and keep it in step with the code. This file is the record: what is verified, under which
 bounds and assumptions, and what the check found.
 
-Confirmed against the code at `4cfdea35` (main, 2026-11-15). Run with TLC 2.19 (TLA+ tools 1.7.4,
+Confirmed against the code at `8c2cbd88` (main, 2026-11-15). Run with TLC 2.19 (TLA+ tools 1.7.4,
 from the nixpkgs this repository's `flake.lock` pins).
 
 ## The promise
@@ -32,6 +32,23 @@ SLNT-1006) is part of `SentOnCurrentEvidence`: the bump that voids it is what `i
 refuses on. "One holder, one request per token" holds by the model's construction (one
 `deletion_token`, `reqs[t]` written once) rather than as a separate invariant.
 
+## The drain label
+
+The same row carries the drain label (`state`): what a person reads about the run's work. `gone` and
+`stopped` are terminal, the executor removed with nothing on record saying its work was saved, or on
+evidence that it was; `kept`, `stop-failed`, `draining` and `saved` are not. The label belongs to
+this model, not Boat custody's: it is a column of the same row, written by the same deleters,
+recovery and drains, and it is right only relative to the removal it reports (SLNT-1006, slice 3).
+
+| Invariant                   | In plain words                                                                                                                    |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `LabelNeverWeakened`        | Once the label is terminal, no write weakens it: not to a weaker terminal label (`stopped` to `gone`), not to a non-terminal one. |
+| `TerminalLabelMeansRemoved` | A terminal label means the runtime no longer has the executor.                                                                    |
+
+`TrackLabel` turns the label and the drain claim on; the removal cases leave them out, so their
+state counts are the removal ledger's alone. `discarded` is out of scope (a discard removal carries
+no ledger ticket).
+
 ## Actors
 
 - **Deleters** (the stop job, the runtime-exit reconciler, the orphan reaper): look at the runtime,
@@ -45,6 +62,12 @@ refuses on. "One holder, one request per token" holds by the model's constructio
   open; a fence lapses at its TTL and is resolved by a later answer opened after it lapsed.
 - **Recovery** (one attempt): `claimRecovery`, a first decision on its claim, `admitRecovery`, a
   second decision after it. Its claim may lapse.
+- **Label writers**: a deleter records `stopped` after its removal (`observe`, ranked by
+  `drainLabelsOutranking`), `gone` or `stopped` when the runtime has nothing of the executor, and
+  `kept` when it keeps it (`markRetained`, unranked); the stop job records `stop-failed` when its
+  runtime call fails (unranked). A drain records its outcome with `save` (`recordProgress`,
+  unranked, fenced on the drain claim). Only the stop job and the drains hold the drain claim; it
+  may lapse.
 - **Attestation**: `attestCompletion` moves the evidence without asking the executor.
 - **The runtime**: carries out a request while its bound has not passed, refuses it, or leaves its
   outcome unknown to the caller.
@@ -54,15 +77,20 @@ refuses on. "One holder, one request per token" holds by the model's constructio
 | Case                   | Group | Deleters | Observers | Recovery | Tokens | Attestations | Crashes | Distinct states | TLC, 4 workers |
 | ---------------------- | ----- | -------- | --------- | -------- | ------ | ------------ | ------- | --------------- | -------------- |
 | `ledger`               | fast  | 2        | 2         | no       | 3      | 1            | 1       | 1,218,892       | 8 s            |
-| `ledger-recovery`      | fast  | 1        | 2         | yes      | 3      | 1            | 1       | 6,605,754       | 38 s           |
-| `ledger-deep`          | deep  | 2        | 2         | no       | 4      | 2            | 2       | 4,487,744       | 23 s           |
-| `ledger-recovery-deep` | deep  | 1        | 2         | yes      | 4      | 2            | 2       | 23,464,478      | 119 s          |
+| `ledger-recovery`      | fast  | 1        | 2         | yes      | 3      | 1            | 1       | 6,603,314       | 36 s           |
+| `ledger-deep`          | deep  | 2        | 2         | no       | 4      | 2            | 2       | 4,487,744       | 25 s           |
+| `ledger-recovery-deep` | deep  | 1        | 2         | yes      | 4      | 2            | 2       | 23,459,590      | 132 s          |
+| `label-fixes`          | fast  | 2        | 2         | no       | 2      | 0            | 1       | 2,776,762       | 16 s           |
+| `label-fixes-deep`     | deep  | 2        | 2         | no       | 3      | 1            | 1       | 19,115,752      | 104 s          |
 
 A third deleter, or a second deleter beside the recovery attempt, takes the state space past 170
 million distinct states within 15 minutes on four workers with the queue still growing: hours on the
 nightly's four-core runner. Those bounds are left out; a second settler is still present in `ledger`
 and `ledger-deep` (the deleter that did not issue), and in the recovery cases (the recovery attempt
 settles what the deleter issued).
+
+The `label-*` cases turn the drain label on, with `d1` the stop job and `o1` a drain (the other
+observer an API route).
 
 Tokens count every removal minted (authorizations and reissues together); a deleter that would mint
 one past the bound stops. Each observer observes once. Holds, fences, claims and the runtime's bound
@@ -84,35 +112,67 @@ lapse at any moment: the model has no clock, only whether each has passed.
   plus a margin (`OBSERVATION_FENCE_MARGIN_MS`); an answer arriving after that may still be
   recorded, as the model allows, but the daemon answered it before the later observation that
   resolved the fence.
-- **Deciding is abstract.** A deleter may decide to remove or keep on any record. The model checks
-  that a removal rests on the evidence it was decided on, not that the decision weighed it rightly
-  (`decideExecutorDeletion` has its own tests).
+- **Deciding is abstract.** A deleter may decide to remove or keep on any record, except that it
+  never keeps an executor the runtime told it is gone (`decideExecutorDeletion` removes it on basis
+  `missing` or on the evidence). The model checks that a removal rests on the evidence it was
+  decided on, not that the decision weighed it rightly (`decideExecutorDeletion` has its own tests).
+- **A drain's non-terminal outcomes are one.** `draining` stands for `draining`, `saved` and `kept`
+  from a drain: they rank the same.
 - **Out of scope.** Removals that rest on no recorded evidence (the owner's discard, a missing
-  executor, not capture-sourced, nothing to save) carry no ticket and pass by this ledger. The drain
-  label (`stopped` / `discarded` / `gone`) is not modelled here yet (SLNT-1006 slice 3). The
-  database trigger (`workspace_capture_drains_invariants`) that holds writers from an older release
-  to the contract is not modelled: every writer here is current.
+  executor, not capture-sourced, nothing to save) carry no ticket and pass by this ledger. The
+  `discarded` label is not modelled. The database trigger (`workspace_capture_drains_invariants`)
+  that holds writers from an older release to the contract is not modelled: every writer here is
+  current.
 
 ## Broken variants
 
 Each turns off one of main's guards and must fail on the invariant it protects. Each passes the
 other invariants' checks or not as it may; its case lists only its own.
 
-| Case                               | Guard turned off                                                                                  | Fails                       |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------- |
-| `broken-issue-skips-evidence`      | `issueDeletion`'s `deletionEvidenceCurrent`                                                       | `SentOnCurrentEvidence`     |
-| `broken-reissue-on-stale-decision` | `reconcileIssuedDeletion`'s `reauthorizedVersion === evidenceVersion` (the re-authorized reissue) | `SentOnCurrentEvidence`     |
-| `broken-observe-while-issued`      | `openObservation`'s refusal of `deleting-issued` whatever its hold                                | `NothingAskedBeforeRemoval` |
-| `broken-release-over-unknown`      | `releaseDeletion` keeping the removal issued while another request's outcome is unknown           | `RemovalStaysIssued`        |
-| `broken-release-before-bound`      | `reconcileIssuedDeletion` releasing only when `fenced`                                            | `RemovalStaysIssued`        |
-| `broken-complete-on-unknown`       | `completeDeletion` only on the runtime call's success                                             | `DeletedMeansGone`          |
-| `broken-authorize-over-deleted`    | `authorizeDeletion`'s `deleted` answer                                                            | `DeletedIsFinal`            |
-| `broken-observe-deleted`           | `openObservation`'s refusal of `deleted`                                                          | `NothingAskedOfDeleted`     |
-| `broken-authorize-over-recovery`   | `authorizeDeletion`'s `recovering` answer                                                         | `RecoveryExclusive`         |
+| Case                                  | Guard turned off                                                                                  | Fails                       |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------- |
+| `broken-issue-skips-evidence`         | `issueDeletion`'s `deletionEvidenceCurrent`                                                       | `SentOnCurrentEvidence`     |
+| `broken-reissue-on-stale-decision`    | `reconcileIssuedDeletion`'s `reauthorizedVersion === evidenceVersion` (the re-authorized reissue) | `SentOnCurrentEvidence`     |
+| `broken-observe-while-issued`         | `openObservation`'s refusal of `deleting-issued` whatever its hold                                | `NothingAskedBeforeRemoval` |
+| `broken-release-over-unknown`         | `releaseDeletion` keeping the removal issued while another request's outcome is unknown           | `RemovalStaysIssued`        |
+| `broken-release-before-bound`         | `reconcileIssuedDeletion` releasing only when `fenced`                                            | `RemovalStaysIssued`        |
+| `broken-complete-on-unknown`          | `completeDeletion` only on the runtime call's success                                             | `DeletedMeansGone`          |
+| `broken-authorize-over-deleted`       | `authorizeDeletion`'s `deleted` answer                                                            | `DeletedIsFinal`            |
+| `broken-observe-deleted`              | `openObservation`'s refusal of `deleted`                                                          | `NothingAskedOfDeleted`     |
+| `broken-authorize-over-recovery`      | `authorizeDeletion`'s `recovering` answer                                                         | `RecoveryExclusive`         |
+| `broken-label-unranked`               | `recordObservation`'s `drainLabelsOutranking` (before SLNT-968), with the proposed label fix on   | `LabelNeverWeakened`        |
+| `broken-missing-without-gone-runtime` | a removal on basis `missing` only on the runtime's word that it has nothing of the executor       | `TerminalLabelMeansRemoved` |
 
 ## Findings
 
-Within the bounds above, main keeps every invariant.
+Within the bounds above, main keeps every invariant of the removal ledger, and breaks
+`LabelNeverWeakened`.
+
+### A terminal drain label overwritten by a later writer (SLNT-1012)
+
+Case `finding-label-weakened`, expected to fail until the code changes; `label-fixes` and
+`label-fixes-deep` turn the proposed fix on (`UnrankedKeepsTerminal`: `markRetained`,
+`recordProgress` and a non-terminal `observe` keep a terminal label) and pass with every invariant.
+#660 (SLNT-968) ranks terminal labels inside `recordObservation` only, and three writes bypass it.
+
+A drain over a removal another path made (the shortest trace):
+
+1. A deleter that does not hold the drain claim (the runtime-exit reconciler, the reaper, recovery)
+   removes the executor on saved evidence and records `stopped`.
+2. A drain claims the run (the stop job's, for an instance `failed` rather than `stopped`).
+3. Its `openObservation` is refused (deleted); the sample is `unrecorded`, the drain finishes
+   `pending`, and `save` writes `draining` over `stopped`.
+
+`kept` after `stopped`:
+
+1. The reconciler looks at the runtime while it still has the executor.
+2. The stop job removes it on saved evidence and records `stopped`.
+3. The reconciler decides to keep on its earlier look, and `markRetained` writes `kept` (and a
+   retention) over `stopped`.
+
+In each case traced through the code a later writer restores `stopped` (the stop job's repeated
+call, the next recovery pass), so nothing is lost: the run reads wrong for a while, the reconciler
+logs an error, and recovery makes a pointless attempt.
 
 ### A request sent after the runtime's bound passed (timing assumption)
 
