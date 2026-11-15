@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
+import { runHarnessStatus, runPreflight } from "./boat-harness.mjs";
 import { runCheck } from "./check.mjs";
 import { runDb, SUITES } from "./db.mjs";
 import { runFormal } from "./formal.mjs";
@@ -25,10 +26,19 @@ const VERBS = {
   formal: "The formal models whose covered paths the diff touches (quick bounds), and their drift",
   stack: "up | status | down: Postgres, the API and the web app; ready when the API answers",
   runtime: "--runtime boat --live: a live Boat launch (an external observer without credentials)",
-  "boat-harness": "Not yet: the Boat harness preflight and lock status",
+  "boat-harness": "--preflight | status: can a harness run start here, which groups the diff needs",
   evidence: "Not yet: screenshots and transcripts, secret-scanned, and the verdict file",
 };
-const IMPLEMENTED = new Set(["plan", "check", "status", "db", "formal", "stack", "runtime"]);
+const IMPLEMENTED = new Set([
+  "plan",
+  "check",
+  "status",
+  "db",
+  "formal",
+  "stack",
+  "runtime",
+  "boat-harness",
+]);
 const STACK_VERBS = ["up", "status", "down"];
 
 class UsageError extends Error {}
@@ -45,7 +55,7 @@ function usage() {
     `db: [suite...] of ${Object.keys(SUITES).join(", ")} (all when none) ;`,
     "formal: --all (every model), --full (every bound, not the quick ones) ;",
     "check, db, formal: --workers <n> (at most n test workers, turbo tasks or checker threads) ;",
-    "stack: up | status | down ; runtime: --runtime boat --live",
+    "stack: up | status | down ; runtime: --runtime boat --live ; boat-harness: --preflight | status",
   ].join("\n");
 }
 
@@ -64,6 +74,7 @@ function parse(argv) {
         full: { type: "boolean", default: false },
         runtime: { type: "string" },
         live: { type: "boolean", default: false },
+        preflight: { type: "boolean", default: false },
       },
     });
   } catch (error) {
@@ -103,6 +114,13 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
   } else if (verb === "stack") {
     if (rest.length !== 1 || !STACK_VERBS.includes(rest[0])) {
       throw new UsageError(`stack takes one of ${STACK_VERBS.join(", ")}`);
+    }
+  } else if (verb === "boat-harness") {
+    const asked = (values.preflight ? 1 : 0) + rest.filter((arg) => arg === "status").length;
+    if (asked !== 1 || rest.some((arg) => arg !== "status")) {
+      throw new UsageError(
+        "boat-harness takes --preflight or status (it never starts the harness)",
+      );
     }
   } else if (verb === "runtime") {
     if (values.runtime !== "boat" || !values.live || rest.length > 0) {
@@ -258,6 +276,16 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
       ...(subverb === "down" ? {} : { proves: ["stack"] }),
       invocation,
     });
+  }
+
+  if (verb === "boat-harness") {
+    const { steps, next } = values.preflight
+      ? runPreflight({
+          root,
+          files: head.mergeBase === null ? [] : changedFiles(root, head.mergeBase),
+        })
+      : runHarnessStatus({ root });
+    return makeResult({ verb, head, startedAt, steps, next, invocation });
   }
 
   if (verb === "runtime") {

@@ -16,7 +16,7 @@ test("every verb prints one result on stdout with --json, valid against the sche
     [["plan", "--files", "packages/workspaces/src/images/boat/catalog.ts", "--json"], 0, "passed"],
     // Its status depends on this checkout's tree; its exit code must follow it.
     [["status", "--base", "HEAD", "--json"], undefined, undefined],
-    ...["boat-harness", "evidence"].map((verb) => [[verb, "--json"], 4, "not_implemented"]),
+    ...["evidence"].map((verb) => [[verb, "--json"], 4, "not_implemented"]),
   ];
   for (const [args, code, status] of cases) {
     const run = verify(...args);
@@ -41,6 +41,8 @@ test("no verb, or help, lists the verbs; a wrong verb or option is a usage error
   assert.equal(verify("db", "everything").status, 2, "db names only the suites it has");
   assert.equal(verify("db", "--workers", "0").status, 2);
   assert.equal(verify("stack", "sideways").status, 2);
+  assert.equal(verify("boat-harness").status, 2, "it says --preflight or status");
+  assert.equal(verify("boat-harness", "run").status, 2, "it never starts the harness");
   assert.equal(verify("runtime", "--runtime", "boat").status, 2, "--live is required");
   assert.equal(verify("runtime", "--runtime", "docker", "--live").status, 2);
 });
