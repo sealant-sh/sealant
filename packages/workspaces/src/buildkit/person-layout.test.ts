@@ -579,7 +579,8 @@ describe("the image probe script", () => {
 
   it("records a sealantd that times out, crashes or fails otherwise as unreadable", async () => {
     expect(await sealantdField("exit 124")).toBe("unreadable");
-    expect(await sealantdField("kill -SEGV $$")).toBe("unreadable");
+    // A real crash, with no core limit: one would leave a core file on every run.
+    expect(await sealantdField("ulimit -c 0; kill -SEGV $$")).toBe("unreadable");
     expect(await sealantdField("exit 1")).toBe("unreadable");
     expect(await sealantdField("echo not json")).toBe("unreadable");
   });
