@@ -239,6 +239,9 @@ describe.skipIf(DATABASE_URL === undefined)("the resource reconciler", () => {
 
   it("runs a killed instance again within one tick, with the metadata guard back in", async () => {
     await docker("kill", instanceContainerName(instance.id));
+    // `kill` returns once the signal is sent; `docker ps`, which the tick reads, can still list the
+    // container as running until Docker records its exit, which `wait` waits for.
+    await docker("wait", instanceContainerName(instance.id));
     const report = await reconciler.tick();
     expect(report.restarted).toEqual(["db"]);
     expect(report.problems).toEqual([]);
