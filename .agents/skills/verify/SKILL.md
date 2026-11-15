@@ -18,24 +18,21 @@ what it would show if it didn't. If the change alters an existing screen, say wh
 
 ## 2. Start the stack
 
-From the repo root:
-
 ```bash
-[ -f .env ] || cp .env.example .env               # the defaults point at local infra
-docker compose up -d --wait postgres              # Postgres on :5433
-pnpm db:migrate
-pnpm --filter @sealant/api dev > /tmp/sealant-api.log 2>&1 &   # :4000
-pnpm --filter @sealant/web dev > /tmp/sealant-web.log 2>&1 &   # :3000
-pnpm exec playwright install --only-shell chromium               # once per Playwright version
+pnpm verify stack up                                # Postgres (:5433), migrated, API :4000, web :3000
+pnpm exec playwright install --only-shell chromium  # once per Playwright version
 ```
 
-Wait until `curl -s http://localhost:3000/` answers. Vite listens on `localhost`, not `127.0.0.1`.
+`up` says ready only once the API has answered `/v1/system/setup-state` from the database and the
+web app has served its page; its logs are under `.verify/logs/stack-*.log`. It creates `.env` from
+`.env.example` when there is none. Ports already in use make it `blocked_by_prerequisite`.
+`pnpm verify stack status` checks a stack it started.
 
 Skip `db:seed`: it only creates the SDK's default owner, and it needs `DATABASE_URL` set by hand.
 Start the worker and SSH gateway (`docker compose --profile apps up -d --build`) only when the
 change involves building or running a workspace.
 
-**Done when** `http://localhost:3000/` answers and the API log shows no errors.
+**Done when** `pnpm verify stack up` exits 0.
 
 ## 3. Drive it and take screenshots
 
@@ -77,8 +74,9 @@ and after.
 
 ## 4. Stop the stack
 
-Stop the two dev servers you started, then `docker compose down`. Add `-v` to drop the local
-database, including the verify account.
+`pnpm verify stack down` stops the dev servers and the Postgres service that `up` started, and
+leaves a Postgres that was already running. The database volume stays, the verify account with it;
+`docker compose down -v` drops it.
 
 ## 5. Report
 
