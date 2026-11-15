@@ -718,22 +718,46 @@ export class DockerResourceRuntime implements ResourceRuntime {
   }
 
   public async observe(): Promise<ReadonlyMap<string, ObservedContainer>> {
-    const result = await this.run([
+    // `ps` lists the containers, but its state comes from a view Docker updates after it releases
+    // `docker stop`, so right after a stop it can still say running. `inspect` reads the state
+    // `stop` waited on.
+    const listed = await this.run([
       "ps",
       "-a",
       "--filter",
       `label=${RESOURCE_LABELS.instance}`,
       "--format",
-      `{{.Label "${RESOURCE_LABELS.instance}"}}\t{{.State}}\t{{.Status}}`,
+      "{{.ID}}",
     ]);
+    const containers = listed.stdout.split("\n").flatMap((line) => {
+      const id = line.trim();
+      return id.length === 0 ? [] : [id];
+    });
     const observed = new Map<string, ObservedContainer>();
-    for (const line of result.stdout.split("\n")) {
-      const [id, state, status] = line.trim().split("\t");
+    if (containers.length === 0) return observed;
+    const inspected = await this.run([
+      "inspect",
+      "--format",
+      `{{index .Config.Labels "${RESOURCE_LABELS.instance}"}}\t{{.State.Status}}\t{{.State.ExitCode}}`,
+      ...containers,
+    ]).catch((error: unknown) => {
+      // One removed since `ps` listed it: the others are still printed, and it is gone.
+      if (
+        isMissing(error) &&
+        error instanceof Error &&
+        "stdout" in error &&
+        typeof error.stdout === "string"
+      ) {
+        return { stdout: error.stdout, stderr: "" };
+      }
+      throw error;
+    });
+    for (const line of inspected.stdout.split("\n")) {
+      const [id, status, exitCode] = line.trim().split("\t");
       if (id === undefined || id.length === 0) continue;
-      const exit = /Exited \((-?\d+)\)/.exec(status ?? "")?.[1];
       observed.set(id, {
-        running: state === "running",
-        exitCode: exit === undefined ? null : Number(exit),
+        running: status === "running",
+        exitCode: status === "exited" && exitCode !== undefined ? Number(exitCode) : null,
       });
     }
     return observed;
