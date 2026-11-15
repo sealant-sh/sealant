@@ -157,6 +157,11 @@ answer the guest gave through the hosted proxy. Defect signatures may match eith
 
 ## Safety on a shared machine
 
+Before a run, `pnpm verify boat-harness --preflight` says whether it can start here (Docker, cgroup
+v2, WireGuard, openssl, the host lock, leftovers of finished runs, other deployments' objects, the
+twin image cache) and which of the four groups the diff needs; `pnpm verify boat-harness status`
+says who holds the lock now. Neither starts anything; `preflight.ts` is the read-only view they use.
+
 One harness run at a time per Docker host. A run takes a host lock: a named container,
 `sealant-boat-harness-lock`, that runs a heartbeat and stops itself 120 s after its last renewal.
 The run's test process renews it every 10 s, and so does its reaper until the run is reaped. A

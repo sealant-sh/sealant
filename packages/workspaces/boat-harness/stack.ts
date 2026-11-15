@@ -266,6 +266,17 @@ const freeSubnet = async (): Promise<string> => {
   throw new Error("no free 192.0.x.0/24 subnet for the twin network");
 };
 
+/** The tag an image built from `context` is kept under: its name and a hash of the context's files. */
+export const cachedImageTag = async (name: string, context: string): Promise<string> => {
+  const digest = createHash("sha256");
+  for (const file of (await readdir(context)).toSorted())
+    digest.update(file).update(await readFile(join(context, file)));
+  return `${name}:${digest.digest("hex").slice(0, 16)}`;
+};
+
+/** The twin base image's build context and name, which `preflight.ts` also reads. */
+export const TWIN_IMAGE = { name: "sealant-boat-harness-twin", context: join(here, "twin") };
+
 /**
  * Builds an image once per content hash of its context and returns its tag, kept between runs.
  * Build arguments change only how an image is built (where it downloads from), never what it holds,
@@ -276,11 +287,8 @@ const cachedImage = async (
   context: string,
   options: { readonly dockerfile?: string; readonly args?: Readonly<Record<string, string>> } = {},
 ): Promise<string> => {
-  const digest = createHash("sha256");
-  for (const file of (await readdir(context)).toSorted())
-    digest.update(file).update(await readFile(join(context, file)));
   const args = Object.entries(options.args ?? {});
-  const tag = `${name}:${digest.digest("hex").slice(0, 16)}`;
+  const tag = await cachedImageTag(name, context);
   const id = await docker(["image", "inspect", "-f", "{{.Id}}", tag]);
   if (id.code === 0 && process.env.BOAT_HARNESS_REBUILD !== "1") return tag;
   const built = await docker(
@@ -502,7 +510,7 @@ export const startStack = async (options: StackOptions = {}): Promise<HarnessSta
         ? await reachableArchive(log)
         : STOCK_ARCHIVE;
     const [twinBase, gatewayBase] = await Promise.all([
-      cachedImage("sealant-boat-harness-twin", join(here, "twin"), {
+      cachedImage(TWIN_IMAGE.name, TWIN_IMAGE.context, {
         args: archive === STOCK_ARCHIVE ? {} : { UBUNTU_ARCHIVE: archive },
       }),
       cachedImage("sealant-boat-harness-gateway", join(repo, "packages/workspaces/boat-tunnel")),
