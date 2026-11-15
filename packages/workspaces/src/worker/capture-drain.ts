@@ -926,7 +926,7 @@ export const inMemoryCaptureDrainLedger = (
         };
         return true;
       }),
-    reconcileIssuedDeletion: (runId, runtime, fenceMs) =>
+    reconcileIssuedDeletion: (runId, runtime, fenceMs, reauthorizedVersion) =>
       Effect.sync((): IssuedDeletionSettlement => {
         const row = store.rows.get(runId);
         const deletion = row?.deletion;
@@ -951,6 +951,22 @@ export const inMemoryCaptureDrainLedger = (
           inMemoryClaimSequence += 1;
           const token = `deletion-${String(inMemoryClaimSequence)}`;
           row.deletion = { ...deletion, token, expiresAtMs: now() + DELETION_HOLD_MS };
+          return { kind: "reissue", ticket: { token } };
+        }
+        if (
+          reauthorizedVersion !== undefined &&
+          reauthorizedVersion === (row.entry.evidenceVersion ?? 0) &&
+          (row.fences?.size ?? 0) === 0
+        ) {
+          // The evidence changed, but what it says now authorizes the same removal: re-based on it.
+          inMemoryClaimSequence += 1;
+          const token = `deletion-${String(inMemoryClaimSequence)}`;
+          row.deletion = {
+            ...deletion,
+            token,
+            evidenceVersion: reauthorizedVersion,
+            expiresAtMs: now() + DELETION_HOLD_MS,
+          };
           return { kind: "reissue", ticket: { token } };
         }
         if (
