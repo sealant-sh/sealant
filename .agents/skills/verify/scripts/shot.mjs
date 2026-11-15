@@ -18,7 +18,9 @@
 // only in the local database.
 //
 // SEALANT_WEB_URL overrides the web app's address (default http://localhost:3000; Vite listens on
-// localhost, not 127.0.0.1). SHOT_DIR overrides where screenshots go (default /tmp/sealant-verify).
+// localhost, not 127.0.0.1). Screenshots go to .verify/shots/<commit>/ (the checkout's HEAD, first
+// 12 characters), where `pnpm verify evidence` gathers them; SHOT_DIR overrides that.
+import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +28,10 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 
 const base = process.env.SEALANT_WEB_URL ?? "http://localhost:3000";
-const outDir = process.env.SHOT_DIR ?? "/tmp/sealant-verify";
+const repo = fileURLToPath(new URL("../../../../", import.meta.url));
+const head = () =>
+  execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim().slice(0, 12);
+const outDir = process.env.SHOT_DIR ?? join(repo, ".verify", "shots", head());
 const account = {
   name: "Verify Agent",
   email: "verify@example.test",

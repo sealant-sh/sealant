@@ -10,6 +10,7 @@ import { parseArgs } from "node:util";
 import { runHarnessStatus, runPreflight } from "./boat-harness.mjs";
 import { runCheck } from "./check.mjs";
 import { runDb, SUITES } from "./db.mjs";
+import { runEvidence } from "./evidence.mjs";
 import { runFormal } from "./formal.mjs";
 import { ciJobsFor, loadObligations, owedFor, printable } from "./plan.mjs";
 import { changedFiles, readHead, REPO_ROOT } from "./repo.mjs";
@@ -27,7 +28,7 @@ const VERBS = {
   stack: "up | status | down: Postgres, the API and the web app; ready when the API answers",
   runtime: "--runtime boat --live: a live Boat launch (an external observer without credentials)",
   "boat-harness": "--preflight | status: can a harness run start here, which groups the diff needs",
-  evidence: "Not yet: screenshots and transcripts, secret-scanned, and the verdict file",
+  evidence: "This commit's results, logs and screenshots, secret-scanned, and its verdict file",
 };
 const IMPLEMENTED = new Set([
   "plan",
@@ -38,6 +39,7 @@ const IMPLEMENTED = new Set([
   "stack",
   "runtime",
   "boat-harness",
+  "evidence",
 ]);
 const STACK_VERBS = ["up", "status", "down"];
 
@@ -286,6 +288,32 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
         })
       : runHarnessStatus({ root });
     return makeResult({ verb, head, startedAt, steps, next, invocation });
+  }
+
+  if (verb === "evidence") {
+    const receipt =
+      head.mergeBase === null
+        ? `No plan: no merge base with ${head.base}.`
+        : toMarkdown({
+            head,
+            judged: judge({
+              owed: planFor(root, head, null).owed,
+              latest: readLatest(root),
+              head,
+              implemented: IMPLEMENTED,
+            }),
+          });
+    const { steps, evidence, next } = runEvidence({ root, head, receipt });
+    return makeResult({
+      verb,
+      head,
+      startedAt,
+      steps,
+      evidence,
+      next,
+      proves: ["evidence"],
+      invocation,
+    });
   }
 
   if (verb === "runtime") {

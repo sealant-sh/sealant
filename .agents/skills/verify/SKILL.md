@@ -1,91 +1,83 @@
 ---
 name: verify
 description:
-  Run sealant's stack locally, drive the web app signed in, and keep screenshots as evidence. Use to
-  prove a change to the web app, API or SDK works beyond its tests, and for every UI change before
-  its PR opens.
+  Prove a sealant change works beyond its tests with `pnpm verify`: what the diff owes, the checks,
+  gated suites and models, the running stack, screenshots and the verdict. Use before a PR opens,
+  and for every change to the web app, API or SDK.
 ---
 
 # Verify a sealant change
 
-Prove the change by using it. For anything a person sees, the evidence is screenshots; a UI change
-isn't verified until someone has looked at it.
+A passing suite is not proof: prove the change by using it. `pnpm verify` does the running; this
+skill says which verbs, in which order, and why. Each verb prints one result (`--json` on stdout),
+keeps it under `.verify/`, and exits 0 only on `passed`. A skip is never a pass.
 
-## 1. Say what you expect to see
+## 1. Say what you expect
 
-Before running anything, write down what the screen or response should show if the change works, and
-what it would show if it didn't. If the change alters an existing screen, say which.
+Before running anything, write what the screen or response shows if the change works, what it shows
+if it doesn't, and which existing screen it alters. The evidence is judged against this, not against
+whatever the run happened to show.
 
-## 2. Start the stack
+## 2. Plan, then check
 
 ```bash
-pnpm verify stack up                                # Postgres (:5433), migrated, API :4000, web :3000
-pnpm exec playwright install --only-shell chromium  # once per Playwright version
+pnpm verify plan
+pnpm verify check
 ```
 
-`up` says ready only once the API has answered `/v1/system/setup-state` from the database and the
-web app has served its page; its logs are under `.verify/logs/stack-*.log`. It creates `.env` from
-`.env.example` when there is none. Ports already in use make it `blocked_by_prerequisite`.
-`pnpm verify stack status` checks a stack it started.
+`plan` lists what the diff owes and the CI jobs it will run; the steps below are where each kind of
+obligation goes. `check` is AGENTS.md's pre-PR gate. Its `skipped` means a suite the diff owes did
+not run: run the `next` command it prints instead of reading past it.
 
-Skip `db:seed`: it only creates the SDK's default owner, and it needs `DATABASE_URL` set by hand.
-Start the worker and SSH gateway (`docker compose --profile apps up -d --build`) only when the
-change involves building or running a workspace.
+**Done when** `check` exits 0.
 
-**Done when** `pnpm verify stack up` exits 0.
+## 3. Discharge what the plan owes
 
-## 3. Drive it and take screenshots
+- A gated suite: `pnpm verify db <suite>`, which needs Docker.
+- A formal model: `pnpm verify formal`. On a drift failure, the area's skill (such as
+  `boat-custody`) says how to read the hunks against the model.
+- The Boat harness: `pnpm verify boat-harness --preflight` first. A run blocked by a held lock,
+  another run's leftovers or a missing WireGuard stops after you have waited for it. Then run the
+  `pnpm boat:harness <file>` lines it prints, which are the groups the diff needs.
+- A live Boat launch: `pnpm verify runtime --runtime boat --live`. Without the credentials it is
+  `requires_external_observer`; say that in the verdict, never that it works.
 
-`scripts/shot.mjs` signs in and screenshots pages. On an empty database it creates a local account
-through the `/setup` wizard; after that it signs in as that account. Screenshots go to
-`/tmp/sealant-verify/` (`SHOT_DIR` overrides).
+## 4. Run it and look at it
 
-For pages you can reach by URL:
+For a change to the web app, API or SDK:
 
 ```bash
+pnpm verify stack up
+pnpm exec playwright install --only-shell chromium     # once per Playwright version
 node .agents/skills/verify/scripts/shot.mjs /workspaces=workspaces /settings=settings
 ```
 
-For a flow, such as filling a form or opening a dialog, write a scratch script outside the repo that
-imports the helpers by absolute path:
+`shot.mjs` signs in (on an empty database it creates the local account through `/setup`) and saves
+full-page PNGs to `.verify/shots/<commit>/`. For a flow, such as a dialog or a form, import its
+`withSignedInPage`, `open` and `shoot` from a scratch script outside the repo, by absolute path.
 
-```js
-import {
-  withSignedInPage,
-  open,
-  shoot,
-} from "/abs/path/to/sealant/.agents/skills/verify/scripts/shot.mjs";
+Screenshot every state the change touches, its empty and error states included, then open each PNG:
+a blank or half-rendered frame is a failed run, not evidence. When the change alters an existing
+screen, take the same shots on `main` so the PR shows before and after. Start the worker and SSH
+gateway (`docker compose --profile apps up -d --build`) only when the change builds or runs a
+workspace.
 
-await withSignedInPage(async (page) => {
-  await open(page, "/workspaces");
-  await page.getByText("New workspace").first().click();
-  await shoot(page, "new-workspace");
-});
-```
+**Done when** you have looked at a screenshot of every state from step 1. Then
+`pnpm verify stack down`.
 
-Screenshot every state the change touches, including the empty and error states it adds. Then read
-each PNG and check it shows what step 1 expected: a blank or half-rendered frame is a failed run,
-not evidence.
-
-When the change alters an existing screen, take the same shots on `main` too, so the PR shows before
-and after.
-
-**Done when** you have a screenshot of every state in step 1 and have looked at each one.
-
-## 4. Stop the stack
-
-`pnpm verify stack down` stops the dev servers and the Postgres service that `up` started, and
-leaves a Postgres that was already running. The database volume stays, the verify account with it;
-`docker compose down -v` drops it.
-
-## 5. Report
-
-Post the verdict on the PR with the screenshots attached, one `--attach` per image:
+## 5. Evidence and verdict
 
 ```bash
-gh pr comment <number> --body-file <verdict.md> \
-  --attach /tmp/sealant-verify/workspaces.png --attach /tmp/sealant-verify/settings.png
+pnpm verify evidence
 ```
 
-The verdict names the commit, what you did, what each screenshot shows, and anything you couldn't
-check.
+On a clean tree it gathers this commit's results, logs and screenshots into
+`.verify/evidence/<commit>/`, scans them for secrets, and writes `verdict.md`. A file with a hit is
+deleted and the result is `evidence_withheld`: report it as withheld. The scan cannot read a
+screenshot's pixels, so look before you attach one. Fill in the verdict's "What I saw" and "Not
+checked" yourself, then post it with one `--attach` per screenshot:
+
+```bash
+gh pr comment <number> --body-file .verify/evidence/<commit>/verdict.md \
+  --attach .verify/evidence/<commit>/shots/workspaces.png
+```
