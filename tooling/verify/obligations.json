@@ -87,6 +87,7 @@
         {
           "kind": "external",
           "what": "a live Boat launch, stop and resume on the provider (packages/workspaces/scripts/boat-live-check.ts)",
+          "command": "pnpm verify runtime --runtime boat --live",
           "proof": "runtime:boat-live"
         }
       ]
@@ -129,7 +130,7 @@
       "paths": ["apps/web/src/**", "packages/ui/src/**"],
       "why": "AGENTS.md: every UI change is screenshotted for its PR, and a screen is verified only once someone has looked at it",
       "owes": [
-        { "kind": "stack", "command": "the verify skill: start the stack", "proof": "stack" },
+        { "kind": "stack", "command": "pnpm verify stack up", "proof": "stack" },
         {
           "kind": "screenshots",
           "command": "the verify skill: drive it and take screenshots",
@@ -141,9 +142,7 @@
       "id": "api-sdk",
       "paths": ["apps/api/src/**", "packages/sdk/src/**", "packages/api-contracts/src/**"],
       "why": "The verify skill: a change to the API or SDK is proved by using it, beyond its tests",
-      "owes": [
-        { "kind": "stack", "command": "the verify skill: start the stack", "proof": "stack" }
-      ]
+      "owes": [{ "kind": "stack", "command": "pnpm verify stack up", "proof": "stack" }]
     }
   ]
 }

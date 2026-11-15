@@ -13,6 +13,8 @@ import { runFormal } from "./formal.mjs";
 import { ciJobsFor, loadObligations, owedFor, printable } from "./plan.mjs";
 import { changedFiles, readHead, REPO_ROOT } from "./repo.mjs";
 import { EXIT_CODES, makeResult, writeResult } from "./result.mjs";
+import { runBoatLive } from "./runtime.mjs";
+import { stackDown, stackStatus, stackUp } from "./stack.mjs";
 import { judge, readLatest, toMarkdown } from "./status.mjs";
 
 const VERBS = {
@@ -21,12 +23,13 @@ const VERBS = {
   status: "For each obligation, whether a passing result exists for this exact commit (--markdown)",
   db: "A throwaway Postgres, the Boat bundle and every gate set; runs gated suites, no skips",
   formal: "The formal models whose covered paths the diff touches (quick bounds), and their drift",
-  stack: "Not yet: the local stack, up, status and down",
-  runtime: "Not yet: a live Boat launch (requires an external observer without credentials)",
+  stack: "up | status | down: Postgres, the API and the web app; ready when the API answers",
+  runtime: "--runtime boat --live: a live Boat launch (an external observer without credentials)",
   "boat-harness": "Not yet: the Boat harness preflight and lock status",
   evidence: "Not yet: screenshots and transcripts, secret-scanned, and the verdict file",
 };
-const IMPLEMENTED = new Set(["plan", "check", "status", "db", "formal"]);
+const IMPLEMENTED = new Set(["plan", "check", "status", "db", "formal", "stack", "runtime"]);
+const STACK_VERBS = ["up", "status", "down"];
 
 class UsageError extends Error {}
 
@@ -41,7 +44,8 @@ function usage() {
     "plan: --files <path>... ; check: --all ; status: --markdown ;",
     `db: [suite...] of ${Object.keys(SUITES).join(", ")} (all when none) ;`,
     "formal: --all (every model), --full (every bound, not the quick ones) ;",
-    "check, db, formal: --workers <n> (at most n test workers, turbo tasks or checker threads)",
+    "check, db, formal: --workers <n> (at most n test workers, turbo tasks or checker threads) ;",
+    "stack: up | status | down ; runtime: --runtime boat --live",
   ].join("\n");
 }
 
@@ -58,6 +62,8 @@ function parse(argv) {
         markdown: { type: "boolean", default: false },
         workers: { type: "string" },
         full: { type: "boolean", default: false },
+        runtime: { type: "string" },
+        live: { type: "boolean", default: false },
       },
     });
   } catch (error) {
@@ -93,6 +99,16 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
     const unknown = rest.find((suite) => !(suite in SUITES));
     if (unknown !== undefined) {
       throw new UsageError(`unknown suite "${unknown}"; db runs ${Object.keys(SUITES).join(", ")}`);
+    }
+  } else if (verb === "stack") {
+    if (rest.length !== 1 || !STACK_VERBS.includes(rest[0])) {
+      throw new UsageError(`stack takes one of ${STACK_VERBS.join(", ")}`);
+    }
+  } else if (verb === "runtime") {
+    if (values.runtime !== "boat" || !values.live || rest.length > 0) {
+      throw new UsageError(
+        "runtime takes --runtime boat --live (the only runtime with a live check so far)",
+      );
     }
   } else if (!values.files && rest.length > 0 && IMPLEMENTED.has(verb)) {
     throw new UsageError(`unexpected argument "${rest[0]}"`);
@@ -216,6 +232,48 @@ export async function run(argv, { root = REPO_ROOT, echo = true } = {}) {
       ),
       next,
       proves,
+      invocation,
+    });
+  }
+
+  if (verb === "stack") {
+    const [subverb] = rest;
+    const outcome =
+      subverb === "up"
+        ? await stackUp({ root, head, echo })
+        : subverb === "status"
+          ? await stackStatus({ root })
+          : await stackDown({ root, echo });
+    return makeResult({
+      verb,
+      head,
+      startedAt,
+      steps: outcome.steps,
+      evidence: outcome.steps.flatMap((step) =>
+        step.log === undefined ? [] : [{ kind: "log", path: step.log }],
+      ),
+      // `up` leaves the stack running on purpose; `cleanup` says what is still there.
+      cleanup: { status: outcome.left.length === 0 ? "clean" : "left", left: outcome.left },
+      next: outcome.next ?? [],
+      ...(subverb === "down" ? {} : { proves: ["stack"] }),
+      invocation,
+    });
+  }
+
+  if (verb === "runtime") {
+    const stamp = startedAt
+      .toISOString()
+      .replaceAll(":", "")
+      .replace(/\.\d+Z$/, "Z");
+    const { steps, evidence, next } = await runBoatLive({ root, stamp, echo });
+    return makeResult({
+      verb,
+      head,
+      startedAt,
+      steps,
+      evidence,
+      next,
+      proves: ["runtime:boat-live"],
       invocation,
     });
   }
