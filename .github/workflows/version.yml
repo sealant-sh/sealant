@@ -21,6 +21,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      pull-request: ${{ steps.changesets.outputs.pullRequestNumber }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -38,6 +40,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Create or update the Version Packages PR
+        id: changesets
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
           version: pnpm changeset version
@@ -45,3 +48,68 @@ jobs:
           title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # GitHub holds the Version Packages PR's pull_request runs at `action_required` because
+  # github-actions[bot] pushed its branch, so `checks` and `e2e checks` never report on it.
+  # Runs dispatched on the branch do not count either: the PR shows only its held runs. Approving
+  # the held runs starts them as ordinary pull_request runs, which the PR counts. Only the runs this
+  # workflow's own push created are approved: CI and Kubernetes e2e, on the PR's head commit,
+  # triggered by github-actions[bot]. A job of its own, so the token that can push cannot approve.
+  approve-checks:
+    name: Start the Version Packages PR's checks
+    needs: version
+    if: needs.version.outputs.pull-request != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Approve its held CI and Kubernetes e2e runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ needs.version.outputs.pull-request }}
+          # GitHub creates the runs a few seconds after the push; give up after five minutes.
+          TRIES: "30"
+          POLL_SECONDS: "10"
+        run: |
+          set -euo pipefail
+          branch=changeset-release/main
+          head=$(gh pr view "$PR" --json headRefName,headRefOid \
+            --jq "select(.headRefName == \"$branch\") | .headRefOid")
+          if [ -z "$head" ]; then
+            echo "::error::#$PR is not the Version Packages PR (head branch is not $branch)"
+            exit 1
+          fi
+          pending="ci.yml kubernetes-e2e.yml"
+          for try in $(seq "$TRIES"); do
+            runs=$(gh api "repos/$GH_REPO/actions/runs?head_sha=$head&event=pull_request&per_page=50" \
+              --jq ".workflow_runs[] | select(.head_branch == \"$branch\")
+                | [.path, .id, .conclusion // \"none\", .actor.login] | @tsv")
+            left=""
+            for workflow in $pending; do
+              # Newest first: the run this push created.
+              run=$(printf '%s\n' "$runs" | awk -F '\t' -v path=".github/workflows/$workflow" \
+                '$1 == path { print; exit }')
+              if [ -z "$run" ]; then
+                left="$left $workflow"
+                continue
+              fi
+              IFS=$'\t' read -r _ id conclusion actor <<<"$run"
+              if [ "$conclusion" != action_required ]; then
+                echo "$workflow run $id on $head is already started"
+              elif [ "$actor" != "github-actions[bot]" ]; then
+                echo "::error::$workflow run $id on $head waits for approval but $actor triggered it"
+                exit 1
+              else
+                gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null
+                echo "Approved $workflow run $id on $head"
+              fi
+            done
+            pending=$left
+            [ -z "$pending" ] && exit 0
+            [ "$try" -lt "$TRIES" ] && sleep "$POLL_SECONDS"
+          done
+          echo "::error::No pull_request run of$pending appeared on $head"
+          exit 1
