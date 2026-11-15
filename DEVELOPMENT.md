@@ -103,20 +103,16 @@ roll-ups exist because a required check that is skipped or renamed stays pending
 protection names them and never a job. A new job goes in its workflow's roll-up `needs`:
 `tooling/scripts/workflow-checks.test.mjs`, which Lint runs, fails until it does.
 
-The Version Packages pull request runs no jobs of its own. The Version workflow opens it as
-`github-actions[bot]`, so GitHub holds its `pull_request` runs for approval (`action_required`) and
-no job starts. Before merging it, the owner dispatches both workflows on its branch and waits for
-`checks` and `e2e checks` to pass on its head commit:
+The Version Packages pull request gets the same two checks without a hand step. The Version workflow
+pushes its branch as `github-actions[bot]`, and GitHub holds the `pull_request` runs that push
+creates at `action_required`, with no jobs. Version's `approve-checks` job, which holds only
+`actions: write`, then approves the held CI and Kubernetes e2e runs on the branch's new head, so
+they run as ordinary pull request runs and report `checks` and `e2e checks` on the commit the pull
+request merges. Every merge to `main` rebuilds the branch and the job approves the new runs. If the
+job fails, approve the held runs on the pull request's Checks tab ("Approve and run workflows").
 
-```bash
-gh workflow run ci.yml --ref changeset-release/main
-gh workflow run kubernetes-e2e.yml --ref changeset-release/main
-```
-
-A dispatched run reports its checks on the head commit of the branch it ran on, the commit the pull
-request merges. On #404 (2026-11-13) every check passed there and the pull request still showed none
-of them and stayed blocked, so whether protection counts dispatched runs is open (SLNT-950). Every
-merge to `main` rewrites the branch; after it moves, dispatch again.
+Dispatching the workflows on `changeset-release/main` does not do it: on #404 (2026-11-13) every
+dispatched check passed on the pull request's head and the pull request still showed none of them.
 
 ## Releasing (packaged self-host)
 
