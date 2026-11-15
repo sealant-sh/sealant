@@ -176,10 +176,24 @@ describe.skipIf(!directory)(
       async (mode) => {
         const f = await fixture(mode);
         const result = await f.builder.build({ spec: f.spec });
+        const operation = mode === "status-http-failed" ? "commandStatus" : "execute";
         const providerFailure = {
-          operation: mode === "status-http-failed" ? "commandStatus" : "execute",
+          operation,
           status: mode === "transport-failed" ? null : 503,
           causeClass: mode === "transport-failed" ? "UND_ERR_SOCKET" : null,
+          // Boat's answer as sealant keeps it: no answer at all, or a 503 kept as `no-answer`
+          // with Boat's code and its message, the bearer value it carried redacted.
+          boat:
+            mode === "transport-failed"
+              ? { kind: "no-answer", retryable: true, operation }
+              : {
+                  kind: "no-answer",
+                  retryable: true,
+                  operation,
+                  code: "provider_error",
+                  message: "[REDACTED_AUTH]",
+                  status: 503,
+                },
           step: "install-recipe",
         };
         expect(result).toMatchObject({ ok: false, error: { providerFailure } });

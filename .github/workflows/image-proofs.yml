@@ -1,0 +1,115 @@
+name: Image proofs
+
+# Workspace images built from blueprints and used the way a person uses them. Each job builds real
+# images (minutes each, with network access to package mirrors, npm, crates.io, GitHub releases and
+# Playwright's CDN), so they run nightly (a mirror or an upstream release can break a build with no
+# change here) and on demand: run it from the Actions tab on a branch that changes what goes into an
+# image. The Arch image job in CI covers every catalog package on Arch on every pull request; these
+# cover the rest.
+on:
+  # TEMPORARY: proves the jobs on this pull request; removed before merge.
+  pull_request:
+    paths:
+      - .github/workflows/image-proofs.yml
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Selected packages build through pacman on Arch and through apt on Ubuntu, sit beside sealantd,
+  # and an image with the Docker service carries a working Compose plugin.
+  packages:
+    name: Selected packages (Arch and Ubuntu)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build images with selected packages and run them
+        run: pnpm --filter @sealant/workspaces test:e2e src/buildkit/packages.e2e.ts
+
+  # A blueprint's dotfiles archives staged by the worker's own stager, bind-mounted by the Docker
+  # adapter and read through the daemon: the dot entries land in /root, nothing from plain
+  # directories is stowed, root logs in with zsh, and processes sealantd starts see HOME=/root.
+  dotfiles:
+    name: Blueprint dotfiles in a Docker workspace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Rootless workspace Docker needs unprivileged user namespaces. Ubuntu 24.04's AppArmor
+      # default refuses the uid_map write, so allow and verify them before the proof runs.
+      - name: Allow unprivileged user namespaces, as a Docker host must
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare -Urn true
+
+      - name: Build an Arch workspace image and apply its dotfiles at launch
+        env:
+          SEALANT_DOTFILES_E2E: "1"
+        run: pnpm --filter @sealant/workspaces test:e2e src/runtime/dotfiles.e2e.ts
+
+  # Mend's per-person layout (ADR 0016) in each managed image family: two people share every
+  # toolchain and neither reads the other's credentials; root alone still works as today.
+  person-layout:
+    name: Person layout (${{ matrix.family }})
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [arch, ubuntu, fedora, nix]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the ${{ matrix.family }} image and run two people in it
+        env:
+          SEALANT_PERSON_LAYOUT_E2E_FAMILIES: ${{ matrix.family }}
+        run: pnpm --filter @sealant/workspaces test:e2e src/buildkit/person-layout.e2e.ts
