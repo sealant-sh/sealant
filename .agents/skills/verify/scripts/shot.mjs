@@ -2,7 +2,7 @@
 //
 // As a command, from the repo root:
 //   node .agents/skills/verify/scripts/shot.mjs <path>[=<name>] ...
-//   node .agents/skills/verify/scripts/shot.mjs /settings=settings-after /=home
+//   node .agents/skills/verify/scripts/shot.mjs /settings/ssh-keys=ssh-keys-after /=home
 //
 // As a library, from a scratch script anywhere (import it by absolute path; it resolves
 // Playwright from this repo, so the scratch script needs no node_modules of its own):

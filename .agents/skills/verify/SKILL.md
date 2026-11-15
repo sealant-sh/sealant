@@ -49,7 +49,7 @@ For a change to the web app, API or SDK:
 ```bash
 pnpm verify stack up
 pnpm exec playwright install --only-shell chromium     # once per Playwright version
-node .agents/skills/verify/scripts/shot.mjs /workspaces=workspaces /settings=settings
+node .agents/skills/verify/scripts/shot.mjs /workspaces=workspaces /settings/ssh-keys=ssh-keys
 ```
 
 `shot.mjs` signs in (on an empty database it creates the local account through `/setup`) and saves
