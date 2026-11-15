@@ -45,6 +45,12 @@ dump_cluster() {
       done
   echo "--- recent events"
   kubectl get events --all-namespaces --sort-by=.lastTimestamp 2>&1 | tail -80 || true
+  # The API cannot say why a node's runtime is down; containerd's own journal can.
+  for node in $(kind get nodes --name "$cluster" 2>/dev/null); do
+    echo "--- containerd on $node"
+    docker exec "$node" systemctl status containerd --no-pager 2>&1 | head -15 || true
+    docker exec "$node" journalctl -u containerd --no-pager -n 60 2>&1 || true
+  done
 }
 
 on_exit() {
@@ -91,6 +97,21 @@ for node in $(kind get nodes --name "$cluster"); do
 done
 kubectl wait --for=condition=Ready node --all --timeout=180s \
   || echo "warning: not every node is Ready after the user-namespace fixes" >&2
+# A node keeps reporting Ready for a while after its containerd stops, so the wait above can pass
+# over one that never restarted; that node fails the run minutes later at an unrelated step. Ask
+# each node's containerd itself, and stop here, with its journal, if one is not running.
+step "checking containerd runs again on every node after the user-namespace fixes"
+for node in $(kind get nodes --name "$cluster"); do
+  waited=0
+  until [ "$(docker exec "$node" systemctl is-active containerd 2>/dev/null)" = active ]; do
+    if [ "$waited" -ge 180 ]; then
+      echo "containerd on $node did not start again after the user-namespace fixes" >&2
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+done
 
 step "rolling out cert-manager (images from quay.io)"
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.2/cert-manager.yaml
