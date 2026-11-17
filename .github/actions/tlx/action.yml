@@ -1,0 +1,34 @@
+name: tlx
+description: >-
+  tlx, the TLA+ model checker every docs/formal model runs with, built at the commit
+  docs/formal/tlx.sh pins and cached under that commit. Sets TLX to the binary for later steps.
+
+runs:
+  using: composite
+  steps:
+    - name: Read the pinned tlx commit
+      id: pin
+      shell: bash
+      run: echo "commit=$(bash docs/formal/tlx.sh --commit)" >> "$GITHUB_OUTPUT"
+
+    # One build per pinned commit: a pull request reads what main's runs saved. A miss builds it in
+    # the next step (rustup reads tlx's rust-toolchain.toml) and saves it.
+    - name: Restore tlx
+      id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/sealant/tlx
+        key: tlx-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.commit }}
+
+    - name: Build tlx
+      shell: bash
+      run: |
+        tlx=$(bash docs/formal/tlx.sh)
+        echo "TLX=$tlx" >> "$GITHUB_ENV"
+
+    - name: Cache tlx
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/sealant/tlx
+        key: tlx-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.commit }}

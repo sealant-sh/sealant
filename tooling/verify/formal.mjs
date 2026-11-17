@@ -5,7 +5,8 @@
 // Each model is an area under docs/formal/<area>/ with a `check.sh` (no argument: the quick bounds;
 // `--deep`: every bound; exit 0 every case gave its expected verdict, 1 one did not, 2 no checker,
 // with at most $FORMAL_WORKERS checker threads when set) and a COVERAGE file (`sync <commit>`, then
-// one `path <repo path>` per covered file).
+// one `path <repo path>` per covered file). Every check.sh runs tlx at the commit docs/formal/tlx.sh
+// pins.
 //
 // It needs nothing installed, so CI's scope job runs `node tooling/verify/formal.mjs scope <base>`
 // before `pnpm install`.
@@ -53,9 +54,13 @@ export function formalAreas(root) {
     .toSorted((a, b) => a.area.localeCompare(b.area));
 }
 
-/** The paths that make a diff owe this model: its covered code and the model itself. */
+// What every model runs on: the tlx pin, the checker lookup each check.sh sources, and CI's tlx
+// build. A diff to one of them owes every model.
+const CHECKER_PATHS = [`${FORMAL}/tlx.sh`, `${FORMAL}/checker.sh`, ".github/actions/tlx/**"];
+
+/** The paths that make a diff owe this model: its covered code, the model and its checker. */
 export function obligationPaths(area) {
-  return [...area.coverage.paths, `${area.directory}/**`];
+  return [...area.coverage.paths, `${area.directory}/**`, ...CHECKER_PATHS];
 }
 
 /** The areas whose covered code or model files `files` touch. */

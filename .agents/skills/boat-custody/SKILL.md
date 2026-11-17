@@ -72,9 +72,9 @@ same way:
 Every action must say what happens to every variable: list the ones it leaves alone in `UNCHANGED`.
 `BoatRunLedger.tla` compares states by `View`, which leaves out an actor's `seenPhase` and `got`
 except at the steps in `PhaseRead` and `GotRead`: a new step that reads either belongs in that set,
-or TLC can skip behaviours. (One worker and many give the same state count when the view is right.)
-If the change fixes an open finding, switch its fix on in the model, set the finding's case to
-`expect: pass`, and keep a case that fails without the fix.
+or the checker can skip behaviours. (One worker and many give the same state count when the view is
+right.) If the change fixes an open finding, switch its fix on in the model, set the finding's case
+to `expect: pass`, and keep a case that fails without the fix.
 
 ## 3. Run the check
 
@@ -82,26 +82,20 @@ If the change fixes an open finding, switch its fix on in the model, set the fin
 docs/formal/boat-custody/check.sh
 ```
 
-About three minutes on 32 cores (15 cases). `pnpm verify formal` runs the same fast cases when the
+About a minute on four workers (15 cases). `pnpm verify formal` runs the same fast cases when the
 diff touches a covered file, CI's `formal` job runs them on such a pull request, and
-`formal-nightly.yml` runs `--deep` every night. `FORMAL_WORKERS` caps TLC's threads on a shared
-machine. Done when the last line is `Every case gave its expected verdict.` and the exit status
-is 0. `--deep` adds five longer cases (about 40 minutes on 32 cores): run it before merging a change
-from step 2. `--trace` also prints the counterexample of the cases that are meant to fail. Name
-cases to run only those (`check.sh ledger proof`).
+`formal-nightly.yml` runs `--deep` every night. `FORMAL_WORKERS` caps the checker's threads; set it
+on a shared machine. Done when the last line is `Every case gave its expected verdict.` and the exit
+status is 0. `--deep` adds five longer cases (about 16 minutes on four workers): run it before
+merging a change from step 2. `--trace` also prints the counterexample of the cases that are meant
+to fail. Name cases to run only those (`check.sh ledger proof`).
 
-The checker is TLC 2.19 (TLA+ tools 1.7.4) from the nixpkgs this repository's `flake.lock` pins; the
-script builds it with `nix` the first time. Without Nix, set `TLA2TOOLS_JAR` to `tla2tools.jar`
-v1.7.4 (github.com/tlaplus/tlaplus/releases) and have Java 11 or later, or put a `tlc` on `PATH`.
-Node prints the counterexamples (`trace.mjs`).
-
-TLC is the reference: the run that goes with a change to a model, or to the code it models, is a TLC
-run. While iterating, `--engine tlx` (it composes with `--deep`, `--trace` and case names) runs the
-same cases with tlx, a Rust checker about ten times faster here: under 20 s for the fast cases,
-about 4 to 5 minutes with `--deep`. tlx is version 0.1, from github.com/tlaplus-x/tlx, measured at
-commit `8d5f082b0f`; it is not in the Nix flake or CI. The record's "TLC and tlx" says how to build
-it and has the measured table. `check.sh` takes it from `BOAT_CUSTODY_TLX`, else `tlx` on `PATH`,
-and exits 2 when there is none.
+The checker is tlx, a Rust TLA+ checker, at the commit `docs/formal/tlx.sh` pins. `check.sh` builds
+it the first time (a few minutes; cargo, or Nix's Rust from this repository's `flake.lock`, and a C
+compiler) and keeps it in `~/.cache/sealant/tlx/`. It runs with `-tlc`, so its verdicts and counts
+are TLC's; the record's "The checker" has the comparison and the one case where the counts differ.
+`--engine tlc` runs the same cases on TLC 2.19 for a cross-check by hand (Nix, `tlc` on `PATH`, or
+`TLA2TOOLS_JAR` with Java 11 or later). Node prints the counterexamples (`trace.mjs`).
 
 Each file in `cases/` states its module, the verdict it must give (`expect: pass`, an invariant's
 name, or `temporal`) and its group; a case that must pass also pins its distinct-state count
@@ -137,10 +131,9 @@ schedule: find out why before you flip its expectation.
 ## 5. Record it
 
 Once the models describe the code at your commit and `check.sh` (and `--deep`) give their expected
-verdicts on TLC, update each `states` pin your change moved to the count TLC reached (never tlx's),
-the coverage record below and the record's findings. Then move `sync` in `COVERAGE`, and the
-record's "Confirmed against" line, to that commit. Move it only after reading every covered hunk
-since the old one.
+verdicts, update each `states` pin your change moved to the count the checker reached, the coverage
+record below and the record's findings. Then move `sync` in `COVERAGE`, and the record's "Confirmed
+against" line, to that commit. Move it only after reading every covered hunk since the old one.
 
 ## Coverage record
 

@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { driftGuard, formalAreas, parseCoverage, touchedAreas } from "./formal.mjs";
+import {
+  driftGuard,
+  formalAreas,
+  obligationPaths,
+  parseCoverage,
+  touchedAreas,
+} from "./formal.mjs";
 import { loadObligations } from "./plan.mjs";
 import { REPO_ROOT } from "./repo.mjs";
 
@@ -85,6 +91,18 @@ test("every model's covered files exist, and the map owes each model exactly for
     assert.equal(readers.length, 1, `${area.area} has one obligation reading its COVERAGE`);
     const owed = obligations.find((entry) => entry.id === readers[0].id);
     for (const file of area.coverage.paths) assert.ok(touchedAreas([area], [file]).length === 1);
-    assert.deepEqual(owed.paths, [...area.coverage.paths, `${area.directory}/**`]);
+    assert.deepEqual(owed.paths, obligationPaths(area));
   }
+});
+
+test("a change to the checker every model runs on owes every model", () => {
+  const areas = formalAreas(REPO_ROOT);
+  for (const file of [
+    "docs/formal/tlx.sh",
+    "docs/formal/checker.sh",
+    ".github/actions/tlx/action.yml",
+  ]) {
+    assert.deepEqual(touchedAreas(areas, [file]), areas, file);
+  }
+  assert.deepEqual(touchedAreas(areas, ["docs/formal/README.md"]), []);
 });

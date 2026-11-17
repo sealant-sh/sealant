@@ -6,8 +6,8 @@ The `capture-removal` skill (`.agents/skills/capture-removal/SKILL.md`) says how
 result and keep it in step with the code. This file is the record: what is verified, under which
 bounds and assumptions, and what the check found.
 
-Confirmed against the code at `8c2cbd88` (main, 2026-11-15). Run with TLC 2.19 (TLA+ tools 1.7.4,
-from the nixpkgs this repository's `flake.lock` pins).
+Confirmed against the code at `8c2cbd88` (main, 2026-11-15). Run with tlx at the commit
+`docs/formal/tlx.sh` pins ("The checker" below).
 
 ## The promise
 
@@ -74,20 +74,20 @@ no ledger ticket).
 
 ## Bounds
 
-| Case                   | Group | Deleters | Observers | Recovery | Tokens | Attestations | Crashes | Distinct states | TLC, 4 workers |
+| Case                   | Group | Deleters | Observers | Recovery | Tokens | Attestations | Crashes | Distinct states | tlx, 4 workers |
 | ---------------------- | ----- | -------- | --------- | -------- | ------ | ------------ | ------- | --------------- | -------------- |
-| `ledger`               | fast  | 2        | 2         | no       | 3      | 1            | 1       | 1,218,892       | 8 s            |
-| `ledger-recovery`      | fast  | 1        | 2         | yes      | 3      | 1            | 1       | 6,603,314       | 36 s           |
-| `ledger-deep`          | deep  | 2        | 2         | no       | 4      | 2            | 2       | 4,487,744       | 25 s           |
-| `ledger-recovery-deep` | deep  | 1        | 2         | yes      | 4      | 2            | 2       | 23,459,590      | 132 s          |
-| `label-fixes`          | fast  | 2        | 2         | no       | 2      | 0            | 1       | 2,776,762       | 16 s           |
-| `label-fixes-deep`     | deep  | 2        | 2         | no       | 3      | 1            | 1       | 19,115,752      | 104 s          |
+| `ledger`               | fast  | 2        | 2         | no       | 3      | 1            | 1       | 1,218,892       | 2 s            |
+| `ledger-recovery`      | fast  | 1        | 2         | yes      | 3      | 1            | 1       | 6,603,314       | 5 s            |
+| `ledger-deep`          | deep  | 2        | 2         | no       | 4      | 2            | 2       | 4,487,744       | 3 s            |
+| `ledger-recovery-deep` | deep  | 1        | 2         | yes      | 4      | 2            | 2       | 23,459,590      | 21 s           |
+| `label-fixes`          | fast  | 2        | 2         | no       | 2      | 0            | 1       | 2,776,762       | 2 s            |
+| `label-fixes-deep`     | deep  | 2        | 2         | no       | 3      | 1            | 1       | 19,115,752      | 15 s           |
 
 A third deleter, or a second deleter beside the recovery attempt, takes the state space past 170
-million distinct states within 15 minutes on four workers with the queue still growing: hours on the
-nightly's four-core runner. Those bounds are left out; a second settler is still present in `ledger`
-and `ledger-deep` (the deleter that did not issue), and in the recovery cases (the recovery attempt
-settles what the deleter issued).
+million distinct states within 15 minutes on four TLC workers with the queue still growing. Those
+bounds are left out; a second settler is still present in `ledger` and `ledger-deep` (the deleter
+that did not issue), and in the recovery cases (the recovery attempt settles what the deleter
+issued).
 
 The `label-*` cases turn the drain label on, with `d1` the stop job and `o1` a drain (the other
 observer an API route).
@@ -95,6 +95,15 @@ observer an API route).
 Tokens count every removal minted (authorizations and reissues together); a deleter that would mint
 one past the bound stops. Each observer observes once. Holds, fences, claims and the runtime's bound
 lapse at any moment: the model has no clock, only whether each has passed.
+
+## The checker
+
+tlx, a TLA+ checker written in Rust, at the commit `docs/formal/tlx.sh` pins, run with `-tlc` (TLC's
+verdicts, counts and depth); `check.sh --engine tlc` runs TLC 2.19 for a cross-check by hand. On
+2026-11-17 (SLNT-1081), at main `da895e73`, every case gave the same verdict under both and every
+case that must pass reached the same count; the cases that must fail reached the same count too, run
+with one worker under both. The whole `--deep` run took 50 s with four tlx workers, against about 11
+minutes for TLC on the nightly's four-core runner.
 
 ## Assumptions
 

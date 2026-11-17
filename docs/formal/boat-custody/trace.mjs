@@ -1,6 +1,6 @@
-// Shortens a TLC counterexample to one line per step: the action, then only the variables it
-// changed. Reads TLC's output on standard input, or tlx's, whose trace has the same form.
-//   tlc ... | node docs/formal/boat-custody/trace.mjs
+// Shortens a counterexample to one line per step: the action, then only the variables it
+// changed. Reads tlx's output on standard input, or TLC's, whose trace has the same form.
+//   tlx check -tlc ... | node docs/formal/boat-custody/trace.mjs
 import { createInterface } from "node:readline";
 
 const lines = [];

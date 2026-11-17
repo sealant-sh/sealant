@@ -68,10 +68,13 @@ docs/formal/capture-removal/check.sh --deep   # every bound, as nightly runs it
 ```
 
 Done when the last line is `Every case gave its expected verdict.` and the exit status is 0. The
-fast cases take under a minute on four cores; `FORMAL_WORKERS` caps TLC's threads (set it on a
-shared machine). `--trace` also prints the counterexample of the cases meant to fail; name cases to
-run only those (`check.sh ledger`). The checker is TLC 2.19 from the nixpkgs this repository's
-`flake.lock` pins; without Nix, set `TLA2TOOLS_JAR` (tools v1.7.4) with Java 11 or later.
+fast cases take about 15 seconds on four workers, every bound under a minute; `FORMAL_WORKERS` caps
+the checker's threads (set it on a shared machine). `--trace` also prints the counterexample of the
+cases meant to fail; name cases to run only those (`check.sh ledger`). The checker is tlx, a Rust
+TLA+ checker, at the commit `docs/formal/tlx.sh` pins; `check.sh` builds it the first time (a few
+minutes; cargo, or Nix's Rust from this repository's `flake.lock`, and a C compiler). It runs with
+`-tlc`, so its verdicts and counts are TLC's. `--engine tlc` runs the same cases on TLC 2.19 for a
+cross-check by hand (Nix, or `TLA2TOOLS_JAR` with Java 11 or later).
 
 A case states its module, the verdict it must give and its group; a case that must pass pins its
 distinct-state count (`states`) and ends `ok` only when both match. `ledger*` cases are main's
