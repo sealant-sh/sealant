@@ -1,30 +1,26 @@
 #!/usr/bin/env bash
-# Model-checks Boat custody with TLC or tlx: the run ledger (BoatRunLedger.tla) and the full
-# check's ledger (BoatKeyProof.tla). Each case in cases/ names its module, the verdict it must give,
-# its group and, if it must pass, the distinct states it must reach.
+# Model-checks Boat custody with tlx: the run ledger (BoatRunLedger.tla) and the full check's ledger
+# (BoatKeyProof.tla). Each case in cases/ names its module, the verdict it must give, its group and,
+# if it must pass, the distinct states it must reach.
 #
-#   docs/formal/boat-custody/check.sh                the fast cases (about three minutes on 32 cores)
-#   docs/formal/boat-custody/check.sh --deep         the fast and the deep cases (about 40 minutes)
+#   docs/formal/boat-custody/check.sh                the fast cases (the quick bounds)
+#   docs/formal/boat-custody/check.sh --quick        the same
+#   docs/formal/boat-custody/check.sh --deep         the fast and the deep cases (every bound)
 #   docs/formal/boat-custody/check.sh ledger         the named cases only
 #   ... --trace                                      also print the counterexample of expected failures
-#   ... --engine tlx                                 any of these with tlx instead of TLC
+#   ... --engine tlc                                 any of these with TLC, for a cross-check by hand
 #
 # `pnpm verify formal` runs the fast cases when a diff touches a path in COVERAGE, and CI runs them on
-# such a pull request; `--deep` runs nightly. FORMAL_WORKERS caps the checker's threads (default: one
-# per core).
+# such a pull request; `--deep` runs nightly (`pnpm verify formal --all --full`). FORMAL_WORKERS caps
+# the checker's threads (default: one per core); on a shared machine set it.
 #
 # Exit status 0: every case gave its expected verdict, and every case that must pass reached the
 # distinct-state count its `states` header pins. 1: one did not; a wrong verdict prints its
 # counterexample. 2: no checker, or a wrong argument.
 #
-# TLC is the reference: the run that goes with a change to a model, or to the code it models, uses
-# TLC. It is $TLC if set (a command), else `tlc` on PATH, else the TLA+ tools pinned by this
-# repository's flake.lock (`nix shell --inputs-from . nixpkgs#tlaplus`, TLC 2.19 / tools 1.7.4),
-# else `java` with $TLA2TOOLS_JAR.
-#
-# tlx (github.com/tlaplus-x/tlx, version 0.1) is for iterating: `--engine tlx`, `--engine=tlx` or
-# BOAT_CUSTODY_ENGINE=tlx. It is the binary in $BOAT_CUSTODY_TLX if set, else `tlx` on PATH. It
-# runs with -tlc, so its verdicts, counts and traces are TLC's; trace.mjs reads either checker's.
+# The checker is tlx, built at the commit docs/formal/tlx.sh pins (on first use: about 3 minutes),
+# or $TLX. `--engine tlc`, `--engine=tlc` or FORMAL_ENGINE=tlc runs TLC instead; docs/formal/checker.sh
+# says where each is found.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -32,16 +28,17 @@ root=$(cd "$here/../../.." && pwd)
 deep=0
 trace=0
 named=()
-engine=${BOAT_CUSTODY_ENGINE:-tlc}
+engine=${FORMAL_ENGINE:-tlx}
 # The help is the comment block at the top of this file.
 usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --deep) deep=1 ;;
+    --quick) deep=0 ;;
     --trace) trace=1 ;;
     --engine)
       [[ $# -ge 2 ]] || {
-        echo "--engine needs tlc or tlx" >&2
+        echo "--engine needs tlx or tlc" >&2
         exit 2
       }
       engine=$2
@@ -60,48 +57,8 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-case "$engine" in
-  tlc | tlx) ;;
-  *)
-    echo "unknown engine $engine; it is tlc or tlx" >&2
-    exit 2
-    ;;
-esac
-
-if [[ "$engine" == tlx ]]; then
-  tlx=${BOAT_CUSTODY_TLX:-$(command -v tlx || true)}
-  if [[ -z "$tlx" || ! -x "$tlx" ]]; then
-    if [[ -n "${BOAT_CUSTODY_TLX:-}" ]]; then
-      echo "BOAT_CUSTODY_TLX is $BOAT_CUSTODY_TLX, which is not an executable; nothing was checked." >&2
-    else
-      echo "No tlx on PATH and BOAT_CUSTODY_TLX is not set; nothing was checked." >&2
-    fi
-    echo "Build it as README.md beside this script says and set BOAT_CUSTODY_TLX to it, or run with TLC (the default)." >&2
-    exit 2
-  fi
-  # -tlc: TLC's verdicts, counts, depth and shortest traces, which the `states` headers pin.
-  checker=("$tlx" check -tlc)
-  checker_name=tlx
-elif [[ -n "${TLC:-}" ]]; then
-  read -r -a tlc <<<"$TLC"
-elif command -v tlc >/dev/null 2>&1; then
-  tlc=(tlc)
-elif command -v nix >/dev/null 2>&1; then
-  # The nixpkgs this repository's flake.lock pins: the same TLC for everyone, fetched once.
-  tools=$(nix build --no-link --print-out-paths --inputs-from "$root" nixpkgs#tlaplus \
-    2> >(grep -v "is dirty" >&2))
-  tlc=("$tools/bin/tlc")
-elif [[ -n "${TLA2TOOLS_JAR:-}" ]] && command -v java >/dev/null 2>&1; then
-  tlc=(java -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC)
-else
-  echo "No TLA+ model checker found. Install Nix (the repository pins the tools), or set" >&2
-  echo "TLA2TOOLS_JAR to tla2tools.jar 1.7.4 from github.com/tlaplus/tlaplus/releases." >&2
-  exit 2
-fi
-if [[ "$engine" == tlc ]]; then
-  checker=("${tlc[@]}")
-  checker_name=TLC
-fi
+# shellcheck source=../checker.sh
+source "$here/../checker.sh"
 command -v node >/dev/null 2>&1 || {
   echo "node is needed to print counterexamples (it is in the repository's dev shell)." >&2
   exit 2

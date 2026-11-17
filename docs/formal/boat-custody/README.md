@@ -1,14 +1,14 @@
 # Boat custody: model-checked
 
-Two TLA+ models of how sealant keeps track of what it makes in a Boat account, checked with TLC. The
+Two TLA+ models of how sealant keeps track of what it makes in a Boat account, checked with tlx. The
 `boat-custody` skill (`.agents/skills/boat-custody/SKILL.md`) says how to run them, read a result
 and keep them in step with the code. This file is the record: what is verified, under which bounds
 and assumptions, and what the check found.
 
 Confirmed against the code at `dd39b9de` (main, 2026-11-13), and the run ledger's create, replay and
-never-created rules again at sealant#648 (SLNT-825), which fixed P1-A. Run with TLC 2.19 (TLA+ tools
-1.7.4, from the nixpkgs this repository's `flake.lock` pins), the reference; tlx, a faster checker
-for iterating, gives the same verdicts and counts ("TLC and tlx" below).
+never-created rules again at sealant#648 (SLNT-825), which fixed P1-A. Run with tlx at the commit
+`docs/formal/tlx.sh` pins, which gives TLC's verdicts and counts on every case ("The checker"
+below).
 
 ## The two promises
 
@@ -301,59 +301,60 @@ Where the docs say nothing, a constant lets the adversary do either. Main's own 
 - The TypeScript itself. The models are written by hand; they are as close to the code as the
   coverage record in the skill says, at the commit above.
 
-## TLC and tlx
+## The checker
 
-TLC is the reference. The run that goes with a change to a model, or to the code it models, is a TLC
-run, and a pinned state count is only ever moved to what TLC reached. tlx is for iterating: a TLA+
-checker written in Rust that reads the same `.tla` and `.cfg` files, about ten times faster here.
-`check.sh --engine tlx` runs it with `-tlc`, its mode that promises TLC's verdicts, counts, depth
-and shortest traces, and `trace.mjs` reads its counterexamples as it reads TLC's.
+tlx checks both models, on a developer's machine, in CI and nightly (SLNT-1081). It is a TLA+
+checker written in Rust that reads the same `.tla` and `.cfg` files as TLC; `check.sh` runs it with
+`-tlc`, its mode that promises TLC's verdicts, counts and depth, and `trace.mjs` reads its
+counterexamples as it reads TLC's.
 
-tlx is version 0.1, about a month old, with no releases. It comes from
-[tlaplus-x/tlx](https://github.com/tlaplus-x/tlx) and was measured at commit
-`8d5f082b0f0d922bf5999d9a8db00c70a4c1d261`. Build it with Rust and a C compiler, then point
-`check.sh` at it (it is not in the Nix flake or CI):
+tlx is version 0.1, with no releases, from [tlaplus-x/tlx](https://github.com/tlaplus-x/tlx).
+`docs/formal/tlx.sh` pins the commit (`8d5f082b0f`) and builds it the first time a `check.sh` needs
+it, into `~/.cache/sealant/tlx/<commit>/`: a few minutes with cargo, or with the Rust of the nixpkgs
+this repository's `flake.lock` pins when there is no cargo. It needs a C compiler as `cc`, then and
+when it checks. CI caches the build by the commit. `TLX=<path>` runs another build.
 
-```sh
-git clone https://github.com/tlaplus-x/tlx && cd tlx && git checkout 8d5f082b0f
-nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c cargo build --release   # or plain cargo
-BOAT_CUSTODY_TLX=$PWD/target/release/tlx docs/formal/boat-custody/check.sh --engine tlx
-```
-
-Without `BOAT_CUSTODY_TLX`, `check.sh --engine tlx` runs `tlx` from `PATH`, and stops with exit 2
-when there is none. `BOAT_CUSTODY_ENGINE=tlx` picks tlx as `--engine tlx` does.
+TLC 2.19 (TLA+ tools 1.7.4) stays for a cross-check by hand: `check.sh --engine tlc` (or
+`FORMAL_ENGINE=tlc`) runs the same cases on it. Nothing scheduled runs it.
 
 Every case that must pass pins its distinct-state count (`\* states:` in its `.cfg`), and ends `ok`
 only when the verdict and the count both match, so a checker that passes over a different state
 space fails the run. A passing case explores every reachable state, so its count is the same on
-every run. A case that must fail pins no count: it runs on every core, and the workers race after
-the violation, so its count changes from run to run under either checker.
+every run and under either checker. A case that must fail pins no count: it runs on every core, and
+the workers race after the violation, so its count changes from run to run.
 
-Measured on 2026-11-13 on a 32-core machine at sealant#648's models, each checker's whole runs.
-Every verdict matched, and every passing case reached the same count under both checkers, twice each
-(the three deep `ledger-*` cases once on TLC, in sealant#648's `--deep` run):
+Compared on 2026-11-17 (SLNT-1081), at main `da895e73`: TLC from the nightly run of every bound on a
+hosted runner's four cores, tlx on a 32-core machine with four workers. Every case gave the same
+verdict, and every case that must pass reached the same count. The cases that must fail, run with
+one worker under both checkers, reached the same count too, except `proof-broken-no-pending-live`.
 
-| Case                                        |   TLC |       tlx | Distinct states (both) |
-| ------------------------------------------- | ----: | --------: | ---------------------: |
-| `ledger`                                    |  44 s |       4 s |              9,438,957 |
-| `ledger-finding-replay-during-first-create` |  80 s |       8 s |             16,606,292 |
-| `proof`                                     |   3 s |       0 s |                911,328 |
-| `proof-live`                                |   6 s |       1 s |                550,736 |
-| `ledger-fixes` (deep)                       |  14 m |      53 s |            106,211,449 |
-| `ledger-lease-lapse` (deep)                 |     — |      72 s |            136,278,796 |
-| `ledger-two-sweeps` (deep)                  |  18 m |     105 s |            193,555,722 |
-| `proof-fixes` (deep)                        |  29 s |       4 s |             17,369,788 |
-| `proof-fixes-live` (deep)                   | 140 s |       7 s |             10,343,551 |
-| whole `check.sh` (15 cases, wall)           | 147 s |   13–18 s |                        |
-| whole `check.sh --deep` (20 cases, wall)    | ~40 m | 229–280 s |                        |
+| Case                                        | TLC (nightly) | tlx (4 workers) | Distinct states (both) |
+| ------------------------------------------- | ------------: | --------------: | ---------------------: |
+| `ledger`                                    |         270 s |            15 s |              9,438,957 |
+| `ledger-finding-replay-during-first-create` |         514 s |            29 s |             16,606,292 |
+| `proof`                                     |           8 s |             0 s |                911,328 |
+| `proof-live`                                |          23 s |             1 s |                550,736 |
+| `ledger-fixes` (deep)                       |          60 m |           225 s |            106,211,449 |
+| `ledger-lease-lapse` (deep)                 |          79 m |           303 s |            136,278,796 |
+| `ledger-two-sweeps` (deep)                  |         126 m |           377 s |            193,555,722 |
+| `proof-fixes` (deep)                        |         131 s |             8 s |             17,369,788 |
+| `proof-fixes-live` (deep)                   |         837 s |            10 s |             10,343,551 |
+| whole `check.sh --deep` (20 cases)          |        ~4.9 h |          16 min |                        |
 
-TLC's `ledger-fixes` time is from a run of the same model before sealant#648 (same count);
-`ledger-two-sweeps` and the whole `--deep` are the times the cases and the skill record;
-`ledger-lease-lapse` was not timed alone on TLC.
+On a hosted runner's four cores, where the nightly runs, tlx takes about 30 minutes for this model's
+`--deep` and about a minute and a half for capture-removal's.
+
+`proof-broken-no-pending-live`, the one case that must fail a temporal property, fails
+`EventuallyDeleted` under both, with a counterexample of 19 states in which the check's VM is left
+with nobody to delete it. The two traces differ, and so do the counts. TLC checks liveness on the
+state space it has found so far, partway through the search (at 43,749 states, a few seconds in),
+and stops at the first violation. tlx explores every reachable state first (449,912) and then
+checks. TLC's count on this case therefore depends on when its periodic check runs: 52,833, 56,243
+and 57,640 in three runs.
 
 ## In CI
 
 A pull request that touches a path in `COVERAGE` (or the models) runs the fast cases in CI's
-`formal` job, on TLC 2.19 / tools 1.7.4 and a hosted runner's four cores, with the drift guard: the
-job fails when covered code changed and neither a model nor `sync` did. `formal-nightly.yml` runs
-`--deep` every night. Locally, `pnpm verify formal` does what the PR job does.
+`formal` job, on tlx at the pinned commit and a hosted runner's four cores, with the drift guard:
+the job fails when covered code changed and neither a model nor `sync` did. `formal-nightly.yml`
+runs `--deep` every night. Locally, `pnpm verify formal` does what the PR job does.

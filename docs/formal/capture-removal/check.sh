@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Model-checks the capture removal ledger (CaptureRemovalLedger.tla) with TLC. Each case in cases/
+# Model-checks the capture removal ledger (CaptureRemovalLedger.tla) with tlx. Each case in cases/
 # names its module, the verdict it must give, its group and, if it must pass, the distinct states it
 # must reach.
 #
@@ -8,18 +8,19 @@
 #   docs/formal/capture-removal/check.sh --deep      the fast and the deep cases (every bound)
 #   docs/formal/capture-removal/check.sh ledger      the named cases only
 #   ... --trace                                      also print the counterexample of expected failures
+#   ... --engine tlc                                 any of these with TLC, for a cross-check by hand
 #
 # `pnpm verify formal` runs the fast cases when a diff touches a path in COVERAGE, and CI runs them on
 # such a pull request; `--deep` runs nightly (`pnpm verify formal --all --full`). FORMAL_WORKERS caps
-# TLC's threads (default: one per core); on a shared machine set it.
+# the checker's threads (default: one per core); on a shared machine set it.
 #
 # Exit status 0: every case gave its expected verdict, and every case that must pass reached the
 # distinct-state count its `states` header pins. 1: one did not; a wrong verdict prints its
 # counterexample. 2: no checker, or a wrong argument.
 #
-# The checker is $TLC if set (a command), else `tlc` on PATH, else the TLA+ tools pinned by this
-# repository's flake.lock (`nix shell --inputs-from . nixpkgs#tlaplus`, TLC 2.19 / tools 1.7.4),
-# else `java` with $TLA2TOOLS_JAR.
+# The checker is tlx, built at the commit docs/formal/tlx.sh pins (on first use: about 3 minutes),
+# or $TLX. `--engine tlc`, `--engine=tlc` or FORMAL_ENGINE=tlc runs TLC instead; docs/formal/checker.sh
+# says where each is found.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -27,6 +28,7 @@ root=$(cd "$here/../../.." && pwd)
 deep=0
 trace=0
 named=()
+engine=${FORMAL_ENGINE:-tlx}
 # The help is the comment block at the top of this file.
 usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; }
 while [[ $# -gt 0 ]]; do
@@ -34,6 +36,15 @@ while [[ $# -gt 0 ]]; do
     --deep) deep=1 ;;
     --quick) deep=0 ;;
     --trace) trace=1 ;;
+    --engine)
+      [[ $# -ge 2 ]] || {
+        echo "--engine needs tlx or tlc" >&2
+        exit 2
+      }
+      engine=$2
+      shift
+      ;;
+    --engine=*) engine=${1#--engine=} ;;
     -h | --help)
       usage
       exit 0
@@ -47,22 +58,8 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ -n "${TLC:-}" ]]; then
-  read -r -a tlc <<<"$TLC"
-elif command -v tlc >/dev/null 2>&1; then
-  tlc=(tlc)
-elif command -v nix >/dev/null 2>&1; then
-  # The nixpkgs this repository's flake.lock pins: the same TLC for everyone, fetched once.
-  tools=$(nix build --no-link --print-out-paths --inputs-from "$root" nixpkgs#tlaplus \
-    2> >(grep -v "is dirty" >&2))
-  tlc=("$tools/bin/tlc")
-elif [[ -n "${TLA2TOOLS_JAR:-}" ]] && command -v java >/dev/null 2>&1; then
-  tlc=(java -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC)
-else
-  echo "No TLA+ model checker found. Install Nix (the repository pins the tools), or set" >&2
-  echo "TLA2TOOLS_JAR to tla2tools.jar 1.7.4 from github.com/tlaplus/tlaplus/releases." >&2
-  exit 2
-fi
+# shellcheck source=../checker.sh
+source "$here/../checker.sh"
 command -v node >/dev/null 2>&1 || {
   echo "node is needed to print counterexamples (it is in the repository's dev shell)." >&2
   exit 2
@@ -73,7 +70,8 @@ keep=0
 cleanup() { if [[ $keep -eq 0 ]]; then rm -rf -- "$scratch"; fi; }
 trap cleanup EXIT
 # TLC unpacks its standard modules into java.io.tmpdir: keep them in this run's scratch directory.
-export JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=$scratch ${JAVA_TOOL_OPTIONS:-}"
+# (tlx keeps its compiled code in ~/.cache/tlx, which this script leaves alone.)
+[[ "$engine" == tlx ]] || export JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=$scratch ${JAVA_TOOL_OPTIONS:-}"
 
 header() { sed -n "s/^\\\\\\* $2: *//p" "$1" | head -n 1; }
 
@@ -102,11 +100,15 @@ for cfg in "${cases[@]}"; do
   pinned=$(header "$cfg" states | tr -d ,)
   out="$scratch/$name.out"
   started=$(date +%s)
-  (cd "$here" && "${tlc[@]}" -workers "${FORMAL_WORKERS:-auto}" -metadir "$scratch/meta-$name" -config "$cfg" "$module.tla") \
+  (cd "$here" && "${checker[@]}" -workers "${FORMAL_WORKERS:-auto}" -metadir "$scratch/meta-$name" -config "$cfg" "$module.tla") \
     >"$out" 2>&1 || true
   seconds=$(($(date +%s) - started))
   if [[ $version_shown -eq 0 ]]; then
-    grep -m 1 '^TLC2 Version' "$out" || true
+    if [[ "$engine" == tlx ]]; then
+      echo "$(grep -m 1 '^tlx version' "$out" || echo 'tlx (version unknown)') ($tlx)"
+    else
+      grep -m 1 '^TLC2 Version' "$out" || true
+    fi
     version_shown=1
   fi
   if grep -q '^Model checking completed. No error has been found.' "$out"; then
@@ -118,15 +120,16 @@ for cfg in "${cases[@]}"; do
     got=error
   fi
   states=$(sed -n 's/^.* states generated, \([0-9,]*\) distinct states found.*$/\1/p' "$out" | tail -n 1 | tr -d ,)
-  # A case that must pass explores every reachable state, so its count is the same on every run;
-  # the `states` header pins it. A case that must fail stops at a violation whose count differs
+  # A case that must pass explores every reachable state, so its count is the same on every run and
+  # for both checkers; the `states` header pins it, and a checker that passes over a different state
+  # space fails the case. A case that must fail stops at a violation whose count differs
   # from run to run with more than one worker: those cases pin no count.
   if [[ "$got" == "$expect" && -n "$pinned" && "${states:-?}" != "$pinned" ]]; then
     unexpected=1
     keep=1
     printf 'FAIL  %-40s %s as expected, but %s states where the case pins %s (%ss)\n' \
       "$name" "$got" "${states:-?}" "$pinned" "$seconds"
-    echo "        TLC's whole output: $out"
+    echo "        $checker_name's whole output: $out"
   elif [[ "$got" == "$expect" ]]; then
     printf 'ok    %-40s %-26s %9s states  %4ss\n' "$name" "$got" "${states:-?}" "$seconds"
     if [[ $trace -eq 1 && "$got" != pass ]]; then node "$here/trace.mjs" <"$out" | sed 's/^/        /'; fi
@@ -139,7 +142,7 @@ for cfg in "${cases[@]}"; do
     else
       node "$here/trace.mjs" <"$out" | sed 's/^/        /'
     fi
-    echo "        TLC's whole output: $out"
+    echo "        $checker_name's whole output: $out"
   fi
 done
 
