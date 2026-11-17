@@ -1,9 +1,10 @@
 name: Formal models (every bound)
 
 # Every formal model under docs/formal/ at every bound (`check.sh --deep`), which is too slow for a
-# pull request: about 40 minutes on 32 cores, so hours on a hosted runner's four. Pull requests run
-# the quick bounds of the models they touch (ci.yml's `formal` job); this catches what only the
-# deep cases reach, nightly and on demand.
+# pull request: about 32 minutes with tlx on a hosted runner's four cores. Pull requests run the quick
+# bounds of the models they touch (ci.yml's `formal` job); this catches what only the deep cases
+# reach, nightly and on demand. CI runs on pull requests only, so this is also the run on main that
+# saves the tlx build pull requests restore.
 on:
   schedule:
     - cron: "41 2 * * *"
@@ -20,8 +21,8 @@ jobs:
   formal:
     name: Formal models (every bound)
     runs-on: ubuntu-24.04
-    # GitHub stops a hosted job at six hours.
-    timeout-minutes: 355
+    # Measured at 36 minutes with a cold tlx build (SLNT-1081); about twice that.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

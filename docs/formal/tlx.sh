@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Prints the path of tlx, the TLA+ model checker that every docs/formal/<area>/check.sh runs, built
 # from github.com/tlaplus-x/tlx at the one commit this file pins. When this machine has no build of
-# that commit it builds one first: a shallow fetch of the commit and `cargo build --release`, which
-# takes about 10 minutes on four cores. It needs git, a C compiler as `cc`, and cargo (rustup reads
+# that commit it builds one first: a shallow fetch of the commit and `cargo build --release`, about
+# 3 minutes on a hosted runner's four cores. It needs git, a C compiler as `cc`, and cargo (rustup reads
 # tlx's rust-toolchain.toml) or, without cargo, Nix, whose Rust comes from this repository's
 # flake.lock.
 #
@@ -61,7 +61,7 @@ fi
 
 src=$(mktemp -d -t tlx-src.XXXXXX)
 trap 'rm -rf -- "$src"' EXIT
-echo "Building tlx at $commit into $dir (once per commit; about 10 minutes on four cores)." >&2
+echo "Building tlx at $commit into $dir (once per commit; about 3 minutes on four cores)." >&2
 {
   git init -q "$src"
   git -C "$src" fetch -q --depth 1 https://github.com/tlaplus-x/tlx "$commit"

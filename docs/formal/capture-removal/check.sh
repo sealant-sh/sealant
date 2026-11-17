@@ -18,7 +18,7 @@
 # distinct-state count its `states` header pins. 1: one did not; a wrong verdict prints its
 # counterexample. 2: no checker, or a wrong argument.
 #
-# The checker is tlx, built at the commit docs/formal/tlx.sh pins (on first use: about 10 minutes),
+# The checker is tlx, built at the commit docs/formal/tlx.sh pins (on first use: about 3 minutes),
 # or $TLX. `--engine tlc`, `--engine=tlc` or FORMAL_ENGINE=tlc runs TLC instead; docs/formal/checker.sh
 # says where each is found.
 set -euo pipefail

@@ -374,7 +374,8 @@ jobs:
     needs: formal-scope
     if: needs.formal-scope.outputs.touched == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # Measured at 7 minutes with a cold tlx build, 3 of them checking (SLNT-1081); about three times.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

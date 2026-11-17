@@ -341,6 +341,9 @@ one worker under both checkers, reached the same count too, except `proof-broken
 | `proof-fixes-live` (deep)                   |         837 s |            10 s |             10,343,551 |
 | whole `check.sh --deep` (20 cases)          |        ~4.9 h |          16 min |                        |
 
+On a hosted runner's four cores, where the nightly runs, tlx takes about 30 minutes for this model's
+`--deep` and about a minute and a half for capture-removal's.
+
 `proof-broken-no-pending-live`, the one case that must fail a temporal property, fails
 `EventuallyDeleted` under both, with a counterexample of 19 states in which the check's VM is left
 with nobody to delete it. The two traces differ, and so do the counts. TLC checks liveness on the
