@@ -52,6 +52,7 @@ import {
   unsupportedWorkspacePackages,
   WORKSPACE_PACKAGE_CATALOG,
 } from "./package-catalog.js";
+import { renderPacmanWithMirrorFallback } from "./pacman.js";
 import {
   GIT_SAFE_DIRECTORY_ANY,
   IMAGE_PROBE_PATH,
@@ -1046,9 +1047,11 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
       "RUN --mount=type=cache,target=/var/cache/pacman/pkg \\",
       // The `|| true` covers the cache clean only. Written as `a && b && c || true` it covered
       // the whole chain: a package that pacman could not find passed the step, and the build died
-      // steps later on a missing `npm` (Arch Linux ARM, 2026-09-21).
-      "    pacman -Syu --noconfirm && \\",
-      `    pacman -S --noconfirm --needed ${packageList.join(" ")} && \\`,
+      // steps later on a missing `npm` (Arch Linux ARM, 2026-09-21). A mirror that stalls on a
+      // signature fails the transaction; it runs again from the next mirror (`./pacman.ts`).
+      `    ${renderPacmanWithMirrorFallback(
+        `pacman -Syu --noconfirm && pacman -S --noconfirm --needed ${packageList.join(" ")}`,
+      )} && \\`,
       `    ${maskSshdUnits} && \\`,
       "    { pacman -Scc --noconfirm || true; }",
     ].join("\n");

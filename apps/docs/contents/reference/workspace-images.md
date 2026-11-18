@@ -62,13 +62,18 @@ pacman on an arm64 Arch image, in the build and in a workspace, installs from ei
 mirrors measured fast (Denmark, Germany, Hungary, Greece, France, two in North America, Taiwan), in
 that order, with the port's geo redirector last: the tarball's own mirrorlist names only the
 redirector, which sent some networks to a mirror serving 30 KB/s, or to one that stalled every
-database sync. pacman moves to the next mirror when one stalls, and keeps checking every package's
-signature. An upgrade of `pacman-mirrorlist` leaves the list in place (as `mirrorlist.pacnew`). The
-tarball is kept in a BuildKit cache mount, so a host downloads it once: later Arch builds reuse it
-while it verifies against the current signature, and a download stopped midway resumes. The board
-kernel, modules and firmware the tarball carries are removed, the tarball's `alarm` user is deleted,
-and root's password is locked, as Docker Hub's `archlinux` image ships it. Every package in the
-catalog installs on both.
+database sync. pacman moves to the next mirror when a package download stalls, and keeps checking
+every package's signature. It fetches each signature only from the mirror that served the package,
+so a mirror that stalls on a signature fails the whole install. The build then runs the install
+again with the first mirror moved to the end of the list, up to three times. Packages that already
+arrived are kept, and the image ships the list in its original order. `pacman -S` in a workspace has
+no such retry: run it again, and it starts from the files that already arrived. An upgrade of
+`pacman-mirrorlist` leaves the list in place (as `mirrorlist.pacnew`). The tarball is kept in a
+BuildKit cache mount, so a host downloads it once: later Arch builds reuse it while it verifies
+against the current signature, and a download stopped midway resumes. The board kernel, modules and
+firmware the tarball carries are removed, the tarball's `alarm` user is deleted, and root's password
+is locked, as Docker Hub's `archlinux` image ships it. Every package in the catalog installs on
+both.
 
 ## The person environment
 
