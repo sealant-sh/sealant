@@ -121,8 +121,11 @@ export const ARCHLINUXARM_SOURCES: readonly string[] = [
  * pacman leaves a server only when it stalls (less than 1 byte/s for 10 seconds): a slow mirror is
  * kept for the whole transaction, a stalled one failed every database sync (CI, 2026-10-11:
  * "failed to synchronize all databases"). pacman tries the servers in order, file by file, and
- * skips one after repeated errors; the redirector is the last resort. The file is pacman's backup
- * of `pacman-mirrorlist`, so an upgrade of that package writes `mirrorlist.pacnew` and keeps this.
+ * skips one after repeated errors; the redirector is the last resort. A package's signature comes
+ * only from the mirror that served the package, so a mirror that stalls on one fails the
+ * transaction; the build runs it again from the next mirror (`./pacman.ts`). The file is pacman's
+ * backup of `pacman-mirrorlist`, so an upgrade of that package writes `mirrorlist.pacnew` and keeps
+ * this.
  */
 export const ARCHLINUXARM_MIRRORLIST = [
   "# Written by Sealant: Arch Linux ARM mirrors measured fast, in order; the geo redirector last.",
