@@ -202,6 +202,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # The runner's own docker CLI pulls from Docker Hub signed in (its ~/.docker/config.json), but
+      # a Docker client inside a test container has no login: the volume test's controller pulls the
+      # workspace guard image anonymously, and Docker Hub refuses anonymous pulls once a runner's
+      # shared address spends its quota. With Google's mirror on the daemon, an anonymous pull is
+      # served by the mirror, with no anonymous limit and no login. A signed-in pull is refused by
+      # the mirror (it rejects Docker Hub's credentials) and goes on to Docker Hub signed in, as
+      # before. dockerd restarts rather than reloads: on Docker 28 a SIGHUP reload loses the
+      # host-gateway address that workspaces' host.docker.internal needs. The restart stops the
+      # postgres service, so it starts again here.
+      - name: Serve anonymous Docker Hub pulls from Google's mirror
+        if: runner.environment == 'github-hosted'
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          config=/etc/docker/daemon.json
+          current=$(sudo cat "$config" 2>/dev/null || echo '{}')
+          echo "$current" | jq '."registry-mirrors" = ["https://mirror.gcr.io"]' | sudo tee "$config"
+          sudo systemctl restart docker
+          docker info --format 'registry mirrors: {{json .RegistryConfig.Mirrors}}'
+          docker start "$POSTGRES_CONTAINER"
+          for _ in $(seq 1 60); do
+            health=$(docker inspect --format '{{.State.Health.Status}}' "$POSTGRES_CONTAINER")
+            [ "$health" = healthy ] && exit 0
+            sleep 1
+          done
+          echo "the postgres service is $health after the Docker restart" >&2
+          exit 1
+
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 

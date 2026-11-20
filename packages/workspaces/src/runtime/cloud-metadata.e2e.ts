@@ -152,7 +152,9 @@ describe("the cloud metadata address", () => {
       "--name",
       dockerMirror,
       "-e",
-      "REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io",
+      // Google's Docker Hub mirror: the same images as registry-1.docker.io, with no anonymous
+      // pull limit to fail the test on a shared CI address.
+      "REGISTRY_PROXY_REMOTEURL=https://mirror.gcr.io",
       "registry:2.8.3",
     ]);
 
