@@ -1,194 +1,194 @@
 [
   {
     "name": "ubuntu/bash/plain/codex",
-    "sha256": "8285138b0430d4bc92d925389a629f0c55550cdb928e2caedd23a3a207f9cebd"
+    "sha256": "718fb04d1f278073b08512dee031caef96b1124a1e7b8db1072b805cffb07280"
   },
   {
     "name": "ubuntu/bash/plain/claude-code",
-    "sha256": "8285138b0430d4bc92d925389a629f0c55550cdb928e2caedd23a3a207f9cebd"
+    "sha256": "718fb04d1f278073b08512dee031caef96b1124a1e7b8db1072b805cffb07280"
   },
   {
     "name": "ubuntu/bash/plain/opencode",
-    "sha256": "8285138b0430d4bc92d925389a629f0c55550cdb928e2caedd23a3a207f9cebd"
+    "sha256": "718fb04d1f278073b08512dee031caef96b1124a1e7b8db1072b805cffb07280"
   },
   {
     "name": "ubuntu/bash/plain/pi",
-    "sha256": "8285138b0430d4bc92d925389a629f0c55550cdb928e2caedd23a3a207f9cebd"
+    "sha256": "718fb04d1f278073b08512dee031caef96b1124a1e7b8db1072b805cffb07280"
   },
   {
     "name": "ubuntu/bash/docker/codex",
-    "sha256": "141cadbed212a39ed89a87e9df2f964ce11d867332d2dddf8edd3164298a0a67"
+    "sha256": "03639214043d4c4086054e87209b2535a43885b8b53acf15549541ce2a368fad"
   },
   {
     "name": "ubuntu/bash/docker/claude-code",
-    "sha256": "141cadbed212a39ed89a87e9df2f964ce11d867332d2dddf8edd3164298a0a67"
+    "sha256": "03639214043d4c4086054e87209b2535a43885b8b53acf15549541ce2a368fad"
   },
   {
     "name": "ubuntu/bash/docker/opencode",
-    "sha256": "141cadbed212a39ed89a87e9df2f964ce11d867332d2dddf8edd3164298a0a67"
+    "sha256": "03639214043d4c4086054e87209b2535a43885b8b53acf15549541ce2a368fad"
   },
   {
     "name": "ubuntu/bash/docker/pi",
-    "sha256": "141cadbed212a39ed89a87e9df2f964ce11d867332d2dddf8edd3164298a0a67"
+    "sha256": "03639214043d4c4086054e87209b2535a43885b8b53acf15549541ce2a368fad"
   },
   {
     "name": "ubuntu/zsh/plain/codex",
-    "sha256": "2b71ec4cb03c0dfa9306672b89c7474cd1fa4da22f09a4c1c63e397dc033572c"
+    "sha256": "f5e8e03992ed13e54136496353558fb13bada164c91033164dcfaaaa37a569b4"
   },
   {
     "name": "ubuntu/zsh/plain/claude-code",
-    "sha256": "2b71ec4cb03c0dfa9306672b89c7474cd1fa4da22f09a4c1c63e397dc033572c"
+    "sha256": "f5e8e03992ed13e54136496353558fb13bada164c91033164dcfaaaa37a569b4"
   },
   {
     "name": "ubuntu/zsh/plain/opencode",
-    "sha256": "2b71ec4cb03c0dfa9306672b89c7474cd1fa4da22f09a4c1c63e397dc033572c"
+    "sha256": "f5e8e03992ed13e54136496353558fb13bada164c91033164dcfaaaa37a569b4"
   },
   {
     "name": "ubuntu/zsh/plain/pi",
-    "sha256": "2b71ec4cb03c0dfa9306672b89c7474cd1fa4da22f09a4c1c63e397dc033572c"
+    "sha256": "f5e8e03992ed13e54136496353558fb13bada164c91033164dcfaaaa37a569b4"
   },
   {
     "name": "ubuntu/zsh/docker/codex",
-    "sha256": "5e69f472ce5266667e1d2f54bb5ef0ccfc135ba38abbf949bc5aa4131a3da530"
+    "sha256": "759d029421575795fc7952daa0cd0036568909c234850dbaad199721e23cc60a"
   },
   {
     "name": "ubuntu/zsh/docker/claude-code",
-    "sha256": "5e69f472ce5266667e1d2f54bb5ef0ccfc135ba38abbf949bc5aa4131a3da530"
+    "sha256": "759d029421575795fc7952daa0cd0036568909c234850dbaad199721e23cc60a"
   },
   {
     "name": "ubuntu/zsh/docker/opencode",
-    "sha256": "5e69f472ce5266667e1d2f54bb5ef0ccfc135ba38abbf949bc5aa4131a3da530"
+    "sha256": "759d029421575795fc7952daa0cd0036568909c234850dbaad199721e23cc60a"
   },
   {
     "name": "ubuntu/zsh/docker/pi",
-    "sha256": "5e69f472ce5266667e1d2f54bb5ef0ccfc135ba38abbf949bc5aa4131a3da530"
+    "sha256": "759d029421575795fc7952daa0cd0036568909c234850dbaad199721e23cc60a"
   },
   {
     "name": "ubuntu/fish/plain/codex",
-    "sha256": "df20e412b36ac7f3b3f7efbe1d6131c9dd6a82f6da83322d4e32f76e9b11e40e"
+    "sha256": "6e9393371c3bcc64abb5eb8cf39dcfc652ba5cecbe6ce73da298c1b9e82caf98"
   },
   {
     "name": "ubuntu/fish/plain/claude-code",
-    "sha256": "df20e412b36ac7f3b3f7efbe1d6131c9dd6a82f6da83322d4e32f76e9b11e40e"
+    "sha256": "6e9393371c3bcc64abb5eb8cf39dcfc652ba5cecbe6ce73da298c1b9e82caf98"
   },
   {
     "name": "ubuntu/fish/plain/opencode",
-    "sha256": "df20e412b36ac7f3b3f7efbe1d6131c9dd6a82f6da83322d4e32f76e9b11e40e"
+    "sha256": "6e9393371c3bcc64abb5eb8cf39dcfc652ba5cecbe6ce73da298c1b9e82caf98"
   },
   {
     "name": "ubuntu/fish/plain/pi",
-    "sha256": "df20e412b36ac7f3b3f7efbe1d6131c9dd6a82f6da83322d4e32f76e9b11e40e"
+    "sha256": "6e9393371c3bcc64abb5eb8cf39dcfc652ba5cecbe6ce73da298c1b9e82caf98"
   },
   {
     "name": "ubuntu/fish/docker/codex",
-    "sha256": "0e0118baefdd00bc26ebcc69f4664bb692921a70c19fc11459902f6493885cec"
+    "sha256": "139ed9fcf6165ebaa36044e1b937badcca0915f5fee8e137d07e226bc5fa2794"
   },
   {
     "name": "ubuntu/fish/docker/claude-code",
-    "sha256": "0e0118baefdd00bc26ebcc69f4664bb692921a70c19fc11459902f6493885cec"
+    "sha256": "139ed9fcf6165ebaa36044e1b937badcca0915f5fee8e137d07e226bc5fa2794"
   },
   {
     "name": "ubuntu/fish/docker/opencode",
-    "sha256": "0e0118baefdd00bc26ebcc69f4664bb692921a70c19fc11459902f6493885cec"
+    "sha256": "139ed9fcf6165ebaa36044e1b937badcca0915f5fee8e137d07e226bc5fa2794"
   },
   {
     "name": "ubuntu/fish/docker/pi",
-    "sha256": "0e0118baefdd00bc26ebcc69f4664bb692921a70c19fc11459902f6493885cec"
+    "sha256": "139ed9fcf6165ebaa36044e1b937badcca0915f5fee8e137d07e226bc5fa2794"
   },
   {
     "name": "nix/bash/plain/codex",
-    "sha256": "f851eef162959d07edd914a982fabda5291334f5cbf8f2ba147b0c31d3534e6f"
+    "sha256": "f3a0a401fd1a128b45ba20066290c1ad327efc1aa2968d359afa992980b21e70"
   },
   {
     "name": "nix/bash/plain/claude-code",
-    "sha256": "f851eef162959d07edd914a982fabda5291334f5cbf8f2ba147b0c31d3534e6f"
+    "sha256": "f3a0a401fd1a128b45ba20066290c1ad327efc1aa2968d359afa992980b21e70"
   },
   {
     "name": "nix/bash/plain/opencode",
-    "sha256": "f851eef162959d07edd914a982fabda5291334f5cbf8f2ba147b0c31d3534e6f"
+    "sha256": "f3a0a401fd1a128b45ba20066290c1ad327efc1aa2968d359afa992980b21e70"
   },
   {
     "name": "nix/bash/plain/pi",
-    "sha256": "f851eef162959d07edd914a982fabda5291334f5cbf8f2ba147b0c31d3534e6f"
+    "sha256": "f3a0a401fd1a128b45ba20066290c1ad327efc1aa2968d359afa992980b21e70"
   },
   {
     "name": "nix/bash/docker/codex",
-    "sha256": "62d0a8557046fa9629b3d74718484b9e571c89a03d98c28b31d272d2d75b42f7"
+    "sha256": "5863e39f9136fe18ad253cc510ddd25e08a07a4d802ed7b80af7d0ef670f1758"
   },
   {
     "name": "nix/bash/docker/claude-code",
-    "sha256": "62d0a8557046fa9629b3d74718484b9e571c89a03d98c28b31d272d2d75b42f7"
+    "sha256": "5863e39f9136fe18ad253cc510ddd25e08a07a4d802ed7b80af7d0ef670f1758"
   },
   {
     "name": "nix/bash/docker/opencode",
-    "sha256": "62d0a8557046fa9629b3d74718484b9e571c89a03d98c28b31d272d2d75b42f7"
+    "sha256": "5863e39f9136fe18ad253cc510ddd25e08a07a4d802ed7b80af7d0ef670f1758"
   },
   {
     "name": "nix/bash/docker/pi",
-    "sha256": "62d0a8557046fa9629b3d74718484b9e571c89a03d98c28b31d272d2d75b42f7"
+    "sha256": "5863e39f9136fe18ad253cc510ddd25e08a07a4d802ed7b80af7d0ef670f1758"
   },
   {
     "name": "nix/zsh/plain/codex",
-    "sha256": "266745727dffeb3f4ad53dd9e03a81aee4682e4bb0a3b5143bf80799867c63c7"
+    "sha256": "5341576072127611478f931ca4d64595e8da06e885a09bb18aa8ba46066244a9"
   },
   {
     "name": "nix/zsh/plain/claude-code",
-    "sha256": "266745727dffeb3f4ad53dd9e03a81aee4682e4bb0a3b5143bf80799867c63c7"
+    "sha256": "5341576072127611478f931ca4d64595e8da06e885a09bb18aa8ba46066244a9"
   },
   {
     "name": "nix/zsh/plain/opencode",
-    "sha256": "266745727dffeb3f4ad53dd9e03a81aee4682e4bb0a3b5143bf80799867c63c7"
+    "sha256": "5341576072127611478f931ca4d64595e8da06e885a09bb18aa8ba46066244a9"
   },
   {
     "name": "nix/zsh/plain/pi",
-    "sha256": "266745727dffeb3f4ad53dd9e03a81aee4682e4bb0a3b5143bf80799867c63c7"
+    "sha256": "5341576072127611478f931ca4d64595e8da06e885a09bb18aa8ba46066244a9"
   },
   {
     "name": "nix/zsh/docker/codex",
-    "sha256": "e6495487dcdea4988687ce6aaa857e36ffb616033847f715437d0d35e562d9d3"
+    "sha256": "82e97a83d9754773451de06596068a2fbee3cab3523def986923777facc4d86a"
   },
   {
     "name": "nix/zsh/docker/claude-code",
-    "sha256": "e6495487dcdea4988687ce6aaa857e36ffb616033847f715437d0d35e562d9d3"
+    "sha256": "82e97a83d9754773451de06596068a2fbee3cab3523def986923777facc4d86a"
   },
   {
     "name": "nix/zsh/docker/opencode",
-    "sha256": "e6495487dcdea4988687ce6aaa857e36ffb616033847f715437d0d35e562d9d3"
+    "sha256": "82e97a83d9754773451de06596068a2fbee3cab3523def986923777facc4d86a"
   },
   {
     "name": "nix/zsh/docker/pi",
-    "sha256": "e6495487dcdea4988687ce6aaa857e36ffb616033847f715437d0d35e562d9d3"
+    "sha256": "82e97a83d9754773451de06596068a2fbee3cab3523def986923777facc4d86a"
   },
   {
     "name": "nix/fish/plain/codex",
-    "sha256": "00888d07f473d7e8d59ac7b824cebc1a9316448616dfa2adb4dcc06d6428844b"
+    "sha256": "7a117b4fbaebd9f98a551c9f44c2084cbf5bfb75471214ceb8717a78a8f58cc2"
   },
   {
     "name": "nix/fish/plain/claude-code",
-    "sha256": "00888d07f473d7e8d59ac7b824cebc1a9316448616dfa2adb4dcc06d6428844b"
+    "sha256": "7a117b4fbaebd9f98a551c9f44c2084cbf5bfb75471214ceb8717a78a8f58cc2"
   },
   {
     "name": "nix/fish/plain/opencode",
-    "sha256": "00888d07f473d7e8d59ac7b824cebc1a9316448616dfa2adb4dcc06d6428844b"
+    "sha256": "7a117b4fbaebd9f98a551c9f44c2084cbf5bfb75471214ceb8717a78a8f58cc2"
   },
   {
     "name": "nix/fish/plain/pi",
-    "sha256": "00888d07f473d7e8d59ac7b824cebc1a9316448616dfa2adb4dcc06d6428844b"
+    "sha256": "7a117b4fbaebd9f98a551c9f44c2084cbf5bfb75471214ceb8717a78a8f58cc2"
   },
   {
     "name": "nix/fish/docker/codex",
-    "sha256": "5d69d241565121892067bca1e3f2ea3923fed56e44c45473b9ccb29fcfbd398b"
+    "sha256": "33f19efd15f396a3c920adfe1d9cdbd4606e86c832f15686722ff69a94d6f116"
   },
   {
     "name": "nix/fish/docker/claude-code",
-    "sha256": "5d69d241565121892067bca1e3f2ea3923fed56e44c45473b9ccb29fcfbd398b"
+    "sha256": "33f19efd15f396a3c920adfe1d9cdbd4606e86c832f15686722ff69a94d6f116"
   },
   {
     "name": "nix/fish/docker/opencode",
-    "sha256": "5d69d241565121892067bca1e3f2ea3923fed56e44c45473b9ccb29fcfbd398b"
+    "sha256": "33f19efd15f396a3c920adfe1d9cdbd4606e86c832f15686722ff69a94d6f116"
   },
   {
     "name": "nix/fish/docker/pi",
-    "sha256": "5d69d241565121892067bca1e3f2ea3923fed56e44c45473b9ccb29fcfbd398b"
+    "sha256": "33f19efd15f396a3c920adfe1d9cdbd4606e86c832f15686722ff69a94d6f116"
   }
 ]

@@ -153,7 +153,12 @@ const systemdBaseSetup = [
       `test "$(dpkg-query -W -f='\${Version}' ${name})" = ${quote(NATIVE_SUBSTRATE.systemd.version)}`,
   ),
   'apt-mark hold "${systemd_packages[@]}"',
-  "apt-get update",
+  // Boat's base VM carries third-party sources (a PHP PPA, CRAN, Docker, NodeSource) and the apt
+  // lists it last fetched for them. When one of them changes its Release file's Label, Origin or
+  // Suite, a plain update refuses it and exits 100, which stops every new image (SLNT-1221: the PHP
+  // PPA relabelled itself "deprecated" on 20 Nov 2026). A machine with no lists would accept the
+  // same repository without a question, so the build does too. Signatures are still checked.
+  "apt-get update --allow-releaseinfo-change",
   // What the agent and the workspace's network need: WireGuard to the resource gateway, iptables
   // and kmod for dockerd's own NAT and bridges, `unshare` (util-linux) for the daemon's PID
   // namespace.
