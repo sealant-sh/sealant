@@ -239,7 +239,17 @@ jobs:
           docker version --format 'docker {{.Server.Version}}'
           docker info --format 'storage driver {{.Driver}}, image store {{json .DriverStatus}}'
           if ! docker pull hello-world; then
-            sudo journalctl -u docker --since '-3 min' --no-pager | tail -40
+            sudo jq '.debug = true' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json.new
+            sudo mv /etc/docker/daemon.json.new /etc/docker/daemon.json
+            sudo systemctl reload docker
+            sleep 2
+            docker pull hello-world || true
+            sudo journalctl -u docker --since '-20 s' --no-pager | grep -v -i 'event' | tail -60
+            jq 'walk(if type == "object" then with_entries(if .key == "auth" or .key == "identitytoken" then .value = "<redacted>" else . end) else . end)' ~/.docker/config.json || echo "no client config"
+            sudo ls -la /root/.docker 2>&1 || true
+            curl -s -i 'https://mirror.gcr.io/v2/token?scope=repository:library/hello-world:pull' | head -3
+            t=$(curl -s 'https://mirror.gcr.io/v2/token?scope=repository:library/hello-world:pull' | jq -r .token)
+            curl -s -I -H "Authorization: Bearer $t" -H 'Accept: application/vnd.oci.image.index.v1+json' https://mirror.gcr.io/v2/library/hello-world/manifests/latest | head -3
             exit 1
           fi
           docker image rm hello-world
