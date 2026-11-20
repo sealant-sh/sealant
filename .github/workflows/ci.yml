@@ -208,20 +208,26 @@ jobs:
       # shared address spends its quota. With Google's mirror on the daemon, an anonymous pull is
       # served by the mirror, with no anonymous limit and no login. A signed-in pull is refused by
       # the mirror (it rejects Docker Hub's credentials) and goes on to Docker Hub signed in, as
-      # before. registry-mirrors reloads on SIGHUP, so the running postgres service is untouched.
+      # before. dockerd restarts rather than reloads: on Docker 28 a SIGHUP reload loses the
+      # host-gateway address that workspaces' host.docker.internal needs. The restart stops the
+      # postgres service, so it starts again here.
       - name: Serve anonymous Docker Hub pulls from Google's mirror
         if: runner.environment == 'github-hosted'
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           config=/etc/docker/daemon.json
           current=$(sudo cat "$config" 2>/dev/null || echo '{}')
           echo "$current" | jq '."registry-mirrors" = ["https://mirror.gcr.io"]' | sudo tee "$config"
-          sudo systemctl reload docker
-          for _ in $(seq 1 20); do
-            mirrors=$(docker info --format '{{json .RegistryConfig.Mirrors}}')
-            case "$mirrors" in *mirror.gcr.io*) echo "registry mirrors: $mirrors"; exit 0 ;; esac
-            sleep 0.5
+          sudo systemctl restart docker
+          docker info --format 'registry mirrors: {{json .RegistryConfig.Mirrors}}'
+          docker start "$POSTGRES_CONTAINER"
+          for _ in $(seq 1 60); do
+            health=$(docker inspect --format '{{.State.Health.Status}}' "$POSTGRES_CONTAINER")
+            [ "$health" = healthy ] && exit 0
+            sleep 1
           done
-          echo "dockerd did not take the registry mirror: $mirrors" >&2
+          echo "the postgres service is $health after the Docker restart" >&2
           exit 1
 
       # TEMPORARY proof for SLNT-1140, removed before merge: with Docker Hub unreachable, an
