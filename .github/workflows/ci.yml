@@ -223,6 +223,14 @@ jobs:
           echo "dockerd did not take the registry mirror: $mirrors" >&2
           exit 1
 
+      # TEMPORARY proof for SLNT-1140, removed before merge: with Docker Hub unreachable from the
+      # runner, any pull on this daemon that skips the mirror fails the job.
+      - name: Refuse Docker Hub on this runner (SLNT-1140 proof)
+        if: runner.environment == 'github-hosted'
+        run: |
+          echo "0.0.0.0 registry-1.docker.io auth.docker.io index.docker.io" | sudo tee -a /etc/hosts
+          getent hosts registry-1.docker.io
+
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
