@@ -240,6 +240,8 @@ describe("native recipe boundary", () => {
       const hold = script.indexOf('apt-mark hold "${systemd_packages[@]}"');
       expect(hold).toBeGreaterThan(0);
       expect(hold).toBeLessThan(script.indexOf("apt-get update"));
+      // A third-party source in Boat's base that relabels itself must not stop the build.
+      expect(script).toContain("\napt-get update --allow-releaseinfo-change\n");
       expect(script).toContain('$2 == "systemd" && $3 == "installed"');
       expect(script).toContain(
         "apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps util-linux iproute2 iptables kmod wireguard-tools",
