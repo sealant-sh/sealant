@@ -206,21 +206,26 @@ jobs:
       # The proofs pull a dozen Docker Hub images on this daemon (the workspace guard, test
       # servers, build bases), and Docker Hub refuses anonymous pulls once a runner's shared address
       # spends its quota. Google's mirror serves the same digests with no anonymous limit and no
-      # login; dockerd still falls back to Docker Hub when the mirror fails. registry-mirrors
-      # reloads on SIGHUP, so the running postgres service is untouched.
+      # login; dockerd still falls back to Docker Hub when the mirror fails. A SIGHUP reload lists
+      # the mirror in `docker info` but pulls skip it, so dockerd restarts, and the postgres
+      # service it stopped starts again.
       - name: Pull Docker Hub images through Google's mirror
         if: runner.environment == 'github-hosted'
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           config=/etc/docker/daemon.json
           current=$(sudo cat "$config" 2>/dev/null || echo '{}')
           echo "$current" | jq '."registry-mirrors" = ["https://mirror.gcr.io"]' | sudo tee "$config"
-          sudo systemctl reload docker
-          for _ in $(seq 1 20); do
-            mirrors=$(docker info --format '{{json .RegistryConfig.Mirrors}}')
-            case "$mirrors" in *mirror.gcr.io*) echo "registry mirrors: $mirrors"; exit 0 ;; esac
-            sleep 0.5
+          sudo systemctl restart docker
+          docker info --format 'registry mirrors: {{json .RegistryConfig.Mirrors}}'
+          docker start "$POSTGRES_CONTAINER"
+          for _ in $(seq 1 60); do
+            health=$(docker inspect --format '{{.State.Health.Status}}' "$POSTGRES_CONTAINER")
+            [ "$health" = healthy ] && exit 0
+            sleep 1
           done
-          echo "dockerd did not take the registry mirror: $mirrors" >&2
+          echo "the postgres service is $health after the Docker restart" >&2
           exit 1
 
       # TEMPORARY proof for SLNT-1140, removed before merge: with Docker Hub unreachable from the
@@ -228,8 +233,16 @@ jobs:
       - name: Refuse Docker Hub on this runner (SLNT-1140 proof)
         if: runner.environment == 'github-hosted'
         run: |
-          echo "0.0.0.0 registry-1.docker.io auth.docker.io index.docker.io" | sudo tee -a /etc/hosts
-          getent hosts registry-1.docker.io
+          for host in registry-1.docker.io auth.docker.io index.docker.io; do
+            printf '0.0.0.0 %s\n:: %s\n' "$host" "$host" | sudo tee -a /etc/hosts
+          done
+          docker version --format 'docker {{.Server.Version}}'
+          docker info --format 'storage driver {{.Driver}}, image store {{json .DriverStatus}}'
+          if ! docker pull hello-world; then
+            sudo journalctl -u docker --since '-3 min' --no-pager | tail -40
+            exit 1
+          fi
+          docker image rm hello-world
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
