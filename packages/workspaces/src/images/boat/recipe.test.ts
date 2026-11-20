@@ -15,6 +15,7 @@ import { BOAT_AGENT_FILES, BOAT_AGENT_MANIFEST_FILE } from "../../runtime/boat/a
 import {
   BOAT_AGENT_DOCKER_DROPIN_PATH,
   BOAT_AGENT_UNIT_PATH,
+  BOAT_APT_RELEASE_LABEL_PATH,
   boatAgentManifestDigest,
   createNativeRecipe,
   NATIVE_SUBSTRATE,
@@ -242,6 +243,13 @@ describe("native recipe boundary", () => {
       expect(hold).toBeLessThan(script.indexOf("apt-get update"));
       // A third-party source in Boat's base that relabels itself must not stop the build.
       expect(script).toContain("\napt-get update --allow-releaseinfo-change\n");
+      // The image keeps Boat's base apt lists, not the build's, so a session's own `apt update`
+      // accepts a source's new Label too.
+      const label = recipe.value.files.find((f) => f.path === BOAT_APT_RELEASE_LABEL_PATH);
+      expect(label?.mode).toBe("0644");
+      expect(Buffer.from(label?.bytes ?? []).toString()).toBe(
+        'Acquire::AllowReleaseInfoChange::Label "true";\n',
+      );
       expect(script).toContain('$2 == "systemd" && $3 == "installed"');
       expect(script).toContain(
         "apt-get install -y --no-install-recommends curl xz-utils ca-certificates procps util-linux iproute2 iptables kmod wireguard-tools",

@@ -123,6 +123,17 @@ const isAgentFile = (path: string) =>
   path === BOAT_AGENT_DOCKER_DROPIN_PATH;
 
 /**
+ * A Boat image never carries the apt lists its build fetched: a VM booted from the saved snapshot
+ * has the lists of Boat's base again, and `/etc` comes back as the build left it. Where a source in
+ * Boat's base has changed its Release file's Label since Boat last fetched it (SLNT-1225: the PHP
+ * PPA's "(deprecated)", 20 Nov 2026), every plain `apt update` in a session would exit 100. So a
+ * session's apt accepts a new Label, which is only a name. A changed Origin or Suite is still
+ * refused, and signatures are still checked.
+ */
+export const BOAT_APT_RELEASE_LABEL_PATH = "/etc/apt/apt.conf.d/50sealant-release-label";
+const APT_RELEASE_LABEL = 'Acquire::AllowReleaseInfoChange::Label "true";\n';
+
+/**
  * `sealant-agent.service.d/docker.conf`: the agent's Docker service. Its bridge address and its
  * address pools are the one thing the image decides about the containers' network: ranges that
  * collide with neither the resource tunnel's addresses (`100.127.255.252/30`) nor the resource
@@ -242,6 +253,7 @@ export const createNativeRecipe = async (
         ? [file(`${BOAT_AGENT_DIRECTORY}/download-docker.sh`, asset("download-docker.sh"), "0755")]
         : []),
       file(`${BOAT_AGENT_DIRECTORY}/project-install.sh`, projectScript, "0644"),
+      file(BOAT_APT_RELEASE_LABEL_PATH, APT_RELEASE_LABEL, "0644"),
       file(
         "/etc/sealant/native-boot.json",
         JSON.stringify(Object.fromEntries(bootEntries)) + "\n",
