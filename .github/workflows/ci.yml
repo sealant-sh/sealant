@@ -182,11 +182,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # The Boat publication suite, the resource reconciler and the caller-owned services proof
-    # use the same migrated Postgres as the tests job. Services start before any step, so this one
-    # names Google's Docker Hub mirror itself (see the mirror step below).
+    # use the same migrated Postgres as the tests job.
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17
+        image: postgres:17
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: sealant_test
@@ -203,56 +202,46 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # The proofs pull a dozen Docker Hub images on this daemon (the workspace guard, test
-      # servers, build bases), and Docker Hub refuses anonymous pulls once a runner's shared address
-      # spends its quota. Google's mirror serves the same digests with no anonymous limit and no
-      # login; dockerd still falls back to Docker Hub when the mirror fails. A SIGHUP reload lists
-      # the mirror in `docker info` but pulls skip it, so dockerd restarts, and the postgres
-      # service it stopped starts again.
-      - name: Pull Docker Hub images through Google's mirror
+      # The runner's own docker CLI pulls from Docker Hub signed in (its ~/.docker/config.json), but
+      # a Docker client inside a test container has no login: the volume test's controller pulls the
+      # workspace guard image anonymously, and Docker Hub refuses anonymous pulls once a runner's
+      # shared address spends its quota. With Google's mirror on the daemon, an anonymous pull is
+      # served by the mirror, with no anonymous limit and no login. A signed-in pull is refused by
+      # the mirror (it rejects Docker Hub's credentials) and goes on to Docker Hub signed in, as
+      # before. registry-mirrors reloads on SIGHUP, so the running postgres service is untouched.
+      - name: Serve anonymous Docker Hub pulls from Google's mirror
         if: runner.environment == 'github-hosted'
-        env:
-          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           config=/etc/docker/daemon.json
           current=$(sudo cat "$config" 2>/dev/null || echo '{}')
           echo "$current" | jq '."registry-mirrors" = ["https://mirror.gcr.io"]' | sudo tee "$config"
-          sudo systemctl restart docker
-          docker info --format 'registry mirrors: {{json .RegistryConfig.Mirrors}}'
-          docker start "$POSTGRES_CONTAINER"
-          for _ in $(seq 1 60); do
-            health=$(docker inspect --format '{{.State.Health.Status}}' "$POSTGRES_CONTAINER")
-            [ "$health" = healthy ] && exit 0
-            sleep 1
+          sudo systemctl reload docker
+          for _ in $(seq 1 20); do
+            mirrors=$(docker info --format '{{json .RegistryConfig.Mirrors}}')
+            case "$mirrors" in *mirror.gcr.io*) echo "registry mirrors: $mirrors"; exit 0 ;; esac
+            sleep 0.5
           done
-          echo "the postgres service is $health after the Docker restart" >&2
+          echo "dockerd did not take the registry mirror: $mirrors" >&2
           exit 1
 
-      # TEMPORARY proof for SLNT-1140, removed before merge: with Docker Hub unreachable from the
-      # runner, any pull on this daemon that skips the mirror fails the job.
-      - name: Refuse Docker Hub on this runner (SLNT-1140 proof)
+      # TEMPORARY proof for SLNT-1140, removed before merge: with Docker Hub unreachable, an
+      # anonymous pull of the guard image (as the volume test's controller makes it) still succeeds,
+      # so the mirror served it. Docker Hub is reachable again before the proofs run.
+      - name: An anonymous pull comes from the mirror (SLNT-1140 proof)
         if: runner.environment == 'github-hosted'
         run: |
+          sudo cp /etc/hosts /tmp/hosts.orig
           for host in registry-1.docker.io auth.docker.io index.docker.io; do
             printf '0.0.0.0 %s\n:: %s\n' "$host" "$host" | sudo tee -a /etc/hosts
           done
-          docker version --format 'docker {{.Server.Version}}'
-          docker info --format 'storage driver {{.Driver}}, image store {{json .DriverStatus}}'
-          if ! docker pull hello-world; then
-            sudo jq '.debug = true' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json.new
-            sudo mv /etc/docker/daemon.json.new /etc/docker/daemon.json
-            sudo systemctl reload docker
-            sleep 2
-            docker pull hello-world || true
-            sudo journalctl -u docker --since '-20 s' --no-pager | grep -v -i 'event' | tail -60
-            jq 'walk(if type == "object" then with_entries(if .key == "auth" or .key == "identitytoken" then .value = "<redacted>" else . end) else . end)' ~/.docker/config.json || echo "no client config"
-            sudo ls -la /root/.docker 2>&1 || true
-            curl -s -i 'https://mirror.gcr.io/v2/token?scope=repository:library/hello-world:pull' | head -3
-            t=$(curl -s 'https://mirror.gcr.io/v2/token?scope=repository:library/hello-world:pull' | jq -r .token)
-            curl -s -I -H "Authorization: Bearer $t" -H 'Accept: application/vnd.oci.image.index.v1+json' https://mirror.gcr.io/v2/library/hello-world/manifests/latest | head -3
-            exit 1
-          fi
-          docker image rm hello-world
+          anonymous=$(mktemp -d)
+          status=0
+          DOCKER_CONFIG=$anonymous docker pull busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e || status=$?
+          DOCKER_CONFIG=$anonymous docker pull alpine:3.20 || status=$?
+          sudo journalctl -u docker --since '-1 min' --no-pager | grep -E 'next endpoint|Trying to pull' || true
+          sudo cp /tmp/hosts.orig /etc/hosts
+          docker image rm busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e alpine:3.20
+          exit $status
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
