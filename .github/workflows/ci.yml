@@ -182,10 +182,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # The Boat publication suite, the resource reconciler and the caller-owned services proof
-    # use the same migrated Postgres as the tests job.
+    # use the same migrated Postgres as the tests job. Services start before any step, so this one
+    # names Google's Docker Hub mirror itself (see the mirror step below).
     services:
       postgres:
-        image: postgres:17
+        image: mirror.gcr.io/library/postgres:17
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: sealant_test
@@ -201,6 +202,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The proofs pull a dozen Docker Hub images on this daemon (the workspace guard, test
+      # servers, build bases), and Docker Hub refuses anonymous pulls once a runner's shared address
+      # spends its quota. Google's mirror serves the same digests with no anonymous limit and no
+      # login; dockerd still falls back to Docker Hub when the mirror fails. registry-mirrors
+      # reloads on SIGHUP, so the running postgres service is untouched.
+      - name: Pull Docker Hub images through Google's mirror
+        if: runner.environment == 'github-hosted'
+        run: |
+          config=/etc/docker/daemon.json
+          current=$(sudo cat "$config" 2>/dev/null || echo '{}')
+          echo "$current" | jq '."registry-mirrors" = ["https://mirror.gcr.io"]' | sudo tee "$config"
+          sudo systemctl reload docker
+          for _ in $(seq 1 20); do
+            mirrors=$(docker info --format '{{json .RegistryConfig.Mirrors}}')
+            case "$mirrors" in *mirror.gcr.io*) echo "registry mirrors: $mirrors"; exit 0 ;; esac
+            sleep 0.5
+          done
+          echo "dockerd did not take the registry mirror: $mirrors" >&2
+          exit 1
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
