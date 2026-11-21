@@ -49,8 +49,9 @@ schedules) needs no model change: note it for step 5.
 - A new transaction or runtime call is a new step with its own `pc` value, so a crash and every
   other actor can fall between it and its neighbours.
 - A write of the drain label (`state`) goes through `WriteLabel`: `Ranked` when it is
-  `recordObservation` with a terminal label, `Unranked` otherwise. A step that only writes the label
-  is reached through `LabelStep`, so the removal cases (`TrackLabel = FALSE`) skip it.
+  `recordObservation` with a terminal label, `Saved` when it is a drain's `recordProgress`,
+  `Unranked` otherwise. A step that only writes the label is reached through `LabelStep`, so the
+  removal cases (`TrackLabel = FALSE`) skip it.
 - `evidence_version` is not a number in the model: every stored or read version is a flag, TRUE
   while it is still current (`dcur`, `seenCur`, `basisCur`). A write that bumps the version calls
   `Bump` (or `BumpVoiding`) and sets `dcur'` itself.
@@ -108,29 +109,30 @@ every covered hunk since the old one.
 
 ## Coverage record
 
-| Code                                                                                                                                       | Model                                                                                      |
-| ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `workspace-capture-drains.ts` `authorizeDeletion`                                                                                          | `Authorize`                                                                                |
-| `confirmDeletion`, `issueDeletion`                                                                                                         | `Renew`, `Issue`                                                                           |
-| `reconcileIssuedDeletion` (`fenced`, `reauthorizedVersion`)                                                                                | `Settle`, `Fenced`, `Reauthorized`                                                         |
-| `completeDeletion`, `releaseDeletion`, `lapseIssuedDeletion`                                                                               | `Succeed`, `Release` (`NotSent`, `Refused`), `Unknown`                                     |
-| `openObservation`, `recordStatus`, `closeObservation`, `endObservation`                                                                    | `Open`, `Record`, `Close`, `End`; `FenceLapses`                                            |
-| `attestCompletion`                                                                                                                         | `Attest`                                                                                   |
-| `claimRecovery`, `admitRecovery`, `releaseRecovery`                                                                                        | `Claim`, `Admit`, `EndRecovery`; `ClaimLapses`                                             |
-| `capture-drain.ts` `authorizedDeletion`, `settleIssuedRemoval`                                                                             | `Look`, `Read`, `Authorize`, `Settle`                                                      |
-| `removeUnderDeletion`, `removalFailed` (`isRemovalRefusal`, `isRemovalPending`), `DELETION_HOLD_MS`                                        | `Issue`, `Send`, `Renew`, `Succeed`, `Refused`, `Unknown`, `HoldLapses`                    |
-| `observedAnswer`, `ledgerObservationRecorder`; the in-memory ledger                                                                        | the observer steps; the same contract                                                      |
-| `capture-drain-ledger.ts` (each call wraps one repo transaction; a failure fails safe)                                                     | the steps above                                                                            |
-| `recover-retained-executors.ts`: the first `authorizedDeletion` on the claim, `admitRecovery`, the removal after recovery                  | `Claim`, the recovery's first `Read`, `Admit`, its second round                            |
-| A runtime adapter's `removalFenceMs`                                                                                                       | `BoundPasses`, `elapsed`, `SendMayOutliveBound`                                            |
-| `recordObservation` (`drainLabelsOutranking`, `capture-evidence-order.ts`), `markRetained`, `recordProgress`; `claimLease`, `releaseLease` | `Ranked`, `Unranked`, `WriteLabel`; the drain claim (`claimBy`)                            |
-| `process-workspace-stop.ts`: its drain claim, `removalObservation` after the removal, `stop-failed`, `markRetained`                        | `StopClaims`, `StopReleases`, `LabelStopped`, `LabelMissing`, `StopFailed`, `MarkRetained` |
-| `reconcile-runtime-exits.ts` `settleUnsettledExecutors`: `gone` on `missing`, `removeRemains`, `markRetained`                              | `LabelMissing`, `LabelStopped`, `MarkRetained`                                             |
-| `capture-drain.ts` `drainCaptureBeforeStop`: its claim, `persist` (`observationOf`)                                                        | `DrainClaims`, `Open`, `DrainSaves`, `DrainClaimLapses`                                    |
+| Code                                                                                                                      | Model                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `workspace-capture-drains.ts` `authorizeDeletion`                                                                         | `Authorize`                                                                                |
+| `confirmDeletion`, `issueDeletion`                                                                                        | `Renew`, `Issue`                                                                           |
+| `reconcileIssuedDeletion` (`fenced`, `reauthorizedVersion`)                                                               | `Settle`, `Fenced`, `Reauthorized`                                                         |
+| `completeDeletion`, `releaseDeletion`, `lapseIssuedDeletion`                                                              | `Succeed`, `Release` (`NotSent`, `Refused`), `Unknown`                                     |
+| `openObservation`, `recordStatus`, `closeObservation`, `endObservation`                                                   | `Open`, `Record`, `Close`, `End`; `FenceLapses`                                            |
+| `attestCompletion`                                                                                                        | `Attest`                                                                                   |
+| `claimRecovery`, `admitRecovery`, `releaseRecovery`                                                                       | `Claim`, `Admit`, `EndRecovery`; `ClaimLapses`                                             |
+| `capture-drain.ts` `authorizedDeletion`, `settleIssuedRemoval`                                                            | `Look`, `Read`, `Authorize`, `Settle`                                                      |
+| `removeUnderDeletion`, `removalFailed` (`isRemovalRefusal`, `isRemovalPending`), `DELETION_HOLD_MS`                       | `Issue`, `Send`, `Renew`, `Succeed`, `Refused`, `Unknown`, `HoldLapses`                    |
+| `observedAnswer`, `ledgerObservationRecorder`; the in-memory ledger                                                       | the observer steps; the same contract                                                      |
+| `capture-drain-ledger.ts` (each call wraps one repo transaction; a failure fails safe)                                    | the steps above                                                                            |
+| `recover-retained-executors.ts`: the first `authorizedDeletion` on the claim, `admitRecovery`, the removal after recovery | `Claim`, the recovery's first `Read`, `Admit`, its second round                            |
+| A runtime adapter's `removalFenceMs`                                                                                      | `BoundPasses`, `elapsed`, `SendMayOutliveBound`                                            |
+| `recordObservation` (`drainLabelsOutranking`, `capture-evidence-order.ts`), `markRetained`; `claimLease`, `releaseLease`  | `Ranked`, `Unranked`, `WriteLabel`; the drain claim (`claimBy`)                            |
+| `recordProgress` (`drainLabelsKeptOverProgress`)                                                                          | `Saved`, `WriteLabel`                                                                      |
+| `process-workspace-stop.ts`: its drain claim, `removalObservation` after the removal, `stop-failed`, `markRetained`       | `StopClaims`, `StopReleases`, `LabelStopped`, `LabelMissing`, `StopFailed`, `MarkRetained` |
+| `reconcile-runtime-exits.ts` `settleUnsettledExecutors`: `gone` on `missing`, `removeRemains`, `markRetained`             | `LabelMissing`, `LabelStopped`, `MarkRetained`                                             |
+| `capture-drain.ts` `drainCaptureBeforeStop`: its claim, `persist` (`observationOf`)                                       | `DrainClaims`, `Open`, `DrainSaves`, `DrainClaimLapses`                                    |
 
 ## Open findings
 
-| Case                             | Finding                                                                                               |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `finding-label-weakened`         | SLNT-1012: `markRetained`, `stop-failed` and a drain's `save` overwrite a terminal label (`stopped`). |
-| `assumption-send-outlives-bound` | SLNT-1010: a request sent minutes after `issueDeletion` acts after the ledger released it.            |
+| Case                             | Finding                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------ |
+| `finding-label-weakened`         | SLNT-1012: `markRetained` and `stop-failed` overwrite a terminal label (`stopped`).        |
+| `assumption-send-outlives-bound` | SLNT-1010: a request sent minutes after `issueDeletion` acts after the ledger released it. |

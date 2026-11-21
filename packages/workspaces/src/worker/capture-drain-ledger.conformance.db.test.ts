@@ -12,16 +12,26 @@
 import { randomUUID } from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
-import { createSealantDB, user, workspaceAttempts, type DB } from "@sealant/db";
-import { Effect } from "effect";
+import {
+  createSealantDB,
+  SealantDB,
+  user,
+  WorkspaceCaptureDrainRepo,
+  WorkspaceCaptureDrainRepoLive,
+  workspaceAttempts,
+  type DB,
+} from "@sealant/db";
+import { Effect, Layer } from "effect";
 import { beforeAll } from "vitest";
 
 import { captureStatus, savedStatus } from "./capture-daemon.fixture.js";
 import { databaseCaptureDrainLedger } from "./capture-drain-ledger.js";
 import {
+  EMPTY_CAPTURE_DRAIN_ENTRY,
   InMemoryCaptureDrainStore,
   inMemoryCaptureDrainLedger,
   type CaptureDrainLedger,
+  type CaptureDrainObservation,
   type DeletionTicket,
 } from "./capture-drain.js";
 
@@ -39,6 +49,8 @@ interface Ledgers {
   /** Two workers sharing one store. */
   readonly a: CaptureDrainLedger;
   readonly b: CaptureDrainLedger;
+  /** The run's drain label, as the API reads it. */
+  readonly label: (runId: string) => Effect.Effect<CaptureDrainObservation | undefined>;
 }
 
 const evidenceVersion = (ledger: CaptureDrainLedger, runId: string) =>
@@ -311,6 +323,32 @@ const removalLedgerCases = (ledgersOf: () => Ledgers) => {
         expect(yield* removalIssued(b, runId)).toBe(true);
       }),
   );
+
+  it.effect(
+    "keeps the owner's discard on record when a drain that still holds the run saves its progress (SLNT-978)",
+    () =>
+      Effect.gen(function* () {
+        const { newRun, a, b, label } = ledgersOf();
+        const runId = yield* newRun();
+        // A sweep's drain (worker A) holds the run, polling a daemon that refuses to finish.
+        const claimed = yield* a.claim(runId);
+        if (claimed === undefined) return yield* Effect.die("the drain could not claim the run");
+        // The owner's discard takes no claim: worker B removes the runtime and records it.
+        const discarded = {
+          state: "discarded",
+          detail: "unsaved captures discarded at the owner's request",
+        } as const;
+        yield* b.observe(runId, discarded);
+
+        // The drain's next poll saves what it saw, still under its claim.
+        const saved = yield* a.save(runId, claimed.token, EMPTY_CAPTURE_DRAIN_ENTRY, {
+          state: "draining",
+          detail: "pending 2 · final flush incomplete",
+        });
+        expect(saved).toBe(true);
+        expect(yield* label(runId)).toEqual(discarded);
+      }),
+  );
 };
 
 describe("capture removal ledger (in memory)", () => {
@@ -320,6 +358,7 @@ describe("capture removal ledger (in memory)", () => {
       newRun: () => Effect.sync(() => `run_conformance_${randomUUID()}`),
       a: inMemoryCaptureDrainLedger({ store, owner: "worker-a" }),
       b: inMemoryCaptureDrainLedger({ store, owner: "worker-b" }),
+      label: (runId) => Effect.sync(() => store.rows.get(runId)?.observation),
     };
   });
 });
@@ -346,5 +385,17 @@ describe.skipIf(DATABASE_URL === undefined)("capture removal ledger (Postgres)",
       }).pipe(Effect.orDie),
     a: databaseCaptureDrainLedger({ db: dbA, owner: "worker-a", leaseMs: 60_000 }),
     b: databaseCaptureDrainLedger({ db: dbB, owner: "worker-b", leaseMs: 60_000 }),
+    label: (runId) =>
+      Effect.gen(function* () {
+        const row = yield* (yield* WorkspaceCaptureDrainRepo).getByRunId(runId);
+        return row?.state === null || row === undefined
+          ? undefined
+          : { state: row.state, detail: row.detail ?? undefined };
+      }).pipe(
+        Effect.provide(
+          WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+        ),
+        Effect.orDie,
+      ),
   }));
 });

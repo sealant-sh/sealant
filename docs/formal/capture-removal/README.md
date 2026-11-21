@@ -6,7 +6,8 @@ The `capture-removal` skill (`.agents/skills/capture-removal/SKILL.md`) says how
 result and keep it in step with the code. This file is the record: what is verified, under which
 bounds and assumptions, and what the check found.
 
-Confirmed against the code at `8c2cbd88` (main, 2026-11-15). Run with tlx at the commit
+Confirmed against the code at `8c2cbd88` (main, 2026-11-15), and against SLNT-978's change to a
+drain's `save` (2026-11-21), the only covered change since. Run with tlx at the commit
 `docs/formal/tlx.sh` pins ("The checker" below).
 
 ## The promise
@@ -65,9 +66,9 @@ no ledger ticket).
 - **Label writers**: a deleter records `stopped` after its removal (`observe`, ranked by
   `drainLabelsOutranking`), `gone` or `stopped` when the runtime has nothing of the executor, and
   `kept` when it keeps it (`markRetained`, unranked); the stop job records `stop-failed` when its
-  runtime call fails (unranked). A drain records its outcome with `save` (`recordProgress`,
-  unranked, fenced on the drain claim). Only the stop job and the drains hold the drain claim; it
-  may lapse.
+  runtime call fails (unranked). A drain records its outcome with `save` (`recordProgress`, fenced
+  on the drain claim), which keeps a terminal label (`drainLabelsKeptOverProgress`, SLNT-978). Only
+  the stop job and the drains hold the drain claim; it may lapse.
 - **Attestation**: `attestCompletion` moves the evidence without asking the executor.
 - **The runtime**: carries out a request while its bound has not passed, refuses it, or leaves its
   outcome unknown to the caller.
@@ -150,6 +151,7 @@ other invariants' checks or not as it may; its case lists only its own.
 | `broken-observe-deleted`              | `openObservation`'s refusal of `deleted`                                                          | `NothingAskedOfDeleted`     |
 | `broken-authorize-over-recovery`      | `authorizeDeletion`'s `recovering` answer                                                         | `RecoveryExclusive`         |
 | `broken-label-unranked`               | `recordObservation`'s `drainLabelsOutranking` (before SLNT-968), with the proposed label fix on   | `LabelNeverWeakened`        |
+| `broken-save-unranked`                | `recordProgress`'s `drainLabelsKeptOverProgress` (before SLNT-978), with the label fix on         | `LabelNeverWeakened`        |
 | `broken-missing-without-gone-runtime` | a removal on basis `missing` only on the runtime's word that it has nothing of the executor       | `TerminalLabelMeansRemoved` |
 
 ## Findings
@@ -160,19 +162,17 @@ Within the bounds above, main keeps every invariant of the removal ledger, and b
 ### A terminal drain label overwritten by a later writer (SLNT-1012)
 
 Case `finding-label-weakened`, expected to fail until the code changes; `label-fixes` and
-`label-fixes-deep` turn the proposed fix on (`UnrankedKeepsTerminal`: `markRetained`,
-`recordProgress` and a non-terminal `observe` keep a terminal label) and pass with every invariant.
-#660 (SLNT-968) ranks terminal labels inside `recordObservation` only, and three writes bypass it.
+`label-fixes-deep` turn the proposed fix on (`UnrankedKeepsTerminal`: `markRetained` and a
+non-terminal `observe` keep a terminal label) and pass with every invariant. #660 (SLNT-968) ranks
+terminal labels inside `recordObservation` only, and two writes still bypass it.
 
-A drain over a removal another path made (the shortest trace):
+A third, a drain's `save` writing over a removal another path made, is fixed (SLNT-978; case
+`broken-save-unranked` restores it): a deleter that does not hold the drain claim (the owner's
+discard, the runtime-exit reconciler, the reaper, recovery) removed the executor and recorded it,
+and a drain that held or then took the claim saved `draining` over it. `recordProgress` now keeps a
+terminal label.
 
-1. A deleter that does not hold the drain claim (the runtime-exit reconciler, the reaper, recovery)
-   removes the executor on saved evidence and records `stopped`.
-2. A drain claims the run (the stop job's, for an instance `failed` rather than `stopped`).
-3. Its `openObservation` is refused (deleted); the sample is `unrecorded`, the drain finishes
-   `pending`, and `save` writes `draining` over `stopped`.
-
-`kept` after `stopped`:
+`kept` after `stopped` (the shortest trace):
 
 1. The reconciler looks at the runtime while it still has the executor.
 2. The stop job removes it on saved evidence and records `stopped`.

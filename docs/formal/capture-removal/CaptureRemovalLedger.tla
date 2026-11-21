@@ -44,7 +44,8 @@ CONSTANTS
     StopJobs,         \* the deleters that are the stop job: they hold the drain claim, write `stop-failed`
     Drains,           \* the observers that are drains: under the drain claim, they `save` a label
     LabelRanked,              \* recordObservation: a terminal label never replaces a stronger one
-    UnrankedKeepsTerminal,    \* the proposed fix: markRetained, `stop-failed`, `save` keep a terminal label
+    UnrankedKeepsTerminal,    \* the proposed fix: markRetained and `stop-failed` keep a terminal label
+    SaveKeepsTerminal,        \* a drain's `save` (recordProgress) keeps a terminal label (SLNT-978)
     MissingNeedsGoneRuntime,  \* a removal on basis `missing` only once the runtime said it has nothing
     TrackLabel        \* FALSE: the label and the drain claim are left out (the removal cases' bounds)
 
@@ -59,7 +60,8 @@ CodeCompleteOnlyOnSuccess == TRUE      \* removeUnderDeletion: completeDeletion 
 CodeAuthorizeRefusesDeleted == TRUE    \* authorizeDeletion: `deleted` answers deleted
 CodeAuthorizeChecksRecovery == TRUE    \* authorizeDeletion: `recovering` under another's live claim
 CodeLabelRanked == TRUE                \* recordObservation: `drainLabelsOutranking`
-CodeUnrankedKeepsTerminal == FALSE     \* markRetained, recordProgress: write the state whatever it was
+CodeUnrankedKeepsTerminal == FALSE     \* markRetained, `stop-failed`: write the state whatever it was
+CodeSaveKeepsTerminal == TRUE          \* recordProgress: `drainLabelsKeptOverProgress`
 CodeMissingNeedsGoneRuntime == TRUE    \* decideExecutorDeletion: `missing` only on the runtime's word
 
 Actors == Deleters \cup RecoveryActors
@@ -639,10 +641,10 @@ BoundPasses(t) ==
 -----------------------------------------------------------------------------
 (* The drain label (`workspace_capture_drains.state`) and the drain claim.     *)
 (* recordObservation (`ledger.observe`) ranks a terminal label: gone, then      *)
-(* stopped (`drainLabelsOutranking`). markRetained (`kept`), the stop job's     *)
-(* `stop-failed` (through observe, but not terminal, so not ranked) and a       *)
-(* drain's `save` (recordProgress, fenced on its claim) write whatever was      *)
-(* there.                                                                       *)
+(* stopped (`drainLabelsOutranking`). A drain's `save` (recordProgress, fenced  *)
+(* on its claim) keeps a terminal label (`drainLabelsKeptOverProgress`,         *)
+(* SLNT-978). markRetained (`kept`) and the stop job's `stop-failed` (through   *)
+(* observe, but not terminal, so not ranked) write whatever was there.         *)
 
 Terminal(l) == l \in {"gone", "stopped"}
 Rank(l) == CASE l = "gone" -> 1 [] l = "stopped" -> 2 [] OTHER -> 0
@@ -651,6 +653,8 @@ Rank(l) == CASE l = "gone" -> 1 [] l = "stopped" -> 2 [] OTHER -> 0
 Ranked(l) == IF LabelRanked /\ Rank(label) > Rank(l) THEN label ELSE l
 \* A write that does not rank. UnrankedKeepsTerminal: the proposed fix, it keeps a terminal label.
 Unranked(l) == IF UnrankedKeepsTerminal /\ Terminal(label) THEN label ELSE l
+\* A drain's `save`: SaveKeepsTerminal, it keeps a terminal label (`drainLabelsKeptOverProgress`).
+Saved(l) == IF SaveKeepsTerminal /\ Terminal(label) THEN label ELSE l
 
 \* Every label write, recording whether it weakened a terminal label.
 WriteLabel(new) ==
@@ -716,14 +720,15 @@ DrainClaims(o) ==
     /\ UNCHANGED <<labelOther, pc, label, bad>>
 
 \* `persist`: recordProgress with the drain's outcome, written only while its claim holds (`gone`
-\* only when the runtime has nothing of the executor); then the claim is released.
+\* only when the runtime has nothing of the executor), and never over a terminal label; then the
+\* claim is released.
 DrainSaves(o) ==
     /\ opc[o] = "save"
     /\ IF claimBy = o /\ TrackLabel
          \* `draining` stands for every outcome a drain records that is not terminal (`saved`,
          \* `kept`): they rank the same, below every terminal label.
          THEN \E l \in {"draining"} \cup (IF exec = "gone" THEN {"gone"} ELSE {}) :
-                WriteLabel(Unranked(l))
+                WriteLabel(Saved(l))
          ELSE UNCHANGED <<label, bad>>
     /\ claimBy' = IF claimBy = o THEN "none" ELSE claimBy
     /\ opc' = [opc EXCEPT ![o] = "done"]
