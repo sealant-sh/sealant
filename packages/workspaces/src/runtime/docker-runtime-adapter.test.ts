@@ -302,6 +302,114 @@ describe("DockerRuntimeAdapter", () => {
     expect(daemonArgs).not.toContain("mend_default");
   });
 
+  it("limits the memory of the workspace and its Docker service, from the host's when auto", async () => {
+    const GiB = 1024 ** 3;
+    let runCount = 0;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "info") return { stdout: `${String(8 * GiB)}\n`, stderr: "" };
+      if (args[0] === "network" && args[1] === "create") {
+        return { stdout: "network-id\n", stderr: "" };
+      }
+      if (args[0] === "run" && !isMetadataGuard(args)) {
+        runCount += 1;
+        return { stdout: runCount === 1 ? "docker-service-id\n" : "workspace-id\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      memory: { workspace: { kind: "auto" }, service: { kind: "auto" } },
+    });
+    const input = createLaunchInput({
+      tooling: { packages: [], services: { docker: { enabled: true } } },
+    });
+
+    await adapter.launch(input);
+    await adapter.launch(input);
+
+    const runs = commandRunner.mock.calls
+      .map((call) => call[1])
+      .filter((args) => args[0] === "run" && !isMetadataGuard(args));
+    const flag = (args: ReadonlyArray<string>, name: string) => args[args.indexOf(name) + 1];
+    const [daemonArgs = [], workspaceArgs = []] = runs;
+    expect(flag(daemonArgs, "--memory")).toBe(String(2 * GiB));
+    expect(flag(daemonArgs, "--memory-swap")).toBe(String(2 * GiB));
+    expect(flag(workspaceArgs, "--memory")).toBe(String(4 * GiB));
+    expect(flag(workspaceArgs, "--memory-swap")).toBe(String(4 * GiB));
+    expect(flag(workspaceArgs, "--oom-score-adj")).toBe("500");
+    // The flags come before the image: after it they would be the image's arguments.
+    expect(workspaceArgs.indexOf("--memory")).toBeLessThan(
+      workspaceArgs.indexOf("127.0.0.1:5000/sealant/workspaces/demo@sha256:test"),
+    );
+    expect(daemonArgs.indexOf("--memory")).toBeLessThan(
+      daemonArgs.indexOf("docker:27.5.1-dind-rootless"),
+    );
+    // The host is read once.
+    expect(commandRunner.mock.calls.filter((call) => call[1][0] === "info")).toHaveLength(1);
+  });
+
+  it("launches with no memory limit when the install sets none, and without reading the host", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) =>
+      args[0] === "run" ? { stdout: "workspace-id\n", stderr: "" } : { stdout: "", stderr: "" },
+    );
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      memory: { workspace: { kind: "none" }, service: { kind: "none" } },
+    });
+
+    await adapter.launch(createLaunchInput());
+
+    const workspaceArgs =
+      commandRunner.mock.calls
+        .map((call) => call[1])
+        .find((args) => args[0] === "run" && !isMetadataGuard(args)) ?? [];
+    expect(workspaceArgs).not.toContain("--memory");
+    expect(workspaceArgs).toContain("--oom-score-adj");
+    expect(commandRunner.mock.calls.some((call) => call[1][0] === "info")).toBe(false);
+  });
+
+  it("launches with no limit for auto when the host's memory cannot be read, and reads it again next launch", async () => {
+    let infoCalls = 0;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "info") {
+        infoCalls += 1;
+        if (infoCalls === 1) throw new Error("Cannot connect to the Docker daemon");
+        return { stdout: `${String(16 * 1024 ** 3)}\n`, stderr: "" };
+      }
+      return args[0] === "run"
+        ? { stdout: "workspace-id\n", stderr: "" }
+        : { stdout: "", stderr: "" };
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      memory: { workspace: { kind: "auto" }, service: { kind: "auto" } },
+    });
+
+    await adapter.launch(createLaunchInput());
+    await adapter.launch(createLaunchInput());
+    warn.mockRestore();
+
+    const runs = commandRunner.mock.calls
+      .map((call) => call[1])
+      .filter((args) => args[0] === "run" && !isMetadataGuard(args));
+    expect(runs[0]).not.toContain("--memory");
+    expect(runs[1]?.[runs[1].indexOf("--memory") + 1]).toBe(String(8 * 1024 ** 3));
+  });
+
   it("refuses a workspace network name Docker would not accept", () => {
     expect(
       () =>

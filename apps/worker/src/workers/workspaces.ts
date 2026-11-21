@@ -65,6 +65,8 @@ import {
   loadMicrovmContextFiles,
   createS3MicrovmArtifactStore,
   microvmRuntimeConfigFromEnv,
+  formatMemoryBytes,
+  parseDockerMemoryPolicy,
   parseDockerRegistryMirrors,
   parseDockerVolumeMappings,
   preserveBeforeDeadline,
@@ -330,6 +332,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     env.SEALANT_DOCKER_REGISTRY_MIRRORS === undefined
       ? undefined
       : parseDockerRegistryMirrors(env.SEALANT_DOCKER_REGISTRY_MIRRORS);
+  const dockerMemory = parseDockerMemoryPolicy(env);
   // Resource instances (Mend ADR 0019) run on this Docker host: the adapter tells their reach
   // about every executor it launches and removes, and a tick below keeps them at their rows.
   let boatResourceReach: (() => Promise<readonly ResourceWorkspaceLink[]>) | undefined;
@@ -480,6 +483,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           stopGraceSeconds: env.SEALANT_DOCKER_STOP_GRACE_SECONDS,
           captureStopGraceSeconds: env.SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS,
           containerStopTimeoutSeconds: env.SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS,
+          memory: dockerMemory,
           ...(resourceReconciler === undefined
             ? {}
             : { executorNetworks: resourceReconciler.hooks }),
@@ -489,6 +493,12 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // Every Docker launch that does not opt in runs the metadata guard's image: pull it now, so a
   // host that cannot reach it says so in this log at startup instead of at the first session.
   for (const adapter of dockerAdapters) {
+    void adapter.memoryLimits().then(({ workspace, service }) =>
+      console.log("Workspace memory limits", {
+        workspace: workspace === undefined ? "none" : formatMemoryBytes(workspace),
+        dockerService: service === undefined ? "none" : formatMemoryBytes(service),
+      }),
+    );
     void adapter.prepareNetworkGuard().then(
       ({ image, pulled }) => console.log("Cloud metadata guard image ready", { image, pulled }),
       (error: unknown) =>

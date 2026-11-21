@@ -55,6 +55,14 @@ export {
   parseDockerRegistryMirrors,
   registryMirrorHostNames,
 } from "./docker-registry-mirrors.js";
+export {
+  AUTO_DOCKER_MEMORY_POLICY,
+  autoDockerMemoryLimits,
+  formatMemoryBytes,
+  parseDockerMemoryPolicy,
+  type DockerMemoryLimits,
+  type DockerMemoryPolicy,
+} from "./docker-memory-limits.js";
 export * from "./kubernetes/index.js";
 export { buildCredentialFileWriteScript } from "./credential-files.js";
 export {

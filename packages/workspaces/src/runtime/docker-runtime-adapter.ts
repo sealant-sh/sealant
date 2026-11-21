@@ -15,6 +15,14 @@ import {
   captureSourceEnv,
 } from "./capture-source.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
+import {
+  dockerMemoryArgs,
+  dockerMemoryPolicyNeedsHost,
+  parseDockerHostMemory,
+  resolveDockerMemoryLimits,
+  type DockerMemoryLimits,
+  type DockerMemoryPolicy,
+} from "./docker-memory-limits.js";
 import { dockerdRegistryMirrorArgs, registryMirrorHostNames } from "./docker-registry-mirrors.js";
 import {
   assertDockerVolumeConfiguration,
@@ -361,6 +369,13 @@ export interface DockerRuntimeAdapterOptions {
    * Defaults to 60 s; never above the planned grace.
    */
   readonly containerStopTimeoutSeconds?: number;
+  /**
+   * Memory limits for each workspace container and its Docker service
+   * (`SEALANT_DOCKER_WORKSPACE_MEMORY_LIMIT`, `SEALANT_DOCKER_SERVICE_MEMORY_LIMIT`; see
+   * `docker-memory-limits.ts`). `auto` is a share of the Docker host's memory, read once from
+   * `docker info`. Unset: no limit and no OOM score, as before.
+   */
+  readonly memory?: DockerMemoryPolicy;
 }
 
 /** `docker stop -t` for a planned stop: long enough for sealantd's SIGTERM flush to ship. */
@@ -975,6 +990,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private readonly captureStopGraceSeconds: number;
   private readonly containerStopTimeoutSeconds: number;
   private readonly executorNetworks: DockerExecutorNetworkHooks | undefined;
+  private readonly memoryPolicy: DockerMemoryPolicy | undefined;
+  /** The policy resolved against the host, once it has been: a failed read is tried again. */
+  private memoryLimitsResolved: DockerMemoryLimits | undefined;
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
@@ -996,6 +1014,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.containerStopTimeoutSeconds =
       options.containerStopTimeoutSeconds ?? DEFAULT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS;
     this.executorNetworks = options.executorNetworks;
+    this.memoryPolicy = options.memory;
     this.controlSocketHostDir = options.controlSocketHostDir;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
     this.volumeMappings = options.volumeMappings;
@@ -1488,6 +1507,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   ): Promise<DockerServiceProvision> {
     const networkName = `${containerName}-network`;
     const serviceName = `${containerName}-docker`;
+    const memory = await this.memoryLimits();
     let createdNetworkId: string | undefined;
     try {
       const result = await this.commandRunner("docker", ["network", "create", networkName]);
@@ -1514,6 +1534,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       "DOCKER_TLS_CERTDIR=",
       "--label",
       `sealant.workspace=${containerName}`,
+      ...(this.memoryPolicy === undefined ? [] : dockerMemoryArgs(memory.service)),
       this.dockerServiceImage,
       "--tls=false",
       ...dockerdRegistryMirrorArgs(this.registryMirrors),
@@ -1583,6 +1604,37 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         `Could not refuse the cloud metadata address in '${name}' with the guard image '${this.networkGuardImage}': ${message}. ${NETWORK_GUARD_REMEDY}`,
       );
     }
+  }
+
+  /**
+   * The memory limits a launch runs with (`memory`): the policy, with `auto` resolved against the
+   * Docker host's memory. The host is read once; a read that fails runs this launch with no limit
+   * for an `auto` setting, says so in the log, and is tried again by the next launch.
+   */
+  public async memoryLimits(): Promise<DockerMemoryLimits> {
+    const policy = this.memoryPolicy;
+    if (policy === undefined) return { workspace: undefined, service: undefined };
+    if (this.memoryLimitsResolved !== undefined) return this.memoryLimitsResolved;
+    if (!dockerMemoryPolicyNeedsHost(policy)) {
+      this.memoryLimitsResolved = resolveDockerMemoryLimits(policy, undefined);
+      return this.memoryLimitsResolved;
+    }
+    const hostBytes = await this.commandRunner("docker", [
+      "info",
+      "--format",
+      "{{json .MemTotal}}",
+    ]).then(
+      (result) => parseDockerHostMemory(result.stdout) ?? result.stdout.trim(),
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    if (typeof hostBytes === "string") {
+      console.warn("Docker host memory could not be read; auto memory limits wait for it", {
+        answer: hostBytes,
+      });
+      return resolveDockerMemoryLimits(policy, undefined);
+    }
+    this.memoryLimitsResolved = resolveDockerMemoryLimits(policy, hostBytes);
+    return this.memoryLimitsResolved;
   }
 
   /**
@@ -2533,6 +2585,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         // raw frames past the guard's route. Dropped from the bounding set, `sudo` cannot get it
         // back; `ping` keeps working through Docker's `ping_group_range`.
         ...(cloudMetadataReachable ? [] : ["--cap-drop", "NET_RAW"]),
+        ...(this.memoryPolicy === undefined
+          ? []
+          : dockerMemoryArgs((await this.memoryLimits()).workspace)),
         imageReference,
       ];
       // Never `--rm` a capture workspace: Docker would delete its disk the moment it exits, and

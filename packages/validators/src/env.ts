@@ -749,6 +749,11 @@ export const workerRuntimeEnvSchema = z.object({
   // Optional container on this Docker host serving those mirrors: joined to each workspace's Docker
   // service network under the mirrors' host names, and disconnected before that network goes.
   SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER: z.string().trim().min(1).optional(),
+  // Memory limits for each Docker workspace container and for its Docker service (the `-docker`
+  // sidecar): `auto` (the default, a share of the Docker host's memory), `none`, or a size such as
+  // `4g`. Grammar is checked by `parseDockerMemoryPolicy`.
+  SEALANT_DOCKER_WORKSPACE_MEMORY_LIMIT: z.string().trim().min(1).optional(),
+  SEALANT_DOCKER_SERVICE_MEMORY_LIMIT: z.string().trim().min(1).optional(),
   // Optional image the Docker adapter runs for a moment in each workspace's network namespace to
   // refuse the cloud metadata address (it needs busybox `ip`). Unset: a pinned busybox. Point it
   // at a mirrored copy where the Docker host cannot pull from Docker Hub.
