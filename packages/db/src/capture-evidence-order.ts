@@ -262,3 +262,13 @@ export const drainLabelsOutranking = (
   incoming: TerminalDrainLabel,
 ): readonly TerminalDrainLabel[] =>
   TERMINAL_DRAIN_LABELS.slice(TERMINAL_DRAIN_LABELS.indexOf(incoming) + 1);
+
+/**
+ * The labels a drain's own progress write (`recordProgress`, the ledger's `save`) keeps: every
+ * terminal one. Each is written once the run's executor was removed or found gone, by whichever
+ * path did it, and a drain still holding the run's claim after that learns nothing new: its
+ * `draining`, `kept` or `saved` describes a daemon that is no longer there, and its `gone` is no
+ * stronger than what is on record (SLNT-978: a sweep's drain wrote `draining` over the owner's
+ * `discarded`). The save still renews the claim and writes its other columns.
+ */
+export const drainLabelsKeptOverProgress: readonly TerminalDrainLabel[] = TERMINAL_DRAIN_LABELS;

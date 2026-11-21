@@ -142,6 +142,7 @@ export {
 export {
   answerCovers,
   compareExecutorOrigins,
+  drainLabelsKeptOverProgress,
   drainLabelsOutranking,
   executorOriginFromStored,
   nextUnsavedObservations,

@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-
 import { Context, Effect, Layer, Schema } from "effect";
 
 import {
+  drainLabelsKeptOverProgress,
   drainLabelsOutranking,
   nextUnsavedObservations,
   statusSupersedes,
@@ -114,7 +115,10 @@ export interface WorkspaceCaptureDrainRepoService {
   }) => Effect.Effect<WorkspaceCaptureDrain | undefined, WorkspaceCaptureDrainRepoError>;
   /**
    * Write progress and renew the lease, fenced on `owner`: `undefined` when the lease was lost
-   * (it expired and another worker took the run), and nothing is written.
+   * (it expired and another worker took the run), and nothing is written. The lease is fenced on
+   * its owner, the label on what the record says: a row that already reads a terminal label
+   * (`drainLabelsKeptOverProgress`: `gone`, `stopped`, `discarded`, written by whichever path
+   * removed the executor) keeps its state and detail, and every other column is written.
    */
   readonly recordProgress: (input: {
     readonly runId: string;
@@ -587,10 +591,27 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
         withRepoError(
           "recordProgress",
           Effect.gen(function* () {
+            // A drain that still holds the run after another path removed its executor (the
+            // owner's discard, which takes no claim, or a removal that found it gone) does not
+            // relabel it: a terminal label stays as that path left it (SLNT-978).
+            const held = inArray(workspaceCaptureDrains.state, [...drainLabelsKeptOverProgress]);
+            const { state, detail } = input.progress;
             const [row] = yield* db
               .update(workspaceCaptureDrains)
               .set({
                 ...progressColumns(input.progress),
+                ...(state === undefined
+                  ? {}
+                  : {
+                      state: sql<WorkspaceCaptureDrainState>`case when ${held} then ${workspaceCaptureDrains.state} else ${state} end`,
+                    }),
+                ...(detail === undefined
+                  ? {}
+                  : {
+                      detail: sql<
+                        string | null
+                      >`case when ${held} then ${workspaceCaptureDrains.detail} else ${detail} end`,
+                    }),
                 leaseExpiresAt: leaseExpiry(input.leaseMs),
               })
               .where(

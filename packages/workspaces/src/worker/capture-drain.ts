@@ -56,6 +56,7 @@
  * the API reports while a stop is in progress.
  */
 import {
+  drainLabelsKeptOverProgress,
   drainLabelsOutranking,
   nextUnsavedObservations,
   statusSupersedes,
@@ -742,7 +743,10 @@ export const inMemoryCaptureDrainLedger = (
           keptLogged: entry.keptLogged,
           silentLogged: entry.silentLogged,
         };
-        row.observation = observation ?? row.observation;
+        // A terminal label stays as the path that removed the executor left it (SLNT-978).
+        const current = row.observation?.state;
+        const held = drainLabelsKeptOverProgress.some((label) => label === current);
+        if (observation !== undefined && !held) row.observation = observation;
         row.expiresAt = now() + leaseMs;
         return true;
       }),
