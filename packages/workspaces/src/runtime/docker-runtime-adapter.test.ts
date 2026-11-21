@@ -176,6 +176,9 @@ const createRuntimeCatalogLoader = (runtimes: ReadonlyArray<string> = ["runc", "
   }));
 };
 
+/** The value after a flag in an argv. */
+const flag = (args: ReadonlyArray<string>, name: string) => args[args.indexOf(name) + 1];
+
 /** The short-lived run that refuses the cloud metadata address in a container's namespace. */
 const isMetadataGuard = (args: ReadonlyArray<string>): boolean =>
   args[0] === "run" && args.includes("NET_ADMIN");
@@ -335,7 +338,6 @@ describe("DockerRuntimeAdapter", () => {
     const runs = commandRunner.mock.calls
       .map((call) => call[1])
       .filter((args) => args[0] === "run" && !isMetadataGuard(args));
-    const flag = (args: ReadonlyArray<string>, name: string) => args[args.indexOf(name) + 1];
     const [daemonArgs = [], workspaceArgs = []] = runs;
     expect(flag(daemonArgs, "--memory")).toBe(String(2 * GiB));
     expect(flag(daemonArgs, "--memory-swap")).toBe(String(2 * GiB));

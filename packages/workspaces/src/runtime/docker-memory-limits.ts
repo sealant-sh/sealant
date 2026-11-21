@@ -117,17 +117,19 @@ export const autoDockerMemoryLimits = (
   service: clamp(hostBytes / 4, 1 * GiB, 8 * GiB, hostBytes / 2),
 });
 
+/** One setting's limit, given what `auto` comes to (undefined while the host is unknown). */
+const limitOf = (setting: DockerMemorySetting, auto: number | undefined): number | undefined =>
+  setting.kind === "bytes" ? setting.bytes : setting.kind === "none" ? undefined : auto;
+
 /** Apply the policy, given the host's memory when either setting is `auto`. */
 export const resolveDockerMemoryLimits = (
   policy: DockerMemoryPolicy,
   hostBytes: number | undefined,
 ): DockerMemoryLimits => {
   const auto = hostBytes === undefined ? undefined : autoDockerMemoryLimits(hostBytes);
-  const pick = (setting: DockerMemorySetting, share: number | undefined): number | undefined =>
-    setting.kind === "bytes" ? setting.bytes : setting.kind === "none" ? undefined : share;
   return {
-    workspace: pick(policy.workspace, auto?.workspace),
-    service: pick(policy.service, auto?.service),
+    workspace: limitOf(policy.workspace, auto?.workspace),
+    service: limitOf(policy.service, auto?.service),
   };
 };
 
