@@ -6,7 +6,7 @@ Used by the web tRPC router + settings UI. Secret material only ever flows INTO 
 `createConnectedAccountRequestSchema.secret`; no response schema ever includes it.
 */
 
-export const connectedAccountProviderSchema = z.enum(["claude", "codex", "github"]);
+export const connectedAccountProviderSchema = z.enum(["claude", "codex", "github", "antigravity"]);
 
 export const connectedAccountStatusSchema = z.enum(["active", "invalid", "archived"]);
 

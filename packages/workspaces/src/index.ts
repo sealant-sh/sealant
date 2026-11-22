@@ -9,6 +9,7 @@ export * from "./queue/index.js";
 export * from "./package-standardization.js";
 export * from "./api/workspace.js";
 export * from "./api/person-layout.js";
+export * from "./worker/antigravity-token-sync-back.js";
 export * from "./worker/capture-drain.js";
 export * from "./worker/capture-drain-ledger.js";
 export * from "./worker/claude-credentials-sync-back.js";

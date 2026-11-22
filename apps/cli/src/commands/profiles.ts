@@ -41,7 +41,10 @@ export const parseClearList = (raw: string): ParsedClearList => {
     .map((entry) => entry.trim())
     .filter((entry) => entry !== "");
   if (entries.length === 0) {
-    return { ok: false, reason: "--clear needs at least one provider (claude, codex, github)." };
+    return {
+      ok: false,
+      reason: "--clear needs at least one provider (claude, codex, github, antigravity).",
+    };
   }
   const providers: Array<ConnectedAccountProvider> = [];
   for (const entry of entries) {
@@ -49,7 +52,7 @@ export const parseClearList = (raw: string): ParsedClearList => {
     if (!parsed.success) {
       return {
         ok: false,
-        reason: `Unknown provider "${entry}" in --clear (expected claude, codex, or github).`,
+        reason: `Unknown provider "${entry}" in --clear (expected claude, codex, github, or antigravity).`,
       };
     }
     if (!providers.includes(parsed.data)) {
@@ -116,10 +119,15 @@ const profilesListCommand = Command.make("list", {}, () =>
         byProvider("claude"),
         byProvider("codex"),
         byProvider("github"),
+        byProvider("antigravity"),
       ]);
     }
     yield* Console.log(
-      renderTable(["NAME", "SLUG", "STATUS", "CLAUDE", "CODEX", "GITHUB"], rows, palette),
+      renderTable(
+        ["NAME", "SLUG", "STATUS", "CLAUDE", "CODEX", "GITHUB", "ANTIGRAVITY"],
+        rows,
+        palette,
+      ),
     );
   }),
 ).pipe(Command.withDescription("List profiles and their credential bindings"));
@@ -182,12 +190,13 @@ const profilesBindCommand = Command.make(
     claude: accountNameFlag("claude"),
     codex: accountNameFlag("codex"),
     github: accountNameFlag("github"),
+    antigravity: accountNameFlag("antigravity"),
     clear: Flag.String("clear").pipe(
       Flag.optional,
       Flag.withDescription("Comma-separated providers to unbind (e.g. --clear claude,codex)"),
     ),
   },
-  ({ claude, clear, codex, github, profile }) =>
+  ({ antigravity, claude, clear, codex, github, profile }) =>
     Effect.gen(function* () {
       const settings = yield* currentSettings;
       const client = yield* ControlPlaneClientService;
@@ -198,7 +207,7 @@ const profilesBindCommand = Command.make(
         readonly provider: ConnectedAccountProvider;
         readonly accountName: string;
       }> = [];
-      const flagByProvider = { claude, codex, github };
+      const flagByProvider = { claude, codex, github, antigravity };
       for (const provider of CONNECTED_ACCOUNT_PROVIDERS) {
         const accountName = Option.getOrUndefined(flagByProvider[provider]);
         if (accountName !== undefined) {
@@ -220,7 +229,7 @@ const profilesBindCommand = Command.make(
         return yield* Effect.fail(
           new CliFailure({
             message: "Nothing to do.",
-            hint: "Pass at least one of --claude/--codex/--github <name>, or --clear <providers>.",
+            hint: "Pass at least one of --claude/--codex/--github/--antigravity <name>, or --clear <providers>.",
           }),
         );
       }

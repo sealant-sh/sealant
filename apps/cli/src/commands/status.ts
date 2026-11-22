@@ -24,7 +24,7 @@ export const authStatusCommand = Command.make("status", {}, () =>
       yield* Console.log("No connected accounts yet.");
       yield* Console.log(
         palette.dim(
-          "Connect one with `sealant auth claude`, `sealant auth codex`, or `sealant auth github`.",
+          "Connect one with `sealant auth claude`, `sealant auth codex`, `sealant auth github`, or `sealant auth antigravity`.",
         ),
       );
       return;

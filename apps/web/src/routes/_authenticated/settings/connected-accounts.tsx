@@ -50,6 +50,16 @@ const PROVIDERS: readonly ProviderCopy[] = [
     footnote:
       "Used for git clone/push/pull and GitHub API calls from your workspaces. Needs the repo scope; workflow is required to edit .github/workflows.",
   },
+  {
+    provider: "antigravity",
+    name: "Antigravity",
+    valueProp: "Run Google Antigravity (agy) inside your workspaces with your Google login.",
+    command: "agy",
+    commandNote:
+      "Sign in on your machine, then paste the contents of ~/.gemini/antigravity-cli/antigravity-oauth-token below.",
+    footnote:
+      "Workspaces receive a copy without the refresh token; Sealant refreshes it in the background and pushes fresh access tokens to running workspaces.",
+  },
 ];
 
 const isCredentialsKeyError = (message: string): boolean =>
@@ -136,9 +146,9 @@ function ConnectedAccountsSettingsPage() {
           Connected accounts
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          Bring your own Claude and Codex subscriptions and a GitHub token. You run the official
-          tool once on your machine and paste the result here; Sealant stores it encrypted and
-          injects it into your workspaces. Sealant never signs in on your behalf.
+          Bring your own Claude, Codex, and Antigravity logins and a GitHub token. You run the
+          official tool once on your machine and paste the result here; Sealant stores it encrypted
+          and injects it into your workspaces. Sealant never signs in on your behalf.
         </p>
       </header>
 
@@ -224,6 +234,15 @@ function ProviderCard({
         return null;
       } catch {
         return "Paste the full contents of ~/.codex/auth.json — this isn't valid JSON.";
+      }
+    }
+
+    if (copy.provider === "antigravity") {
+      try {
+        JSON.parse(value);
+        return null;
+      } catch {
+        return "Paste the full contents of ~/.gemini/antigravity-cli/antigravity-oauth-token — this isn't valid JSON.";
       }
     }
 
@@ -344,7 +363,9 @@ function ProviderCard({
           </NumberedStep>
 
           <NumberedStep index={2} title="Paste the result" note={copy.footnote}>
-            {copy.provider === "codex" || copy.provider === "claude" ? (
+            {copy.provider === "codex" ||
+            copy.provider === "claude" ||
+            copy.provider === "antigravity" ? (
               <textarea
                 value={secret}
                 onChange={(event) => {
@@ -356,7 +377,9 @@ function ProviderCard({
                 placeholder={
                   copy.provider === "codex"
                     ? '{ "OPENAI_API_KEY": null, "tokens": { ... } }'
-                    : '{ "claudeAiOauth": { ... } } — or sk-ant-oat01-...'
+                    : copy.provider === "antigravity"
+                      ? '{ "token": { "access_token": "...", "refresh_token": "...", "expiry": "..." } }'
+                      : '{ "claudeAiOauth": { ... } } — or sk-ant-oat01-...'
                 }
                 autoComplete="off"
                 spellCheck={false}
@@ -375,7 +398,9 @@ function ProviderCard({
                 spellCheck={false}
               />
             )}
-            {copy.provider === "codex" || copy.provider === "claude" ? (
+            {copy.provider === "codex" ||
+            copy.provider === "claude" ||
+            copy.provider === "antigravity" ? (
               <p className="mt-2 text-xs leading-relaxed text-faint">
                 This value is sensitive — it authenticates as you. It is masked in transit and
                 stored encrypted.
@@ -466,6 +491,20 @@ function AccountMetadata({ account }: { readonly account: ConnectedAccountSummar
     return (
       <p className="font-mono text-xs text-muted-foreground break-all">
         {identity ?? "codex session"} · {synced ?? connected}
+      </p>
+    );
+  }
+
+  if (account.provider === "antigravity") {
+    const identity = readString(account.metadata, "email");
+    const suffix = readString(account.metadata, "tokenSuffix");
+    const synced =
+      account.lastSyncedAt === null ? null : `last synced ${formatDate(account.lastSyncedAt)}`;
+
+    return (
+      <p className="font-mono text-xs text-muted-foreground break-all">
+        {identity ?? (suffix === undefined ? "antigravity session" : `session …${suffix}`)} ·{" "}
+        {synced ?? connected}
       </p>
     );
   }

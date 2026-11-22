@@ -86,7 +86,7 @@ export const credentialFileInjectionSchema = z.strictObject({
       uid: z.number().int().min(0),
       gid: z.number().int().min(0),
       generation: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
-      providers: z.array(z.enum(["claude", "codex", "github"])).min(1),
+      providers: z.array(z.enum(["claude", "codex", "github", "antigravity"])).min(1),
     })
     .optional(),
 });

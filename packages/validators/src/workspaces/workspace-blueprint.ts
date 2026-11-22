@@ -370,7 +370,12 @@ export const workspaceSpecNetworkSchema = z
   })
   .prefault({});
 
-export const workspaceCredentialProviderSchema = z.enum(["claude", "codex", "github"]);
+export const workspaceCredentialProviderSchema = z.enum([
+  "claude",
+  "codex",
+  "github",
+  "antigravity",
+]);
 
 // Opaque connected-account pointer (`connected-account:<id>`), resolved and decrypted by the
 // worker just before launch. Blueprints never carry credential material itself.

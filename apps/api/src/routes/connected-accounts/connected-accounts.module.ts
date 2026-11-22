@@ -18,6 +18,7 @@ import {
   type MarkConnectedAccountInvalidResponse,
 } from "@sealant/api-contracts";
 import {
+  antigravityTokenCanRefresh,
   apiKeyMetadata,
   anthropicSecretKindOf,
   CLAUDE_TOKEN_PREFIX,
@@ -28,6 +29,7 @@ import {
   loginClassOfKind,
   narrowClaudeCredentialsJson,
   OPENAI_API_KEY_PREFIX,
+  parseAntigravityTokenJson,
   parseApiKey,
   parseClaudeCredentialsJson,
   parseCodexAuthJson,
@@ -356,6 +358,25 @@ export const normalizeSecret = (
             : { tokenType: "gh-cli", scopesVerified: false },
         );
       }
+      case "antigravity": {
+        const parsed = parseAntigravityTokenJson(secret);
+
+        if (!parsed.valid) {
+          return yield* new ConnectedAccountBadRequestError({ message: parsed.reason });
+        }
+
+        if (!antigravityTokenCanRefresh(secret)) {
+          return yield* new ConnectedAccountBadRequestError({
+            message:
+              "antigravity-oauth-token must contain token.refresh_token. Sign in with `agy` and paste ~/.gemini/antigravity-cli/antigravity-oauth-token.",
+          });
+        }
+
+        return credentialOf(["antigravity", { tokenJson: secret }], {
+          ...parsed.metadata,
+          connectedVia: "paste",
+        });
+      }
     }
   });
 };
@@ -386,7 +407,12 @@ type ConnectTarget =
   | { readonly kind: "replace"; readonly account: ConnectedAccountWithDefault }
   | { readonly kind: "create"; readonly name: string };
 
-const providerLabel = { claude: "Claude", codex: "Codex", github: "GitHub" } as const;
+const providerLabel = {
+  claude: "Claude",
+  codex: "Codex",
+  github: "GitHub",
+  antigravity: "Antigravity",
+} as const;
 const loginLabel = { subscription: "subscription login", "api-key": "API key" } as const;
 
 type StoredLogin = ConnectedAccountLoginClass | "unreadable" | undefined;
@@ -478,10 +504,10 @@ const parseConnectEndpoint = (
   request: CreateConnectedAccountRequest,
 ): Effect.Effect<EndpointUrl | undefined, ConnectedAccountBadRequestError> => {
   if (request.endpoint === undefined) return Effect.succeed(undefined);
-  if (request.provider === "github") {
+  if (request.provider === "github" || request.provider === "antigravity") {
     return Effect.fail(
       new ConnectedAccountBadRequestError({
-        message: "A GitHub token has no endpoint; connect it without one.",
+        message: `A${request.provider === "antigravity" ? "n Antigravity login" : " GitHub token"} has no endpoint; connect it without one.`,
       }),
     );
   }
@@ -499,7 +525,7 @@ const parseConnectEndpoint = (
 };
 
 const loginMismatch = (
-  provider: "claude" | "codex",
+  provider: "claude" | "codex" | "antigravity",
   expected: ConnectedAccountLoginClass,
   actual: ConnectedAccountLoginClass,
 ): string =>

@@ -23,7 +23,12 @@ after that only `makeDefault` on a connect, or `setConnectedAccountDefault`, cha
 Disconnecting the default leaves the person without one: no other account is chosen for them.
 */
 
-export const connectedAccountProviderSchema = Schema.Literals(["claude", "codex", "github"]);
+export const connectedAccountProviderSchema = Schema.Literals([
+  "claude",
+  "codex",
+  "github",
+  "antigravity",
+]);
 export type ConnectedAccountProvider = typeof connectedAccountProviderSchema.Type;
 
 export const connectedAccountStatusSchema = Schema.Literals(["active", "invalid", "archived"]);

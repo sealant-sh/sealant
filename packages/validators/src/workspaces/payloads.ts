@@ -24,6 +24,7 @@ export const newWorkspaceCredentialsSchema = z.object({
   claude: z.string().trim().min(1).optional(),
   codex: z.string().trim().min(1).optional(),
   github: z.string().trim().min(1).optional(),
+  antigravity: z.string().trim().min(1).optional(),
 });
 
 export const newWorkspaceSchema = workspaceBuildSpecSchema.extend({

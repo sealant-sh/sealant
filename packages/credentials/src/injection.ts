@@ -1,5 +1,11 @@
-import { claudeCredentialsCopy, claudeSetupTokenCredentials, codexLoginFile } from "./copies.js";
+import {
+  antigravityTokenCopy,
+  claudeCredentialsCopy,
+  claudeSetupTokenCredentials,
+  codexLoginFile,
+} from "./copies.js";
 import type {
+  AntigravityTokenPayload,
   ClaudeSubscriptionPayload,
   CodexCredentialPayload,
   GitHubCredentialPayload,
@@ -24,6 +30,7 @@ export type CredentialInjection =
 export const CLAUDE_OAUTH_TOKEN_ENV_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
 export const CLAUDE_CREDENTIALS_JSON_PATH = "$HOME/.claude/.credentials.json";
 export const CODEX_AUTH_JSON_PATH = "$HOME/.codex/auth.json";
+export const ANTIGRAVITY_TOKEN_PATH = "$HOME/.gemini/antigravity-cli/antigravity-oauth-token";
 export const GITHUB_TOKEN_ENV_KEYS = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
 
 export const claudeApiKeyUnsupported = (accountName: string): string =>
@@ -35,7 +42,8 @@ export const endpointKeyUnsupported = (accountName: string): string =>
 type PlanCredentialInjectionsArgs =
   | readonly ["claude", ClaudeSubscriptionPayload]
   | readonly ["codex", CodexCredentialPayload]
-  | readonly ["github", GitHubCredentialPayload];
+  | readonly ["github", GitHubCredentialPayload]
+  | readonly ["antigravity", AntigravityTokenPayload];
 
 export const planCredentialInjections = (
   ...args: PlanCredentialInjectionsArgs
@@ -80,6 +88,19 @@ export const planCredentialInjections = (
         key,
         value: payload.token,
       }));
+    }
+    case "antigravity": {
+      return [
+        {
+          kind: "file",
+          path: ANTIGRAVITY_TOKEN_PATH,
+          // A copy without refresh_token: only the keep-fresh worker refreshes (§6a).
+          contentBase64: Buffer.from(antigravityTokenCopy(payload.tokenJson), "utf8").toString(
+            "base64",
+          ),
+          mode: "600",
+        },
+      ];
     }
   }
 };

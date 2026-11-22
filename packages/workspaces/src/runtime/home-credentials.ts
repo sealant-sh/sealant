@@ -31,13 +31,20 @@ import {
 const PROCESS_NOT_FOUND: number = ControlErrorCode.PROCESS_NOT_FOUND;
 
 /** The providers a home holds logins for. */
-export type HomeCredentialProvider = "claude" | "codex" | "github" | "pi" | "opencode";
+export type HomeCredentialProvider =
+  | "claude"
+  | "codex"
+  | "github"
+  | "antigravity"
+  | "pi"
+  | "opencode";
 
 /** Where each provider's login lives, relative to the home. */
 export const HOME_CREDENTIAL_FILES: Readonly<Record<HomeCredentialProvider, string>> = {
   claude: ".claude/.credentials.json",
   codex: ".codex/auth.json",
   github: ".config/gh/hosts.yml",
+  antigravity: ".gemini/antigravity-cli/antigravity-oauth-token",
   pi: ".pi/agent/auth.json",
   opencode: ".local/share/opencode/auth.json",
 };
@@ -270,6 +277,8 @@ export const HOME_SCRIPT_EXIT = {
    * key's name there is a directory: no key is written.
    */
   claudeKeyUnusable: 89,
+  /** Antigravity's `antigravity-oauth-token` is not a regular single-link writable file. */
+  antigravityLoginUnusable: 94,
 } as const;
 
 const KEPT_LOGINS_BASE = 90;
@@ -306,9 +315,10 @@ const FILE_EXITS: Readonly<Record<HomeFileCredentialProvider, number>> = {
   claude: HOME_SCRIPT_EXIT.claudeLoginUnusable,
   codex: HOME_SCRIPT_EXIT.codexLoginUnusable,
   github: HOME_SCRIPT_EXIT.githubLoginUnusable,
+  antigravity: HOME_SCRIPT_EXIT.antigravityLoginUnusable,
 };
 
-/** The first descriptor the owner's half opens a whole-file login on (one each, at most three). */
+/** The first descriptor the owner's half opens a whole-file login on (one each, at most four). */
 const FIRST_LOGIN_FD = 3;
 
 /** The exits a merged login's write or removal answers for each provider. */
@@ -690,8 +700,13 @@ export const buildHomeCredentialScript = (input: HomeCredentialScriptInput): str
 };
 
 /** The providers whose login is a whole file of its own (a launch writes only these). */
-export type HomeFileCredentialProvider = "claude" | "codex" | "github";
-const HOME_FILE_PROVIDERS: readonly HomeFileCredentialProvider[] = ["claude", "codex", "github"];
+export type HomeFileCredentialProvider = "claude" | "codex" | "github" | "antigravity";
+const HOME_FILE_PROVIDERS: readonly HomeFileCredentialProvider[] = [
+  "claude",
+  "codex",
+  "github",
+  "antigravity",
+];
 
 /** Which provider's login file a path relative to a home is, if it is one a launch writes. */
 export const homeCredentialProviderOf = (
@@ -800,6 +815,8 @@ export const homeLoginOfRefusal = (
       return "codex";
     case HOME_SCRIPT_EXIT.githubLoginUnusable:
       return "github";
+    case HOME_SCRIPT_EXIT.antigravityLoginUnusable:
+      return "antigravity";
     case HOME_SCRIPT_EXIT.claudeKeyUnusable:
       return "claude";
     default:
@@ -835,13 +852,16 @@ export const homeScriptRefusal = (
     }
     case HOME_SCRIPT_EXIT.claudeLoginUnusable:
     case HOME_SCRIPT_EXIT.codexLoginUnusable:
-    case HOME_SCRIPT_EXIT.githubLoginUnusable: {
+    case HOME_SCRIPT_EXIT.githubLoginUnusable:
+    case HOME_SCRIPT_EXIT.antigravityLoginUnusable: {
       const file =
         exitCode === HOME_SCRIPT_EXIT.claudeLoginUnusable
           ? HOME_CREDENTIAL_FILES.claude
           : exitCode === HOME_SCRIPT_EXIT.codexLoginUnusable
             ? HOME_CREDENTIAL_FILES.codex
-            : HOME_CREDENTIAL_FILES.github;
+            : exitCode === HOME_SCRIPT_EXIT.antigravityLoginUnusable
+              ? HOME_CREDENTIAL_FILES.antigravity
+              : HOME_CREDENTIAL_FILES.github;
       return `${home}/${file} is not a regular file its owner can write, or has another hard link (a name elsewhere, which could be saved state); sealant writes a login only into a file of its own, and wrote none.`;
     }
     case HOME_SCRIPT_EXIT.claudeKeyUnusable:

@@ -1060,7 +1060,7 @@ type WorkspaceCredentialRef = NewWorkspace["runtime"]["credentialRefs"][number];
  */
 const launchRefusal = (account: ConnectedAccount) =>
   Effect.gen(function* () {
-    if (account.provider === "github") return undefined;
+    if (account.provider === "github" || account.provider === "antigravity") return undefined;
     const cipher = yield* CredentialCipher;
     return yield* cipher.decrypt(account.encryptedPayload).pipe(
       Effect.flatMap((plaintext) =>

@@ -11,7 +11,7 @@ Payloads carry ONLY the secret material; non-secret display/ops data is extracte
 `metadata` column at connect time (see `parseCodexAuthJson`).
 */
 
-export const connectedAccountProviders = ["claude", "codex", "github"] as const;
+export const connectedAccountProviders = ["claude", "codex", "github", "antigravity"] as const;
 export type ConnectedAccountProvider = (typeof connectedAccountProviders)[number];
 
 export const connectedAccountProviderSchema = Schema.Literals(connectedAccountProviders);
@@ -585,12 +585,109 @@ export const hasKnownGitHubTokenPrefix = (token: string): boolean => {
   return GITHUB_TOKEN_PREFIXES.some((prefix) => token.startsWith(prefix));
 };
 
+// ---------------------------------------------------------------------------
+// Antigravity — verbatim ~/.gemini/antigravity-cli/antigravity-oauth-token
+// contents (personal Google OAuth login; workspaces receive a copy without
+// `refresh_token`, and only the keep-fresh worker refreshes it via `agy models`).
+// ---------------------------------------------------------------------------
+
+export const antigravityTokenPayloadSchema = Schema.Struct({
+  tokenJson: Schema.String.check(Schema.isNonEmpty()),
+});
+export type AntigravityTokenPayload = typeof antigravityTokenPayloadSchema.Type;
+
+export const parseAntigravityTokenPayload = Schema.decodeUnknownSync(antigravityTokenPayloadSchema);
+
+/** Non-secret metadata extracted from antigravity-oauth-token at connect/sync time. */
+export interface AntigravityTokenMetadata {
+  readonly tokenSuffix?: string;
+  readonly email?: string;
+  readonly authMethod?: string;
+  /** `token.expiry` parsed as epoch millis — the keep-fresh sweeper's newest-wins marker. */
+  readonly expiresAt?: number;
+}
+
+export type ParseAntigravityTokenJsonResult =
+  | { readonly valid: true; readonly metadata: AntigravityTokenMetadata }
+  | { readonly valid: false; readonly reason: string };
+
+/**
+ * Validates verbatim ~/.gemini/antigravity-cli/antigravity-oauth-token contents and extracts
+ * non-secret metadata. Shape: `{ token: { access_token, refresh_token?, expiry?, expires_in?,
+ * token_type? }, auth_method?, id_token_email? }`.
+ */
+export const parseAntigravityTokenJson = (raw: string): ParseAntigravityTokenJsonResult => {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { valid: false, reason: "antigravity-oauth-token is not valid JSON." };
+  }
+
+  const root = asRecord(parsed);
+
+  if (root === undefined) {
+    return { valid: false, reason: "antigravity-oauth-token must be a JSON object." };
+  }
+
+  const token = asRecord(root.token);
+
+  if (token === undefined) {
+    return { valid: false, reason: "antigravity-oauth-token must contain a token object." };
+  }
+
+  const accessToken = asNonEmptyString(token.access_token);
+
+  if (accessToken === undefined) {
+    return { valid: false, reason: "antigravity-oauth-token must contain token.access_token." };
+  }
+
+  const expiryRaw = asNonEmptyString(token.expiry);
+  const parsedExpiry = expiryRaw === undefined ? Number.NaN : Date.parse(expiryRaw);
+  const expiresAt = Number.isFinite(parsedExpiry) && parsedExpiry > 0 ? parsedExpiry : undefined;
+  const email = asNonEmptyString(root.id_token_email);
+  const authMethod = asNonEmptyString(root.auth_method);
+
+  return {
+    valid: true,
+    metadata: {
+      tokenSuffix: accessToken.slice(-4),
+      ...(email === undefined ? {} : { email }),
+      ...(authMethod === undefined ? {} : { authMethod }),
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+    },
+  };
+};
+
+/**
+ * SECRET-bearing extraction: returns every token value an antigravity-oauth-token can carry so
+ * callers can redact them from outbound error text. Returns an empty list on invalid input.
+ */
+export const extractAntigravitySecrets = (tokenJson: string): readonly string[] => {
+  try {
+    const root = asRecord(JSON.parse(tokenJson));
+    const token = root === undefined ? undefined : asRecord(root.token);
+
+    if (token === undefined) {
+      return [];
+    }
+
+    return [asNonEmptyString(token.access_token), asNonEmptyString(token.refresh_token)].filter(
+      (secret): secret is string => secret !== undefined,
+    );
+  } catch {
+    return [];
+  }
+};
+
 export const connectedAccountKinds = [
   "oauth-token",
   "credentials-json",
   "auth-json",
   "gh-cli-token",
   "api-key",
+  "antigravity-token",
 ] as const;
 export type ConnectedAccountKind = (typeof connectedAccountKinds)[number];
 
@@ -600,7 +697,8 @@ export const parseConnectedAccountKind = (kind: string): ConnectedAccountKind | 
 export type ProviderCredentialPayload =
   | readonly ["claude", ClaudeCredentialPayload]
   | readonly ["codex", CodexCredentialPayload]
-  | readonly ["github", GitHubCredentialPayload];
+  | readonly ["github", GitHubCredentialPayload]
+  | readonly ["antigravity", AntigravityTokenPayload];
 
 /** A decrypted payload as the credential it is; throws when it is not one of `provider`'s. */
 export const parseStoredCredential = (
@@ -615,6 +713,8 @@ export const parseStoredCredential = (
       return ["codex", parseCodexCredentialPayload(parsed)];
     case "github":
       return ["github", parseGitHubCredentialPayload(parsed)];
+    case "antigravity":
+      return ["antigravity", parseAntigravityTokenPayload(parsed)];
   }
 };
 
@@ -623,6 +723,7 @@ export const credentialKindOf = (
 ): ConnectedAccountKind => {
   const [provider, payload] = credential;
   if (provider === "github") return "gh-cli-token";
+  if (provider === "antigravity") return "antigravity-token";
   if ("apiKey" in payload) return "api-key";
   if (provider === "codex") return "auth-json";
   return "token" in payload ? "oauth-token" : "credentials-json";
@@ -638,6 +739,7 @@ export const loginClassOf = (
 ): ConnectedAccountLoginClass | undefined => {
   const [provider, payload] = credential;
   if (provider === "github") return undefined;
+  if (provider === "antigravity") return "subscription";
   if ("apiKey" in payload) return "api-key";
   if (provider === "claude") return "subscription";
   return codexAuthJsonLogin(payload.authJson)?.login ?? "subscription";
@@ -653,7 +755,7 @@ export type PlacedLogin =
 
 export const placedLoginOf = (...credential: ProviderCredentialPayload): PlacedLogin => {
   const [provider, payload] = credential;
-  if (provider === "github") return { kind: "subscription" };
+  if (provider === "github" || provider === "antigravity") return { kind: "subscription" };
   if ("apiKey" in payload) {
     return {
       kind: "api-key",
@@ -676,6 +778,7 @@ const loginClassOfKinds = {
   "auth-json": "subscription",
   "api-key": "api-key",
   "gh-cli-token": undefined,
+  "antigravity-token": "subscription",
 } as const satisfies Record<ConnectedAccountKind, ConnectedAccountLoginClass | undefined>;
 
 /** The login class a stored `kind` says, for reads; a write decision uses {@link loginClassOf}. */

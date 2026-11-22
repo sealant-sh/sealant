@@ -150,12 +150,14 @@ describe("kinds", () => {
     expect(credentialKindOf("codex", { apiKey: codexKey })).toBe("api-key");
     expect(credentialKindOf("codex", { authJson: "{}" })).toBe("auth-json");
     expect(credentialKindOf("github", { token: "gho_fake" })).toBe("gh-cli-token");
+    expect(credentialKindOf("antigravity", { tokenJson: "{}" })).toBe("antigravity-token");
     expect(connectedAccountKinds.map(loginClassOfKind)).toEqual([
       "subscription",
       "subscription",
       "subscription",
       undefined,
       "api-key",
+      "subscription",
     ]);
     expect(loginClassOf("github", { token: "gho_fake" })).toBeUndefined();
     expect(loginClassOf("claude", { apiKey: claudeKey })).toBe("api-key");

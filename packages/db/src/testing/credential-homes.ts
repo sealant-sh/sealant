@@ -41,6 +41,7 @@ const LOGIN_FILES = {
   claude: ".claude/.credentials.json",
   codex: ".codex/auth.json",
   github: ".config/gh/hosts.yml",
+  antigravity: ".gemini/antigravity-cli/antigravity-oauth-token",
   pi: ".pi/agent/auth.json",
   opencode: ".local/share/opencode/auth.json",
 } as const;

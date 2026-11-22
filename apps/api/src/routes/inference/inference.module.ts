@@ -192,6 +192,9 @@ const exchangeLoginOf = (...credential: ProviderCredentialPayload): ExchangeLogi
     case "github": {
       throw new Error("a GitHub login runs no inference");
     }
+    case "antigravity": {
+      throw new Error("an Antigravity login runs no inference");
+    }
   }
 };
 
