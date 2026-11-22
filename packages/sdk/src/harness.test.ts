@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { claudeCode, codex, customHarness, opencode } from "./harness.js";
+import { antigravity, claudeCode, codex, customHarness, opencode } from "./harness.js";
 
 describe("harness factories", () => {
   it("opencode runs one-shot as `opencode run <prompt>`", () => {
@@ -17,6 +17,9 @@ describe("harness factories", () => {
       "-p",
       "p",
     ]);
+    expect(antigravity().id).toBe("antigravity");
+    expect(antigravity().launchCommand).toBe("agy");
+    expect(antigravity().buildRunCommand("p")).toEqual({ executable: "agy", args: ["-p", "p"] });
   });
 
   it("customHarness is the bring-your-own escape hatch", () => {

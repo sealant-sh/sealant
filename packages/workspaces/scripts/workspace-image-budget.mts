@@ -263,7 +263,7 @@ const FIXTURE = JSON.stringify({
     "react-dom": "18.3.1",
   },
 });
-const HARNESSES = ["claude", "codex", "opencode", "pi"] as const;
+const HARNESSES = ["claude", "codex", "opencode", "pi", "agy"] as const;
 
 /** Inside a long-lived container: one sample of each tool measure, as JSON, in microseconds. */
 const TOOLS_SCRIPT = [

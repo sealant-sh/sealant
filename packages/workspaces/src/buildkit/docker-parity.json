@@ -1,770 +1,962 @@
 [
   {
     "name": "fedora/bash/none/codex",
-    "sha256": "bd07932d548854ae349d38028b974b8e166368b2aa869c9c1cda89945d37968d"
+    "sha256": "cd99982cda86f2e99a74bf254595b636f161961626c2638a8ef5a000fd27129e"
   },
   {
     "name": "fedora/bash/none/claude-code",
-    "sha256": "bd07932d548854ae349d38028b974b8e166368b2aa869c9c1cda89945d37968d"
+    "sha256": "cd99982cda86f2e99a74bf254595b636f161961626c2638a8ef5a000fd27129e"
   },
   {
     "name": "fedora/bash/none/opencode",
-    "sha256": "bd07932d548854ae349d38028b974b8e166368b2aa869c9c1cda89945d37968d"
+    "sha256": "cd99982cda86f2e99a74bf254595b636f161961626c2638a8ef5a000fd27129e"
   },
   {
     "name": "fedora/bash/none/pi",
-    "sha256": "bd07932d548854ae349d38028b974b8e166368b2aa869c9c1cda89945d37968d"
+    "sha256": "cd99982cda86f2e99a74bf254595b636f161961626c2638a8ef5a000fd27129e"
+  },
+  {
+    "name": "fedora/bash/none/antigravity",
+    "sha256": "cd99982cda86f2e99a74bf254595b636f161961626c2638a8ef5a000fd27129e"
   },
   {
     "name": "fedora/bash/public/codex",
-    "sha256": "4970ecfc675577676c896d7adc84a87442058eb33f38a6600f1cbcee4d3d69b3"
+    "sha256": "a45a53630acff71a9b8ead980efa30c7b81fbd14f645062723961078079e0f20"
   },
   {
     "name": "fedora/bash/public/claude-code",
-    "sha256": "4970ecfc675577676c896d7adc84a87442058eb33f38a6600f1cbcee4d3d69b3"
+    "sha256": "a45a53630acff71a9b8ead980efa30c7b81fbd14f645062723961078079e0f20"
   },
   {
     "name": "fedora/bash/public/opencode",
-    "sha256": "4970ecfc675577676c896d7adc84a87442058eb33f38a6600f1cbcee4d3d69b3"
+    "sha256": "a45a53630acff71a9b8ead980efa30c7b81fbd14f645062723961078079e0f20"
   },
   {
     "name": "fedora/bash/public/pi",
-    "sha256": "4970ecfc675577676c896d7adc84a87442058eb33f38a6600f1cbcee4d3d69b3"
+    "sha256": "a45a53630acff71a9b8ead980efa30c7b81fbd14f645062723961078079e0f20"
+  },
+  {
+    "name": "fedora/bash/public/antigravity",
+    "sha256": "a45a53630acff71a9b8ead980efa30c7b81fbd14f645062723961078079e0f20"
   },
   {
     "name": "fedora/bash/secret/codex",
-    "sha256": "23957cdf232f01298dbc9568e80e04bb4cdaa8698d46c44af26961d2d72e708f"
+    "sha256": "06b689194ff2c3d7c78b0fc0c68685175ce7f5e8270a51b2dcf9d884920f8cbc"
   },
   {
     "name": "fedora/bash/secret/claude-code",
-    "sha256": "23957cdf232f01298dbc9568e80e04bb4cdaa8698d46c44af26961d2d72e708f"
+    "sha256": "06b689194ff2c3d7c78b0fc0c68685175ce7f5e8270a51b2dcf9d884920f8cbc"
   },
   {
     "name": "fedora/bash/secret/opencode",
-    "sha256": "23957cdf232f01298dbc9568e80e04bb4cdaa8698d46c44af26961d2d72e708f"
+    "sha256": "06b689194ff2c3d7c78b0fc0c68685175ce7f5e8270a51b2dcf9d884920f8cbc"
   },
   {
     "name": "fedora/bash/secret/pi",
-    "sha256": "23957cdf232f01298dbc9568e80e04bb4cdaa8698d46c44af26961d2d72e708f"
+    "sha256": "06b689194ff2c3d7c78b0fc0c68685175ce7f5e8270a51b2dcf9d884920f8cbc"
+  },
+  {
+    "name": "fedora/bash/secret/antigravity",
+    "sha256": "06b689194ff2c3d7c78b0fc0c68685175ce7f5e8270a51b2dcf9d884920f8cbc"
   },
   {
     "name": "fedora/bash/runtime/codex",
-    "sha256": "7cebfe70e1386a127aed4dad3004a8867f07ea2f3c052876b053ae98af0925e8"
+    "sha256": "05532a760dbf8526ae4167e9b650a1ac4f9caf6f5b9e6f415981633aa0fcb702"
   },
   {
     "name": "fedora/bash/runtime/claude-code",
-    "sha256": "7cebfe70e1386a127aed4dad3004a8867f07ea2f3c052876b053ae98af0925e8"
+    "sha256": "05532a760dbf8526ae4167e9b650a1ac4f9caf6f5b9e6f415981633aa0fcb702"
   },
   {
     "name": "fedora/bash/runtime/opencode",
-    "sha256": "7cebfe70e1386a127aed4dad3004a8867f07ea2f3c052876b053ae98af0925e8"
+    "sha256": "05532a760dbf8526ae4167e9b650a1ac4f9caf6f5b9e6f415981633aa0fcb702"
   },
   {
     "name": "fedora/bash/runtime/pi",
-    "sha256": "7cebfe70e1386a127aed4dad3004a8867f07ea2f3c052876b053ae98af0925e8"
+    "sha256": "05532a760dbf8526ae4167e9b650a1ac4f9caf6f5b9e6f415981633aa0fcb702"
+  },
+  {
+    "name": "fedora/bash/runtime/antigravity",
+    "sha256": "05532a760dbf8526ae4167e9b650a1ac4f9caf6f5b9e6f415981633aa0fcb702"
   },
   {
     "name": "fedora/zsh/none/codex",
-    "sha256": "c8ade8ce0cf3d571620f0e362076d914f4f77766732d6c3647b6097fe0e4d56f"
+    "sha256": "3cb88bfc3fd7a696528cd1d7af1175953000b89bb71bdfdd272a5e4e93f3ef96"
   },
   {
     "name": "fedora/zsh/none/claude-code",
-    "sha256": "c8ade8ce0cf3d571620f0e362076d914f4f77766732d6c3647b6097fe0e4d56f"
+    "sha256": "3cb88bfc3fd7a696528cd1d7af1175953000b89bb71bdfdd272a5e4e93f3ef96"
   },
   {
     "name": "fedora/zsh/none/opencode",
-    "sha256": "c8ade8ce0cf3d571620f0e362076d914f4f77766732d6c3647b6097fe0e4d56f"
+    "sha256": "3cb88bfc3fd7a696528cd1d7af1175953000b89bb71bdfdd272a5e4e93f3ef96"
   },
   {
     "name": "fedora/zsh/none/pi",
-    "sha256": "c8ade8ce0cf3d571620f0e362076d914f4f77766732d6c3647b6097fe0e4d56f"
+    "sha256": "3cb88bfc3fd7a696528cd1d7af1175953000b89bb71bdfdd272a5e4e93f3ef96"
+  },
+  {
+    "name": "fedora/zsh/none/antigravity",
+    "sha256": "3cb88bfc3fd7a696528cd1d7af1175953000b89bb71bdfdd272a5e4e93f3ef96"
   },
   {
     "name": "fedora/zsh/public/codex",
-    "sha256": "349441f0dab3bed271b4135677dff6d554fbbc1d8a9b9839f3909ef1277728f0"
+    "sha256": "7a8991039f9e8bc2ac3ffbdde92ab6a8326118ca939ee05459ed81ad576a2209"
   },
   {
     "name": "fedora/zsh/public/claude-code",
-    "sha256": "349441f0dab3bed271b4135677dff6d554fbbc1d8a9b9839f3909ef1277728f0"
+    "sha256": "7a8991039f9e8bc2ac3ffbdde92ab6a8326118ca939ee05459ed81ad576a2209"
   },
   {
     "name": "fedora/zsh/public/opencode",
-    "sha256": "349441f0dab3bed271b4135677dff6d554fbbc1d8a9b9839f3909ef1277728f0"
+    "sha256": "7a8991039f9e8bc2ac3ffbdde92ab6a8326118ca939ee05459ed81ad576a2209"
   },
   {
     "name": "fedora/zsh/public/pi",
-    "sha256": "349441f0dab3bed271b4135677dff6d554fbbc1d8a9b9839f3909ef1277728f0"
+    "sha256": "7a8991039f9e8bc2ac3ffbdde92ab6a8326118ca939ee05459ed81ad576a2209"
+  },
+  {
+    "name": "fedora/zsh/public/antigravity",
+    "sha256": "7a8991039f9e8bc2ac3ffbdde92ab6a8326118ca939ee05459ed81ad576a2209"
   },
   {
     "name": "fedora/zsh/secret/codex",
-    "sha256": "9dfefffaead364dd404e716a9e17aea05188e0b7f8d895c0b27a8d6864688737"
+    "sha256": "4a2b928efedfe88cdf107d3fe58a10662e95be9f13d106dcb72babc29cf0b296"
   },
   {
     "name": "fedora/zsh/secret/claude-code",
-    "sha256": "9dfefffaead364dd404e716a9e17aea05188e0b7f8d895c0b27a8d6864688737"
+    "sha256": "4a2b928efedfe88cdf107d3fe58a10662e95be9f13d106dcb72babc29cf0b296"
   },
   {
     "name": "fedora/zsh/secret/opencode",
-    "sha256": "9dfefffaead364dd404e716a9e17aea05188e0b7f8d895c0b27a8d6864688737"
+    "sha256": "4a2b928efedfe88cdf107d3fe58a10662e95be9f13d106dcb72babc29cf0b296"
   },
   {
     "name": "fedora/zsh/secret/pi",
-    "sha256": "9dfefffaead364dd404e716a9e17aea05188e0b7f8d895c0b27a8d6864688737"
+    "sha256": "4a2b928efedfe88cdf107d3fe58a10662e95be9f13d106dcb72babc29cf0b296"
+  },
+  {
+    "name": "fedora/zsh/secret/antigravity",
+    "sha256": "4a2b928efedfe88cdf107d3fe58a10662e95be9f13d106dcb72babc29cf0b296"
   },
   {
     "name": "fedora/zsh/runtime/codex",
-    "sha256": "12f3bcaa7efe246ce5a421c5b5872f9da3edbff9a80a0ab95844e06fbc971037"
+    "sha256": "bdc4b31dd0996cb6d1dd0ebdeb8e201c84c83110c15ec83af224ae20b204ec69"
   },
   {
     "name": "fedora/zsh/runtime/claude-code",
-    "sha256": "12f3bcaa7efe246ce5a421c5b5872f9da3edbff9a80a0ab95844e06fbc971037"
+    "sha256": "bdc4b31dd0996cb6d1dd0ebdeb8e201c84c83110c15ec83af224ae20b204ec69"
   },
   {
     "name": "fedora/zsh/runtime/opencode",
-    "sha256": "12f3bcaa7efe246ce5a421c5b5872f9da3edbff9a80a0ab95844e06fbc971037"
+    "sha256": "bdc4b31dd0996cb6d1dd0ebdeb8e201c84c83110c15ec83af224ae20b204ec69"
   },
   {
     "name": "fedora/zsh/runtime/pi",
-    "sha256": "12f3bcaa7efe246ce5a421c5b5872f9da3edbff9a80a0ab95844e06fbc971037"
+    "sha256": "bdc4b31dd0996cb6d1dd0ebdeb8e201c84c83110c15ec83af224ae20b204ec69"
+  },
+  {
+    "name": "fedora/zsh/runtime/antigravity",
+    "sha256": "bdc4b31dd0996cb6d1dd0ebdeb8e201c84c83110c15ec83af224ae20b204ec69"
   },
   {
     "name": "fedora/fish/none/codex",
-    "sha256": "3ae29fb52ad1a34d814955142656cf19705b69cfcc3cc0b9605188bbfd677091"
+    "sha256": "3f7f6cc7d21a768fb15d93d398a089f47f6bfceb6e4e6804f2e99a916bd0a9de"
   },
   {
     "name": "fedora/fish/none/claude-code",
-    "sha256": "3ae29fb52ad1a34d814955142656cf19705b69cfcc3cc0b9605188bbfd677091"
+    "sha256": "3f7f6cc7d21a768fb15d93d398a089f47f6bfceb6e4e6804f2e99a916bd0a9de"
   },
   {
     "name": "fedora/fish/none/opencode",
-    "sha256": "3ae29fb52ad1a34d814955142656cf19705b69cfcc3cc0b9605188bbfd677091"
+    "sha256": "3f7f6cc7d21a768fb15d93d398a089f47f6bfceb6e4e6804f2e99a916bd0a9de"
   },
   {
     "name": "fedora/fish/none/pi",
-    "sha256": "3ae29fb52ad1a34d814955142656cf19705b69cfcc3cc0b9605188bbfd677091"
+    "sha256": "3f7f6cc7d21a768fb15d93d398a089f47f6bfceb6e4e6804f2e99a916bd0a9de"
+  },
+  {
+    "name": "fedora/fish/none/antigravity",
+    "sha256": "3f7f6cc7d21a768fb15d93d398a089f47f6bfceb6e4e6804f2e99a916bd0a9de"
   },
   {
     "name": "fedora/fish/public/codex",
-    "sha256": "fbb7ecd28e187b9ec98fe7e40b7b2781b7d1f7b137dd21fc9c795a63d67b5ed8"
+    "sha256": "d8125c441cf08a5829c88f09d6ef5e535331769ca692ef4d05637c6b612d5f2f"
   },
   {
     "name": "fedora/fish/public/claude-code",
-    "sha256": "fbb7ecd28e187b9ec98fe7e40b7b2781b7d1f7b137dd21fc9c795a63d67b5ed8"
+    "sha256": "d8125c441cf08a5829c88f09d6ef5e535331769ca692ef4d05637c6b612d5f2f"
   },
   {
     "name": "fedora/fish/public/opencode",
-    "sha256": "fbb7ecd28e187b9ec98fe7e40b7b2781b7d1f7b137dd21fc9c795a63d67b5ed8"
+    "sha256": "d8125c441cf08a5829c88f09d6ef5e535331769ca692ef4d05637c6b612d5f2f"
   },
   {
     "name": "fedora/fish/public/pi",
-    "sha256": "fbb7ecd28e187b9ec98fe7e40b7b2781b7d1f7b137dd21fc9c795a63d67b5ed8"
+    "sha256": "d8125c441cf08a5829c88f09d6ef5e535331769ca692ef4d05637c6b612d5f2f"
+  },
+  {
+    "name": "fedora/fish/public/antigravity",
+    "sha256": "d8125c441cf08a5829c88f09d6ef5e535331769ca692ef4d05637c6b612d5f2f"
   },
   {
     "name": "fedora/fish/secret/codex",
-    "sha256": "2c3dc06d49bdf741871ce973ec84ebdcd298f1893ec0e272d88a97d6aa22f749"
+    "sha256": "040873a208630430ab8591bcc63dccf1f91dd7e76a5d9e896ecf4479c6fbbad9"
   },
   {
     "name": "fedora/fish/secret/claude-code",
-    "sha256": "2c3dc06d49bdf741871ce973ec84ebdcd298f1893ec0e272d88a97d6aa22f749"
+    "sha256": "040873a208630430ab8591bcc63dccf1f91dd7e76a5d9e896ecf4479c6fbbad9"
   },
   {
     "name": "fedora/fish/secret/opencode",
-    "sha256": "2c3dc06d49bdf741871ce973ec84ebdcd298f1893ec0e272d88a97d6aa22f749"
+    "sha256": "040873a208630430ab8591bcc63dccf1f91dd7e76a5d9e896ecf4479c6fbbad9"
   },
   {
     "name": "fedora/fish/secret/pi",
-    "sha256": "2c3dc06d49bdf741871ce973ec84ebdcd298f1893ec0e272d88a97d6aa22f749"
+    "sha256": "040873a208630430ab8591bcc63dccf1f91dd7e76a5d9e896ecf4479c6fbbad9"
+  },
+  {
+    "name": "fedora/fish/secret/antigravity",
+    "sha256": "040873a208630430ab8591bcc63dccf1f91dd7e76a5d9e896ecf4479c6fbbad9"
   },
   {
     "name": "fedora/fish/runtime/codex",
-    "sha256": "a1c54f0684b07bdc8cf07bef26047e963e2b959f7863557ea12598ee3f095f3e"
+    "sha256": "74fc5ab9d5792ec3849a116eb16405844970dbfb6ebfaa1c4883de74534557b8"
   },
   {
     "name": "fedora/fish/runtime/claude-code",
-    "sha256": "a1c54f0684b07bdc8cf07bef26047e963e2b959f7863557ea12598ee3f095f3e"
+    "sha256": "74fc5ab9d5792ec3849a116eb16405844970dbfb6ebfaa1c4883de74534557b8"
   },
   {
     "name": "fedora/fish/runtime/opencode",
-    "sha256": "a1c54f0684b07bdc8cf07bef26047e963e2b959f7863557ea12598ee3f095f3e"
+    "sha256": "74fc5ab9d5792ec3849a116eb16405844970dbfb6ebfaa1c4883de74534557b8"
   },
   {
     "name": "fedora/fish/runtime/pi",
-    "sha256": "a1c54f0684b07bdc8cf07bef26047e963e2b959f7863557ea12598ee3f095f3e"
+    "sha256": "74fc5ab9d5792ec3849a116eb16405844970dbfb6ebfaa1c4883de74534557b8"
+  },
+  {
+    "name": "fedora/fish/runtime/antigravity",
+    "sha256": "74fc5ab9d5792ec3849a116eb16405844970dbfb6ebfaa1c4883de74534557b8"
   },
   {
     "name": "arch/bash/none/codex",
-    "sha256": "f2777ee254743a2a189b33913a49d3792ab4cd451666bed71bda46c1e0b338a6"
+    "sha256": "1607185b89b1556821ca22a5f1ac821f491b8ec7deaa4c88b56182476c13b651"
   },
   {
     "name": "arch/bash/none/claude-code",
-    "sha256": "f2777ee254743a2a189b33913a49d3792ab4cd451666bed71bda46c1e0b338a6"
+    "sha256": "1607185b89b1556821ca22a5f1ac821f491b8ec7deaa4c88b56182476c13b651"
   },
   {
     "name": "arch/bash/none/opencode",
-    "sha256": "f2777ee254743a2a189b33913a49d3792ab4cd451666bed71bda46c1e0b338a6"
+    "sha256": "1607185b89b1556821ca22a5f1ac821f491b8ec7deaa4c88b56182476c13b651"
   },
   {
     "name": "arch/bash/none/pi",
-    "sha256": "f2777ee254743a2a189b33913a49d3792ab4cd451666bed71bda46c1e0b338a6"
+    "sha256": "1607185b89b1556821ca22a5f1ac821f491b8ec7deaa4c88b56182476c13b651"
+  },
+  {
+    "name": "arch/bash/none/antigravity",
+    "sha256": "1607185b89b1556821ca22a5f1ac821f491b8ec7deaa4c88b56182476c13b651"
   },
   {
     "name": "arch/bash/public/codex",
-    "sha256": "c57a846bfdabf3294335dd9fa823dd273267e7882645ad5b178b5338a94551f0"
+    "sha256": "34aa058e94a7e3df411c607fd420facd4410381185d6e0d56f9f5aacf106230b"
   },
   {
     "name": "arch/bash/public/claude-code",
-    "sha256": "c57a846bfdabf3294335dd9fa823dd273267e7882645ad5b178b5338a94551f0"
+    "sha256": "34aa058e94a7e3df411c607fd420facd4410381185d6e0d56f9f5aacf106230b"
   },
   {
     "name": "arch/bash/public/opencode",
-    "sha256": "c57a846bfdabf3294335dd9fa823dd273267e7882645ad5b178b5338a94551f0"
+    "sha256": "34aa058e94a7e3df411c607fd420facd4410381185d6e0d56f9f5aacf106230b"
   },
   {
     "name": "arch/bash/public/pi",
-    "sha256": "c57a846bfdabf3294335dd9fa823dd273267e7882645ad5b178b5338a94551f0"
+    "sha256": "34aa058e94a7e3df411c607fd420facd4410381185d6e0d56f9f5aacf106230b"
+  },
+  {
+    "name": "arch/bash/public/antigravity",
+    "sha256": "34aa058e94a7e3df411c607fd420facd4410381185d6e0d56f9f5aacf106230b"
   },
   {
     "name": "arch/bash/secret/codex",
-    "sha256": "693321677c6b4fb2c7be3e463c120125fa326b0c801faf9c8ab8fb19f211959f"
+    "sha256": "9c44ca3abe09e9465d33cec1ac961d4bf397b87fdd617e0463fdfff6533d9858"
   },
   {
     "name": "arch/bash/secret/claude-code",
-    "sha256": "693321677c6b4fb2c7be3e463c120125fa326b0c801faf9c8ab8fb19f211959f"
+    "sha256": "9c44ca3abe09e9465d33cec1ac961d4bf397b87fdd617e0463fdfff6533d9858"
   },
   {
     "name": "arch/bash/secret/opencode",
-    "sha256": "693321677c6b4fb2c7be3e463c120125fa326b0c801faf9c8ab8fb19f211959f"
+    "sha256": "9c44ca3abe09e9465d33cec1ac961d4bf397b87fdd617e0463fdfff6533d9858"
   },
   {
     "name": "arch/bash/secret/pi",
-    "sha256": "693321677c6b4fb2c7be3e463c120125fa326b0c801faf9c8ab8fb19f211959f"
+    "sha256": "9c44ca3abe09e9465d33cec1ac961d4bf397b87fdd617e0463fdfff6533d9858"
+  },
+  {
+    "name": "arch/bash/secret/antigravity",
+    "sha256": "9c44ca3abe09e9465d33cec1ac961d4bf397b87fdd617e0463fdfff6533d9858"
   },
   {
     "name": "arch/bash/runtime/codex",
-    "sha256": "a5cfd4052bf0c59bc9405b7353b28eeed78fad434f06b0ab0fb6f787d19a33f9"
+    "sha256": "20c28291de1afba70d84ea3484ce8cb45df18ec8c9efaec72bb50679b8a13f93"
   },
   {
     "name": "arch/bash/runtime/claude-code",
-    "sha256": "a5cfd4052bf0c59bc9405b7353b28eeed78fad434f06b0ab0fb6f787d19a33f9"
+    "sha256": "20c28291de1afba70d84ea3484ce8cb45df18ec8c9efaec72bb50679b8a13f93"
   },
   {
     "name": "arch/bash/runtime/opencode",
-    "sha256": "a5cfd4052bf0c59bc9405b7353b28eeed78fad434f06b0ab0fb6f787d19a33f9"
+    "sha256": "20c28291de1afba70d84ea3484ce8cb45df18ec8c9efaec72bb50679b8a13f93"
   },
   {
     "name": "arch/bash/runtime/pi",
-    "sha256": "a5cfd4052bf0c59bc9405b7353b28eeed78fad434f06b0ab0fb6f787d19a33f9"
+    "sha256": "20c28291de1afba70d84ea3484ce8cb45df18ec8c9efaec72bb50679b8a13f93"
+  },
+  {
+    "name": "arch/bash/runtime/antigravity",
+    "sha256": "20c28291de1afba70d84ea3484ce8cb45df18ec8c9efaec72bb50679b8a13f93"
   },
   {
     "name": "arch/zsh/none/codex",
-    "sha256": "a5fe07012818ded7786b07037ccedb612f5695f6e9f4b048185cffd03b3219d1"
+    "sha256": "482531c5847ae0b3405986464c6daf66b50354d8b9970718c79a9b24970cecbc"
   },
   {
     "name": "arch/zsh/none/claude-code",
-    "sha256": "a5fe07012818ded7786b07037ccedb612f5695f6e9f4b048185cffd03b3219d1"
+    "sha256": "482531c5847ae0b3405986464c6daf66b50354d8b9970718c79a9b24970cecbc"
   },
   {
     "name": "arch/zsh/none/opencode",
-    "sha256": "a5fe07012818ded7786b07037ccedb612f5695f6e9f4b048185cffd03b3219d1"
+    "sha256": "482531c5847ae0b3405986464c6daf66b50354d8b9970718c79a9b24970cecbc"
   },
   {
     "name": "arch/zsh/none/pi",
-    "sha256": "a5fe07012818ded7786b07037ccedb612f5695f6e9f4b048185cffd03b3219d1"
+    "sha256": "482531c5847ae0b3405986464c6daf66b50354d8b9970718c79a9b24970cecbc"
+  },
+  {
+    "name": "arch/zsh/none/antigravity",
+    "sha256": "482531c5847ae0b3405986464c6daf66b50354d8b9970718c79a9b24970cecbc"
   },
   {
     "name": "arch/zsh/public/codex",
-    "sha256": "3388b2226d728a468db35e1c27dca0d83ac9dd639191dc26f7fe3365a78f4751"
+    "sha256": "8699cd59c81a8154857903dbb5e710c0708fab0db017682db6ae90fa681ba312"
   },
   {
     "name": "arch/zsh/public/claude-code",
-    "sha256": "3388b2226d728a468db35e1c27dca0d83ac9dd639191dc26f7fe3365a78f4751"
+    "sha256": "8699cd59c81a8154857903dbb5e710c0708fab0db017682db6ae90fa681ba312"
   },
   {
     "name": "arch/zsh/public/opencode",
-    "sha256": "3388b2226d728a468db35e1c27dca0d83ac9dd639191dc26f7fe3365a78f4751"
+    "sha256": "8699cd59c81a8154857903dbb5e710c0708fab0db017682db6ae90fa681ba312"
   },
   {
     "name": "arch/zsh/public/pi",
-    "sha256": "3388b2226d728a468db35e1c27dca0d83ac9dd639191dc26f7fe3365a78f4751"
+    "sha256": "8699cd59c81a8154857903dbb5e710c0708fab0db017682db6ae90fa681ba312"
+  },
+  {
+    "name": "arch/zsh/public/antigravity",
+    "sha256": "8699cd59c81a8154857903dbb5e710c0708fab0db017682db6ae90fa681ba312"
   },
   {
     "name": "arch/zsh/secret/codex",
-    "sha256": "fbfeba076abefb4fd491c224ba1090bb63526c7545181d1b374f0e0d655a638f"
+    "sha256": "fd41bb6a01fa24f3adbc91e0e93450ff1f555379ea1cb1dce0c226a671949633"
   },
   {
     "name": "arch/zsh/secret/claude-code",
-    "sha256": "fbfeba076abefb4fd491c224ba1090bb63526c7545181d1b374f0e0d655a638f"
+    "sha256": "fd41bb6a01fa24f3adbc91e0e93450ff1f555379ea1cb1dce0c226a671949633"
   },
   {
     "name": "arch/zsh/secret/opencode",
-    "sha256": "fbfeba076abefb4fd491c224ba1090bb63526c7545181d1b374f0e0d655a638f"
+    "sha256": "fd41bb6a01fa24f3adbc91e0e93450ff1f555379ea1cb1dce0c226a671949633"
   },
   {
     "name": "arch/zsh/secret/pi",
-    "sha256": "fbfeba076abefb4fd491c224ba1090bb63526c7545181d1b374f0e0d655a638f"
+    "sha256": "fd41bb6a01fa24f3adbc91e0e93450ff1f555379ea1cb1dce0c226a671949633"
+  },
+  {
+    "name": "arch/zsh/secret/antigravity",
+    "sha256": "fd41bb6a01fa24f3adbc91e0e93450ff1f555379ea1cb1dce0c226a671949633"
   },
   {
     "name": "arch/zsh/runtime/codex",
-    "sha256": "0538af623945429db7073c4d1066bc72ff1025caacde41bec45bf484ba477512"
+    "sha256": "1ffe424d0a6076aaf5b75bd87f894f75b25aeddb35d9567ed45b823e4bb2f2f3"
   },
   {
     "name": "arch/zsh/runtime/claude-code",
-    "sha256": "0538af623945429db7073c4d1066bc72ff1025caacde41bec45bf484ba477512"
+    "sha256": "1ffe424d0a6076aaf5b75bd87f894f75b25aeddb35d9567ed45b823e4bb2f2f3"
   },
   {
     "name": "arch/zsh/runtime/opencode",
-    "sha256": "0538af623945429db7073c4d1066bc72ff1025caacde41bec45bf484ba477512"
+    "sha256": "1ffe424d0a6076aaf5b75bd87f894f75b25aeddb35d9567ed45b823e4bb2f2f3"
   },
   {
     "name": "arch/zsh/runtime/pi",
-    "sha256": "0538af623945429db7073c4d1066bc72ff1025caacde41bec45bf484ba477512"
+    "sha256": "1ffe424d0a6076aaf5b75bd87f894f75b25aeddb35d9567ed45b823e4bb2f2f3"
+  },
+  {
+    "name": "arch/zsh/runtime/antigravity",
+    "sha256": "1ffe424d0a6076aaf5b75bd87f894f75b25aeddb35d9567ed45b823e4bb2f2f3"
   },
   {
     "name": "arch/fish/none/codex",
-    "sha256": "fc9be0598558b8c16aafa7f174e2bb3bf6b64b4db45481ed7cd9e1e15aa979c6"
+    "sha256": "d4ef154ef3f3e417a245dbd68f823d81311fce18fa40568859dc9ffa37d81324"
   },
   {
     "name": "arch/fish/none/claude-code",
-    "sha256": "fc9be0598558b8c16aafa7f174e2bb3bf6b64b4db45481ed7cd9e1e15aa979c6"
+    "sha256": "d4ef154ef3f3e417a245dbd68f823d81311fce18fa40568859dc9ffa37d81324"
   },
   {
     "name": "arch/fish/none/opencode",
-    "sha256": "fc9be0598558b8c16aafa7f174e2bb3bf6b64b4db45481ed7cd9e1e15aa979c6"
+    "sha256": "d4ef154ef3f3e417a245dbd68f823d81311fce18fa40568859dc9ffa37d81324"
   },
   {
     "name": "arch/fish/none/pi",
-    "sha256": "fc9be0598558b8c16aafa7f174e2bb3bf6b64b4db45481ed7cd9e1e15aa979c6"
+    "sha256": "d4ef154ef3f3e417a245dbd68f823d81311fce18fa40568859dc9ffa37d81324"
+  },
+  {
+    "name": "arch/fish/none/antigravity",
+    "sha256": "d4ef154ef3f3e417a245dbd68f823d81311fce18fa40568859dc9ffa37d81324"
   },
   {
     "name": "arch/fish/public/codex",
-    "sha256": "63b8953a5d6ce179026da05275dc628306229c165f745f436f2249756ab00953"
+    "sha256": "f385db65c96a304211adb328edd9882329b278821a2a80b65eb91eefcf1280c7"
   },
   {
     "name": "arch/fish/public/claude-code",
-    "sha256": "63b8953a5d6ce179026da05275dc628306229c165f745f436f2249756ab00953"
+    "sha256": "f385db65c96a304211adb328edd9882329b278821a2a80b65eb91eefcf1280c7"
   },
   {
     "name": "arch/fish/public/opencode",
-    "sha256": "63b8953a5d6ce179026da05275dc628306229c165f745f436f2249756ab00953"
+    "sha256": "f385db65c96a304211adb328edd9882329b278821a2a80b65eb91eefcf1280c7"
   },
   {
     "name": "arch/fish/public/pi",
-    "sha256": "63b8953a5d6ce179026da05275dc628306229c165f745f436f2249756ab00953"
+    "sha256": "f385db65c96a304211adb328edd9882329b278821a2a80b65eb91eefcf1280c7"
+  },
+  {
+    "name": "arch/fish/public/antigravity",
+    "sha256": "f385db65c96a304211adb328edd9882329b278821a2a80b65eb91eefcf1280c7"
   },
   {
     "name": "arch/fish/secret/codex",
-    "sha256": "99e2774e57e1d719f013da7fa3dcdcec277d4abe18e1b1c4a188ae705909299b"
+    "sha256": "f06cb35b6a6dbff087a4d55055e0cac123b7dfbc2c0444b55251c5124188f657"
   },
   {
     "name": "arch/fish/secret/claude-code",
-    "sha256": "99e2774e57e1d719f013da7fa3dcdcec277d4abe18e1b1c4a188ae705909299b"
+    "sha256": "f06cb35b6a6dbff087a4d55055e0cac123b7dfbc2c0444b55251c5124188f657"
   },
   {
     "name": "arch/fish/secret/opencode",
-    "sha256": "99e2774e57e1d719f013da7fa3dcdcec277d4abe18e1b1c4a188ae705909299b"
+    "sha256": "f06cb35b6a6dbff087a4d55055e0cac123b7dfbc2c0444b55251c5124188f657"
   },
   {
     "name": "arch/fish/secret/pi",
-    "sha256": "99e2774e57e1d719f013da7fa3dcdcec277d4abe18e1b1c4a188ae705909299b"
+    "sha256": "f06cb35b6a6dbff087a4d55055e0cac123b7dfbc2c0444b55251c5124188f657"
+  },
+  {
+    "name": "arch/fish/secret/antigravity",
+    "sha256": "f06cb35b6a6dbff087a4d55055e0cac123b7dfbc2c0444b55251c5124188f657"
   },
   {
     "name": "arch/fish/runtime/codex",
-    "sha256": "f584045c1c02d9f4a1fba8ae97fe19da3a4d938c40e4e9d3af7c91f8e99c66dd"
+    "sha256": "928ddd364519a821dbd76a07c917471dff410a12c442a0fe42bd878f8eb05655"
   },
   {
     "name": "arch/fish/runtime/claude-code",
-    "sha256": "f584045c1c02d9f4a1fba8ae97fe19da3a4d938c40e4e9d3af7c91f8e99c66dd"
+    "sha256": "928ddd364519a821dbd76a07c917471dff410a12c442a0fe42bd878f8eb05655"
   },
   {
     "name": "arch/fish/runtime/opencode",
-    "sha256": "f584045c1c02d9f4a1fba8ae97fe19da3a4d938c40e4e9d3af7c91f8e99c66dd"
+    "sha256": "928ddd364519a821dbd76a07c917471dff410a12c442a0fe42bd878f8eb05655"
   },
   {
     "name": "arch/fish/runtime/pi",
-    "sha256": "f584045c1c02d9f4a1fba8ae97fe19da3a4d938c40e4e9d3af7c91f8e99c66dd"
+    "sha256": "928ddd364519a821dbd76a07c917471dff410a12c442a0fe42bd878f8eb05655"
+  },
+  {
+    "name": "arch/fish/runtime/antigravity",
+    "sha256": "928ddd364519a821dbd76a07c917471dff410a12c442a0fe42bd878f8eb05655"
   },
   {
     "name": "ubuntu/bash/none/codex",
-    "sha256": "5dec4f27351f49ea448b8c979568f9f4c8d2ff5b923e20eb058d3afb777dc3c6"
+    "sha256": "2cfcac7b10283fe25f406c7fbbe5735ee9b536848872448f6ef9b250ba565dea"
   },
   {
     "name": "ubuntu/bash/none/claude-code",
-    "sha256": "5dec4f27351f49ea448b8c979568f9f4c8d2ff5b923e20eb058d3afb777dc3c6"
+    "sha256": "2cfcac7b10283fe25f406c7fbbe5735ee9b536848872448f6ef9b250ba565dea"
   },
   {
     "name": "ubuntu/bash/none/opencode",
-    "sha256": "5dec4f27351f49ea448b8c979568f9f4c8d2ff5b923e20eb058d3afb777dc3c6"
+    "sha256": "2cfcac7b10283fe25f406c7fbbe5735ee9b536848872448f6ef9b250ba565dea"
   },
   {
     "name": "ubuntu/bash/none/pi",
-    "sha256": "5dec4f27351f49ea448b8c979568f9f4c8d2ff5b923e20eb058d3afb777dc3c6"
+    "sha256": "2cfcac7b10283fe25f406c7fbbe5735ee9b536848872448f6ef9b250ba565dea"
+  },
+  {
+    "name": "ubuntu/bash/none/antigravity",
+    "sha256": "2cfcac7b10283fe25f406c7fbbe5735ee9b536848872448f6ef9b250ba565dea"
   },
   {
     "name": "ubuntu/bash/public/codex",
-    "sha256": "dafbf4b613c32baddecf84da991c444df3bf674900f7d3494b0d383ffacd0b11"
+    "sha256": "5d8af1a39220c543e90b690e2cb6c7c96aa3edf6581d75281f52e5ff4e5d13a4"
   },
   {
     "name": "ubuntu/bash/public/claude-code",
-    "sha256": "dafbf4b613c32baddecf84da991c444df3bf674900f7d3494b0d383ffacd0b11"
+    "sha256": "5d8af1a39220c543e90b690e2cb6c7c96aa3edf6581d75281f52e5ff4e5d13a4"
   },
   {
     "name": "ubuntu/bash/public/opencode",
-    "sha256": "dafbf4b613c32baddecf84da991c444df3bf674900f7d3494b0d383ffacd0b11"
+    "sha256": "5d8af1a39220c543e90b690e2cb6c7c96aa3edf6581d75281f52e5ff4e5d13a4"
   },
   {
     "name": "ubuntu/bash/public/pi",
-    "sha256": "dafbf4b613c32baddecf84da991c444df3bf674900f7d3494b0d383ffacd0b11"
+    "sha256": "5d8af1a39220c543e90b690e2cb6c7c96aa3edf6581d75281f52e5ff4e5d13a4"
+  },
+  {
+    "name": "ubuntu/bash/public/antigravity",
+    "sha256": "5d8af1a39220c543e90b690e2cb6c7c96aa3edf6581d75281f52e5ff4e5d13a4"
   },
   {
     "name": "ubuntu/bash/secret/codex",
-    "sha256": "6c79a6171993791e97a3711b980099f15026d96759cc0eea2eb1db50d9af7829"
+    "sha256": "039ccfe54f7be0fa87819f36d677998667b54b84674c679447bc0c85de215374"
   },
   {
     "name": "ubuntu/bash/secret/claude-code",
-    "sha256": "6c79a6171993791e97a3711b980099f15026d96759cc0eea2eb1db50d9af7829"
+    "sha256": "039ccfe54f7be0fa87819f36d677998667b54b84674c679447bc0c85de215374"
   },
   {
     "name": "ubuntu/bash/secret/opencode",
-    "sha256": "6c79a6171993791e97a3711b980099f15026d96759cc0eea2eb1db50d9af7829"
+    "sha256": "039ccfe54f7be0fa87819f36d677998667b54b84674c679447bc0c85de215374"
   },
   {
     "name": "ubuntu/bash/secret/pi",
-    "sha256": "6c79a6171993791e97a3711b980099f15026d96759cc0eea2eb1db50d9af7829"
+    "sha256": "039ccfe54f7be0fa87819f36d677998667b54b84674c679447bc0c85de215374"
+  },
+  {
+    "name": "ubuntu/bash/secret/antigravity",
+    "sha256": "039ccfe54f7be0fa87819f36d677998667b54b84674c679447bc0c85de215374"
   },
   {
     "name": "ubuntu/bash/runtime/codex",
-    "sha256": "f0f551c0df5f4afda1a019058c6964f853db95252bf4f4f3c5c1ff379b5f257a"
+    "sha256": "81a7959166817cec558cc34be0da482926a5cc96aae52842cf19ab567f5f5957"
   },
   {
     "name": "ubuntu/bash/runtime/claude-code",
-    "sha256": "f0f551c0df5f4afda1a019058c6964f853db95252bf4f4f3c5c1ff379b5f257a"
+    "sha256": "81a7959166817cec558cc34be0da482926a5cc96aae52842cf19ab567f5f5957"
   },
   {
     "name": "ubuntu/bash/runtime/opencode",
-    "sha256": "f0f551c0df5f4afda1a019058c6964f853db95252bf4f4f3c5c1ff379b5f257a"
+    "sha256": "81a7959166817cec558cc34be0da482926a5cc96aae52842cf19ab567f5f5957"
   },
   {
     "name": "ubuntu/bash/runtime/pi",
-    "sha256": "f0f551c0df5f4afda1a019058c6964f853db95252bf4f4f3c5c1ff379b5f257a"
+    "sha256": "81a7959166817cec558cc34be0da482926a5cc96aae52842cf19ab567f5f5957"
+  },
+  {
+    "name": "ubuntu/bash/runtime/antigravity",
+    "sha256": "81a7959166817cec558cc34be0da482926a5cc96aae52842cf19ab567f5f5957"
   },
   {
     "name": "ubuntu/zsh/none/codex",
-    "sha256": "c80f153d90259c9b7d52dbfd7241baf29ffdfff4600070e03aa41dd8e01d2761"
+    "sha256": "aaca7f9adec600ee6d561b6baafbd5351984c445b710e14a0fd6eb29ce3336ce"
   },
   {
     "name": "ubuntu/zsh/none/claude-code",
-    "sha256": "c80f153d90259c9b7d52dbfd7241baf29ffdfff4600070e03aa41dd8e01d2761"
+    "sha256": "aaca7f9adec600ee6d561b6baafbd5351984c445b710e14a0fd6eb29ce3336ce"
   },
   {
     "name": "ubuntu/zsh/none/opencode",
-    "sha256": "c80f153d90259c9b7d52dbfd7241baf29ffdfff4600070e03aa41dd8e01d2761"
+    "sha256": "aaca7f9adec600ee6d561b6baafbd5351984c445b710e14a0fd6eb29ce3336ce"
   },
   {
     "name": "ubuntu/zsh/none/pi",
-    "sha256": "c80f153d90259c9b7d52dbfd7241baf29ffdfff4600070e03aa41dd8e01d2761"
+    "sha256": "aaca7f9adec600ee6d561b6baafbd5351984c445b710e14a0fd6eb29ce3336ce"
+  },
+  {
+    "name": "ubuntu/zsh/none/antigravity",
+    "sha256": "aaca7f9adec600ee6d561b6baafbd5351984c445b710e14a0fd6eb29ce3336ce"
   },
   {
     "name": "ubuntu/zsh/public/codex",
-    "sha256": "8fe48cbeeac44bc5b5fc1107f6f96446556175f5b9b15de298b1ea31ed534aab"
+    "sha256": "4debf3a9e52bdd931921d57a32fd74a5625c79a3afc0e033267d44081ac5a0d4"
   },
   {
     "name": "ubuntu/zsh/public/claude-code",
-    "sha256": "8fe48cbeeac44bc5b5fc1107f6f96446556175f5b9b15de298b1ea31ed534aab"
+    "sha256": "4debf3a9e52bdd931921d57a32fd74a5625c79a3afc0e033267d44081ac5a0d4"
   },
   {
     "name": "ubuntu/zsh/public/opencode",
-    "sha256": "8fe48cbeeac44bc5b5fc1107f6f96446556175f5b9b15de298b1ea31ed534aab"
+    "sha256": "4debf3a9e52bdd931921d57a32fd74a5625c79a3afc0e033267d44081ac5a0d4"
   },
   {
     "name": "ubuntu/zsh/public/pi",
-    "sha256": "8fe48cbeeac44bc5b5fc1107f6f96446556175f5b9b15de298b1ea31ed534aab"
+    "sha256": "4debf3a9e52bdd931921d57a32fd74a5625c79a3afc0e033267d44081ac5a0d4"
+  },
+  {
+    "name": "ubuntu/zsh/public/antigravity",
+    "sha256": "4debf3a9e52bdd931921d57a32fd74a5625c79a3afc0e033267d44081ac5a0d4"
   },
   {
     "name": "ubuntu/zsh/secret/codex",
-    "sha256": "a8ef5592c946c21a4bdd56da08541c8f882a81dca46076f6d6ae448eaec132cc"
+    "sha256": "347e898dafed4daf7e685e6cf58b7fca008894f5cdf12c3352fb94156b065405"
   },
   {
     "name": "ubuntu/zsh/secret/claude-code",
-    "sha256": "a8ef5592c946c21a4bdd56da08541c8f882a81dca46076f6d6ae448eaec132cc"
+    "sha256": "347e898dafed4daf7e685e6cf58b7fca008894f5cdf12c3352fb94156b065405"
   },
   {
     "name": "ubuntu/zsh/secret/opencode",
-    "sha256": "a8ef5592c946c21a4bdd56da08541c8f882a81dca46076f6d6ae448eaec132cc"
+    "sha256": "347e898dafed4daf7e685e6cf58b7fca008894f5cdf12c3352fb94156b065405"
   },
   {
     "name": "ubuntu/zsh/secret/pi",
-    "sha256": "a8ef5592c946c21a4bdd56da08541c8f882a81dca46076f6d6ae448eaec132cc"
+    "sha256": "347e898dafed4daf7e685e6cf58b7fca008894f5cdf12c3352fb94156b065405"
+  },
+  {
+    "name": "ubuntu/zsh/secret/antigravity",
+    "sha256": "347e898dafed4daf7e685e6cf58b7fca008894f5cdf12c3352fb94156b065405"
   },
   {
     "name": "ubuntu/zsh/runtime/codex",
-    "sha256": "1cd74b7790fa2f8b1f8ad70a4405dad1752bad11660659cb6709c2bdddacf66c"
+    "sha256": "3962b48361058d352b557646bb152bfb89aa9510354549681135485c19e2c7d7"
   },
   {
     "name": "ubuntu/zsh/runtime/claude-code",
-    "sha256": "1cd74b7790fa2f8b1f8ad70a4405dad1752bad11660659cb6709c2bdddacf66c"
+    "sha256": "3962b48361058d352b557646bb152bfb89aa9510354549681135485c19e2c7d7"
   },
   {
     "name": "ubuntu/zsh/runtime/opencode",
-    "sha256": "1cd74b7790fa2f8b1f8ad70a4405dad1752bad11660659cb6709c2bdddacf66c"
+    "sha256": "3962b48361058d352b557646bb152bfb89aa9510354549681135485c19e2c7d7"
   },
   {
     "name": "ubuntu/zsh/runtime/pi",
-    "sha256": "1cd74b7790fa2f8b1f8ad70a4405dad1752bad11660659cb6709c2bdddacf66c"
+    "sha256": "3962b48361058d352b557646bb152bfb89aa9510354549681135485c19e2c7d7"
+  },
+  {
+    "name": "ubuntu/zsh/runtime/antigravity",
+    "sha256": "3962b48361058d352b557646bb152bfb89aa9510354549681135485c19e2c7d7"
   },
   {
     "name": "ubuntu/fish/none/codex",
-    "sha256": "fd002366a3d3c6e8ff6157093faecea58a9a77a930c24bfa927d6d4f9b575604"
+    "sha256": "4c06f9ee026bf5d2af36aeb333bb63d278612a8d2316bb9bd99c6545fd30df97"
   },
   {
     "name": "ubuntu/fish/none/claude-code",
-    "sha256": "fd002366a3d3c6e8ff6157093faecea58a9a77a930c24bfa927d6d4f9b575604"
+    "sha256": "4c06f9ee026bf5d2af36aeb333bb63d278612a8d2316bb9bd99c6545fd30df97"
   },
   {
     "name": "ubuntu/fish/none/opencode",
-    "sha256": "fd002366a3d3c6e8ff6157093faecea58a9a77a930c24bfa927d6d4f9b575604"
+    "sha256": "4c06f9ee026bf5d2af36aeb333bb63d278612a8d2316bb9bd99c6545fd30df97"
   },
   {
     "name": "ubuntu/fish/none/pi",
-    "sha256": "fd002366a3d3c6e8ff6157093faecea58a9a77a930c24bfa927d6d4f9b575604"
+    "sha256": "4c06f9ee026bf5d2af36aeb333bb63d278612a8d2316bb9bd99c6545fd30df97"
+  },
+  {
+    "name": "ubuntu/fish/none/antigravity",
+    "sha256": "4c06f9ee026bf5d2af36aeb333bb63d278612a8d2316bb9bd99c6545fd30df97"
   },
   {
     "name": "ubuntu/fish/public/codex",
-    "sha256": "4dfd1f6e74e64d966636ca5cd29068086368d4fa1e34e9a8a6422a34ffa9dc16"
+    "sha256": "33224c14d04a41c2048a8c174a79831a6142529bcd1094c71917f3613010681f"
   },
   {
     "name": "ubuntu/fish/public/claude-code",
-    "sha256": "4dfd1f6e74e64d966636ca5cd29068086368d4fa1e34e9a8a6422a34ffa9dc16"
+    "sha256": "33224c14d04a41c2048a8c174a79831a6142529bcd1094c71917f3613010681f"
   },
   {
     "name": "ubuntu/fish/public/opencode",
-    "sha256": "4dfd1f6e74e64d966636ca5cd29068086368d4fa1e34e9a8a6422a34ffa9dc16"
+    "sha256": "33224c14d04a41c2048a8c174a79831a6142529bcd1094c71917f3613010681f"
   },
   {
     "name": "ubuntu/fish/public/pi",
-    "sha256": "4dfd1f6e74e64d966636ca5cd29068086368d4fa1e34e9a8a6422a34ffa9dc16"
+    "sha256": "33224c14d04a41c2048a8c174a79831a6142529bcd1094c71917f3613010681f"
+  },
+  {
+    "name": "ubuntu/fish/public/antigravity",
+    "sha256": "33224c14d04a41c2048a8c174a79831a6142529bcd1094c71917f3613010681f"
   },
   {
     "name": "ubuntu/fish/secret/codex",
-    "sha256": "dca8889329726dcebe99480985a38576988e6a420117e39678f3a689a3e13cee"
+    "sha256": "164fc86edd205f750697f37c25d8bd82c5377c29dbe1176e398de8be8c2fb391"
   },
   {
     "name": "ubuntu/fish/secret/claude-code",
-    "sha256": "dca8889329726dcebe99480985a38576988e6a420117e39678f3a689a3e13cee"
+    "sha256": "164fc86edd205f750697f37c25d8bd82c5377c29dbe1176e398de8be8c2fb391"
   },
   {
     "name": "ubuntu/fish/secret/opencode",
-    "sha256": "dca8889329726dcebe99480985a38576988e6a420117e39678f3a689a3e13cee"
+    "sha256": "164fc86edd205f750697f37c25d8bd82c5377c29dbe1176e398de8be8c2fb391"
   },
   {
     "name": "ubuntu/fish/secret/pi",
-    "sha256": "dca8889329726dcebe99480985a38576988e6a420117e39678f3a689a3e13cee"
+    "sha256": "164fc86edd205f750697f37c25d8bd82c5377c29dbe1176e398de8be8c2fb391"
+  },
+  {
+    "name": "ubuntu/fish/secret/antigravity",
+    "sha256": "164fc86edd205f750697f37c25d8bd82c5377c29dbe1176e398de8be8c2fb391"
   },
   {
     "name": "ubuntu/fish/runtime/codex",
-    "sha256": "48d39e177301c909213a1a226845284272d5093fc50623b3abf963a8cdbfe329"
+    "sha256": "02d9aa4ab98eb44b1cd168611047d92169a72ef74898bbdd75caa33fb32a4d49"
   },
   {
     "name": "ubuntu/fish/runtime/claude-code",
-    "sha256": "48d39e177301c909213a1a226845284272d5093fc50623b3abf963a8cdbfe329"
+    "sha256": "02d9aa4ab98eb44b1cd168611047d92169a72ef74898bbdd75caa33fb32a4d49"
   },
   {
     "name": "ubuntu/fish/runtime/opencode",
-    "sha256": "48d39e177301c909213a1a226845284272d5093fc50623b3abf963a8cdbfe329"
+    "sha256": "02d9aa4ab98eb44b1cd168611047d92169a72ef74898bbdd75caa33fb32a4d49"
   },
   {
     "name": "ubuntu/fish/runtime/pi",
-    "sha256": "48d39e177301c909213a1a226845284272d5093fc50623b3abf963a8cdbfe329"
+    "sha256": "02d9aa4ab98eb44b1cd168611047d92169a72ef74898bbdd75caa33fb32a4d49"
+  },
+  {
+    "name": "ubuntu/fish/runtime/antigravity",
+    "sha256": "02d9aa4ab98eb44b1cd168611047d92169a72ef74898bbdd75caa33fb32a4d49"
   },
   {
     "name": "nix/bash/none/codex",
-    "sha256": "406ba8195d82d516cad6bc1c4db48026197934073b05ce4049232e8047f1082a"
+    "sha256": "a5377b41878b471880225b0740a61cbe8ea6bdcc7fe22b48788be86087a76bb4"
   },
   {
     "name": "nix/bash/none/claude-code",
-    "sha256": "406ba8195d82d516cad6bc1c4db48026197934073b05ce4049232e8047f1082a"
+    "sha256": "a5377b41878b471880225b0740a61cbe8ea6bdcc7fe22b48788be86087a76bb4"
   },
   {
     "name": "nix/bash/none/opencode",
-    "sha256": "406ba8195d82d516cad6bc1c4db48026197934073b05ce4049232e8047f1082a"
+    "sha256": "a5377b41878b471880225b0740a61cbe8ea6bdcc7fe22b48788be86087a76bb4"
   },
   {
     "name": "nix/bash/none/pi",
-    "sha256": "406ba8195d82d516cad6bc1c4db48026197934073b05ce4049232e8047f1082a"
+    "sha256": "a5377b41878b471880225b0740a61cbe8ea6bdcc7fe22b48788be86087a76bb4"
+  },
+  {
+    "name": "nix/bash/none/antigravity",
+    "sha256": "a5377b41878b471880225b0740a61cbe8ea6bdcc7fe22b48788be86087a76bb4"
   },
   {
     "name": "nix/bash/public/codex",
-    "sha256": "fec17e69fc5331e56dbc64025f092fd9be749b639df9f56c75c7090c7d476dfe"
+    "sha256": "470749aa444a4e84ab9b3e7732d15b9a9c124f21ab07b235ee210570761378c6"
   },
   {
     "name": "nix/bash/public/claude-code",
-    "sha256": "fec17e69fc5331e56dbc64025f092fd9be749b639df9f56c75c7090c7d476dfe"
+    "sha256": "470749aa444a4e84ab9b3e7732d15b9a9c124f21ab07b235ee210570761378c6"
   },
   {
     "name": "nix/bash/public/opencode",
-    "sha256": "fec17e69fc5331e56dbc64025f092fd9be749b639df9f56c75c7090c7d476dfe"
+    "sha256": "470749aa444a4e84ab9b3e7732d15b9a9c124f21ab07b235ee210570761378c6"
   },
   {
     "name": "nix/bash/public/pi",
-    "sha256": "fec17e69fc5331e56dbc64025f092fd9be749b639df9f56c75c7090c7d476dfe"
+    "sha256": "470749aa444a4e84ab9b3e7732d15b9a9c124f21ab07b235ee210570761378c6"
+  },
+  {
+    "name": "nix/bash/public/antigravity",
+    "sha256": "470749aa444a4e84ab9b3e7732d15b9a9c124f21ab07b235ee210570761378c6"
   },
   {
     "name": "nix/bash/secret/codex",
-    "sha256": "197395cc8f2f4ccb29bcbad88b5cfdb67100209658b87c83206b0071ad964d99"
+    "sha256": "7aa847a72b873d42b30344dd27f1b7264696f7573b10a0a37ac4b6f41611ea60"
   },
   {
     "name": "nix/bash/secret/claude-code",
-    "sha256": "197395cc8f2f4ccb29bcbad88b5cfdb67100209658b87c83206b0071ad964d99"
+    "sha256": "7aa847a72b873d42b30344dd27f1b7264696f7573b10a0a37ac4b6f41611ea60"
   },
   {
     "name": "nix/bash/secret/opencode",
-    "sha256": "197395cc8f2f4ccb29bcbad88b5cfdb67100209658b87c83206b0071ad964d99"
+    "sha256": "7aa847a72b873d42b30344dd27f1b7264696f7573b10a0a37ac4b6f41611ea60"
   },
   {
     "name": "nix/bash/secret/pi",
-    "sha256": "197395cc8f2f4ccb29bcbad88b5cfdb67100209658b87c83206b0071ad964d99"
+    "sha256": "7aa847a72b873d42b30344dd27f1b7264696f7573b10a0a37ac4b6f41611ea60"
+  },
+  {
+    "name": "nix/bash/secret/antigravity",
+    "sha256": "7aa847a72b873d42b30344dd27f1b7264696f7573b10a0a37ac4b6f41611ea60"
   },
   {
     "name": "nix/bash/runtime/codex",
-    "sha256": "d84016c4d53605a7d1e6d004c2cddac2ca4c577f6bc96cca5e1361bcd63b85ba"
+    "sha256": "ab5abf9e0fba7b9139c3f3e043813762656401ce705b250db94e031853b7bdbe"
   },
   {
     "name": "nix/bash/runtime/claude-code",
-    "sha256": "d84016c4d53605a7d1e6d004c2cddac2ca4c577f6bc96cca5e1361bcd63b85ba"
+    "sha256": "ab5abf9e0fba7b9139c3f3e043813762656401ce705b250db94e031853b7bdbe"
   },
   {
     "name": "nix/bash/runtime/opencode",
-    "sha256": "d84016c4d53605a7d1e6d004c2cddac2ca4c577f6bc96cca5e1361bcd63b85ba"
+    "sha256": "ab5abf9e0fba7b9139c3f3e043813762656401ce705b250db94e031853b7bdbe"
   },
   {
     "name": "nix/bash/runtime/pi",
-    "sha256": "d84016c4d53605a7d1e6d004c2cddac2ca4c577f6bc96cca5e1361bcd63b85ba"
+    "sha256": "ab5abf9e0fba7b9139c3f3e043813762656401ce705b250db94e031853b7bdbe"
+  },
+  {
+    "name": "nix/bash/runtime/antigravity",
+    "sha256": "ab5abf9e0fba7b9139c3f3e043813762656401ce705b250db94e031853b7bdbe"
   },
   {
     "name": "nix/zsh/none/codex",
-    "sha256": "a0a19c0102c84c5204eb00d6c9949bd5e81fabed14d0571db8c39cf5ac7d0681"
+    "sha256": "786e1b4d2e573d7df42691a0187eb6806b6a4c6ba972c5a94662881274645878"
   },
   {
     "name": "nix/zsh/none/claude-code",
-    "sha256": "a0a19c0102c84c5204eb00d6c9949bd5e81fabed14d0571db8c39cf5ac7d0681"
+    "sha256": "786e1b4d2e573d7df42691a0187eb6806b6a4c6ba972c5a94662881274645878"
   },
   {
     "name": "nix/zsh/none/opencode",
-    "sha256": "a0a19c0102c84c5204eb00d6c9949bd5e81fabed14d0571db8c39cf5ac7d0681"
+    "sha256": "786e1b4d2e573d7df42691a0187eb6806b6a4c6ba972c5a94662881274645878"
   },
   {
     "name": "nix/zsh/none/pi",
-    "sha256": "a0a19c0102c84c5204eb00d6c9949bd5e81fabed14d0571db8c39cf5ac7d0681"
+    "sha256": "786e1b4d2e573d7df42691a0187eb6806b6a4c6ba972c5a94662881274645878"
+  },
+  {
+    "name": "nix/zsh/none/antigravity",
+    "sha256": "786e1b4d2e573d7df42691a0187eb6806b6a4c6ba972c5a94662881274645878"
   },
   {
     "name": "nix/zsh/public/codex",
-    "sha256": "e52293aa5d9a038c41ecb817f1c872b99487eeff9537361048fdb54c723cd395"
+    "sha256": "a628a4fe2252dca98192891491b0d2dac9bc2eb464dc6ca80363e523a6ad3178"
   },
   {
     "name": "nix/zsh/public/claude-code",
-    "sha256": "e52293aa5d9a038c41ecb817f1c872b99487eeff9537361048fdb54c723cd395"
+    "sha256": "a628a4fe2252dca98192891491b0d2dac9bc2eb464dc6ca80363e523a6ad3178"
   },
   {
     "name": "nix/zsh/public/opencode",
-    "sha256": "e52293aa5d9a038c41ecb817f1c872b99487eeff9537361048fdb54c723cd395"
+    "sha256": "a628a4fe2252dca98192891491b0d2dac9bc2eb464dc6ca80363e523a6ad3178"
   },
   {
     "name": "nix/zsh/public/pi",
-    "sha256": "e52293aa5d9a038c41ecb817f1c872b99487eeff9537361048fdb54c723cd395"
+    "sha256": "a628a4fe2252dca98192891491b0d2dac9bc2eb464dc6ca80363e523a6ad3178"
+  },
+  {
+    "name": "nix/zsh/public/antigravity",
+    "sha256": "a628a4fe2252dca98192891491b0d2dac9bc2eb464dc6ca80363e523a6ad3178"
   },
   {
     "name": "nix/zsh/secret/codex",
-    "sha256": "e4dde3692812153065fe95cfb5556d7f420e1dc78567d5596aff567fb57f8c93"
+    "sha256": "1331ae1769b3dae0755a36e92f647d2f5aa44232602cc227abb52f7f79274d8e"
   },
   {
     "name": "nix/zsh/secret/claude-code",
-    "sha256": "e4dde3692812153065fe95cfb5556d7f420e1dc78567d5596aff567fb57f8c93"
+    "sha256": "1331ae1769b3dae0755a36e92f647d2f5aa44232602cc227abb52f7f79274d8e"
   },
   {
     "name": "nix/zsh/secret/opencode",
-    "sha256": "e4dde3692812153065fe95cfb5556d7f420e1dc78567d5596aff567fb57f8c93"
+    "sha256": "1331ae1769b3dae0755a36e92f647d2f5aa44232602cc227abb52f7f79274d8e"
   },
   {
     "name": "nix/zsh/secret/pi",
-    "sha256": "e4dde3692812153065fe95cfb5556d7f420e1dc78567d5596aff567fb57f8c93"
+    "sha256": "1331ae1769b3dae0755a36e92f647d2f5aa44232602cc227abb52f7f79274d8e"
+  },
+  {
+    "name": "nix/zsh/secret/antigravity",
+    "sha256": "1331ae1769b3dae0755a36e92f647d2f5aa44232602cc227abb52f7f79274d8e"
   },
   {
     "name": "nix/zsh/runtime/codex",
-    "sha256": "ef340e4d11fe7c9dd38f519789f43ab5ac5e8c234846622ae2ed23bc88ac8b79"
+    "sha256": "d47c4c97fa091404513603ec4e926d4826692985a8bc88c609f2ba18307fb277"
   },
   {
     "name": "nix/zsh/runtime/claude-code",
-    "sha256": "ef340e4d11fe7c9dd38f519789f43ab5ac5e8c234846622ae2ed23bc88ac8b79"
+    "sha256": "d47c4c97fa091404513603ec4e926d4826692985a8bc88c609f2ba18307fb277"
   },
   {
     "name": "nix/zsh/runtime/opencode",
-    "sha256": "ef340e4d11fe7c9dd38f519789f43ab5ac5e8c234846622ae2ed23bc88ac8b79"
+    "sha256": "d47c4c97fa091404513603ec4e926d4826692985a8bc88c609f2ba18307fb277"
   },
   {
     "name": "nix/zsh/runtime/pi",
-    "sha256": "ef340e4d11fe7c9dd38f519789f43ab5ac5e8c234846622ae2ed23bc88ac8b79"
+    "sha256": "d47c4c97fa091404513603ec4e926d4826692985a8bc88c609f2ba18307fb277"
+  },
+  {
+    "name": "nix/zsh/runtime/antigravity",
+    "sha256": "d47c4c97fa091404513603ec4e926d4826692985a8bc88c609f2ba18307fb277"
   },
   {
     "name": "nix/fish/none/codex",
-    "sha256": "30f9dc862f959b9eaa764a3b27e8175f9a376727c2b200ca86028a8032781a1f"
+    "sha256": "7306da58c3a2c6b92aca9c441301a701994f9cef1f65f8f98ccaea20c6ad11fe"
   },
   {
     "name": "nix/fish/none/claude-code",
-    "sha256": "30f9dc862f959b9eaa764a3b27e8175f9a376727c2b200ca86028a8032781a1f"
+    "sha256": "7306da58c3a2c6b92aca9c441301a701994f9cef1f65f8f98ccaea20c6ad11fe"
   },
   {
     "name": "nix/fish/none/opencode",
-    "sha256": "30f9dc862f959b9eaa764a3b27e8175f9a376727c2b200ca86028a8032781a1f"
+    "sha256": "7306da58c3a2c6b92aca9c441301a701994f9cef1f65f8f98ccaea20c6ad11fe"
   },
   {
     "name": "nix/fish/none/pi",
-    "sha256": "30f9dc862f959b9eaa764a3b27e8175f9a376727c2b200ca86028a8032781a1f"
+    "sha256": "7306da58c3a2c6b92aca9c441301a701994f9cef1f65f8f98ccaea20c6ad11fe"
+  },
+  {
+    "name": "nix/fish/none/antigravity",
+    "sha256": "7306da58c3a2c6b92aca9c441301a701994f9cef1f65f8f98ccaea20c6ad11fe"
   },
   {
     "name": "nix/fish/public/codex",
-    "sha256": "5976e36d59fcb42784a5c14a068f3a6c5b9f2277897e1225b6efc14e4585c4e1"
+    "sha256": "5655db8e98e58c7b2517609563d27ad3e22e086be7377ca557f769717ecc1b80"
   },
   {
     "name": "nix/fish/public/claude-code",
-    "sha256": "5976e36d59fcb42784a5c14a068f3a6c5b9f2277897e1225b6efc14e4585c4e1"
+    "sha256": "5655db8e98e58c7b2517609563d27ad3e22e086be7377ca557f769717ecc1b80"
   },
   {
     "name": "nix/fish/public/opencode",
-    "sha256": "5976e36d59fcb42784a5c14a068f3a6c5b9f2277897e1225b6efc14e4585c4e1"
+    "sha256": "5655db8e98e58c7b2517609563d27ad3e22e086be7377ca557f769717ecc1b80"
   },
   {
     "name": "nix/fish/public/pi",
-    "sha256": "5976e36d59fcb42784a5c14a068f3a6c5b9f2277897e1225b6efc14e4585c4e1"
+    "sha256": "5655db8e98e58c7b2517609563d27ad3e22e086be7377ca557f769717ecc1b80"
+  },
+  {
+    "name": "nix/fish/public/antigravity",
+    "sha256": "5655db8e98e58c7b2517609563d27ad3e22e086be7377ca557f769717ecc1b80"
   },
   {
     "name": "nix/fish/secret/codex",
-    "sha256": "b1d2ffa4a7218b9af00b316f75e32923217f7b40b07f23096bf824a1d1ea2b62"
+    "sha256": "50f5a630b166ea4b6163b54c9e08aab9711b214b0ac2a79df6cc9011395b0fa0"
   },
   {
     "name": "nix/fish/secret/claude-code",
-    "sha256": "b1d2ffa4a7218b9af00b316f75e32923217f7b40b07f23096bf824a1d1ea2b62"
+    "sha256": "50f5a630b166ea4b6163b54c9e08aab9711b214b0ac2a79df6cc9011395b0fa0"
   },
   {
     "name": "nix/fish/secret/opencode",
-    "sha256": "b1d2ffa4a7218b9af00b316f75e32923217f7b40b07f23096bf824a1d1ea2b62"
+    "sha256": "50f5a630b166ea4b6163b54c9e08aab9711b214b0ac2a79df6cc9011395b0fa0"
   },
   {
     "name": "nix/fish/secret/pi",
-    "sha256": "b1d2ffa4a7218b9af00b316f75e32923217f7b40b07f23096bf824a1d1ea2b62"
+    "sha256": "50f5a630b166ea4b6163b54c9e08aab9711b214b0ac2a79df6cc9011395b0fa0"
+  },
+  {
+    "name": "nix/fish/secret/antigravity",
+    "sha256": "50f5a630b166ea4b6163b54c9e08aab9711b214b0ac2a79df6cc9011395b0fa0"
   },
   {
     "name": "nix/fish/runtime/codex",
-    "sha256": "7cbad0b0caa3873cb844a4afcab0aaaaa01cce5d37219228d00d9a47a9c11ec3"
+    "sha256": "235bed16226dd337a5b3aa56562a792c4b2955950162db04771608ec0d81b02f"
   },
   {
     "name": "nix/fish/runtime/claude-code",
-    "sha256": "7cbad0b0caa3873cb844a4afcab0aaaaa01cce5d37219228d00d9a47a9c11ec3"
+    "sha256": "235bed16226dd337a5b3aa56562a792c4b2955950162db04771608ec0d81b02f"
   },
   {
     "name": "nix/fish/runtime/opencode",
-    "sha256": "7cbad0b0caa3873cb844a4afcab0aaaaa01cce5d37219228d00d9a47a9c11ec3"
+    "sha256": "235bed16226dd337a5b3aa56562a792c4b2955950162db04771608ec0d81b02f"
   },
   {
     "name": "nix/fish/runtime/pi",
-    "sha256": "7cbad0b0caa3873cb844a4afcab0aaaaa01cce5d37219228d00d9a47a9c11ec3"
+    "sha256": "235bed16226dd337a5b3aa56562a792c4b2955950162db04771608ec0d81b02f"
+  },
+  {
+    "name": "nix/fish/runtime/antigravity",
+    "sha256": "235bed16226dd337a5b3aa56562a792c4b2955950162db04771608ec0d81b02f"
   }
 ]

@@ -38,7 +38,7 @@ const recipeCases = async () => {
   for (const family of ["ubuntu", "nix"] as const)
     for (const shell of ["bash", "zsh", "fish"] as const)
       for (const docker of [false, true])
-        for (const harness of ["codex", "claude-code", "opencode", "pi"] as const) {
+        for (const harness of ["codex", "claude-code", "opencode", "pi", "antigravity"] as const) {
           const base = createWorkspaceBuildSpec({
             harness: { id: harness },
             target: {

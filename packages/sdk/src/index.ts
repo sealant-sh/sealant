@@ -15,7 +15,7 @@
  *   await run.record.replay()
  */
 export { Sealant } from "./client.js";
-export { claudeCode, codex, customHarness, opencode, pi } from "./harness.js";
+export { antigravity, claudeCode, codex, customHarness, opencode, pi } from "./harness.js";
 export {
   ForwardDialError,
   type ForwardDialFailure,

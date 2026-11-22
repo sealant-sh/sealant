@@ -184,6 +184,7 @@ const BUILTIN_LAUNCH_COMMANDS: Record<string, string> = {
   codex: "codex",
   "claude-code": "claude",
   pi: "pi",
+  antigravity: "agy",
 };
 
 /** Wire → public snaps of one capture class. */

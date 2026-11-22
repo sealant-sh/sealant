@@ -178,12 +178,13 @@ describe("an Arch workspace image on the Docker daemon's architecture", () => {
     expect(found.trim()).toBe("checked");
 
     const versions = await run(
-      "codex --version && claude --version && opencode --version && pi --version && bun --version",
+      "codex --version && claude --version && opencode --version && pi --version && agy --version && bun --version",
     );
     expect(versions).toContain(HARNESS_VERSIONS.codex);
     expect(versions).toContain(HARNESS_VERSIONS["claude-code"]);
     expect(versions).toContain(HARNESS_VERSIONS.opencode);
     expect(versions).toContain(HARNESS_VERSIONS.pi);
+    expect(versions).toContain(HARNESS_VERSIONS.antigravity);
   }, 120_000);
 
   it("boots sealantd as PID 1, and a person runs a harness and reaches root through sudo only", async () => {
@@ -222,7 +223,7 @@ describe("an Arch workspace image on the Docker daemon's architecture", () => {
           "set -u",
           // A person as prepare makes one: a uid from the reserved range, in the mend group.
           "useradd -u 40001 -g mend -m -s /bin/bash p1",
-          "sudo -u p1 -H bash -lc 'id -un; codex --version; claude --version; opencode --version; pi --version'",
+          "sudo -u p1 -H bash -lc 'id -un; codex --version; claude --version; opencode --version; pi --version; agy --version'",
           "sudo -u p1 -H sudo -n true && echo sudo=ok",
           // su through a terminal, fed (once it prompts) the password the rootfs ships root with.
           "command -v script >/dev/null && command -v su >/dev/null || { echo tools=missing; exit 1; }",
@@ -237,6 +238,7 @@ describe("an Arch workspace image on the Docker daemon's architecture", () => {
       expect(out).toContain(HARNESS_VERSIONS["claude-code"]);
       expect(out).toContain(HARNESS_VERSIONS.opencode);
       expect(out).toContain(HARNESS_VERSIONS.pi);
+      expect(out).toContain(HARNESS_VERSIONS.antigravity);
       expect(out).toContain("sudo=ok");
       expect(out).toContain("su-control=ok");
       expect(out).toContain("su-root=refused");

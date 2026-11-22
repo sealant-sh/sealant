@@ -11,7 +11,7 @@ const dockerParityCases = () =>
   (["fedora", "arch", "ubuntu", "nix"] as const).flatMap((family) =>
     (["bash", "zsh", "fish"] as const).flatMap((shell) =>
       (["none", "public", "secret", "runtime"] as const).flatMap((dotfiles) =>
-        (["codex", "claude-code", "opencode", "pi"] as const).map((harness) => {
+        (["codex", "claude-code", "opencode", "pi", "antigravity"] as const).map((harness) => {
           const spec = createWorkspaceBuildSpec({
             harness: { id: harness },
             target: {

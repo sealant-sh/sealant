@@ -91,9 +91,9 @@ that mapping. See
 ### Harnesses
 
 Harness factories describe how to invoke a harness one-shot: `opencode()`, `codex()`,
-`claudeCode({ profile? })`, and `customHarness({ id, invoke, ... })` for anything else. Only
-`opencode()` is exercised end-to-end today; the Codex and Claude Code invocation forms are pending
-live verification against the baked workspace image.
+`claudeCode({ profile? })`, `pi()`, `antigravity()`, and `customHarness({ id, invoke, ... })` for
+anything else. Only `opencode()` is exercised end-to-end today; the other invocation forms are
+pending live verification against the baked workspace image.
 
 ### Owner identity
 
