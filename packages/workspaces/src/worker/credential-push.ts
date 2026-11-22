@@ -1,11 +1,14 @@
 import { isResourceDomainId } from "@sealant/api-contracts";
 import {
+  ANTIGRAVITY_TOKEN_PATH,
+  antigravityTokenCopy,
   chatgptLoginEntry,
   CLAUDE_CREDENTIALS_JSON_PATH,
   CODEX_AUTH_JSON_PATH,
   claudeCredentialsFile,
   codexAuthJsonCopy,
   loginClassOf,
+  parseAntigravityTokenPayload,
   parseClaudeCredentialPayload,
   parseCodexCredentialPayload,
   type CredentialCipherService,
@@ -62,13 +65,16 @@ const HOME_PUSH_CONCURRENCY = 4;
 
 const PUSH_TIMEOUT = Duration.seconds(15);
 
-export type CredentialPushProvider = "claude" | "codex";
+export type CredentialPushProvider = "claude" | "codex" | "antigravity";
 
 /** The stored login a home's provider is made from: pi's and opencode's are the Codex login. */
 const homeLoginSource = (provider: string): CredentialPushProvider | "github" | undefined =>
   provider === "pi" || provider === "opencode"
     ? "codex"
-    : provider === "claude" || provider === "codex" || provider === "github"
+    : provider === "claude" ||
+        provider === "codex" ||
+        provider === "github" ||
+        provider === "antigravity"
       ? provider
       : undefined;
 
@@ -159,7 +165,12 @@ export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
           if (target === undefined) return Effect.succeed("unreachable" as const);
           const file = {
             kind: "file" as const,
-            path: input.provider === "claude" ? CLAUDE_CREDENTIALS_JSON_PATH : CODEX_AUTH_JSON_PATH,
+            path:
+              input.provider === "claude"
+                ? CLAUDE_CREDENTIALS_JSON_PATH
+                : input.provider === "codex"
+                  ? CODEX_AUTH_JSON_PATH
+                  : ANTIGRAVITY_TOKEN_PATH,
             contentBase64: Buffer.from(launchCopy.copyJson, "utf8").toString("base64"),
             mode: "600",
           };
@@ -324,6 +335,10 @@ const subscriptionCopy = (provider: CredentialPushProvider, parsed: unknown) => 
   if (provider === "claude") {
     const payload = parseClaudeCredentialPayload(parsed);
     return "apiKey" in payload ? undefined : claudeCredentialsFile(payload);
+  }
+  if (provider === "antigravity") {
+    const payload = parseAntigravityTokenPayload(parsed);
+    return antigravityTokenCopy(payload.tokenJson);
   }
   const payload = parseCodexCredentialPayload(parsed);
   return "authJson" in payload && loginClassOf("codex", payload) === "subscription"

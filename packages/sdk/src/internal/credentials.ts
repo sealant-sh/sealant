@@ -16,6 +16,7 @@ export interface WorkspaceCredentialsPayload {
   readonly claude?: string;
   readonly codex?: string;
   readonly github?: string;
+  readonly antigravity?: string;
 }
 
 export const mapAccountRef = (value: boolean | string | undefined): string | undefined => {
@@ -39,12 +40,14 @@ export const mapWorkspaceCredentials = (
   const claude = mapAccountRef(options.claude);
   const codex = mapAccountRef(options.codex);
   const github = mapAccountRef(options.github);
+  const antigravity = mapAccountRef(options.antigravity);
 
   const payload: WorkspaceCredentialsPayload = {
     ...(options.profile === undefined ? {} : { profileId: options.profile }),
     ...(claude === undefined ? {} : { claude }),
     ...(codex === undefined ? {} : { codex }),
     ...(github === undefined ? {} : { github }),
+    ...(antigravity === undefined ? {} : { antigravity }),
   };
 
   return Object.keys(payload).length > 0 ? payload : undefined;

@@ -114,6 +114,11 @@ export const accountDetails = (account: ConnectedAccountSummary): string => {
       }
       return parts.join(" ");
     }
+    case "antigravity": {
+      const email = metadataString(account.metadata, "email");
+      const suffix = metadataString(account.metadata, "tokenSuffix");
+      return email ?? (suffix !== undefined ? `token …${suffix}` : "");
+    }
   }
 };
 

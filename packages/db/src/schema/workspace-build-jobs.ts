@@ -302,6 +302,7 @@ export const workspaceCredentialHomeProviderValues = [
   "claude",
   "codex",
   "github",
+  "antigravity",
   // pi's and opencode's ChatGPT logins, made from the person's Codex account (§6c).
   "pi",
   "opencode",

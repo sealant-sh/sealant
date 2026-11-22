@@ -18,6 +18,7 @@ const PROVIDER_LABELS: ReadonlyArray<{
   { provider: "claude", label: "Claude" },
   { provider: "codex", label: "Codex" },
   { provider: "github", label: "GitHub" },
+  { provider: "antigravity", label: "Antigravity" },
 ];
 
 const NOT_LINKED = "";
@@ -86,7 +87,7 @@ function ProfileAgentsPage() {
     <WorkspacePage
       kicker="Profile"
       title={title}
-      description="Bind a connected account per provider. Workspaces launched from this profile inherit these identities — Claude, Codex, and GitHub — unless a launch overrides them."
+      description="Bind a connected account per provider. Workspaces launched from this profile inherit these identities — Claude, Codex, GitHub, and Antigravity — unless a launch overrides them."
     >
       <div className="space-y-8">
         <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-sm)]">

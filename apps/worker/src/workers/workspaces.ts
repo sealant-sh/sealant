@@ -98,6 +98,10 @@ import { Effect, Layer } from "effect";
 import { assembleBoat, type BoatWorkerStack } from "./boat-assembly.js";
 import { processRunExecJob } from "./process-run-exec-job.js";
 import {
+  ANTIGRAVITY_SESSION_REFRESH_INTERVAL_MS,
+  refreshAntigravitySessionCredentials,
+} from "./refresh-antigravity-sessions.js";
+import {
   CLAUDE_SESSION_REFRESH_INTERVAL_MS,
   refreshClaudeSessionCredentials,
 } from "./refresh-claude-sessions.js";
@@ -1040,6 +1044,20 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }, CODEX_SESSION_REFRESH_INTERVAL_MS);
   codexRefreshTimer?.unref();
 
+  // The only refresher of an Antigravity personal Google OAuth login (§6a): workspaces receive a
+  // stripped copy without refresh_token, so the sweeper refreshes via `agy models` every 10m.
+  const antigravityRefreshTimer =
+    credentialCipher === undefined
+      ? undefined
+      : setInterval(() => {
+          refreshAntigravitySessionCredentials({ db, credentialCipher, targetOptions }).catch(
+            (error: unknown) => {
+              console.error("Antigravity session refresh tick failed", { error });
+            },
+          );
+        }, ANTIGRAVITY_SESSION_REFRESH_INTERVAL_MS);
+  antigravityRefreshTimer?.unref();
+
   const placementLayer = Layer.mergeAll(
     CredentialPlacementRepoLive,
     WorkspaceCredentialHomeRepoLive,
@@ -1387,6 +1405,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       }
       if (codexRefreshTimer !== undefined) {
         clearInterval(codexRefreshTimer);
+      }
+      if (antigravityRefreshTimer !== undefined) {
+        clearInterval(antigravityRefreshTimer);
       }
       await lifecycleConsumer.cancel();
       await runExecConsumer.cancel();

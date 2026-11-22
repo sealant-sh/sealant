@@ -27,6 +27,7 @@ import {
   type PruneWorkspaceCredentialsResponse,
 } from "@sealant/api-contracts";
 import {
+  antigravityTokenCopy,
   chatgptLoginEntry,
   claudeCredentialsFile,
   codexLoginFile,
@@ -372,6 +373,8 @@ const homeLoginFile = (
       return codexLoginFile(payload);
     case "claude":
       return "apiKey" in payload ? payload.apiKey : claudeCredentialsFile(payload);
+    case "antigravity":
+      return antigravityTokenCopy(payload.tokenJson);
   }
 };
 
@@ -444,6 +447,7 @@ const OWNER_HALF_REFUSALS: ReadonlySet<number> = new Set([
   HOME_SCRIPT_EXIT.claudeLoginUnusable,
   HOME_SCRIPT_EXIT.codexLoginUnusable,
   HOME_SCRIPT_EXIT.githubLoginUnusable,
+  HOME_SCRIPT_EXIT.antigravityLoginUnusable,
   HOME_SCRIPT_EXIT.claudeKeyUnusable,
 ]);
 
@@ -472,7 +476,7 @@ export const putWorkspaceCredentials = (input: {
     if (named.length === 0) {
       return yield* new WorkspaceBadRequestError({
         message:
-          "Name the claude, codex or github account to put into the home, or null to remove one.",
+          "Name the claude, codex, github or antigravity account to put into the home, or null to remove one.",
       });
     }
     if ((payload.uid === undefined) !== (payload.gid === undefined)) {

@@ -37,8 +37,22 @@ FROM docker:27.5.1-cli AS docker-cli
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git \
+  && apt-get install -y --no-install-recommends ca-certificates curl git \
   && rm -rf /var/lib/apt/lists/*
+# Pinned Antigravity CLI for the keep-fresh sweeper (`agy models`, zero LLM tokens).
+RUN set -eu \
+  && case "$(uname -m)" in \
+       x86_64) arch=x64; dir=linux-x64; sha=83311d3f354567612dc16c1ae2ea9b503d6f6833aa4e138d39aa229da3f3bb99b0e4d7cca0bce4796b0060d6a51d8113eb7449ed5dc0e7900bf217107ea5bff9 ;; \
+       aarch64|arm64) arch=arm64; dir=linux-arm; sha=c9b29bba475f63a1a80161ae93ba72b221c7a586d9851e4d0061546704bab66d6b2760b25d716d191724fc7564f3246456ee151e28aa37af48dbcd72bdc6c463 ;; \
+       *) echo "antigravity: no release for $(uname -m)" >&2; exit 1 ;; \
+     esac \
+  && tmp="$(mktemp -d)" \
+  && curl -fsSL --retry 3 -o "$tmp/agy.tar.gz" "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.14-5302690847260672/$dir/cli_linux_$arch.tar.gz" \
+  && echo "$sha  $tmp/agy.tar.gz" | sha512sum -c - \
+  && tar -xzf "$tmp/agy.tar.gz" -C "$tmp" \
+  && install -m 0755 "$tmp/antigravity" /usr/local/bin/agy \
+  && rm -rf "$tmp" \
+  && agy --version
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 # Workspace image builds force DOCKER_BUILDKIT=1, which requires the matching buildx plugin.
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx

@@ -164,6 +164,33 @@ export const codexAuthJsonCanRefresh = (authJson: string): boolean => {
 };
 
 /**
+ * An Antigravity OAuth token file whose holder cannot refresh it: `token` without `refresh_token`.
+ * Verified against agy 1.5.14 in a keyring-less Linux container: `agy models`, `agy -p`, and
+ * `agy acp --stdio` all authenticate with `access_token` alone until `expiry - 5m`.
+ */
+export const antigravityTokenCopy = (tokenJson: string): string => {
+  const document = parseObject(tokenJson, "the Antigravity OAuth token file");
+  const token = document["token"];
+  if (!Predicate.isObject(token)) {
+    throw new CredentialCopyError("the Antigravity OAuth token file has no token object");
+  }
+  const { refresh_token: _refreshToken, ...withoutRefresh } = token;
+  return JSON.stringify({ ...document, token: withoutRefresh });
+};
+
+/** Whether an Antigravity OAuth token file carries a refresh token (the store's own copy does). */
+export const antigravityTokenCanRefresh = (tokenJson: string): boolean => {
+  try {
+    const token = parseObject(tokenJson, "the Antigravity OAuth token file")["token"];
+    if (!Predicate.isObject(token)) return false;
+    const refreshToken = token["refresh_token"];
+    return typeof refreshToken === "string" && refreshToken !== "";
+  } catch {
+    return false;
+  }
+};
+
+/**
  * A GitHub token as the GitHub CLI's `hosts.yml` (`$GH_CONFIG_DIR`, by default
  * `~/.config/gh/hosts.yml`), the file a home holds GitHub in (docs/connected-accounts-design.md
  * §6c): `gh` and any credential helper that reads it find the person's own token, and nothing rides

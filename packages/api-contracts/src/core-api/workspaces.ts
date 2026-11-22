@@ -218,6 +218,7 @@ export const createWorkspaceCredentialsSchema = Schema.Struct({
   claude: Schema.optional(NonEmptyString),
   codex: Schema.optional(NonEmptyString),
   github: Schema.optional(NonEmptyString),
+  antigravity: Schema.optional(NonEmptyString),
 });
 export type CreateWorkspaceCredentials = typeof createWorkspaceCredentialsSchema.Type;
 
@@ -963,6 +964,7 @@ export const workspaceCredentialHomeProviders = [
   "claude",
   "codex",
   "github",
+  "antigravity",
   "pi",
   "opencode",
 ] as const;
@@ -970,8 +972,15 @@ export type WorkspaceCredentialHomeProvider = (typeof workspaceCredentialHomePro
 
 /** The connected account's provider each home provider's login is made from. */
 export const workspaceCredentialHomeAccountProvider: Readonly<
-  Record<WorkspaceCredentialHomeProvider, "claude" | "codex" | "github">
-> = { claude: "claude", codex: "codex", github: "github", pi: "codex", opencode: "codex" };
+  Record<WorkspaceCredentialHomeProvider, "claude" | "codex" | "github" | "antigravity">
+> = {
+  claude: "claude",
+  codex: "codex",
+  github: "github",
+  antigravity: "antigravity",
+  pi: "codex",
+  opencode: "codex",
+};
 
 /**
  * Put one person's logins into one home of a RUNNING workspace (docs/connected-accounts-design.md
@@ -1004,6 +1013,7 @@ export const putWorkspaceCredentialsRequestSchema = Schema.Struct({
   claude: Schema.optional(Schema.NullOr(NonEmptyString)),
   codex: Schema.optional(Schema.NullOr(NonEmptyString)),
   github: Schema.optional(Schema.NullOr(NonEmptyString)),
+  antigravity: Schema.optional(Schema.NullOr(NonEmptyString)),
   /**
    * pi's ChatGPT login, made from a Codex account of `onBehalfOfUserId` (an id or a Codex account
    * name), as the `openai-codex` entry of `<home>/.pi/agent/auth.json`. The file is merged: its
@@ -1090,6 +1100,7 @@ export const workspaceCredentialHomeSchema = Schema.Struct({
     claude: Schema.optional(workspaceHomeAccountSchema),
     codex: Schema.optional(workspaceHomeAccountSchema),
     github: Schema.optional(workspaceHomeAccountSchema),
+    antigravity: Schema.optional(workspaceHomeAccountSchema),
     /** The Codex account pi's ChatGPT login is made from. */
     pi: Schema.optional(workspaceHomeAccountSchema),
     /** The Codex account opencode's ChatGPT login is made from. */

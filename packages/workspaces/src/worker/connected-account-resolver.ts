@@ -125,6 +125,21 @@ const planLogin = (
         }),
       };
     }
+    case "antigravity": {
+      const planned = planCredentialInjections(provider, payload);
+      if (home === undefined) return { kind: "planned", injections: planned };
+      return {
+        kind: "planned",
+        injections: planned.map((injection) => {
+          if (injection.kind !== "file" || !injection.path.startsWith(HOME_PREFIX)) {
+            throw new Error(
+              `A ${provider} login planned outside $HOME cannot be written into a home.`,
+            );
+          }
+          return { ...injection, path: `${home.path}/${injection.path.slice(HOME_PREFIX.length)}` };
+        }),
+      };
+    }
   }
 };
 
@@ -260,9 +275,11 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
       provider: credentialRef.provider,
       connectedAccountId: account.id,
       injection: fileInjected ? ("file" as const) : ("env" as const),
-      // Every Claude/Codex FILE planCredentialInjections writes is a copy that cannot refresh.
+      // Every Claude/Codex/Antigravity FILE planCredentialInjections writes is a copy that cannot refresh.
       ...(fileInjected &&
-      (credentialRef.provider === "claude" || credentialRef.provider === "codex")
+      (credentialRef.provider === "claude" ||
+        credentialRef.provider === "codex" ||
+        credentialRef.provider === "antigravity")
         ? { copy: true }
         : {}),
       ...(login === undefined ? {} : { login }),

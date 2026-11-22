@@ -55,7 +55,7 @@ export type WorkspaceRunLinkRelation = (typeof workspaceRunLinkRelationValues)[n
 export const profileSshKeyPurposeValues = ["login", "git-auth", "git-signing"] as const;
 export type ProfileSshKeyPurpose = (typeof profileSshKeyPurposeValues)[number];
 
-export const connectedAccountProviderValues = ["claude", "codex", "github"] as const;
+export const connectedAccountProviderValues = ["claude", "codex", "github", "antigravity"] as const;
 export type ConnectedAccountProvider = (typeof connectedAccountProviderValues)[number];
 
 export const connectedAccountStatusValues = ["active", "invalid", "archived"] as const;

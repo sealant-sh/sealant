@@ -30,6 +30,20 @@ export {
 } from "./claude-session.js";
 
 export {
+  ANTIGRAVITY_TOKEN_REL_PATH,
+  isNewerAntigravityToken,
+  isPlausibleAntigravityExpiry,
+  MAX_PLAUSIBLE_ANTIGRAVITY_EXPIRY_AHEAD_MS,
+  provisionAntigravityHome,
+  readAntigravityHomeToken,
+  readStoredAntigravityExpiresAt,
+  removeAntigravityHome,
+  type ProvisionedAntigravityHome,
+} from "./antigravity-session.js";
+
+export {
+  antigravityTokenCanRefresh,
+  antigravityTokenCopy,
   claudeCredentialsCanRefresh,
   claudeCredentialsCopy,
   claudeSetupTokenCredentials,
@@ -54,6 +68,7 @@ export {
 } from "./codex-session.js";
 
 export {
+  ANTIGRAVITY_TOKEN_PATH,
   claudeApiKeyUnsupported,
   endpointKeyUnsupported,
   claudeCredentialsFile,
@@ -69,6 +84,7 @@ export {
 } from "./injection.js";
 
 export {
+  antigravityTokenPayloadSchema,
   apiKeyMetadata,
   apiKeyPayloadSchema,
   anthropicSecretKindOf,
@@ -85,6 +101,7 @@ export {
   connectedAccountProviders,
   connectedAccountProviderSchema,
   credentialKindOf,
+  extractAntigravitySecrets,
   extractClaudeOauthCredentials,
   extractCodexSecrets,
   GITHUB_TOKEN_PREFIXES,
@@ -93,6 +110,8 @@ export {
   loginClassOf,
   loginClassOfKind,
   OPENAI_API_KEY_PREFIX,
+  parseAntigravityTokenJson,
+  parseAntigravityTokenPayload,
   parseApiKey,
   parseConnectedAccountKind,
   parseStoredCredential,
@@ -104,6 +123,8 @@ export {
   parseCodexCredentialPayload,
   parseGitHubCredentialPayload,
   placedLoginOf,
+  type AntigravityTokenMetadata,
+  type AntigravityTokenPayload,
   type ApiKeyPayload,
   type ClaudeCredentialPayload,
   type ClaudeCredentialsFilePayload,
@@ -118,6 +139,7 @@ export {
   type ConnectedAccountKind,
   type ConnectedAccountProvider,
   type GitHubCredentialPayload,
+  type ParseAntigravityTokenJsonResult,
   type ParseApiKeyResult,
   type PlacedLogin,
   type ParseClaudeCredentialsJsonResult,

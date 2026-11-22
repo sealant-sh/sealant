@@ -223,6 +223,8 @@ export interface WorkspaceCredentialsOptions {
   readonly codex?: boolean | string;
   /** `true` for the caller's default GitHub account, or a string naming a specific one. */
   readonly github?: boolean | string;
+  /** `true` for the caller's default Antigravity account, or a string naming a specific one. */
+  readonly antigravity?: boolean | string;
 }
 
 /**
@@ -1439,6 +1441,7 @@ export interface WorkspaceCredentialsPutOptions {
   readonly claude?: WorkspaceCredentialsAccountChoice;
   readonly codex?: WorkspaceCredentialsAccountChoice;
   readonly github?: WorkspaceCredentialsAccountChoice;
+  readonly antigravity?: WorkspaceCredentialsAccountChoice;
   /**
    * pi's ChatGPT login, made from one of `onBehalfOf`'s Codex accounts (`true` is their default
    * Codex account), written as the `openai-codex` entry of `<home>/.pi/agent/auth.json`. The file
@@ -1468,7 +1471,7 @@ export interface WorkspaceCredentialsPutOptions {
 
 /** A provider a partial {@link WorkspaceCredentials.put} left out, and why. */
 export interface WorkspaceCredentialSkip {
-  readonly provider: "claude" | "codex" | "github" | "pi" | "opencode";
+  readonly provider: "claude" | "codex" | "github" | "antigravity" | "pi" | "opencode";
   /** The account's refusal, as a whole put would have rejected with it. */
   readonly reason:
     | "connected-account-missing"
@@ -1511,7 +1514,7 @@ export type CredentialPlacementLogin =
 
 /** A receipt associated with the provider slot it occupies in this home. */
 export interface WorkspaceCredentialPlacementReceipt extends CredentialPlacementReceipt {
-  readonly provider: "claude" | "codex" | "github" | "pi" | "opencode";
+  readonly provider: "claude" | "codex" | "github" | "antigravity" | "pi" | "opencode";
 }
 
 /** One account whose copy a home holds. */
@@ -1537,6 +1540,7 @@ export interface WorkspaceCredentialHome {
     readonly claude?: WorkspaceCredentialHomeAccount;
     readonly codex?: WorkspaceCredentialHomeAccount;
     readonly github?: WorkspaceCredentialHomeAccount;
+    readonly antigravity?: WorkspaceCredentialHomeAccount;
     /** The Codex account pi's ChatGPT login is made from. */
     readonly pi?: WorkspaceCredentialHomeAccount;
     /** The Codex account opencode's ChatGPT login is made from. */
@@ -2693,7 +2697,7 @@ export interface BoatAccountsNamespace {
 // Connected accounts (the client's owner's Claude / Codex / GitHub credentials)
 // ---------------------------------------------------------------------------------------------
 
-export type ConnectedAccountProvider = "claude" | "codex" | "github";
+export type ConnectedAccountProvider = "claude" | "codex" | "github" | "antigravity";
 export type ConnectedAccountStatus = "active" | "invalid" | "archived";
 
 /** A connected account as every surface sees it — NEVER carries secret material. */

@@ -10,6 +10,7 @@ import { authRemoveCommand } from "./commands/remove.js";
 import { authStatusCommand } from "./commands/status.js";
 import { ApiUrlFlag, CliConfigStoreLive, OwnerFlag } from "./config.js";
 import { CliFailure, describeUnknown } from "./errors.js";
+import { authAntigravityCommand } from "./providers/antigravity.js";
 import { authClaudeCommand } from "./providers/claude.js";
 import { authCodexCommand } from "./providers/codex.js";
 import { authGithubCommand } from "./providers/github.js";
@@ -22,6 +23,7 @@ const authCommand = Command.make("auth").pipe(
     authClaudeCommand,
     authCodexCommand,
     authGithubCommand,
+    authAntigravityCommand,
     authStatusCommand,
     authRemoveCommand,
   ]),

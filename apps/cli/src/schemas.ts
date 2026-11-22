@@ -9,7 +9,7 @@ import { z } from "zod";
  * packages/validators/src/api/connected-accounts.ts.
  */
 
-export const connectedAccountProviderSchema = z.enum(["claude", "codex", "github"]);
+export const connectedAccountProviderSchema = z.enum(["claude", "codex", "github", "antigravity"]);
 export type ConnectedAccountProvider = z.infer<typeof connectedAccountProviderSchema>;
 export const CONNECTED_ACCOUNT_PROVIDERS = connectedAccountProviderSchema.options;
 
