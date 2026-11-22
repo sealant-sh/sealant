@@ -16,6 +16,10 @@
     "sha256": "02d681c0ef0a685c1bc65a86aa9a95cff5c6f0fc4c3f0cfd0b721f03197352f8"
   },
   {
+    "name": "ubuntu/bash/plain/antigravity",
+    "sha256": "02d681c0ef0a685c1bc65a86aa9a95cff5c6f0fc4c3f0cfd0b721f03197352f8"
+  },
+  {
     "name": "ubuntu/bash/docker/codex",
     "sha256": "e75ccc1954a628c4cd6556b6e3c59d40900ef963b22ba936755c24139accc42c"
   },
@@ -29,6 +33,10 @@
   },
   {
     "name": "ubuntu/bash/docker/pi",
+    "sha256": "e75ccc1954a628c4cd6556b6e3c59d40900ef963b22ba936755c24139accc42c"
+  },
+  {
+    "name": "ubuntu/bash/docker/antigravity",
     "sha256": "e75ccc1954a628c4cd6556b6e3c59d40900ef963b22ba936755c24139accc42c"
   },
   {
@@ -48,6 +56,10 @@
     "sha256": "a87f38fc4d042161f1abcc55a0c8541be809d4f0b61225a09e8c471014035280"
   },
   {
+    "name": "ubuntu/zsh/plain/antigravity",
+    "sha256": "a87f38fc4d042161f1abcc55a0c8541be809d4f0b61225a09e8c471014035280"
+  },
+  {
     "name": "ubuntu/zsh/docker/codex",
     "sha256": "9236c9b800b46378b6bbb5cd8fca2cf20a8145db749c3b6c74b36d30b247084c"
   },
@@ -61,6 +73,10 @@
   },
   {
     "name": "ubuntu/zsh/docker/pi",
+    "sha256": "9236c9b800b46378b6bbb5cd8fca2cf20a8145db749c3b6c74b36d30b247084c"
+  },
+  {
+    "name": "ubuntu/zsh/docker/antigravity",
     "sha256": "9236c9b800b46378b6bbb5cd8fca2cf20a8145db749c3b6c74b36d30b247084c"
   },
   {
@@ -80,6 +96,10 @@
     "sha256": "b63c33d0704fe8d02faba0c5e0b0df267ddd8dfb30d0cfaccb7bb4cd62ce27b4"
   },
   {
+    "name": "ubuntu/fish/plain/antigravity",
+    "sha256": "b63c33d0704fe8d02faba0c5e0b0df267ddd8dfb30d0cfaccb7bb4cd62ce27b4"
+  },
+  {
     "name": "ubuntu/fish/docker/codex",
     "sha256": "30c77b62ef94b6b65d497383656906a88cfba9a4e4a78cbce1b802cb1cb7b4a2"
   },
@@ -93,6 +113,10 @@
   },
   {
     "name": "ubuntu/fish/docker/pi",
+    "sha256": "30c77b62ef94b6b65d497383656906a88cfba9a4e4a78cbce1b802cb1cb7b4a2"
+  },
+  {
+    "name": "ubuntu/fish/docker/antigravity",
     "sha256": "30c77b62ef94b6b65d497383656906a88cfba9a4e4a78cbce1b802cb1cb7b4a2"
   },
   {
@@ -112,6 +136,10 @@
     "sha256": "83c2c82917bd356d83622241f8553bc3b5f71d37a350546f606453443d07ef17"
   },
   {
+    "name": "nix/bash/plain/antigravity",
+    "sha256": "83c2c82917bd356d83622241f8553bc3b5f71d37a350546f606453443d07ef17"
+  },
+  {
     "name": "nix/bash/docker/codex",
     "sha256": "26ff0f1f4bc7ebdf9ac706f8a3d75e6445add4399f37c68ebc39e93a421c91dc"
   },
@@ -125,6 +153,10 @@
   },
   {
     "name": "nix/bash/docker/pi",
+    "sha256": "26ff0f1f4bc7ebdf9ac706f8a3d75e6445add4399f37c68ebc39e93a421c91dc"
+  },
+  {
+    "name": "nix/bash/docker/antigravity",
     "sha256": "26ff0f1f4bc7ebdf9ac706f8a3d75e6445add4399f37c68ebc39e93a421c91dc"
   },
   {
@@ -144,6 +176,10 @@
     "sha256": "6f5b558e1f9dbaf4aba7237a08276df34e796ed40a9345ec2f071cab9f7cc43e"
   },
   {
+    "name": "nix/zsh/plain/antigravity",
+    "sha256": "6f5b558e1f9dbaf4aba7237a08276df34e796ed40a9345ec2f071cab9f7cc43e"
+  },
+  {
     "name": "nix/zsh/docker/codex",
     "sha256": "2df3426f0ec81b9278887687fd329118b8ced8f72eaa49d19f6618d3cc0ba497"
   },
@@ -157,6 +193,10 @@
   },
   {
     "name": "nix/zsh/docker/pi",
+    "sha256": "2df3426f0ec81b9278887687fd329118b8ced8f72eaa49d19f6618d3cc0ba497"
+  },
+  {
+    "name": "nix/zsh/docker/antigravity",
     "sha256": "2df3426f0ec81b9278887687fd329118b8ced8f72eaa49d19f6618d3cc0ba497"
   },
   {
@@ -176,6 +216,10 @@
     "sha256": "0b30e2be4ff3ca53a329473ad580de553b7d1a32375d48ee97b7e6a9f06c24ab"
   },
   {
+    "name": "nix/fish/plain/antigravity",
+    "sha256": "0b30e2be4ff3ca53a329473ad580de553b7d1a32375d48ee97b7e6a9f06c24ab"
+  },
+  {
     "name": "nix/fish/docker/codex",
     "sha256": "3aad322b99e43aa21755f6a75f958e736abbef73fe04a41ab1c9ee15d63f5dd4"
   },
@@ -189,6 +233,10 @@
   },
   {
     "name": "nix/fish/docker/pi",
+    "sha256": "3aad322b99e43aa21755f6a75f958e736abbef73fe04a41ab1c9ee15d63f5dd4"
+  },
+  {
+    "name": "nix/fish/docker/antigravity",
     "sha256": "3aad322b99e43aa21755f6a75f958e736abbef73fe04a41ab1c9ee15d63f5dd4"
   }
 ]

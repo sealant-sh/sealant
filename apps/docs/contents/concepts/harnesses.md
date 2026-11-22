@@ -25,7 +25,7 @@ understand the agent's internals, only how to launch it and watch it.
 
 ## Shipped harnesses
 
-The workspace builder (`/workspaces/new`) lets you pick one of three harnesses when you create a
+The workspace builder (`/workspaces/new`) lets you pick one of five harnesses when you create a
 workspace:
 
 | Harness     | id            | One-shot invocation     |
@@ -33,11 +33,13 @@ workspace:
 | OpenCode    | `opencode`    | `opencode run <prompt>` |
 | Codex       | `codex`       | `codex exec <prompt>`   |
 | Claude Code | `claude-code` | `claude -p <prompt>`    |
+| pi          | `pi`          | `pi -p <prompt>`        |
+| Antigravity | `antigravity` | `agy -p <prompt>`       |
 
-Every workspace image carries the Codex and Claude Code CLIs regardless of which harness the
-workspace was created with — the harness choice decides what launches and what a run invokes, not
-what is installed. An `opencode` workspace additionally installs OpenCode. This means a shell in any
-workspace can open either baked agent against the same files and state.
+Every workspace image carries all five baked CLIs (`codex`, `claude`, `opencode`, `pi`, and `agy`)
+regardless of which harness the workspace was created with — the harness choice decides what
+launches and what a run invokes, not what is installed. This means a shell in any workspace can open
+any baked agent against the same files and state.
 
 > OpenCode is the only harness exercised end to end today. The Codex and Claude Code invocation
 > forms are the expected headless shapes but are still pending live verification. If you rely on one
@@ -54,10 +56,12 @@ once. A pinned version changes only in a pull request, and bumping one rebuilds 
 To bump a harness:
 
 1. Read the version to pin: `npm view @anthropic-ai/claude-code version`,
-   `npm view @openai/codex version`, `npm view opencode-ai version`, and the latest release tag of
-   `earendil-works/pi` (without its `v`).
-2. Change it in `HARNESS_VERSIONS`. The tests read the same table, so nothing else in sealant
-   changes.
+   `npm view @openai/codex version`, `npm view opencode-ai version`, the latest release tag of
+   `earendil-works/pi` (without its `v`), and the Antigravity CLI manifests at
+   `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json`
+   and `linux_arm64.json` (version, build id, and SHA-512 per architecture).
+2. Change it in `HARNESS_VERSIONS` (and `ANTIGRAVITY_RELEASE` for Antigravity). The tests read the
+   same table, so nothing else in sealant changes.
 3. In Mend, check what was surveyed against an older version: the credential survey in
    `packages/sessions/src/harness-state.ts` and `CLAUDE_CODE_PROTOCOL_VERSION` in
    `packages/agent-protocol`.

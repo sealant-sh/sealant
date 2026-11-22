@@ -44,6 +44,13 @@ export const pi = (): Harness => ({
   launchCommand: "pi",
 });
 
+/** Google Antigravity CLI (`agy`). */
+export const antigravity = (): Harness => ({
+  id: "antigravity",
+  buildRunCommand: (prompt) => ({ executable: "agy", args: ["-p", prompt] }),
+  launchCommand: "agy",
+});
+
 /**
  * A bring-your-own harness. The caller supplies how to invoke it one-shot (`invoke`) and, optionally,
  * how to install and launch it. This is the harness-neutral escape hatch: any agent loop, CI worker,

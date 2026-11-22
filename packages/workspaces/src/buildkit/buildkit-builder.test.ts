@@ -862,6 +862,7 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain(
       `RUN npm install -g --allow-scripts=opencode-ai opencode-ai@${HARNESS_VERSIONS.opencode}`,
     );
+    expect(containerfile).toContain(`antigravity-cli/${HARNESS_VERSIONS.antigravity}-`);
     // Codex's sandbox prerequisite is baked with the CLI — no "could not find bubblewrap" banner.
     expect(containerfile).toMatch(/dnf -y install [^\n]*\bbubblewrap\b/);
     expect(containerfile).toContain(

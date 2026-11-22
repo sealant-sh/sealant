@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 
 import { useTRPC } from "@/lib/trpc/react";
 
-type HarnessId = "opencode" | "codex" | "claude-code" | "pi";
+type HarnessId = "opencode" | "codex" | "claude-code" | "pi" | "antigravity";
 type SourceMode = "git" | "github";
 type ConfigRepoMode = "none" | "git" | "github";
 type LoginShell = "bash" | "zsh" | "fish";
@@ -93,6 +93,7 @@ const HARNESS_OPTIONS: ReadonlyArray<{ readonly value: HarnessId; readonly label
   { value: "codex", label: "Codex" },
   { value: "claude-code", label: "Claude Code" },
   { value: "pi", label: "pi" },
+  { value: "antigravity", label: "Antigravity" },
 ];
 
 const TARGET_OS_OPTIONS: ReadonlyArray<{ readonly value: TargetOs; readonly label: string }> = [
@@ -2183,6 +2184,9 @@ function parseHarnessId(value: string): HarnessId {
   }
   if (value === "pi") {
     return "pi";
+  }
+  if (value === "antigravity") {
+    return "antigravity";
   }
 
   return "opencode";

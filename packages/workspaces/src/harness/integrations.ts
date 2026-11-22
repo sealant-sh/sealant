@@ -1,6 +1,6 @@
 import * as Rec from "effect/Record";
 
-export type HarnessId = "opencode" | "codex" | "claude-code" | "pi";
+export type HarnessId = "opencode" | "codex" | "claude-code" | "pi" | "antigravity";
 
 /** The one-shot invocation for a prompt, resolved SERVER-SIDE (the single source of truth). */
 export interface HarnessRunCommand {
@@ -34,7 +34,37 @@ export const HARNESS_VERSIONS = {
   codex: "0.160.1",
   "claude-code": "2.1.292",
   pi: "1.0.4",
+  antigravity: "1.5.14",
 } as const satisfies Record<HarnessId, string>;
+
+/**
+ * Antigravity CLI release metadata pinned by build id and SHA-512 per architecture.
+ * Manifests live at:
+ *   https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<platform>.json
+ */
+const ANTIGRAVITY_RELEASE = {
+  build: `${HARNESS_VERSIONS.antigravity}-5302690847260672`,
+  sha512: {
+    x64: "83311d3f354567612dc16c1ae2ea9b503d6f6833aa4e138d39aa229da3f3bb99b0e4d7cca0bce4796b0060d6a51d8113eb7449ed5dc0e7900bf217107ea5bff9",
+    arm64:
+      "c9b29bba475f63a1a80161ae93ba72b221c7a586d9851e4d0061546704bab66d6b2760b25d716d191724fc7564f3246456ee151e28aa37af48dbcd72bdc6c463",
+  },
+} as const;
+
+/** Antigravity's release binary for this machine, checked against its pinned SHA-512. */
+const ANTIGRAVITY_INSTALL_COMMAND = [
+  "set -eu",
+  `case "$(uname -m)" in x86_64) arch=x64; dir=linux-x64; sha=${ANTIGRAVITY_RELEASE.sha512.x64} ;; aarch64|arm64) arch=arm64; dir=linux-arm; sha=${ANTIGRAVITY_RELEASE.sha512.arm64} ;; *) echo "antigravity: no release for $(uname -m)" >&2; exit 1 ;; esac`,
+  `url="https://storage.googleapis.com/antigravity-public/antigravity-cli/${ANTIGRAVITY_RELEASE.build}/$dir/cli_linux_$arch.tar.gz"`,
+  'tmp="$(mktemp -d)"',
+  'curl -fsSL --retry 3 -o "$tmp/agy.tar.gz" "$url"',
+  'echo "$sha  $tmp/agy.tar.gz" | sha512sum -c -',
+  "mkdir -p /usr/local/bin",
+  'tar -xzf "$tmp/agy.tar.gz" -C "$tmp"',
+  'install -m 0755 "$tmp/antigravity" /usr/local/bin/agy',
+  'rm -rf "$tmp"',
+  "agy --version",
+].join("; ");
 
 /** pi's release for this machine, checked against the release's own SHA256SUMS. */
 const PI_INSTALL_COMMAND = [
@@ -93,6 +123,15 @@ const harnessIntegrations: Record<HarnessId, HarnessIntegration> = {
     launchCommand: "pi",
     buildRunCommand: (prompt) => ({ executable: "pi", args: ["-p", prompt] }),
   },
+  antigravity: {
+    id: "antigravity",
+    // Antigravity ships a self-contained glibc binary per platform, verified against its pinned
+    // SHA-512 and installed as /usr/local/bin/agy.
+    installPackages: ["curl", "tar", "ca-certificates"],
+    installCommand: ANTIGRAVITY_INSTALL_COMMAND,
+    launchCommand: "agy",
+    buildRunCommand: (prompt) => ({ executable: "agy", args: ["-p", prompt] }),
+  },
 };
 
 /**
@@ -102,7 +141,13 @@ const harnessIntegrations: Record<HarnessId, HarnessIntegration> = {
  * an image fact. Every supported harness is baked: a session can switch to any of them, and a
  * standby or a shell workspace has them all.
  */
-const bakedHarnessIds: readonly HarnessId[] = ["codex", "claude-code", "opencode", "pi"];
+const bakedHarnessIds: readonly HarnessId[] = [
+  "codex",
+  "claude-code",
+  "opencode",
+  "pi",
+  "antigravity",
+];
 
 export const isBakedHarnessId = (id: string): boolean =>
   bakedHarnessIds.some((baked) => baked === id);
