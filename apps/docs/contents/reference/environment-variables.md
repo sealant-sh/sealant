@@ -294,7 +294,9 @@ The workspace and its Docker service also get a wider guard than the metadata on
 These stay reachable:
 
 - the rest of the workspace's own networks, and the mirrors on them;
-- its resource reach networks, which it joins after launch;
+- its resource reach networks. Its guard waits for the ones the launch attaches. On Docker 28 or
+  newer, sealant creates every reach network with no host gateway at all
+  (`gateway_mode_ipv4=isolated`), so the host stays out of reach through those networks too;
 - `SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS`, such as a company registry, a database in the same VPC
   or a tailnet model gateway (opt in to the host with its address here);
 - the resolvers Docker's DNS forwards to from inside the workspace. Docker does that whenever the
@@ -317,8 +319,9 @@ it beside `auto`. `none` turns detection off.
 No code of the workspace runs before its routes are in. It starts behind a small gate (`/bin/sh` as
 its entrypoint, so the image needs one): the gate waits until the worker has run the guard, then
 hands over to the image's own entrypoint and command, which become PID 1. Every start of a recovery
-waits at the gate again. A gate never released ends the container after five minutes. A capture
-workspace whose guard fails is kept, still at its gate, for recovery.
+waits at the gate again. A recovery whose guard fails stops the container rather than letting it run
+unguarded, and keeps its disk for the next attempt. A gate never released ends the container after
+five minutes. A capture workspace whose guard fails is kept, still at its gate, for recovery.
 
 Every value is checked when the worker starts: an entry that is not an address or a block, a block
 with host bits set, or an exception that overlaps the workspace, resource reach or resource egress
@@ -329,6 +332,8 @@ runs: a network made under one setting is not removed under the other.
 
 Not covered:
 
+- On Docker before 28, a reach network joined after launch (a link added to a running workspace)
+  keeps a host gateway that the workspace can reach until its next start.
 - UDP and ICMP to an opened address, and any port on it: a route opens an address, not a port.
 - Image builds, which run on the Docker host without the guard.
 

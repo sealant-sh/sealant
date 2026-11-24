@@ -147,6 +147,16 @@ describe("network, exec and probe argv", () => {
     );
   });
 
+  it("gives an internal network no host gateway when asked, and never a routed one", () => {
+    const isolated = "com.docker.network.bridge.gateway_mode_ipv4=isolated";
+    expect(
+      networkCreateArgv("sealant-run-1-reach", "reach", "10.231.0.0/27", { isolatedGateway: true }),
+    ).toContain(isolated);
+    expect(
+      networkCreateArgv("sealres-x-egress", "egress", "10.232.0.16/28", { isolatedGateway: true }),
+    ).not.toContain(isolated);
+  });
+
   it("joins an instance under its alias", () => {
     expect(
       connectArgv({ network: "sealant-run-1-reach", container: "sealres-x", alias: "db" }),

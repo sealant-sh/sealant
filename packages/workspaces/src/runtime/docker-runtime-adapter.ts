@@ -697,6 +697,17 @@ const isNoSuchContainerError = (error: unknown): boolean => {
   return /no such (container|object)/i.test(text);
 };
 
+// `docker image inspect` of an image this host does not have: "No such image" (or "No such
+// object", depending on the CLI path).
+const isNoSuchImageError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr = "stderr" in error ? error.stderr : undefined;
+  const text = typeof stderr === "string" ? `${error.message}\n${stderr}` : error.message;
+  return /no such (image|object)/i.test(text);
+};
+
 // `docker network rm` / `docker network inspect` against a missing network: "network X not found"
 // (the daemon) or "No such network: X" (the CLI).
 const isNoSuchNetworkError = (error: unknown): boolean => {
@@ -1832,14 +1843,33 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * `--entrypoint` and the arguments after the image.
    */
   private async gatedCommand(image: string): Promise<ReturnType<typeof networkGateArgs>> {
-    const inspected = await this.commandRunner("docker", [
-      "image",
-      "inspect",
-      "--format",
-      "{{json .Config.Entrypoint}}\t{{json .Config.Cmd}}",
-      image,
-    ]);
-    return networkGateArgs(imageCommand(inspected.stdout));
+    const inspect = () =>
+      this.commandRunner("docker", [
+        "image",
+        "inspect",
+        "--format",
+        "{{json .Config.Entrypoint}}\t{{json .Config.Cmd}}",
+        image,
+      ]);
+    let inspected: DockerCommandResult;
+    try {
+      try {
+        inspected = await inspect();
+      } catch (error) {
+        // Not on this host yet (a cold host, or pruned since it was built): `docker run` would
+        // pull it, so pull it here first and read it again.
+        if (!isNoSuchImageError(error)) throw error;
+        await this.commandRunner("docker", ["pull", "-q", image]);
+        inspected = await inspect();
+      }
+      return networkGateArgs(imageCommand(inspected.stdout));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Could not read the command of the workspace image '${image}' to start it behind the network gate: ${message}`,
+      );
+    }
   }
 
   /** Let a gated workspace's own command start: its guard's routes are in. */
@@ -2100,6 +2130,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * guard that fails leaves the save to go on rather than lose the work it holds.
    */
   private async guardNetworkForRecovery(containerId: string, name: string): Promise<void> {
+    // Behind the gate, a guard that fails keeps it shut: the error goes up and the recovery
+    // ends with the container halted, never running unguarded.
+    if (this.egress !== undefined) {
+      await this.guardNetwork(containerId, name, false);
+      return;
+    }
     await this.guardNetwork(containerId, name, false).catch((error: unknown) => {
       const guard = this.egress === undefined ? "Cloud metadata guard" : "Egress guard";
       console.warn(`${guard} failed on a recovery start; the container runs without it`, {
@@ -2344,9 +2380,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * fast if the container exits during boot (e.g. clone failure -> daemon exit 1). The launch owner
    * removes only a container it created; an adopted live container is left intact for retry safety.
    */
-  private async awaitControlSocketReady(containerId: string, containerName: string): Promise<void> {
+  private async awaitControlSocketReady(
+    containerId: string,
+    containerName: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const deadline = Date.now() + this.readinessTimeoutMs;
     for (;;) {
+      if (signal?.aborted === true) {
+        throw createAdapterError("adapter-unavailable", "The readiness wait was abandoned.");
+      }
       if (await this.isControlSocketAccepting(containerId, containerName)) {
         return;
       }
@@ -2456,6 +2499,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           : undefined,
       ]);
     } catch (error) {
+      // A gated container whose guard failed is still at its gate: halt it, so it neither runs
+      // unguarded nor reads as running to the next recovery attempt. Its disk is kept.
+      if (this.egress !== undefined) {
+        await this.commandRunner("docker", ["kill", input.resourceId]).catch(() => undefined);
+      }
       if (unparked) {
         await this.parkRetained({
           resourceId: input.resourceId,
@@ -3059,11 +3107,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // launch reports ready, so before any session starts. What sealantd runs at boot on its own
       // (lifecycle steps, the foreground harness) can start up to the guard's run (~0.7 s) earlier.
       // An adopted container gets it too.
-      // A gated workspace runs nothing of its own until this releases it.
-      const guarded = this.guardNetwork(containerId, containerName, cloudMetadataReachable).then(
-        () => (gate === undefined ? undefined : this.releaseNetworkGate(containerId)),
-      );
-      void guarded.catch(() => undefined);
       const reached = this.executorNetworks
         ?.launched({ runId: parsed.runId, executor: containerName })
         .catch((error: unknown) => {
@@ -3072,20 +3115,39 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             error: error instanceof Error ? error.message : String(error),
           });
         });
+      // A gated workspace runs nothing of its own until this releases it. Its guard waits for the
+      // reach networks the launch attaches, so their gateways are refused too before it is.
+      const guarded = (gate === undefined ? Promise.resolve() : Promise.resolve(reached))
+        .then(() => this.guardNetwork(containerId, containerName, cloudMetadataReachable))
+        .then(() => (gate === undefined ? undefined : this.releaseNetworkGate(containerId)));
+      void guarded.catch(() => undefined);
       await reportStartedLaunch(hooks, executor.identity);
 
-      await readyThenGuarded(
-        (async () => {
-          if (this.verifyRunning) {
-            await this.assertContainerRunning(containerId, containerName);
-            // Don't report a launch as done until the daemon's control socket is actually
-            // accepting — otherwise the control plane reports "ready" before the socket binds (the
-            // readiness TOCTOU that surfaced as intermittent "connection closed" in harness.run()).
-            await this.awaitControlSocketReady(containerId, containerName);
-          }
-        })(),
-        guarded,
-      );
+      const readiness = new AbortController();
+      const ready = (async () => {
+        if (this.verifyRunning) {
+          await this.assertContainerRunning(containerId, containerName);
+          // Don't report a launch as done until the daemon's control socket is actually
+          // accepting — otherwise the control plane reports "ready" before the socket binds (the
+          // readiness TOCTOU that surfaced as intermittent "connection closed" in harness.run()).
+          await this.awaitControlSocketReady(containerId, containerName, readiness.signal);
+        }
+      })();
+      if (gate === undefined) {
+        await readyThenGuarded(ready, guarded);
+      } else {
+        // Behind the gate nothing answers until the guard has run: a guard that fails ends the
+        // launch with its own error at once, rather than after the readiness timeout as a socket
+        // that never answered.
+        void ready.catch(() => undefined);
+        try {
+          await guarded;
+        } catch (error) {
+          readiness.abort();
+          throw error;
+        }
+        await ready;
+      }
       await reached;
 
       // The endpoint is the daemon control target used by every control-plane session, independent

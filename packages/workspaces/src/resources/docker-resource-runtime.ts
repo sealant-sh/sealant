@@ -189,6 +189,10 @@ const errorText = (error: unknown): string => {
 /** Docker's own words for an object that is not there. */
 const isMissing = (error: unknown) =>
   /no such (container|object|network|volume|image)|network \S+ not found/i.test(errorText(error));
+/** An engine that does not know `gateway_mode_ipv4=isolated` (before Docker 28). */
+const isGatewayModeRefused = (error: unknown) =>
+  /gateway_mode_ipv4|gateway mode/i.test(errorText(error));
+
 /** Docker's own words for an object that is already there. */
 const isPresent = (error: unknown) => /already exists|is already in use/i.test(errorText(error));
 const isNotConnected = (error: unknown) => /is not connected/i.test(errorText(error));
@@ -234,6 +238,8 @@ export class DockerResourceRuntime implements ResourceRuntime {
   private readonly dockerSocketPath: string;
   private readonly guardImage: string;
   private readonly readyTimeoutMs: number;
+  /** Whether internal networks are still made with no host gateway (until the engine refuses). */
+  private isolatedGateways = true;
   private readonly subnets: ResourceSubnets;
 
   public constructor(options: DockerResourceRuntimeOptions) {
@@ -278,10 +284,27 @@ export class DockerResourceRuntime implements ResourceRuntime {
     }
   }
 
-  /** The network on sealant's subnet: created when missing, its subnet held in sealant's table. */
+  /**
+   * The network on sealant's subnet: created when missing, its subnet held in sealant's table. An
+   * internal network is made with no host gateway (`networkCreateArgv`'s `isolatedGateway`) where
+   * the engine accepts it; one that refuses the option gets a plain internal network, and is not
+   * asked again.
+   */
   private async ensureNetwork(name: string, kind: ResourceInstanceNetworkKind, owner: string) {
     if (await this.networkExists(name)) return;
     const subnet = await this.subnets.allocate({ name, kind, owner });
+    if (kind !== "egress" && this.isolatedGateways) {
+      try {
+        await this.runTolerating(
+          networkCreateArgv(name, kind, subnet, { isolatedGateway: true }),
+          isPresent,
+        );
+        return;
+      } catch (error) {
+        if (!isGatewayModeRefused(error)) throw error;
+        this.isolatedGateways = false;
+      }
+    }
     await this.runTolerating(networkCreateArgv(name, kind, subnet), isPresent);
   }
 
