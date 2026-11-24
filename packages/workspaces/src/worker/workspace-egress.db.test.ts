@@ -25,6 +25,17 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
 
+const proxyInput = (runId: string, workspaceId: string, caCertPem: string) => ({
+  runId,
+  workspaceId,
+  proxyContainer: `sealant-${runId}-proxy`,
+  adminSocketPath: `/run/sealant/sockets/sealant-${runId}-proxy/proxy-admin.sock`,
+  caCertPem,
+  caKeySealed: "v1.k1.sealed",
+  encryptionKeyId: "k1",
+  caNotAfter: new Date(Date.now() + 86_400_000),
+});
+
 describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgres)", () => {
   let db: DB;
   const userId = `user_egress_${randomUUID()}`;
@@ -76,17 +87,6 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
     return { workspaceId, runId };
   };
 
-  const proxyInput = (runId: string, workspaceId: string, caCertPem: string) => ({
-    runId,
-    workspaceId,
-    proxyContainer: `sealant-${runId}-proxy`,
-    adminSocketPath: `/run/sealant/sockets/sealant-${runId}-proxy/proxy-admin.sock`,
-    caCertPem,
-    caKeySealed: "v1.k1.sealed",
-    encryptionKeyId: "k1",
-    caNotAfter: new Date(Date.now() + 86_400_000),
-  });
-
   it("gives each revocation the next watermark and keeps every tombstone, even with no policy stored", async () => {
     const { workspaceId } = await workspaceWithRun();
     const tombstones = await run(
@@ -110,7 +110,9 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
       }),
     );
     expect(
-      [tombstones.first.revocationWatermark, tombstones.second.revocationWatermark].toSorted(),
+      [tombstones.first.revocationWatermark, tombstones.second.revocationWatermark].toSorted(
+        (left, right) => left - right,
+      ),
     ).toEqual([1, 2]);
     expect(tombstones.third).toEqual({
       revocationWatermark: 3,

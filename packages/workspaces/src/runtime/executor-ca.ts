@@ -31,7 +31,7 @@ export interface ExecutorCa {
   /** The public certificate: the only part that reaches the workspace. */
   readonly certPem: string;
   /** PKCS#8 PEM of the private key: sealed at rest, handed only to the proxy, never logged. */
-  readonly keyPem: Redacted.Redacted<string>;
+  readonly keyPem: Redacted.Redacted;
   readonly notAfter: Date;
 }
 
@@ -157,7 +157,7 @@ const exportKey = (key: KeyObject): string => {
 };
 
 /** Whether `keyPem` is the private key of `certPem` (a CA read back from storage). */
-export const executorCaMatches = (certPem: string, keyPem: Redacted.Redacted<string>): boolean => {
+export const executorCaMatches = (certPem: string, keyPem: Redacted.Redacted): boolean => {
   try {
     return new X509Certificate(certPem).checkPrivateKey(createPrivateKey(Redacted.value(keyPem)));
   } catch {

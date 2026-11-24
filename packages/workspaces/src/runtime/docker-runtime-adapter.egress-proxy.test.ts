@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import { Redacted } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { EGRESS_PROXY_GATE_SCRIPT } from "./docker-egress-proxy.js";
 import { parseDockerEgressPolicy } from "./docker-egress.js";
@@ -57,13 +58,15 @@ const publication = {
   evidence: {},
 };
 
+/** Docker's answer about something it does not have. */
+const noSuch = (what: string) =>
+  Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
+
 /** A Docker host in memory, answering what a proxy-backed launch asks of it. */
 const dockerHost = (options: { readonly engine?: string } = {}) => {
   const calls: string[][] = [];
   const networks = new Map<string, Set<string>>();
   const containers = new Map<string, { running: boolean; labels: Record<string, string> }>();
-  const noSuch = (what: string) =>
-    Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
   const run = vi.fn(async (_command: string, args: Array<string>) => {
     calls.push([...args]);
     const last = args.at(-1) ?? "";
@@ -122,9 +125,11 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
     if (verb === "run") {
       const name = args[args.indexOf("--name") + 1] ?? "";
       const labels = Object.fromEntries(
-        args.flatMap((arg, index) =>
-          args[index - 1] === "--label" ? [arg.split("=") as [string, string]] : [],
-        ),
+        args.flatMap((arg, index) => {
+          if (args[index - 1] !== "--label") return [];
+          const [key = "", value = ""] = arg.split("=");
+          return [[key, value] as const];
+        }),
       );
       containers.set(name, { running: true, labels });
       return { stdout: `${name}-cid\n`, stderr: "" };
@@ -207,7 +212,9 @@ const adminSocket = async (path: string) => {
         return;
       }
       if (req.url === "/v1/policy") {
-        const doc = JSON.parse(body) as { policyHash: string; revocationWatermark: number };
+        const doc = z
+          .object({ policyHash: z.string(), revocationWatermark: z.number() })
+          .parse(JSON.parse(body));
         res.end(
           JSON.stringify({
             ok: true,
@@ -299,7 +306,7 @@ describe("a Docker workspace behind its own egress proxy", () => {
     // The proxy was told its whole policy (and only then the workspace ran).
     const policy = socket?.requests.find((request) => request.url === "/v1/policy");
     expect(policy?.method).toBe("PUT");
-    const document = JSON.parse(policy?.body ?? "{}") as Record<string, unknown>;
+    const document = z.record(z.string(), z.unknown()).parse(JSON.parse(policy?.body ?? "{}"));
     expect(document).toMatchObject({
       mode: "restricted",
       leaseTtlSecs: 120,

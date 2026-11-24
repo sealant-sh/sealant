@@ -34,7 +34,7 @@ export interface EgressProxyPolicyInput {
   readonly brokeredSecrets: readonly BrokeredSecret[];
   /** Each secret's real value by `secretRef`. Never logged. */
   readonly brokeredValues: Redacted.Redacted<Readonly<Record<string, string>>>;
-  readonly ca: { readonly certPem: string; readonly keyPem: Redacted.Redacted<string> };
+  readonly ca: { readonly certPem: string; readonly keyPem: Redacted.Redacted };
   readonly tombstones: EgressTombstones;
   readonly host: EgressProxyHostFacts;
 }

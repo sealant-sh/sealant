@@ -8,6 +8,7 @@ import {
   type WorkspaceEgressRepoService,
   type WorkspaceEgressRevocation,
 } from "@sealant/db";
+import { parseWorkspaceBlueprint } from "@sealant/validators";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -152,14 +153,11 @@ describe("what a proxy-backed workspace boots with", () => {
   });
 
   it("launches under the pinned policy, not the one it was created with", () => {
-    const created: {
-      readonly harness: string;
-      readonly networkPolicy?: {
-        readonly mode: "standard" | "restricted";
-        readonly policyHash: string;
-      };
-      readonly brokeredSecrets?: readonly (typeof BROKERED)[];
-    } = { harness: "x", networkPolicy: { mode: "standard", policyHash: "sha256:created" } };
+    const created = parseWorkspaceBlueprint({
+      sources: { workspace: { kind: "git", url: "https://github.com/example/repo.git" } },
+      harness: { id: "opencode" },
+      networkPolicy: { mode: "standard", policyHash: "sha256:created" },
+    });
     const pinned = withPinnedEgressPolicy(created, storedPolicy());
     expect(pinned.networkPolicy?.policyHash).toBe("sha256:pinned");
     expect(pinned.brokeredSecrets).toEqual([BROKERED]);

@@ -6,7 +6,7 @@
  * covers what such a push could not confirm (`egress-proxy-sweep.ts`).
  */
 import type { BrokeredSecret, NetworkPolicy } from "@sealant/api-contracts";
-import type { CredentialCipherError, CredentialCipherService } from "@sealant/credentials";
+import { CredentialCipherError, type CredentialCipherService } from "@sealant/credentials";
 import {
   tombstonesOf,
   type WorkspaceEgressPolicy,
@@ -51,7 +51,7 @@ export const openBrokeredValues = (
     : cipher.decrypt(sealed).pipe(
         Effect.flatMap((json) => decodeValues(json)),
         Effect.mapError((error) =>
-          error._tag === "CredentialCipherError"
+          error instanceof CredentialCipherError
             ? error
             : new EgressProxyStoreError({
                 message: "Stored brokered values are not a string map.",

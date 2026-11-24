@@ -17,7 +17,7 @@
  */
 import type { CredentialCipherService } from "@sealant/credentials";
 import type { LiveWorkspaceEgressProxy, WorkspaceEgressRepoService } from "@sealant/db";
-import { Effect } from "effect";
+import { Effect, Result } from "effect";
 
 import type { EgressProxyOrchestrator } from "../runtime/egress-proxy-orchestrator.js";
 import { egressPolicyHash } from "../runtime/egress-proxy-policy.js";
@@ -67,7 +67,7 @@ export const sweepEgressProxy = (input: {
     const renewed = yield* Effect.tryPromise(() =>
       proxies.heartbeat(workspaceContainer, watermark),
     ).pipe(Effect.result);
-    if (renewed._tag === "Success") {
+    if (Result.isSuccess(renewed)) {
       const behind =
         renewed.success.resyncRequired ||
         (proxy.confirmedRevocationWatermark ?? -1) < watermark ||
@@ -102,7 +102,7 @@ export const sweepEgressProxies = (input: {
   readonly repo: WorkspaceEgressRepoService;
   readonly cipher: CredentialCipherService;
   readonly proxies: EgressProxyOrchestrator;
-}): Effect.Effect<Readonly<Record<EgressProxySweepOutcome, number>>, never> =>
+}): Effect.Effect<Readonly<Record<EgressProxySweepOutcome, number>>> =>
   Effect.gen(function* () {
     const live = yield* input.repo
       .listLiveProxies()

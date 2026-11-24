@@ -25,6 +25,8 @@ import {
 
 const binary = process.env["SEALANT_EGRESS_PROXY_BINARY"];
 
+const loopback = (port: number) => `127.0.0.1:${String(port)}`;
+
 describe.skipIf(binary === undefined)("the admin wire of a real egress proxy", () => {
   let directory: string;
   let proxy: ChildProcess;
@@ -34,7 +36,6 @@ describe.skipIf(binary === undefined)("the admin wire of a real egress proxy", (
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), "sealant-proxy-e2e-"));
     const socket = join(directory, "proxy-admin.sock");
-    const loopback = (port: number) => `127.0.0.1:${String(port)}`;
     const base = 20_000 + Math.floor(Math.random() * 20_000);
     proxy = spawn(
       binary ?? "",

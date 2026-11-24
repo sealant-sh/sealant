@@ -5,10 +5,15 @@
  * trusts), seals the CA's key with the credential key, and builds the proxy's first policy from
  * storage, exactly as every later push does.
  */
-import type { BrokeredSecret, NetworkPolicy } from "@sealant/api-contracts";
+import type { BrokeredSecret } from "@sealant/api-contracts";
 import { needsEgressProxy } from "@sealant/api-contracts/network-policy";
 import type { CredentialCipherService } from "@sealant/credentials";
 import type { WorkspaceEgressPolicy, WorkspaceEgressRepoService } from "@sealant/db";
+import {
+  workspaceBrokeredSecretsSchema,
+  workspaceNetworkPolicySchema,
+  type WorkspaceBlueprint,
+} from "@sealant/validators";
 import { Effect, Redacted } from "effect";
 
 import type { EgressProxyLaunch } from "../runtime/egress-proxy-orchestrator.js";
@@ -20,22 +25,22 @@ import { generateExecutorCa } from "../runtime/executor-ca.js";
  * A blueprint with the workspace's pinned policy in place of the one it was created with: "Apply
  * updated policy" replaces the stored policy, and every later launch (a restart) runs under it.
  */
-export const withPinnedEgressPolicy = <
-  B extends {
-    readonly networkPolicy?: NetworkPolicy | undefined;
-    readonly brokeredSecrets?: readonly BrokeredSecret[] | undefined;
-  },
->(
-  blueprint: B,
+export const withPinnedEgressPolicy = (
+  blueprint: WorkspaceBlueprint,
   pinned: WorkspaceEgressPolicy | undefined,
-): B => {
+): WorkspaceBlueprint => {
   if (pinned === undefined) return blueprint;
   const { networkPolicy: _created, brokeredSecrets: _createdSecrets, ...rest } = blueprint;
   return {
     ...rest,
-    ...(pinned.networkPolicy === null ? {} : { networkPolicy: pinned.networkPolicy }),
-    ...(pinned.brokeredSecrets.length === 0 ? {} : { brokeredSecrets: pinned.brokeredSecrets }),
-  } as B;
+    // Parsed like any spec: a stored row that no longer meets the rules fails the launch.
+    ...(pinned.networkPolicy === null
+      ? {}
+      : { networkPolicy: workspaceNetworkPolicySchema.parse(pinned.networkPolicy) }),
+    ...(pinned.brokeredSecrets.length === 0
+      ? {}
+      : { brokeredSecrets: workspaceBrokeredSecretsSchema.parse(pinned.brokeredSecrets) }),
+  };
 };
 
 /**

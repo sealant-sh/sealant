@@ -304,7 +304,12 @@ export class EgressProxyOrchestrator {
       );
       if (madeMeanwhile) return;
       await this.#subnets.release(name).catch(() => undefined);
-      throw new Error(`Could not create the network '${name}' on ${subnet}: ${failureText(error)}`);
+      throw new Error(
+        `Could not create the network '${name}' on ${subnet}: ${failureText(error)}`,
+        {
+          cause: error,
+        },
+      );
     }
   }
 
@@ -353,7 +358,9 @@ export class EgressProxyOrchestrator {
       } catch (error) {
         // A concurrent launch of the same run may have created it first.
         if ((await this.#inspect(name)) === undefined) {
-          throw new Error(`Could not create the egress proxy '${name}': ${failureText(error)}`);
+          throw new Error(`Could not create the egress proxy '${name}': ${failureText(error)}`, {
+            cause: error,
+          });
         }
       }
       state = await this.#inspect(name);
@@ -428,11 +435,13 @@ export class EgressProxyOrchestrator {
           );
           throw new Error(
             `The egress proxy '${name}' exited before it answered on its admin socket.${logs ? ` Logs:\n${logs}` : ""}`,
+            { cause: error },
           );
         }
         if (Date.now() > deadline) {
           throw new Error(
             `The egress proxy '${name}' did not answer on its admin socket within ${String(this.#healthTimeoutMs)} ms: ${failureText(error)}`,
+            { cause: error },
           );
         }
         await delay(HEALTH_POLL_MS);
@@ -525,7 +534,9 @@ export class EgressProxyOrchestrator {
       await this.#run("docker", ["rm", "-f", name]);
     } catch (error) {
       if (!isNoSuch(error)) {
-        throw new Error(`Could not remove the egress proxy '${name}': ${failureText(error)}`);
+        throw new Error(`Could not remove the egress proxy '${name}': ${failureText(error)}`, {
+          cause: error,
+        });
       }
     }
     for (const network of [
@@ -567,7 +578,9 @@ export class EgressProxyOrchestrator {
       await this.#run("docker", ["network", "rm", network]);
     } catch (error) {
       if (!isNoSuch(error)) {
-        throw new Error(`Could not remove the network '${network}': ${failureText(error)}`);
+        throw new Error(`Could not remove the network '${network}': ${failureText(error)}`, {
+          cause: error,
+        });
       }
     }
   }
@@ -587,7 +600,9 @@ export class EgressProxyOrchestrator {
       return { id, running: running === "true" };
     } catch (error) {
       if (isNoSuch(error)) return undefined;
-      throw new Error(`The egress proxy '${name}' could not be inspected: ${failureText(error)}`);
+      throw new Error(`The egress proxy '${name}' could not be inspected: ${failureText(error)}`, {
+        cause: error,
+      });
     }
   }
 }

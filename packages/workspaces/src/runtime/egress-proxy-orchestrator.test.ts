@@ -16,13 +16,15 @@ import {
   type ProxyAdminClient,
 } from "./proxy-admin-client.js";
 
+/** Docker's answer about something it does not have. */
+const noSuch = (what: string) =>
+  Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
+
 /** A Docker host in memory: containers and networks, and every command it was given. */
 const fakeDocker = () => {
   const calls: string[][] = [];
   const containers = new Map<string, { running: boolean; killResists?: boolean }>();
   const networks = new Map<string, Set<string>>();
-  const noSuch = (what: string) =>
-    Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
   const run: DockerCommandRunner = async (_command, args) => {
     calls.push([...args]);
     const [verb, sub] = args;

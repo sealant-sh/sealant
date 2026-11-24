@@ -1,4 +1,5 @@
 import { createPrivateKey, createPublicKey, X509Certificate } from "node:crypto";
+import { inspect } from "node:util";
 
 import { Redacted } from "effect";
 import { describe, expect, it } from "vitest";
@@ -33,7 +34,7 @@ describe("the per-executor CA", () => {
     expect(createPublicKey(key).export({ format: "jwk" })).toEqual(
       cert.publicKey.export({ format: "jwk" }),
     );
-    expect(String(ca.keyPem)).not.toContain("PRIVATE KEY");
+    expect(inspect(ca.keyPem)).not.toContain("PRIVATE KEY");
     expect(JSON.stringify(ca)).not.toContain("PRIVATE KEY");
   });
 
