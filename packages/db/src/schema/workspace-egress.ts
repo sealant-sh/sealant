@@ -42,6 +42,11 @@ export const workspaceEgressPolicies = snakeCase.table("workspace_egress_policie
   encryptionKeyId: text(),
   /** The newest revocation's watermark; 0 before the first. Only ever grows. */
   revocationWatermark: bigint({ mode: "number" }).notNull().default(0),
+  /**
+   * Bumped by every write of the policy, a rotation of only a secret's value included (which
+   * leaves `policyHash` as it was): a proxy that confirmed an older revision is pushed again.
+   */
+  policyRevision: bigint({ mode: "number" }).notNull().default(0),
   createdAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp({ mode: "date", withTimezone: true })
     .notNull()
@@ -90,6 +95,10 @@ export interface WorkspaceEgressProxyNetwork {
   readonly operatorAllowedPrivateCidrs: readonly string[];
   readonly hostPublicIps: readonly string[];
   readonly blockedCidrs: readonly string[];
+  /** The operator's mirror hosts on the proxy's network: the only mirrors a policy may grant. */
+  readonly mirrorHosts?: readonly string[];
+  /** Resource hosts the workspace is authorized to reach through its proxy. */
+  readonly resourceHosts?: readonly string[];
 }
 
 export const workspaceEgressProxies = snakeCase.table(
@@ -114,6 +123,8 @@ export const workspaceEgressProxies = snakeCase.table(
     /** What the proxy last confirmed taking (`PUT /v1/policy`, `POST /v1/revoke`). */
     confirmedPolicyHash: text(),
     confirmedRevocationWatermark: bigint({ mode: "number" }),
+    /** The policy revision the proxy last confirmed (`workspace_egress_policies.policy_revision`). */
+    confirmedPolicyRevision: bigint({ mode: "number" }),
     createdAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()

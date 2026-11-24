@@ -5,6 +5,7 @@ CREATE TABLE "workspace_egress_policies" (
 	"brokered_values_sealed" text,
 	"encryption_key_id" text,
 	"revocation_watermark" bigint DEFAULT 0 NOT NULL,
+	"policy_revision" bigint DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -21,6 +22,7 @@ CREATE TABLE "workspace_egress_proxies" (
 	"network" jsonb,
 	"confirmed_policy_hash" text,
 	"confirmed_revocation_watermark" bigint,
+	"confirmed_policy_revision" bigint,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );

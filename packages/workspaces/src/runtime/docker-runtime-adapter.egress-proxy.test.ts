@@ -76,6 +76,10 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
       networks.set(last, new Set());
       return { stdout: `${last}-id\n`, stderr: "" };
     }
+    if (verb === "network" && sub === "ls") return { stdout: "bridge-1\n", stderr: "" };
+    if (verb === "network" && sub === "inspect" && args.includes("{{json .IPAM.Config}}")) {
+      return { stdout: '[{"Subnet":"192.0.10.0/24","Gateway":"192.0.10.1"}]\n', stderr: "" };
+    }
     if (verb === "network" && sub === "inspect") {
       const name = last.replace(/-id$/, "");
       const members = networks.get(name);
@@ -264,7 +268,7 @@ describe("a Docker workspace behind its own egress proxy", () => {
         }),
         subnets: pool,
       },
-      egressProxy: { image: "egress-proxy:test" },
+      egressProxy: { image: "egress-proxy:test", ownControlDirectory: async () => undefined },
     });
 
   const launchInput = (extra: Record<string, unknown> = {}) =>
@@ -317,7 +321,9 @@ describe("a Docker workspace behind its own egress proxy", () => {
         expect.objectContaining({ value: SECRET_VALUE, headerName: "Authorization" }),
       ],
     });
-    expect(document["blockedCidrs"]).toEqual(["10.233.0.17/32", "10.233.0.0/28"]);
+    expect(document["blockedCidrs"]).toEqual(
+      expect.arrayContaining(["192.0.10.0/24", "192.0.10.1/32", "10.233.0.17/32", "10.233.0.0/28"]),
+    );
 
     const args = docker.calls[workspaceRun] ?? [];
     const networks = args.flatMap((arg, index) => (args[index - 1] === "--network" ? [arg] : []));
@@ -331,6 +337,42 @@ describe("a Docker workspace behind its own egress proxy", () => {
     expect(args).not.toContain("host.docker.internal:host-gateway");
     expect(args).toContain(EGRESS_PROXY_GATE_SCRIPT);
     expect(args).toEqual(expect.arrayContaining(["--cap-drop", "NET_RAW"]));
+  });
+
+  it("keeps a workspace with Docker inside on its isolated network: the Docker service joins it there", async () => {
+    const docker = dockerHost();
+    await adapterOn(docker).launch(
+      launchInput({
+        networkPolicy: { mode: "standard", policyHash: "sha256:policy" },
+        tooling: { services: { docker: { enabled: true } } },
+      }),
+    );
+    const args =
+      docker.calls.find((call) => call[0] === "run" && call.includes("sealant-run-1")) ?? [];
+    const networks = args.flatMap((arg, index) => (args[index - 1] === "--network" ? [arg] : []));
+    expect(networks).toEqual(["sealant-run-1-isolated"]);
+    expect(args).toContain("DOCKER_HOST=tcp://docker:2375");
+    expect(docker.calls).toContainEqual([
+      "network",
+      "connect",
+      "--alias",
+      "docker",
+      "sealant-run-1-isolated",
+      "sealant-run-1-docker-cid",
+    ]);
+  });
+
+  it("runs behind its proxy when the worker hands one for a stored host revocation alone", async () => {
+    const docker = dockerHost();
+    await adapterOn(docker).launch(
+      launchInput({
+        networkPolicy: { mode: "standard", policyHash: "sha256:policy" },
+        brokeredSecrets: [],
+      }),
+    );
+    const args =
+      docker.calls.find((call) => call[0] === "run" && call.includes("sealant-run-1")) ?? [];
+    expect(args[args.indexOf("--network") + 1]).toBe("sealant-run-1-isolated");
   });
 
   it("never puts a brokered secret's value or the CA's key into anything Docker sees", async () => {

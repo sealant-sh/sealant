@@ -7,6 +7,7 @@ import {
 } from "./core-api/workspaces.js";
 import {
   brokeredSecretValuesProblems,
+  canonicalRevocationHost,
   brokeredSecretsProblems,
   needsEgressProxy,
   networkPolicyProblems,
@@ -178,4 +179,21 @@ describe("a brokered secret's variable", () => {
       ]);
     },
   );
+});
+
+describe("a revocation's hosts", () => {
+  it("are stored canonically, and refused when no policy could name them", () => {
+    expect(canonicalRevocationHost("API.Example.com.")).toBe("api.example.com");
+    expect(canonicalRevocationHost("https://api.example.com/x")).toBeUndefined();
+    expect(canonicalRevocationHost("*.example.com")).toBeUndefined();
+    const decoded = Schema.decodeUnknownExit(revokeWorkspaceAccessRequestSchema)({
+      ownerUserId: "user_1",
+      hosts: ["api.example.com", "https://evil/?q"],
+    });
+    expect(Exit.isFailure(decoded)).toBe(true);
+  });
+
+  it("put a workspace behind its proxy from then on", () => {
+    expect(needsEgressProxy({ revokedHosts: ["api.example.com"] })).toBe(true);
+  });
 });

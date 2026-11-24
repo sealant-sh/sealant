@@ -19,6 +19,7 @@ import { egressPolicyHash } from "../runtime/egress-proxy-policy.js";
 import { sealBrokeredValues } from "../runtime/egress-proxy-store.js";
 import { generateExecutorCa } from "../runtime/executor-ca.js";
 import {
+  ProxyAdminRefusedError,
   ProxyAdminUnreachableError,
   type ProxyAdminClient,
   type ProxyPolicyDocument,
@@ -34,13 +35,14 @@ const cipher = Effect.runSync(
 const ca = generateExecutorCa({ executor: "sealant-run-1" });
 const caKeySealed = Effect.runSync(cipher.encrypt(Redacted.value(ca.keyPem))).sealed;
 
-const policy = (revocationWatermark: number): WorkspaceEgressPolicy => ({
+const policy = (revocationWatermark: number, policyRevision = 1): WorkspaceEgressPolicy => ({
   workspaceId: "ws_1",
   networkPolicy: { mode: "restricted", policyHash: "sha256:pinned" },
   brokeredSecrets: [],
   brokeredValuesSealed: Effect.runSync(sealBrokeredValues(cipher, {})).sealed,
   encryptionKeyId: "k1",
   revocationWatermark,
+  policyRevision,
   createdAt: new Date(),
   updatedAt: new Date(),
 });
@@ -62,13 +64,19 @@ const proxyRow = (overrides: Partial<WorkspaceEgressProxy> = {}): WorkspaceEgres
   },
   confirmedPolicyHash: egressPolicyHash({ mode: "restricted", policyHash: "sha256:pinned" }, []),
   confirmedRevocationWatermark: 2,
+  confirmedPolicyRevision: 1,
   createdAt: new Date(),
   updatedAt: new Date(),
   ...overrides,
 });
 
 const repoRecording = () => {
-  const confirmed: Array<{ policyHash: string | undefined; revocationWatermark: number }> = [];
+  const confirmed: Array<{
+    policyHash: string | undefined;
+    revocationWatermark: number;
+    policyRevision?: number | undefined;
+  }> = [];
+  const networks: unknown[] = [];
   const repo: WorkspaceEgressRepoService = {
     getPolicy: () => Effect.die("unused"),
     putPolicy: () => Effect.die("unused"),
@@ -86,29 +94,48 @@ const repoRecording = () => {
       ]),
     tombstones: () => Effect.succeed(tombstonesOf(2, [])),
     ensureProxy: () => Effect.die("unused"),
-    recordProxyNetwork: () => Effect.die("unused"),
+    recordProxyNetwork: (_runId, network) =>
+      Effect.sync(() => {
+        networks.push(network);
+      }),
     getProxy: () => Effect.die("unused"),
     confirmProxy: (input) =>
       Effect.sync(() => {
         confirmed.push({
           policyHash: input.policyHash,
           revocationWatermark: input.revocationWatermark,
+          policyRevision: input.policyRevision,
         });
       }),
     listLiveProxies: () => Effect.succeed([]),
   };
-  return { repo, confirmed };
+  return { repo, confirmed, networks };
 };
 
-/** A Docker host with the proxy container on it, running or not. */
-const dockerWithProxy = (running: boolean) => {
+/**
+ * A Docker host with the proxy container on it, running or not, beside its workspace container
+ * (running unless told otherwise), and one bridge on a public range.
+ */
+const dockerWithProxy = (
+  running: boolean,
+  options: { readonly workspaceRunning?: boolean } = {},
+) => {
   const calls: string[][] = [];
   const state = { running };
+  const workspaceRunning = options.workspaceRunning ?? true;
   const run: DockerCommandRunner = async (_command, args) => {
     calls.push([...args]);
-    if (args[0] === "inspect") return { stdout: `cid\t${String(state.running)}\n`, stderr: "" };
+    const last = args.at(-1) ?? "";
+    if (args[0] === "inspect") {
+      const up = last.endsWith("-proxy") ? state.running : workspaceRunning;
+      return { stdout: `cid\t${String(up)}\n`, stderr: "" };
+    }
     if (args[0] === "kill" || args[0] === "stop") state.running = false;
     if (args[0] === "start") state.running = true;
+    if (args[0] === "network" && args[1] === "ls") return { stdout: "bridge-1\n", stderr: "" };
+    if (args[0] === "network" && args[1] === "inspect" && args.includes("{{json .IPAM.Config}}")) {
+      return { stdout: '[{"Subnet":"192.0.10.0/24","Gateway":"192.0.10.1"}]\n', stderr: "" };
+    }
     if (args[0] === "network" && args[1] === "inspect") return { stdout: "id\n", stderr: "" };
     return { stdout: "", stderr: "" };
   };
@@ -159,8 +186,9 @@ describe("the egress proxy sweep", () => {
     readonly client: ProxyAdminClient;
     readonly proxy?: WorkspaceEgressProxy;
     readonly watermark?: number;
+    readonly policyRevision?: number;
   }) => {
-    const { repo, confirmed } = repoRecording();
+    const { repo, confirmed, networks } = repoRecording();
     const pool = { allocate: async () => "10.233.0.0/28", release: async () => undefined };
     const proxies = new EgressProxyOrchestrator({
       run: input.docker.run,
@@ -169,16 +197,20 @@ describe("the egress proxy sweep", () => {
       controlMountArgs: () => [],
       adminClient: () => input.client,
       healthTimeoutMs: 500,
+      ownControlDirectory: async () => undefined,
     });
     const outcome = await Effect.runPromise(
       sweepEgressProxy({
-        live: { proxy: input.proxy ?? proxyRow(), policy: policy(input.watermark ?? 2) },
+        live: {
+          proxy: input.proxy ?? proxyRow(),
+          policy: policy(input.watermark ?? 2, input.policyRevision ?? 1),
+        },
         repo,
         cipher,
         proxies,
       }),
     );
-    return { outcome, confirmed };
+    return { outcome, confirmed, networks };
   };
 
   it("only renews the lease of a proxy that is current", async () => {
@@ -203,7 +235,9 @@ describe("the egress proxy sweep", () => {
       revokedSecretIds: ["psec_old"],
       executorCaCertPem: ca.certPem,
     });
-    expect(confirmed).toEqual([{ policyHash: pushed[0]?.policyHash, revocationWatermark: 2 }]);
+    expect(confirmed).toEqual([
+      { policyHash: pushed[0]?.policyHash, revocationWatermark: 2, policyRevision: 1 },
+    ]);
   });
 
   it("pushes a revocation the proxy never confirmed (the API could not reach it)", async () => {
@@ -237,5 +271,78 @@ describe("the egress proxy sweep", () => {
       proxy: proxyRow({ network: null }),
     });
     expect(outcome).toBe("launching");
+  });
+
+  it("pushes again after a rotation of only a secret's value, whose policy hash did not move", async () => {
+    const { client, pushed } = clientWith({});
+    const { outcome, confirmed } = await sweep({
+      docker: dockerWithProxy(true),
+      client,
+      policyRevision: 2,
+    });
+    expect(outcome).toBe("pushed");
+    expect(pushed).toHaveLength(1);
+    expect(confirmed[0]?.policyRevision).toBe(2);
+  });
+
+  it("measures the host's bridges again before a push, so the proxy refuses one made since", async () => {
+    const { client, pushed } = clientWith({});
+    const { networks } = await sweep({ docker: dockerWithProxy(true), client, watermark: 3 });
+    expect(pushed[0]?.blockedCidrs).toEqual(
+      expect.arrayContaining(["192.0.10.0/24", "192.0.10.1/32"]),
+    );
+    expect(networks).toHaveLength(1);
+  });
+
+  it("kills an unreachable proxy and leaves it down when its workspace is stopping", async () => {
+    const docker = dockerWithProxy(true, { workspaceRunning: false });
+    const { client, pushed } = clientWith({
+      heartbeat: async () => {
+        throw new ProxyAdminUnreachableError("connect ECONNREFUSED");
+      },
+    });
+    const { outcome } = await sweep({ docker, client });
+    expect(outcome).toBe("killed");
+    expect(docker.state.running).toBe(false);
+    expect(docker.calls.some((call) => call[0] === "start")).toBe(false);
+    expect(pushed).toHaveLength(0);
+  });
+
+  it("resyncs a proxy that answers watermark_rollback rather than kill it", async () => {
+    const docker = dockerWithProxy(true);
+    const { client, pushed } = clientWith({
+      heartbeat: async () => {
+        throw new ProxyAdminRefusedError(409, "watermark_rollback", "behind");
+      },
+    });
+    const { outcome } = await sweep({ docker, client });
+    expect(outcome).toBe("pushed");
+    expect(pushed).toHaveLength(1);
+    expect(docker.calls.some((call) => call[0] === "kill")).toBe(false);
+  });
+
+  it("restarts a proxy that does not confirm closing what the policy revokes", async () => {
+    const docker = dockerWithProxy(true);
+    let refused = false;
+    const { client } = clientWith({
+      putPolicy: async (document) => {
+        if (!refused) {
+          refused = true;
+          throw new ProxyAdminRefusedError(
+            500,
+            "close_unconfirmed",
+            "1 connection did not confirm closing",
+          );
+        }
+        return {
+          policyHash: document.policyHash,
+          revocationWatermark: document.revocationWatermark,
+          closed: 1,
+        };
+      },
+    });
+    const { outcome } = await sweep({ docker, client, watermark: 3 });
+    expect(outcome).toBe("restarted");
+    expect(docker.calls.map((call) => call[0])).toContain("kill");
   });
 });

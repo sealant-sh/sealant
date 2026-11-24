@@ -322,5 +322,22 @@ export const brokeredSecretValuesProblems = (
 export const needsEgressProxy = (input: {
   readonly networkPolicy?: NetworkPolicy | undefined;
   readonly brokeredSecrets?: readonly BrokeredSecret[] | undefined;
+  /**
+   * Hosts the workspace holds a durable revocation of: only a proxy refuses a host, so a workspace
+   * with one runs behind its proxy from then on, whatever its mode.
+   */
+  readonly revokedHosts?: readonly string[] | undefined;
 }): boolean =>
-  input.networkPolicy?.mode === "restricted" || (input.brokeredSecrets ?? []).length > 0;
+  input.networkPolicy?.mode === "restricted" ||
+  (input.brokeredSecrets ?? []).length > 0 ||
+  (input.revokedHosts ?? []).length > 0;
+
+/**
+ * A host as a revocation stores it: lowercase, no trailing dot, so a tombstone matches the host the
+ * proxy compares it with. `undefined` when it is not a host a policy could name.
+ */
+export const canonicalRevocationHost = (host: string): string | undefined => {
+  const trimmed = host.trim().toLowerCase();
+  const canonical = trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed;
+  return policyHostProblem(canonical, { allowIp: true }) === undefined ? canonical : undefined;
+};

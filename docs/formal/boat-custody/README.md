@@ -224,9 +224,11 @@ which gives P2-B its form without a stall.
   pinned network policy (`workspace_egress_policies`) right after it parses the spec, before runtime
   selection and before any `boat_runs` statement or Boat call. A Boat workspace that would need an
   egress proxy is refused by selection. The launch input gains an `egressProxy` hook, and brokered
-  placeholders join the staged secret env; both reach only proxy-backed Docker launches. No covered
-  function's statements, their order, or the Boat answers they act on changed, so no action moved.
-  `sync` stays where it was: sealant#641's hunks are still unread against the models.
+  placeholders join the staged secret env; both reach only proxy-backed Docker launches. Round 1 of
+  its review added one more read in the same place (the workspace's stored host revocations, from
+  `workspace_egress_revocations`) and a proxy launch for host-vm workspaces; neither touches a Boat
+  run. No covered function's statements, their order, or the Boat answers they act on changed, so no
+  action moved. `sync` stays where it was: sealant#641's hunks are still unread against the models.
 
 ## Each property fails on a broken variant
 

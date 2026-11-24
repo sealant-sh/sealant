@@ -64,8 +64,18 @@ export const egressProxyLaunch = (input: {
   readonly workspaceId: string;
   readonly repo: WorkspaceEgressRepoService;
   readonly cipher: CredentialCipherService;
+  /**
+   * What a workspace with no stored policy row gets. `refuse` (the default): its proxy is not
+   * loaded, since the row holds the secrets' values and a restricted mode the proxy must not
+   * lose. `standard`: a workspace whose spec asks for no policy but runs behind a proxy anyway
+   * (every host-vm workspace) gets the standard policy and its CA.
+   */
+  readonly whenUnstored?: "refuse" | "standard";
 }): EgressProxyLaunch => {
   const { runId, workspaceId, repo, cipher } = input;
+  const whenUnstored = input.whenUnstored ?? "refuse";
+  /** The stored policy revision the first policy was built from, for its confirmation. */
+  let preparedRevision: number | undefined;
   return {
     prepare: (measured) =>
       Effect.runPromise(
@@ -97,11 +107,12 @@ export const egressProxyLaunch = (input: {
           // The proxy's policy comes from storage only: without the stored row (its secrets'
           // sealed values among it) the proxy would load less than the workspace asked for.
           const policy = yield* repo.getPolicy(workspaceId);
-          if (policy === undefined) {
+          if (policy === undefined && whenUnstored === "refuse") {
             return yield* new EgressProxyStoreError({
               message: `Workspace ${workspaceId} has no stored network policy for its egress proxy.`,
             });
           }
+          preparedRevision = policy?.policyRevision;
           const document = yield* storedProxyPolicyDocument({
             cipher,
             proxy: { ...proxy, network },
@@ -122,6 +133,7 @@ export const egressProxyLaunch = (input: {
           runId,
           policyHash: applied.policyHash,
           revocationWatermark: applied.revocationWatermark,
+          ...(preparedRevision === undefined ? {} : { policyRevision: preparedRevision }),
         }),
       ),
   };

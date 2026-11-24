@@ -94,12 +94,26 @@ describe("DockerResourceRuntime.observe", () => {
 });
 
 /** A Docker with one executor and no networks, refusing isolated gateways when told to. */
-const reachDocker = (refuseIsolated: boolean) => {
+const reachDocker = (
+  refuseIsolated: boolean,
+  options: { readonly proxyBacked?: boolean; readonly proxyGone?: boolean } = {},
+) => {
   const creates: Array<ReadonlyArray<string>> = [];
+  const connects: Array<ReadonlyArray<string>> = [];
   const networks = new Set<string>();
   const run: DockerCommandRunner = async (_command, args) => {
     if (args[0] === "container" && args[1] === "inspect") {
+      if (options.proxyGone === true && args.at(-1)?.endsWith("-proxy") === true) {
+        throw new Error(`Error: No such container: ${args.at(-1) ?? ""}`);
+      }
       return { stdout: "true\t0\t\n", stderr: "" };
+    }
+    if (args[0] === "inspect" && args.some((arg) => arg.includes("sealant.egress-proxy-backed"))) {
+      return { stdout: options.proxyBacked === true ? "true\n" : "\n", stderr: "" };
+    }
+    if (args[0] === "network" && args[1] === "connect") {
+      connects.push(args);
+      return { stdout: "", stderr: "" };
     }
     if (args[0] === "network" && args[1] === "inspect") {
       if (args.includes("{{.Id}}")) {
@@ -128,7 +142,7 @@ const reachDocker = (refuseIsolated: boolean) => {
     },
     commandRunner: run,
   });
-  return { runtime, creates };
+  return { runtime, creates, connects };
 };
 
 describe("DockerResourceRuntime reach networks", () => {
@@ -145,5 +159,29 @@ describe("DockerResourceRuntime reach networks", () => {
     // Refused once, then a plain internal network; the next one is not asked with the option again.
     expect(older.creates.map((args) => args.includes(isolated))).toEqual([true, false, false]);
     expect(older.creates.every((args) => args.includes("--internal"))).toBe(true);
+  });
+});
+
+describe("DockerResourceRuntime reach of a workspace behind its egress proxy", () => {
+  it("attaches the proxy to the reach network, never the workspace itself", async () => {
+    const docker = reachDocker(false, { proxyBacked: true });
+    await docker.runtime.attachExecutor("sealant-run-1", []);
+    const members = docker.connects.map((args) => args.at(-1));
+    expect(members).toContain("sealant-run-1-proxy");
+    expect(members).not.toContain("sealant-run-1");
+  });
+
+  it("attaches nothing when the workspace's proxy is not there", async () => {
+    const docker = reachDocker(false, { proxyBacked: true, proxyGone: true });
+    await expect(docker.runtime.attachExecutor("sealant-run-1", [])).rejects.toThrow(
+      /runs behind an egress proxy/,
+    );
+    expect(docker.connects).toEqual([]);
+  });
+
+  it("attaches an ordinary workspace directly, as before", async () => {
+    const docker = reachDocker(false);
+    await docker.runtime.attachExecutor("sealant-run-1", []);
+    expect(docker.connects.map((args) => args.at(-1))).toContain("sealant-run-1");
   });
 });

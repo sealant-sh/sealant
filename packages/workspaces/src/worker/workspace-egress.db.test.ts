@@ -194,4 +194,59 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
     expect(runs).not.toContain(stopped.runId);
     expect(runs).not.toContain(replaced.runId);
   });
+
+  it("leaves a proxy to the stop under way: no sweep sees it once its stop is requested", async () => {
+    const { workspaceId, runId } = await workspaceWithRun("ready");
+    const before = await run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceEgressRepo;
+        yield* repo.ensureProxy(proxyInput(runId, workspaceId, "CA"));
+        return yield* repo.listLiveProxies();
+      }),
+    );
+    const after = await run(
+      Effect.gen(function* () {
+        yield* (yield* WorkspaceRuntimeInstanceRepo).markStopRequested({
+          runId,
+          stopReason: "user",
+        });
+        return yield* (yield* WorkspaceEgressRepo).listLiveProxies();
+      }),
+    );
+    expect(before.map((row) => row.proxy.runId)).toContain(runId);
+    expect(after.map((row) => row.proxy.runId)).not.toContain(runId);
+  });
+
+  it("bumps the policy revision on every write, a value-only rotation included, and confirms it forward only", async () => {
+    const { workspaceId, runId } = await workspaceWithRun();
+    const put = {
+      workspaceId,
+      networkPolicy: { mode: "standard" as const, policyHash: "h" },
+      brokeredSecrets: [],
+      encryptionKeyId: "k1",
+    };
+    const result = await run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceEgressRepo;
+        const first = yield* repo.putPolicy({ ...put, brokeredValuesSealed: "v1.k1.a" });
+        const rotated = yield* repo.putPolicy({ ...put, brokeredValuesSealed: "v1.k1.b" });
+        yield* repo.ensureProxy(proxyInput(runId, workspaceId, "CA"));
+        yield* repo.confirmProxy({
+          runId,
+          policyHash: "h",
+          revocationWatermark: 0,
+          policyRevision: rotated.policyRevision,
+        });
+        yield* repo.confirmProxy({
+          runId,
+          policyHash: "h",
+          revocationWatermark: 0,
+          policyRevision: first.policyRevision,
+        });
+        return { first, rotated, proxy: yield* repo.getProxy(runId) };
+      }),
+    );
+    expect(result.rotated.policyRevision).toBeGreaterThan(result.first.policyRevision);
+    expect(result.proxy?.confirmedPolicyRevision).toBe(result.rotated.policyRevision);
+  });
 });

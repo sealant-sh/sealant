@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  canonicalRevocationHost,
   WorkspaceBadRequestError,
   WorkspaceNotFoundError,
   WorkspaceRuntimeRequirementUnsupportedError,
@@ -102,7 +103,11 @@ const standardPolicy = (policyHash: string): NetworkPolicy => ({
   allowHosts: [{ host: "registry.npmjs.org" }],
 });
 
-/** The egress store in memory, with the live repository's watermark and confirmation rules. */
+/**
+ * The egress store in memory, with the live repository's watermark, revision and confirmation
+ * rules: every `putPolicy` of an existing row bumps its revision, and a confirmation never moves
+ * the confirmed watermark or revision backwards.
+ */
 const memoryEgress = () => {
   const policies = new Map<string, WorkspaceEgressPolicy>();
   const revocations: WorkspaceEgressRevocation[] = [];
@@ -115,6 +120,7 @@ const memoryEgress = () => {
     brokeredValuesSealed: null,
     encryptionKeyId: null,
     revocationWatermark: 0,
+    policyRevision: 0,
     createdAt: at,
     updatedAt: at,
   });
@@ -124,8 +130,10 @@ const memoryEgress = () => {
     getPolicy: (workspaceId) => Effect.succeed(policies.get(workspaceId)),
     putPolicy: (input) =>
       Effect.sync(() => {
+        const existing = policies.get(input.workspaceId);
         const row: WorkspaceEgressPolicy = {
-          ...(policies.get(input.workspaceId) ?? emptyPolicy(input.workspaceId)),
+          ...(existing ?? emptyPolicy(input.workspaceId)),
+          policyRevision: existing === undefined ? 0 : existing.policyRevision + 1,
           networkPolicy: input.networkPolicy ?? null,
           brokeredSecrets: input.brokeredSecrets,
           brokeredValuesSealed: input.brokeredValuesSealed ?? null,
@@ -141,10 +149,12 @@ const memoryEgress = () => {
         policies.set(input.workspaceId, { ...current, revocationWatermark: watermark });
         const rows = [
           ...[...new Set(input.secretIds)].map((target) => ({ kind: "secret" as const, target })),
-          ...[...new Set(input.hosts.map((host) => host.toLowerCase()))].map((target) => ({
-            kind: "host" as const,
-            target,
-          })),
+          ...[...new Set(input.hosts.map((host) => canonicalRevocationHost(host) ?? host))].map(
+            (target) => ({
+              kind: "host" as const,
+              target,
+            }),
+          ),
           ...(input.all ? [{ kind: "all" as const, target: null }] : []),
         ];
         for (const row of rows) {
@@ -163,6 +173,13 @@ const memoryEgress = () => {
         );
       }),
     listRevocations,
+    tombstones: (workspaceId) =>
+      Effect.sync(() =>
+        tombstonesOf(
+          policies.get(workspaceId)?.revocationWatermark ?? 0,
+          revocations.filter((row) => row.workspaceId === workspaceId),
+        ),
+      ),
     getProxy: (runId) => Effect.succeed(proxies.get(runId)),
     confirmProxy: (input) =>
       Effect.sync(() => {
@@ -176,6 +193,14 @@ const memoryEgress = () => {
         proxies.set(input.runId, {
           ...proxy,
           ...(input.policyHash === undefined ? {} : { confirmedPolicyHash: input.policyHash }),
+          ...(input.policyRevision === undefined
+            ? {}
+            : {
+                confirmedPolicyRevision: Math.max(
+                  proxy.confirmedPolicyRevision ?? -1,
+                  input.policyRevision,
+                ),
+              }),
           confirmedRevocationWatermark: input.revocationWatermark,
         });
       }),
@@ -206,8 +231,21 @@ const tempDir = async (prefix: string) => {
   return dir;
 };
 
-/** A proxy admin API on a Unix socket that confirms every request, closing `closed` streams. */
-const startAdminSocket = async (egress: MemoryEgress, closed: number) => {
+/** A refusal the fake admin API answers with instead of confirming. */
+interface AdminRefusal {
+  readonly status: number;
+  readonly error: string;
+}
+
+/**
+ * A proxy admin API on a Unix socket that confirms every request, closing `closed` streams, unless
+ * `refuse` answers the call (by its index among the calls) with a refusal.
+ */
+const startAdminSocket = async (
+  egress: MemoryEgress,
+  closed: number,
+  refuse: (call: AdminCall, index: number) => AdminRefusal | undefined = () => undefined,
+) => {
   const dir = await tempDir("sealant-proxy-admin-");
   const socketPath = join(dir, "proxy-admin.sock");
   const calls: AdminCall[] = [];
@@ -216,12 +254,19 @@ const startAdminSocket = async (egress: MemoryEgress, closed: number) => {
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
       const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      calls.push({
+      const call: AdminCall = {
         method: req.method,
         url: req.url,
         body,
         storedRevocations: egress.revocations.length,
-      });
+      };
+      calls.push(call);
+      const refusal = refuse(call, calls.length - 1);
+      if (refusal !== undefined) {
+        res.writeHead(refusal.status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: refusal.error, message: "refused by the test" }));
+        return;
+      }
       const fields = typeof body === "object" && body !== null ? body : {};
       const answer = {
         policyHash: "policyHash" in fields ? fields.policyHash : undefined,
@@ -254,6 +299,7 @@ const proxyRow = (socketPath: string): WorkspaceEgressProxy => ({
     blockedCidrs: ["172.17.0.0/16"],
   },
   confirmedPolicyHash: null,
+  confirmedPolicyRevision: null,
   confirmedRevocationWatermark: null,
   createdAt: new Date(0),
   updatedAt: new Date(0),
@@ -412,6 +458,7 @@ describe("revokeWorkspaceAccess", () => {
       brokeredValuesSealed: null,
       encryptionKeyId: null,
       revocationWatermark: 0,
+      policyRevision: 0,
       createdAt: new Date(0),
       updatedAt: new Date(0),
     });
@@ -426,6 +473,123 @@ describe("revokeWorkspaceAccess", () => {
       ["host", "api.vercel.com"],
       ["all", null],
     ]);
+  });
+
+  it("sends every stored tombstone, so a revocation an earlier push missed goes with the next", async () => {
+    const egress = memoryEgress();
+    // The first revocation's push is not confirmed: the proxy may not hold it.
+    const admin = await startAdminSocket(egress, 0, (_call, index) =>
+      index === 0 ? { status: 500, error: "close_unconfirmed" } : undefined,
+    );
+    egress.proxies.set("run_1", proxyRow(admin.socketPath));
+    const revoke = (payload: { secretIds?: string[]; hosts?: string[] }) =>
+      Effect.runPromise(
+        routes
+          .revokeWorkspaceAccess({
+            workspaceId: "ws_1",
+            payload: { ownerUserId: OWNER, ...payload },
+          })
+          .pipe(Effect.provide(launchedLayer(egress))),
+      );
+    expect((await revoke({ secretIds: ["sec_vercel"] })).enforcement).toBe("pending");
+    expect(await revoke({ hosts: ["API.Vercel.com."] })).toEqual({
+      workspaceId: "ws_1",
+      revocationWatermark: 2,
+      enforcement: "enforced",
+      closed: 0,
+    });
+    expect(admin.calls[1]?.body).toEqual({
+      revocationWatermark: 2,
+      revokeSecretIds: ["sec_vercel"],
+      revokeHosts: ["api.vercel.com"],
+      revokeAll: false,
+    });
+    expect(egress.proxies.get("run_1")?.confirmedRevocationWatermark).toBe(2);
+  });
+
+  it("pushes the whole stored policy when the proxy holds a later watermark, and answers enforced once it takes it", async () => {
+    const egress = memoryEgress();
+    egress.policies.set("ws_1", {
+      workspaceId: "ws_1",
+      networkPolicy: standardPolicy("ph_1"),
+      brokeredSecrets: [],
+      brokeredValuesSealed: null,
+      encryptionKeyId: null,
+      revocationWatermark: 0,
+      policyRevision: 4,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const admin = await startAdminSocket(egress, 2, (call) =>
+      call.url === "/v1/revoke" ? { status: 409, error: "watermark_rollback" } : undefined,
+    );
+    egress.proxies.set("run_1", proxyRow(admin.socketPath));
+    const layer = launchedLayer(egress);
+    await Effect.runPromise(
+      routes
+        .revokeWorkspaceAccess({
+          workspaceId: "ws_1",
+          payload: { ownerUserId: OWNER, secretIds: ["sec_old"] },
+        })
+        .pipe(Effect.provide(layer)),
+    );
+    const response = await Effect.runPromise(
+      routes
+        .revokeWorkspaceAccess({
+          workspaceId: "ws_1",
+          payload: { ownerUserId: OWNER, hosts: ["registry.npmjs.org"] },
+        })
+        .pipe(Effect.provide(layer)),
+    );
+    expect(response).toEqual({
+      workspaceId: "ws_1",
+      revocationWatermark: 2,
+      enforcement: "enforced",
+      closed: 2,
+    });
+    const put = admin.calls.at(-1);
+    expect(put).toMatchObject({ method: "PUT", url: "/v1/policy" });
+    expect(put?.body).toMatchObject({
+      policyHash: "ph_1",
+      revocationWatermark: 2,
+      revokedSecretIds: ["sec_old"],
+      revokedHosts: ["registry.npmjs.org"],
+    });
+    expect(egress.proxies.get("run_1")).toMatchObject({
+      confirmedPolicyHash: "ph_1",
+      confirmedPolicyRevision: 4,
+      confirmedRevocationWatermark: 2,
+    });
+  });
+
+  it("refuses a host revocation on a runtime that runs no egress proxy, storing nothing", async () => {
+    for (const runtime of ["k8s", "boat"] as const) {
+      const egress = memoryEgress();
+      const result = await Effect.runPromise(
+        routes
+          .revokeWorkspaceAccess({
+            workspaceId: "ws_1",
+            payload: { ownerUserId: OWNER, hosts: ["api.vercel.com"] },
+          })
+          .pipe(Effect.result, Effect.provide(launchedLayer(egress, { runtime }))),
+      );
+      expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+        WorkspaceRuntimeRequirementUnsupportedError,
+      );
+      expect(egress.revocations).toEqual([]);
+      expect(egress.policies.size).toBe(0);
+    }
+    // A secret revocation there is stored, and holds from the next start.
+    const egress = memoryEgress();
+    const allowed = await Effect.runPromise(
+      routes
+        .revokeWorkspaceAccess({
+          workspaceId: "ws_1",
+          payload: { ownerUserId: OWNER, secretIds: ["sec_vercel"] },
+        })
+        .pipe(Effect.provide(launchedLayer(egress, { runtime: "k8s" }))),
+    );
+    expect(allowed.enforcement).toBe("next-start");
   });
 
   it("refuses another owner's workspace as not found, storing nothing", async () => {
@@ -497,6 +661,18 @@ describe("applyWorkspaceNetworkPolicy", () => {
 
   it("pushes the stored policy, revocations included, to the live proxy and records what it confirmed", async () => {
     const egress = memoryEgress();
+    // The workspace already holds the secret's placeholder: only the proxy's side changes.
+    egress.policies.set("ws_1", {
+      workspaceId: "ws_1",
+      networkPolicy: standardPolicy("ph_1"),
+      brokeredSecrets: [vercelSecret()],
+      brokeredValuesSealed: null,
+      encryptionKeyId: null,
+      revocationWatermark: 0,
+      policyRevision: 0,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
     const admin = await startAdminSocket(egress, 1);
     egress.proxies.set("run_1", proxyRow(admin.socketPath));
     await Effect.runPromise(
@@ -538,6 +714,56 @@ describe("applyWorkspaceNetworkPolicy", () => {
     expect(egress.proxies.get("run_1")).toMatchObject({
       confirmedPolicyHash: "ph_3",
       confirmedRevocationWatermark: 1,
+    });
+  });
+});
+
+describe("applyWorkspaceNetworkPolicy · what a live proxy can take", () => {
+  const apply = (egress: MemoryEgress, value: string) =>
+    Effect.runPromise(
+      routes
+        .applyWorkspaceNetworkPolicy({
+          workspaceId: "ws_1",
+          payload: {
+            ownerUserId: OWNER,
+            networkPolicy: standardPolicy("ph_5"),
+            brokeredSecrets: [vercelSecret()],
+            brokeredSecretValues: { vercel: value },
+          },
+        })
+        .pipe(Effect.provide(launchedLayer(egress))),
+    );
+
+  it("answers next-start for a brokered secret new to the workspace, though the proxy took it", async () => {
+    const egress = memoryEgress();
+    const admin = await startAdminSocket(egress, 1);
+    egress.proxies.set("run_1", proxyRow(admin.socketPath));
+    expect(await apply(egress, SECRET_VALUE)).toEqual({
+      workspaceId: "ws_1",
+      policyHash: "ph_5",
+      revocationWatermark: 0,
+      enforcement: "next-start",
+    });
+    expect(admin.calls.map((call) => [call.method, call.url])).toEqual([["PUT", "/v1/policy"]]);
+    expect(egress.proxies.get("run_1")?.confirmedPolicyHash).toBe("ph_5");
+  });
+
+  it("enforces a rotated value at once, and records the revision the proxy confirmed", async () => {
+    const egress = memoryEgress();
+    // Applied while no proxy ran: the workspace boots with the secret's placeholder.
+    await apply(egress, SECRET_VALUE);
+    const admin = await startAdminSocket(egress, 1);
+    egress.proxies.set("run_1", proxyRow(admin.socketPath));
+    const rotated = await apply(egress, "Bearer vercel-rotated");
+    expect(rotated.enforcement).toBe("enforced");
+    expect(admin.calls[0]?.body).toMatchObject({
+      brokeredSecrets: [{ secretId: "sec_vercel", value: "Bearer vercel-rotated" }],
+    });
+    // Same policy hash as before: only the revision tells the proxy has the new value.
+    expect(egress.policies.get("ws_1")?.policyRevision).toBe(1);
+    expect(egress.proxies.get("run_1")).toMatchObject({
+      confirmedPolicyHash: "ph_5",
+      confirmedPolicyRevision: 1,
     });
   });
 });

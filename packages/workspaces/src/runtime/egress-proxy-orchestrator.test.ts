@@ -2,6 +2,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Redacted } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DockerCommandRunner } from "./docker-runtime-adapter.js";
@@ -10,6 +11,9 @@ import {
   egressProxyCreateArgv,
   proxyAddressOf,
 } from "./egress-proxy-orchestrator.js";
+import { buildProxyPolicyDocument } from "./egress-proxy-policy.js";
+import type { EgressProxyHostFacts, EgressProxyLaunch } from "./egress-proxy-types.js";
+import { generateExecutorCa } from "./executor-ca.js";
 import {
   ProxyAdminRefusedError,
   ProxyAdminUnreachableError,
@@ -21,7 +25,14 @@ const noSuch = (what: string) =>
   Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
 
 /** A Docker host in memory: containers and networks, and every command it was given. */
-const fakeDocker = () => {
+const fakeDocker = (
+  options: {
+    /** The host's bridge networks' IPAM (subnet, gateway); `unreadable` fails the inventory. */
+    readonly bridges?:
+      | ReadonlyArray<{ readonly Subnet: string; readonly Gateway?: string }>
+      | "unreadable";
+  } = {},
+) => {
   const calls: string[][] = [];
   const containers = new Map<string, { running: boolean; killResists?: boolean }>();
   const networks = new Map<string, Set<string>>();
@@ -29,6 +40,17 @@ const fakeDocker = () => {
     calls.push([...args]);
     const [verb, sub] = args;
     const last = args[args.length - 1] ?? "";
+    if (verb === "network" && sub === "ls") {
+      if (options.bridges === "unreadable") throw new Error("Cannot connect to the Docker daemon");
+      return { stdout: "bridge-1\n", stderr: "" };
+    }
+    if (verb === "network" && sub === "inspect" && args.includes("{{json .IPAM.Config}}")) {
+      const bridges =
+        options.bridges === "unreadable" || options.bridges === undefined
+          ? [{ Subnet: "172.17.0.0/16", Gateway: "172.17.0.1" }]
+          : options.bridges;
+      return { stdout: `${JSON.stringify(bridges)}\n`, stderr: "" };
+    }
     if (verb === "network" && sub === "inspect") {
       const members = networks.get(last);
       if (members === undefined) throw noSuch("network");
@@ -125,6 +147,23 @@ const healthyClient = (overrides: Partial<ProxyAdminClient> = {}): ProxyAdminCli
   ...overrides,
 });
 
+const ca = generateExecutorCa({ executor: "sealant-run1" });
+const documentFor = (
+  host: EgressProxyHostFacts = {
+    operatorAllowedPrivateCidrs: [],
+    hostPublicIps: [],
+    blockedCidrs: [],
+  },
+) =>
+  buildProxyPolicyDocument({
+    networkPolicy: undefined,
+    brokeredSecrets: [],
+    brokeredValues: Redacted.make({}),
+    ca,
+    tombstones: { revocationWatermark: 0, revokedHosts: [], revokedSecretIds: [] },
+    host,
+  });
+
 describe("the proxy's address and container", () => {
   it("takes the isolated subnet's last usable address", () => {
     expect(proxyAddressOf("10.210.0.16/28")).toBe("10.210.0.30");
@@ -146,7 +185,7 @@ describe("the proxy's address and container", () => {
       "--read-only",
       "--cap-drop ALL",
       "--security-opt no-new-privileges:true",
-      "--user 65532:65532",
+      "--user 65532:0",
       "--sysctl net.ipv4.ip_unprivileged_port_start=53",
       "--network sealant-run1-isolated --ip 10.210.0.30",
       "-v /run/sealant/sockets/sealant-run1-proxy:/run/sealant",
@@ -170,11 +209,19 @@ describe("EgressProxyOrchestrator", () => {
     await rm(controlDir, { recursive: true, force: true });
   });
 
-  const orchestrator = (docker: ReturnType<typeof fakeDocker>, client = healthyClient()) => {
+  const owned: string[] = [];
+  const orchestrator = (
+    docker: ReturnType<typeof fakeDocker>,
+    client = healthyClient(),
+    own: (directory: string) => Promise<void> = async (directory) => {
+      owned.push(directory);
+    },
+  ) => {
     const subnets = subnetPool();
     return {
       subnets,
       orchestrator: new EgressProxyOrchestrator({
+        ownControlDirectory: own,
         run: docker.run,
         subnets,
         image: "egress-proxy:test",
@@ -186,6 +233,66 @@ describe("EgressProxyOrchestrator", () => {
       }),
     };
   };
+
+  it("refuses every Docker bridge on the host, a public-range one included, and grants only the operator's mirrors", async () => {
+    const docker = fakeDocker({
+      bridges: [
+        { Subnet: "192.0.10.0/24", Gateway: "192.0.10.1" },
+        { Subnet: "fd00:dead::/64", Gateway: "fd00:dead::1" },
+      ],
+    });
+    const { orchestrator: proxies } = orchestrator(docker);
+    const prepared: Array<Parameters<EgressProxyLaunch["prepare"]>[0]> = [];
+    await proxies.launchProxy({
+      workspaceContainer: "sealant-run1",
+      operatorAllowedPrivateCidrs: [],
+      hostPublicIps: [],
+      launch: {
+        prepare: async (measured) => {
+          prepared.push(measured);
+          return { caCertPem: "CA", document: documentFor(measured.host) };
+        },
+      },
+    });
+    expect(prepared[0]?.host.blockedCidrs).toEqual(
+      expect.arrayContaining([
+        "192.0.10.0/24",
+        "192.0.10.1/32",
+        "fd00:dead::/64",
+        "fd00:dead::1/128",
+        "10.210.0.0/28",
+      ]),
+    );
+    expect(prepared[0]?.host.mirrorHosts).toEqual(["npm-mirror"]);
+  });
+
+  it("starts no proxy on a host whose bridges cannot be read", async () => {
+    const docker = fakeDocker({ bridges: "unreadable" });
+    const { orchestrator: proxies } = orchestrator(docker);
+    await expect(
+      proxies.launchProxy({
+        workspaceContainer: "sealant-run1",
+        operatorAllowedPrivateCidrs: [],
+        hostPublicIps: [],
+        launch: { prepare: async () => ({ caCertPem: "CA", document: documentFor() }) },
+      }),
+    ).rejects.toThrow();
+    expect(docker.calls.some((call) => call[0] === "create")).toBe(false);
+  });
+
+  it("hands the control directory to the proxy's user and root's group, and never opens it wider", async () => {
+    const docker = fakeDocker();
+    const { orchestrator: proxies } = orchestrator(docker, healthyClient(), async () => {
+      throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+    });
+    const networks = await proxies.prepareNetworks("sealant-run1");
+    await expect(
+      proxies.startProxy({ workspaceContainer: "sealant-run1", networks }),
+    ).rejects.toThrow(/must run as root/);
+    const mode = (await stat(join(controlDir, "sealant-run1-proxy"))).mode & 0o777;
+    expect(mode & 0o007).toBe(0);
+    expect(docker.calls.some((call) => call[0] === "create")).toBe(false);
+  });
 
   it("puts the workspace's network alone with its proxy, and the proxy's route out apart", async () => {
     const docker = fakeDocker();

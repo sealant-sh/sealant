@@ -23,11 +23,11 @@
 import { chmod, chown, mkdir } from "node:fs/promises";
 import { join as joinPath } from "node:path";
 
-import { cidr, formatCidr } from "./cidr.js";
+import { cidr, formatCidr, parseCidr } from "./cidr.js";
 import { mirrorConnectArgv, type WorkspaceMirrorContainer } from "./docker-egress.js";
 import { isolatedNetworkCreateArgv } from "./docker-isolated-network.js";
 import type { DockerCommandRunner } from "./docker-runtime-adapter.js";
-import type { EgressProxyLaunch } from "./egress-proxy-types.js";
+import type { EgressProxyHostFacts, EgressProxyLaunch } from "./egress-proxy-types.js";
 import {
   createProxyAdminClient,
   ProxyAdminRefusedError,
@@ -40,13 +40,20 @@ import {
 } from "./proxy-admin-client.js";
 
 /**
- * The proxy image (`SEALANT_EGRESS_PROXY_IMAGE` replaces it). A placeholder until sealantd's
- * release pipeline publishes the image (SLNT-1317); it is pinned by digest before release.
+ * The proxy image (`SEALANT_EGRESS_PROXY_IMAGE` replaces it): sealantd 0.21.0-next.207's
+ * multi-arch `egress-proxy-next`, pinned by digest.
  */
-export const DEFAULT_EGRESS_PROXY_IMAGE = "ghcr.io/sealant-sh/egress-proxy-next:0.21.0-next.0";
+export const DEFAULT_EGRESS_PROXY_IMAGE =
+  "ghcr.io/sealant-sh/egress-proxy-next:0.21.0-next.207@sha256:234d880e12fe7607b4e3e53b4ff02e1774241daa43d82bad301723a5372712e0";
 
 /** The proxy image's user: the admin socket's directory is handed to it. */
 export const EGRESS_PROXY_UID = 65_532;
+/**
+ * The proxy's group: root's, so the control plane (the API runs as uid 0 with every capability
+ * dropped) reaches its admin socket through the group bits of a 0750 directory and a 0660 socket,
+ * with nothing world-writable.
+ */
+export const EGRESS_PROXY_GID = 0;
 
 /** Where the proxy's control subpath is mounted inside it, and its admin socket there. */
 export const EGRESS_PROXY_CONTROL_MOUNT = "/run/sealant";
@@ -124,7 +131,7 @@ export const egressProxyCreateArgv = (input: {
     "--security-opt",
     "no-new-privileges:true",
     "--user",
-    `${String(EGRESS_PROXY_UID)}:${String(EGRESS_PROXY_UID)}`,
+    `${String(EGRESS_PROXY_UID)}:${String(EGRESS_PROXY_GID)}`,
     "--sysctl",
     "net.ipv4.ip_unprivileged_port_start=53",
     "--tmpfs",
@@ -185,7 +192,17 @@ export interface EgressProxyOrchestratorOptions {
   readonly healthTimeoutMs?: number;
   /** Test seam: the admin client for a socket. */
   readonly adminClient?: (socketPath: string) => ProxyAdminClient;
+  /**
+   * Gives the proxy's control directory to its user and root's group, mode 0750 (default: chown
+   * and chmod, which need the worker to run as root). Tests, which do not, record the call.
+   */
+  readonly ownControlDirectory?: (directory: string) => Promise<void>;
 }
+
+const ownForProxy = async (directory: string): Promise<void> => {
+  await chown(directory, EGRESS_PROXY_UID, EGRESS_PROXY_GID);
+  await chmod(directory, 0o750);
+};
 
 const failureText = (error: unknown): string => {
   const stderr =
@@ -197,6 +214,55 @@ const isNoSuch = (error: unknown): boolean =>
   /no such (container|network|object)/i.test(failureText(error));
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Every subnet and gateway of every Docker bridge network on this host, IPv4 and IPv6, from the
+ * engine's IPAM: what a proxy refuses as `blockedCidrs`, since a bridge on a public range is not in
+ * its built-in private ranges. Throws when the inventory cannot be read, so nothing is pushed
+ * without it. Shared with the host-vm runtime.
+ */
+export const dockerBridgeCidrs = async (
+  run: DockerCommandRunner,
+): Promise<ReadonlyArray<string>> => {
+  const listed = await run("docker", [
+    "network",
+    "ls",
+    "--filter",
+    "driver=bridge",
+    "--format",
+    "{{.ID}}",
+  ]);
+  const ids = listed.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (ids.length === 0) return [];
+  const inspected = await run("docker", [
+    "network",
+    "inspect",
+    "--format",
+    "{{json .IPAM.Config}}",
+    ...ids,
+  ]);
+  const blocks = new Set<string>();
+  for (const line of inspected.stdout.split("\n").filter((each) => each.trim().length > 0)) {
+    const config: unknown = JSON.parse(line);
+    if (config === null) continue;
+    if (!Array.isArray(config)) throw new Error("docker network inspect answered no IPAM list");
+    for (const entry of config) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const subnet: unknown = Reflect.get(entry, "Subnet");
+      const gateway: unknown = Reflect.get(entry, "Gateway");
+      for (const value of [subnet, gateway]) {
+        if (typeof value !== "string" || value.length === 0) continue;
+        const parsed = parseCidr(value);
+        if (parsed === undefined) throw new Error(`docker network inspect answered ${value}`);
+        blocks.add(formatCidr(parsed));
+      }
+    }
+  }
+  return [...blocks];
+};
+
 export class EgressProxyOrchestrator {
   readonly #run: DockerCommandRunner;
   readonly #subnets: EgressProxySubnets;
@@ -206,6 +272,7 @@ export class EgressProxyOrchestrator {
   readonly #mirrors: ReadonlyArray<WorkspaceMirrorContainer>;
   readonly #healthTimeoutMs: number;
   readonly #adminClient: (socketPath: string) => ProxyAdminClient;
+  readonly #ownControlDirectory: (directory: string) => Promise<void>;
 
   public constructor(options: EgressProxyOrchestratorOptions) {
     this.#run = options.run;
@@ -216,6 +283,7 @@ export class EgressProxyOrchestrator {
     this.#mirrors = options.mirrors ?? [];
     this.#healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
     this.#adminClient = options.adminClient ?? ((socketPath) => createProxyAdminClient(socketPath));
+    this.#ownControlDirectory = options.ownControlDirectory ?? ownForProxy;
   }
 
   public get image(): string {
@@ -314,19 +382,22 @@ export class EgressProxyOrchestrator {
   }
 
   /**
-   * The proxy's control directory, made and handed to the proxy's user: it binds its admin socket
-   * there, and the workspace never mounts it.
+   * The proxy's control directory: owned by the proxy's user and root's group, mode 0750, so the
+   * proxy binds its admin socket there (0660, its own group root's) and the control plane's root
+   * reaches it through the group bits even with every capability dropped. The workspace never
+   * mounts it. A worker that cannot give the directory away (not root) fails the launch: it is
+   * never opened wider instead.
    */
   public async prepareControlDirectory(workspaceContainer: string): Promise<void> {
     const directory = joinPath(this.#controlDir, egressProxyName(workspaceContainer));
-    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await mkdir(directory, { recursive: true, mode: 0o750 });
     try {
-      await chown(directory, EGRESS_PROXY_UID, EGRESS_PROXY_UID);
-      await chmod(directory, 0o700);
-    } catch {
-      // A worker that is not root cannot give the directory away: open it to the proxy's user
-      // instead. The socket itself is 0660, so only its owner and group (and root) connect.
-      await chmod(directory, 0o777);
+      await this.#ownControlDirectory(directory);
+    } catch (error) {
+      throw new Error(
+        `The egress proxy's control directory '${directory}' could not be given to uid ${String(EGRESS_PROXY_UID)}, gid ${String(EGRESS_PROXY_GID)} (the worker must run as root): ${failureText(error)}`,
+        { cause: error },
+      );
     }
   }
 
@@ -390,32 +461,63 @@ export class EgressProxyOrchestrator {
     readonly launch: EgressProxyLaunch;
     readonly operatorAllowedPrivateCidrs: ReadonlyArray<string>;
     readonly hostPublicIps: ReadonlyArray<string>;
+    readonly resourceHosts?: ReadonlyArray<string>;
     readonly reachNetworks?: ReadonlyArray<string>;
   }): Promise<LaunchedEgressProxy> {
     const networks = await this.prepareNetworks(input.workspaceContainer);
+    // Measured before the proxy starts: a host whose bridges cannot be read launches nothing.
+    const host = await this.hostFacts({
+      networks,
+      operatorAllowedPrivateCidrs: input.operatorAllowedPrivateCidrs,
+      hostPublicIps: input.hostPublicIps,
+      ...(input.resourceHosts === undefined ? {} : { resourceHosts: input.resourceHosts }),
+    });
     await this.startProxy({
       workspaceContainer: input.workspaceContainer,
       networks,
       ...(input.reachNetworks === undefined ? {} : { reachNetworks: input.reachNetworks }),
     });
-    const outbound = cidr(networks.outbound.subnet);
     const { caCertPem, document } = await input.launch.prepare({
       proxyContainer: egressProxyName(input.workspaceContainer),
       adminSocketPath: this.adminSocketPath(input.workspaceContainer),
       proxyIp: networks.proxyIp,
-      host: {
-        operatorAllowedPrivateCidrs: [...input.operatorAllowedPrivateCidrs],
-        hostPublicIps: [...input.hostPublicIps],
-        blockedCidrs: [
-          // The outbound bridge's gateway is the host itself.
-          formatCidr({ family: 4, base: outbound.base + 1n, prefix: 32 }),
-          networks.isolated.subnet,
-        ],
-      },
+      host,
     });
     const applied = await this.pushPolicy(input.workspaceContainer, document);
     await input.launch.confirmed?.(applied);
     return { networks, applied, caCertPem };
+  }
+
+  /**
+   * What the proxy must know of this host, measured now: every Docker bridge's subnets and
+   * gateways (and the workspace's networks) refused, the operator's exceptions and the host's
+   * public addresses as given, and the operator's mirror hosts as the only mirrors a policy may
+   * grant. Throws when the bridges cannot be read: the policy is never pushed without them. The
+   * sweep calls it again before every push, so a bridge made since the launch is refused too.
+   */
+  public async hostFacts(input: {
+    readonly networks: EgressProxyNetworks;
+    readonly operatorAllowedPrivateCidrs: ReadonlyArray<string>;
+    readonly hostPublicIps: ReadonlyArray<string>;
+    readonly resourceHosts?: ReadonlyArray<string>;
+  }): Promise<EgressProxyHostFacts> {
+    const bridges = await dockerBridgeCidrs(this.#run);
+    const outbound = cidr(input.networks.outbound.subnet);
+    return {
+      operatorAllowedPrivateCidrs: [...input.operatorAllowedPrivateCidrs],
+      hostPublicIps: [...input.hostPublicIps],
+      blockedCidrs: [
+        ...new Set([
+          ...bridges,
+          // The outbound bridge's gateway is the host itself; both networks, measured or not.
+          formatCidr({ family: 4, base: outbound.base + 1n, prefix: 32 }),
+          input.networks.outbound.subnet,
+          input.networks.isolated.subnet,
+        ]),
+      ],
+      mirrorHosts: this.#mirrors.flatMap((mirror) => mirror.aliases),
+      resourceHosts: [...(input.resourceHosts ?? [])],
+    };
   }
 
   /** Poll `GET /v1/health` until the proxy answers, failing early when its container ended. */
@@ -514,6 +616,13 @@ export class EgressProxyOrchestrator {
     if (state === undefined || !state.running) return false;
     await this.#run("docker", ["stop", "-t", "5", name]);
     return true;
+  }
+
+  /** Whether a container (the workspace, before its proxy is restarted) exists and runs. */
+  public async containerState(
+    name: string,
+  ): Promise<{ readonly id: string; readonly running: boolean } | undefined> {
+    return this.#inspect(name);
   }
 
   /** Whether the proxy container exists and runs; `undefined` when there is none. */

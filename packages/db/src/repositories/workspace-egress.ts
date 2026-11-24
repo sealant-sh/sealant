@@ -1,4 +1,8 @@
-import type { BrokeredSecret, NetworkPolicy } from "@sealant/api-contracts";
+import {
+  canonicalRevocationHost,
+  type BrokeredSecret,
+  type NetworkPolicy,
+} from "@sealant/api-contracts";
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
@@ -129,6 +133,8 @@ export interface WorkspaceEgressRepoService {
   readonly confirmProxy: (input: {
     readonly runId: string;
     readonly policyHash: string | undefined;
+    /** The policy revision of the document the proxy took (a revocation alone carries none). */
+    readonly policyRevision?: number | undefined;
     readonly revocationWatermark: number;
   }) => Effect.Effect<void, WorkspaceEgressRepoError>;
   /** The proxy of each workspace's current run whose executor is up. */
@@ -191,6 +197,7 @@ const make: Effect.Effect<WorkspaceEgressRepoService, never, SealantDB> = Effect
               brokeredSecrets: input.brokeredSecrets,
               brokeredValuesSealed: input.brokeredValuesSealed ?? null,
               encryptionKeyId: input.encryptionKeyId ?? null,
+              policyRevision: sql`${workspaceEgressPolicies.policyRevision} + 1`,
               updatedAt: new Date(),
             },
           })
@@ -225,9 +232,9 @@ const make: Effect.Effect<WorkspaceEgressRepoService, never, SealantDB> = Effect
               kind: "secret" as const,
               target,
             }));
-            const hosts = [...new Set(input.hosts.map((host) => host.trim().toLowerCase()))].map(
-              (target) => ({ kind: "host" as const, target }),
-            );
+            const hosts = [
+              ...new Set(input.hosts.map((host) => canonicalRevocationHost(host) ?? host)),
+            ].map((target) => ({ kind: "host" as const, target }));
             const all = input.all ? [{ kind: "all" as const, target: null }] : [];
             yield* db.insert(workspaceEgressRevocations).values(
               [...rows, ...hosts, ...all].map((row) => ({
@@ -295,6 +302,11 @@ const make: Effect.Effect<WorkspaceEgressRepoService, never, SealantDB> = Effect
           .update(workspaceEgressProxies)
           .set({
             ...(input.policyHash === undefined ? {} : { confirmedPolicyHash: input.policyHash }),
+            ...(input.policyRevision === undefined
+              ? {}
+              : {
+                  confirmedPolicyRevision: sql`greatest(coalesce(${workspaceEgressProxies.confirmedPolicyRevision}, -1), ${input.policyRevision})`,
+                }),
             confirmedRevocationWatermark: input.revocationWatermark,
             updatedAt: new Date(),
           })
@@ -324,7 +336,13 @@ const make: Effect.Effect<WorkspaceEgressRepoService, never, SealantDB> = Effect
             workspaceEgressPolicies,
             eq(workspaceEgressPolicies.workspaceId, workspaceEgressProxies.workspaceId),
           )
-          .where(inArray(workspaceRuntimeInstances.status, [...LIVE_STATUSES]))
+          .where(
+            and(
+              inArray(workspaceRuntimeInstances.status, [...LIVE_STATUSES]),
+              // A stop under way owns the proxy from here: no sweep starts it again behind it.
+              isNull(workspaceRuntimeInstances.stopReason),
+            ),
+          )
           .pipe(
             Effect.map((rows) =>
               rows.map((row) => ({ proxy: row.proxy, policy: row.policy ?? undefined })),

@@ -452,6 +452,8 @@ export interface DockerRuntimeAdapterOptions {
   readonly egressProxy?: {
     /** `SEALANT_EGRESS_PROXY_IMAGE`; defaults to `DEFAULT_EGRESS_PROXY_IMAGE`. */
     readonly image?: string;
+    /** See `EgressProxyOrchestratorOptions.ownControlDirectory` (tests that do not run as root). */
+    readonly ownControlDirectory?: (directory: string) => Promise<void>;
   };
 }
 
@@ -1181,6 +1183,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         run: this.commandRunner,
         subnets: egress.subnets,
         ...(options.egressProxy.image === undefined ? {} : { image: options.egressProxy.image }),
+        ...(options.egressProxy.ownControlDirectory === undefined
+          ? {}
+          : { ownControlDirectory: options.egressProxy.ownControlDirectory }),
         controlDir,
         controlMountArgs: (proxyName) =>
           volumeMappings === undefined
@@ -3130,7 +3135,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // network and takes its first policy before anything of the workspace exists, so the
       // workspace never runs a moment without it (§7.1). Its gate also writes the trust bundle.
       let proxied: { readonly proxyIp: string; readonly caCertPem: string } | undefined;
-      if (needsEgressProxy(parsed.blueprint)) {
+      // The worker hands a proxy launch for a workspace whose stored state needs one beyond its
+      // spec (a host revocation): behind its proxy either way.
+      if (needsEgressProxy(parsed.blueprint) || parsed.egressProxy !== undefined) {
         const proxies = this.proxies;
         const egress = this.egress;
         const launch = parsed.egressProxy;
@@ -3171,7 +3178,29 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             this.guardNetwork(id, name, cloudMetadataReachable),
           )
         : undefined;
-      const dockerNetworkName = dockerService?.networkName;
+      // Behind a proxy the workspace stays on its isolated network alone: its Docker service joins
+      // that network under the `docker` alias instead of the workspace joining the service's
+      // routed bridge, which would give it a way out past the proxy.
+      if (proxied !== undefined && dockerService !== undefined && egressNetworkName !== undefined) {
+        await this.commandRunner("docker", [
+          "network",
+          "connect",
+          "--alias",
+          "docker",
+          egressNetworkName,
+          dockerService.acquisition.containerId,
+        ]).catch((error: unknown) => {
+          if (
+            !/already exists|already attached/i.test(
+              error instanceof Error ? error.message : String(error),
+            )
+          ) {
+            throw error;
+          }
+        });
+      }
+      const dockerServiceAlias = dockerService === undefined ? undefined : "docker";
+      const dockerNetworkName = proxied === undefined ? dockerService?.networkName : undefined;
       // Every route the guard adds is one a packet socket could skip: with the guard on, root has
       // no NET_RAW (and `sudo` cannot get it back from the bounding set).
       const guardsRoutes = this.egress !== undefined || !cloudMetadataReachable;
@@ -3275,8 +3304,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ...(proxied === undefined ? ["--add-host", "host.docker.internal:host-gateway"] : []),
         ...(proxied === undefined
           ? []
-          : proxiedWorkspaceArgs({ ...proxied, dockerService: dockerNetworkName !== undefined })),
-        ...(dockerNetworkName === undefined
+          : proxiedWorkspaceArgs({ ...proxied, dockerService: dockerServiceAlias !== undefined })),
+        ...(dockerServiceAlias === undefined
           ? []
           : ["-e", "DOCKER_HOST=tcp://docker:2375", "-e", "DOCKER_TLS_CERTDIR="]),
         "-w",

@@ -54,6 +54,7 @@ const memoryRepo = (policy: WorkspaceEgressPolicy | undefined) => {
           network: null,
           confirmedPolicyHash: null,
           confirmedRevocationWatermark: null,
+          confirmedPolicyRevision: null,
           createdAt: now,
           updatedAt: now,
         };
@@ -74,6 +75,7 @@ const memoryRepo = (policy: WorkspaceEgressPolicy | undefined) => {
             ...proxy,
             confirmedPolicyHash: input.policyHash ?? proxy.confirmedPolicyHash,
             confirmedRevocationWatermark: input.revocationWatermark,
+            confirmedPolicyRevision: input.policyRevision ?? proxy.confirmedPolicyRevision,
           });
       }),
     listLiveProxies: () => Effect.succeed([]),
@@ -90,6 +92,7 @@ const storedPolicy = (): WorkspaceEgressPolicy => {
     brokeredValuesSealed: sealed.sealed,
     encryptionKeyId: sealed.keyId,
     revocationWatermark: 0,
+    policyRevision: 3,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -133,6 +136,27 @@ describe("the worker's half of a proxy-backed launch", () => {
       confirmedPolicyHash: "sha256:pinned",
       confirmedRevocationWatermark: 0,
     });
+  });
+
+  it("loads a host-vm workspace with no stored policy under the standard policy, with its own CA", async () => {
+    const { repo } = memoryRepo(undefined);
+    const prepared = await egressProxyLaunch({
+      runId: "run-1",
+      workspaceId: "ws_1",
+      repo,
+      cipher,
+      whenUnstored: "standard",
+    }).prepare(measured);
+    expect(prepared.document).toMatchObject({ mode: "standard", brokeredSecrets: [] });
+    expect(prepared.document.executorCaCertPem).toBe(prepared.caCertPem);
+  });
+
+  it("confirms the policy revision the first policy was built from", async () => {
+    const { repo, proxies } = memoryRepo(storedPolicy());
+    const launch = egressProxyLaunch({ runId: "run-1", workspaceId: "ws_1", repo, cipher });
+    await launch.prepare(measured);
+    await launch.confirmed?.({ policyHash: "sha256:pinned", revocationWatermark: 0, closed: 0 });
+    expect(proxies.get("run-1")?.confirmedPolicyRevision).toBe(3);
   });
 
   it("refuses to load a proxy for a workspace with no stored policy", async () => {

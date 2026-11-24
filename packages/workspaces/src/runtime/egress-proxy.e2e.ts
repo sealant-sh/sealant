@@ -101,7 +101,8 @@ describe.skipIf(binary === undefined)("the admin wire of a real egress proxy", (
       host: {
         operatorAllowedPrivateCidrs: ["10.42.0.0/16"],
         hostPublicIps: ["203.0.113.7/32"],
-        blockedCidrs: [],
+        // What the bridge inventory hands over: IPv4 and IPv6 subnets and gateways.
+        blockedCidrs: ["192.0.10.0/24", "192.0.10.1/32", "fd00:dead::/64", "fd00:dead::1/128"],
       },
     });
 

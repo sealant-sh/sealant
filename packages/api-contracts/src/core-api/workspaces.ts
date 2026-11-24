@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
 import {
+  canonicalRevocationHost,
   brokeredSecretsProblems,
   brokeredSecretValuesProblems,
   networkPolicyProblems,
@@ -1769,11 +1770,14 @@ export const revokeWorkspaceAccessRequestSchema = Schema.Struct({
       readonly hosts?: readonly string[] | undefined;
       readonly all?: boolean | undefined;
     }) =>
-      (request.secretIds?.length ?? 0) > 0 ||
-      (request.hosts?.length ?? 0) > 0 ||
-      request.all === true
-        ? undefined
-        : "revocation: name secretIds, hosts or all",
+      (request.secretIds?.length ?? 0) === 0 &&
+      (request.hosts?.length ?? 0) === 0 &&
+      request.all !== true
+        ? "revocation: name secretIds, hosts or all"
+        : // A tombstone the proxy cannot read would refuse every later policy: refused here.
+          (request.hosts ?? [])
+            .filter((host) => canonicalRevocationHost(host) === undefined)
+            .map((host) => `revocation: \`${host}\` is not a host a policy can name`),
     policyRefusalWords,
   ),
 );
@@ -2225,6 +2229,8 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       error: [
         WorkspaceBadRequestError,
         WorkspaceNotFoundError,
+        // A host revocation on a runtime that runs no egress proxy, which alone refuses a host.
+        WorkspaceRuntimeRequirementUnsupportedError,
         WorkspaceServiceUnavailableError,
         WorkspaceInternalServerError,
       ],

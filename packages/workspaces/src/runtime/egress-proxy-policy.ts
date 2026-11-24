@@ -79,6 +79,8 @@ export const buildProxyPolicyDocument = (input: EgressProxyPolicyInput): ProxyPo
   const revokedSecrets = new Set(input.tombstones.revokedSecretIds);
   const values = Redacted.value(input.brokeredValues);
   const policy = input.networkPolicy;
+  const mirrorHosts = new Set(input.host.mirrorHosts ?? []);
+  const resourceHosts = new Set(input.host.resourceHosts ?? []);
   return {
     mode: policy?.mode ?? "standard",
     policyHash: egressPolicyHash(policy, input.brokeredSecrets),
@@ -94,17 +96,15 @@ export const buildProxyPolicyDocument = (input: EgressProxyPolicyInput): ProxyPo
       ...(entry.methods === undefined ? {} : { methods: [...entry.methods] }),
       ...(entry.pathPrefixes === undefined ? {} : { pathPrefixes: [...entry.pathPrefixes] }),
     })),
-    allowMirrors: (policy?.allowMirrors ?? []).map(({ name, host, port }) => ({
-      name,
-      host,
-      port,
-    })),
-    allowResources: (policy?.allowResources ?? []).map(({ name, host, port, guestIp }) => ({
-      name,
-      host,
-      port,
-      guestIp,
-    })),
+    // A mirror or resource is reached at a private address, which the proxy allows only for the
+    // targets granted here: so only the operator's own mirror hosts and the resource hosts the
+    // workspace is authorized to reach are granted, never a target the caller named.
+    allowMirrors: (policy?.allowMirrors ?? [])
+      .filter(({ host }) => mirrorHosts.has(host))
+      .map(({ name, host, port }) => ({ name, host, port })),
+    allowResources: (policy?.allowResources ?? [])
+      .filter(({ host }) => resourceHosts.has(host))
+      .map(({ name, host, port, guestIp }) => ({ name, host, port, guestIp })),
     brokeredSecrets: input.brokeredSecrets
       .filter((secret) => !revokedSecrets.has(secret.secretId))
       .map((secret) => {

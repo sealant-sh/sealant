@@ -4,13 +4,15 @@
  * proxy's admin socket (this process mounts the control directory; it has no Docker), and answers
  * what became of it there: `enforced` once the proxy confirmed it, `pending` when it could not be
  * reached (the worker's sweep keeps pushing, and kills a proxy that misses a revocation), and
- * `next-start` when no proxy runs for the workspace now.
+ * `next-start` when no proxy runs for the workspace now, or when the change reaches the workspace
+ * itself (a brokered secret's placeholder), which only a boot delivers.
  */
 import {
   WorkspaceBadRequestError,
   WorkspaceInternalServerError,
   WorkspaceRuntimeRequirementUnsupportedError,
   type ApplyWorkspaceNetworkPolicyRequest,
+  type BrokeredSecret,
   type ApplyWorkspaceNetworkPolicyResponse,
   type GetWorkspaceNetworkPolicyQuery,
   type RevokeWorkspaceAccessRequest,
@@ -21,6 +23,7 @@ import { CredentialCipher } from "@sealant/credentials";
 import {
   WorkspaceEgressRepo,
   WorkspaceRuntimeInstanceRepo,
+  type WorkspaceEgressPolicy,
   type WorkspaceEgressProxy,
 } from "@sealant/db";
 import { networkPolicyRefusal, type NewWorkspace } from "@sealant/validators";
@@ -37,6 +40,7 @@ import { env } from "../../runtime-env.js";
 import {
   loadRecordedSpec,
   requireOwnedWorkspace,
+  runsEgressProxy,
   sealBrokeredSecretValues,
   withInternalError,
 } from "./workspaces.module.js";
@@ -95,6 +99,72 @@ const outcomeFields = (outcome: EgressPushOutcome) =>
     ? { enforcement: "enforced" as const, closed: outcome.closed }
     : { enforcement: "pending" as const };
 
+/**
+ * Push the workspace's whole stored policy, every revocation included, to its live proxy, and
+ * record what the proxy confirmed: the policy's hash, the watermark and the policy revision the
+ * document was built from. `pending`, with no document, while the launch has not measured the
+ * host yet: it pushes the stored policy as the proxy's first.
+ */
+const pushStoredPolicy = (input: {
+  readonly workspaceId: string;
+  readonly proxy: WorkspaceEgressProxy;
+  readonly policy: WorkspaceEgressPolicy | undefined;
+}) =>
+  Effect.gen(function* () {
+    const egress = yield* WorkspaceEgressRepo;
+    const document = yield* withInternalError(
+      Effect.gen(function* () {
+        return yield* storedProxyPolicyDocument({
+          cipher: yield* CredentialCipher,
+          proxy: input.proxy,
+          policy: input.policy,
+          revocations: yield* egress.listRevocations(input.workspaceId),
+        });
+      }),
+      "Failed to build the egress proxy's policy.",
+    );
+    if (document === undefined) {
+      const outcome: EgressPushOutcome = {
+        enforcement: "pending",
+        reason: "the launch has not measured the host yet",
+      };
+      return { policyHash: undefined, outcome };
+    }
+    const outcome = yield* pushToProxy(input.proxy, document);
+    if (outcome.enforcement === "enforced") {
+      yield* withInternalError(
+        egress.confirmProxy({
+          runId: input.proxy.runId,
+          policyHash: document.policyHash,
+          revocationWatermark: document.revocationWatermark,
+          policyRevision: input.policy?.policyRevision,
+        }),
+        "Failed to record what the egress proxy confirmed.",
+      );
+    }
+    return { policyHash: document.policyHash, outcome };
+  });
+
+/**
+ * Whether an update hands the workspace something new: a brokered secret it did not hold, or one
+ * whose variable name or placeholder changed. The placeholder is in the workspace's environment,
+ * which only a boot sets, so such an update holds from the next start whatever the proxy took.
+ */
+const reachesWorkspace = (
+  previous: readonly BrokeredSecret[],
+  next: readonly BrokeredSecret[],
+): boolean => {
+  const held = new Map(previous.map((secret) => [secret.secretId, secret]));
+  return next.some((secret) => {
+    const before = held.get(secret.secretId);
+    return (
+      before === undefined ||
+      before.name !== secret.name ||
+      before.placeholder !== secret.placeholder
+    );
+  });
+};
+
 export const applyWorkspaceNetworkPolicy = (input: {
   readonly workspaceId: string;
   readonly payload: ApplyWorkspaceNetworkPolicyRequest;
@@ -136,6 +206,11 @@ export const applyWorkspaceNetworkPolicy = (input: {
       payload.brokeredSecretValues ?? {},
     );
     const egress = yield* WorkspaceEgressRepo;
+    const previous = yield* withInternalError(
+      egress.getPolicy(workspace.id),
+      "Failed to load the workspace's network policy.",
+    );
+    const nextStartOnly = reachesWorkspace(previous?.brokeredSecrets ?? [], brokeredSecrets);
     const stored = yield* withInternalError(
       egress.putPolicy({
         workspaceId: workspace.id,
@@ -159,40 +234,18 @@ export const applyWorkspaceNetworkPolicy = (input: {
         enforcement: "next-start",
       } satisfies ApplyWorkspaceNetworkPolicyResponse;
     }
-    const document = yield* withInternalError(
-      Effect.gen(function* () {
-        return yield* storedProxyPolicyDocument({
-          cipher: yield* CredentialCipher,
-          proxy,
-          policy: stored,
-          revocations: yield* egress.listRevocations(workspace.id),
-        });
-      }),
-      "Failed to build the egress proxy's policy.",
-    );
-    // The launch has not measured the host yet: it pushes the stored policy as the proxy's first.
-    if (document === undefined) {
-      return { ...stays, enforcement: "pending" } satisfies ApplyWorkspaceNetworkPolicyResponse;
-    }
-    const outcome = yield* pushToProxy(proxy, document);
-    if (outcome.enforcement === "enforced") {
-      yield* withInternalError(
-        egress.confirmProxy({
-          runId: proxy.runId,
-          policyHash: document.policyHash,
-          revocationWatermark: document.revocationWatermark,
-        }),
-        "Failed to record what the egress proxy confirmed.",
-      );
-    } else {
+    // Pushed even when the update holds only from the next start: the proxy takes the policy's
+    // allow list and the secrets' values now, and the workspace gets the placeholders at boot.
+    const pushed = yield* pushStoredPolicy({ workspaceId: workspace.id, proxy, policy: stored });
+    if (pushed.outcome.enforcement === "pending") {
       yield* Effect.logWarning(
-        `Workspace ${workspace.id}: its updated network policy is stored, and run ${proxy.runId}'s egress proxy did not take it (${outcome.reason}); the worker keeps pushing it.`,
+        `Workspace ${workspace.id}: its updated network policy is stored, and run ${proxy.runId}'s egress proxy did not take it (${pushed.outcome.reason}); the worker keeps pushing it.`,
       );
     }
     return {
       ...stays,
-      policyHash: document.policyHash,
-      ...outcomeFields(outcome),
+      policyHash: pushed.policyHash ?? stays.policyHash,
+      ...(nextStartOnly ? { enforcement: "next-start" as const } : outcomeFields(pushed.outcome)),
     } satisfies ApplyWorkspaceNetworkPolicyResponse;
   });
 
@@ -222,6 +275,18 @@ export const revokeWorkspaceAccess = (input: {
       hosts: [...grants.hosts, ...(payload.hosts ?? [])],
       all,
     };
+    // Only an egress proxy refuses a host: a host revocation on a runtime that runs none could
+    // never be enforced, so it is refused before anything is stored. A secret revocation stays
+    // allowed everywhere (with no proxy it holds from the next start).
+    if (revocation.hosts.length > 0) {
+      const { runtime } = yield* workspaceRuntimeOf(workspace.id, workspace.latestRunId);
+      if (!runsEgressProxy(runtime)) {
+        return yield* new WorkspaceRuntimeRequirementUnsupportedError({
+          message: `The ${runtime} runtime runs no egress proxy, so it cannot refuse a host: revoke brokered secrets by id instead, or move the workspace to Docker or Host VM (host-vm).`,
+          code: "runtime-requirement-unsupported",
+        });
+      }
+    }
     // Durable before anything is told: it holds for the workspace's life whatever happens next.
     const tombstones = yield* withInternalError(
       egress.revoke({ workspaceId: workspace.id, ...revocation }),
@@ -237,13 +302,28 @@ export const revokeWorkspaceAccess = (input: {
         enforcement: "next-start",
       } satisfies RevokeWorkspaceAccessResponse;
     }
-    const outcome = yield* revokeOnProxy(proxy, { revocationWatermark, ...revocation });
-    if (outcome.enforcement === "enforced") {
+    // Every tombstone through this watermark, so one an earlier push missed goes now.
+    const revoked = yield* revokeOnProxy(proxy, { tombstones, all });
+    if (revoked.enforcement === "enforced") {
       yield* withInternalError(
         egress.confirmProxy({ runId: proxy.runId, policyHash: undefined, revocationWatermark }),
         "Failed to record what the egress proxy confirmed.",
       );
-    } else {
+    }
+    // A proxy holding a later watermark than this one may lack some revocation storage holds: it
+    // takes the whole stored policy instead, every tombstone in it.
+    const outcome: EgressPushOutcome =
+      revoked.enforcement === "resync"
+        ? (yield* pushStoredPolicy({
+            workspaceId: workspace.id,
+            proxy,
+            policy: yield* withInternalError(
+              egress.getPolicy(workspace.id),
+              "Failed to load the workspace's network policy.",
+            ),
+          })).outcome
+        : revoked;
+    if (outcome.enforcement === "pending") {
       yield* Effect.logWarning(
         `Workspace ${workspace.id}: revocation ${String(revocationWatermark)} is stored, and run ${proxy.runId}'s egress proxy did not confirm it (${outcome.reason}); the worker's sweep kills the proxy if it stays unreachable.`,
       );

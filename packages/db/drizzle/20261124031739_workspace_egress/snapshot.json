@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "085d77de-b5bd-4116-940f-3d5ed54ba42e",
+  "id": "ab9bc649-d5f9-4d00-9d01-6cd87fed06b2",
   "prevIds": ["968f9905-0db5-4ef9-b1bd-d10c8411bda0"],
   "ddl": [
     {
@@ -8592,6 +8592,19 @@
       "table": "workspace_egress_policies"
     },
     {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "policy_revision",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workspace_egress_policies"
+    },
+    {
       "type": "timestamp with time zone",
       "typeSchema": null,
       "notNull": true,
@@ -8756,6 +8769,19 @@
       "generated": null,
       "identity": null,
       "name": "confirmed_revocation_watermark",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workspace_egress_proxies"
+    },
+    {
+      "type": "bigint",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "confirmed_policy_revision",
       "entityType": "columns",
       "schema": "public",
       "table": "workspace_egress_proxies"

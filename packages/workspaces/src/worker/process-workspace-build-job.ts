@@ -1414,11 +1414,21 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         }),
       catch: toWorkspaceBuildJobProcessingError,
     });
-    const egressProxy = needsEgressProxy(spec)
+    // Behind its proxy: what the spec asks for (restricted egress, a brokered secret), a host the
+    // workspace holds a durable revocation of (only the proxy refuses a host), and every host-vm
+    // workspace, whose VM reaches the network only through it.
+    const revokedHosts = yield* storedRevokedHosts(labelWorkspaceId);
+    const proxied = needsEgressProxy({ ...spec, revokedHosts }) || prepared.adapterId === "host-vm";
+    const egressProxy = proxied
       ? yield* egressProxyLaunchFor({
           runId: job.runId,
           workspaceId: labelWorkspaceId,
           cipher: options.credentialCipher,
+          // A spec that asks for no policy (host-vm, or a host revocation alone) may have no row.
+          whenUnstored:
+            spec.networkPolicy === undefined && (spec.brokeredSecrets ?? []).length === 0
+              ? "standard"
+              : "refuse",
         })
       : undefined;
 
@@ -1661,6 +1671,7 @@ const egressProxyLaunchFor = (input: {
   readonly runId: string | null;
   readonly workspaceId: string | undefined;
   readonly cipher: CredentialCipherService | undefined;
+  readonly whenUnstored: "refuse" | "standard";
 }) =>
   Effect.gen(function* () {
     const egress = yield* Effect.serviceOption(WorkspaceEgressRepo);
@@ -1681,7 +1692,19 @@ const egressProxyLaunchFor = (input: {
       workspaceId: input.workspaceId,
       repo: egress.value,
       cipher: input.cipher,
+      whenUnstored: input.whenUnstored,
     });
+  });
+
+/** The hosts the workspace holds a durable revocation of; none without the egress store. */
+const storedRevokedHosts = (workspaceId: string | undefined) =>
+  Effect.gen(function* () {
+    const egress = yield* Effect.serviceOption(WorkspaceEgressRepo);
+    if (workspaceId === undefined || Option.isNone(egress)) return [];
+    const tombstones = yield* egress.value
+      .tombstones(workspaceId)
+      .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+    return tombstones.revokedHosts;
   });
 
 /**

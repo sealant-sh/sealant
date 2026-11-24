@@ -9,6 +9,7 @@ import type { BrokeredSecret, NetworkPolicy } from "@sealant/api-contracts";
 import { CredentialCipherError, type CredentialCipherService } from "@sealant/credentials";
 import {
   tombstonesOf,
+  type WorkspaceEgressTombstones,
   type WorkspaceEgressPolicy,
   type WorkspaceEgressProxy,
   type WorkspaceEgressRevocation,
@@ -117,37 +118,47 @@ export const pushToProxy = (
     ),
   );
 
+/** What a revocation sent to a live proxy came to. */
+export type EgressRevocationPush =
+  | EgressPushOutcome
+  /**
+   * The proxy holds a watermark past this one (409): it may not hold every revocation storage
+   * does, so the caller pushes the whole stored policy (`PUT /v1/policy`) instead.
+   */
+  | { readonly enforcement: "resync"; readonly reason: string };
+
 /**
- * Send a stored revocation straight to the proxy, which answers once every matching stream is
- * closed. A proxy past this watermark (409) took a later policy carrying it.
+ * Send the workspace's revocations to the proxy, which answers once every matching stream is
+ * closed. Every tombstone through the stored watermark goes, not only the newest revocation's:
+ * one an earlier call failed to deliver is carried by the next. A proxy that answers without
+ * confirming its closes (`close_unconfirmed`), or cannot be reached, is `pending`: the worker's
+ * sweep kills it and starts it again with the whole stored policy.
  */
 export const revokeOnProxy = (
   proxy: Pick<WorkspaceEgressProxy, "adminSocketPath">,
   revocation: {
-    readonly revocationWatermark: number;
-    readonly secretIds: readonly string[];
-    readonly hosts: readonly string[];
+    readonly tombstones: WorkspaceEgressTombstones;
+    /** This revocation asked for every grant (`revokeAll`). */
     readonly all: boolean;
   },
   client: ProxyAdminClient = createProxyAdminClient(proxy.adminSocketPath),
-): Effect.Effect<EgressPushOutcome> =>
+): Effect.Effect<EgressRevocationPush> =>
   Effect.promise(() =>
     client
       .revoke({
-        revocationWatermark: revocation.revocationWatermark,
-        revokeSecretIds: [...revocation.secretIds],
-        revokeHosts: [...revocation.hosts],
+        revocationWatermark: revocation.tombstones.revocationWatermark,
+        revokeSecretIds: [...revocation.tombstones.revokedSecretIds],
+        revokeHosts: [...revocation.tombstones.revokedHosts],
         revokeAll: revocation.all,
       })
       .then(
-        (revoked): EgressPushOutcome => ({ enforcement: "enforced", closed: revoked.closed }),
-        (error: unknown): EgressPushOutcome =>
-          error instanceof ProxyAdminRefusedError && error.code === "watermark_rollback"
-            ? { enforcement: "enforced", closed: 0 }
-            : {
-                enforcement: "pending",
-                reason: error instanceof Error ? error.message : String(error),
-              },
+        (revoked): EgressRevocationPush => ({ enforcement: "enforced", closed: revoked.closed }),
+        (error: unknown): EgressRevocationPush => {
+          const reason = error instanceof Error ? error.message : String(error);
+          return error instanceof ProxyAdminRefusedError && error.code === "watermark_rollback"
+            ? { enforcement: "resync", reason }
+            : { enforcement: "pending", reason };
+        },
       ),
   );
 

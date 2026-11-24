@@ -157,6 +157,7 @@ import {
   resolveWorkspacePhase,
   resolveWorkspaceStatus,
   executorIsRetained as genericExecutorIsRetained,
+  withPinnedEgressPolicy,
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
 import { Cause, type Context, Duration, Effect, Option, Result } from "effect";
@@ -1573,6 +1574,15 @@ const createCancelledError = (idempotencyKey: string) =>
 class CreateReservationLost extends Error {
   public override readonly name = "CreateReservationLost";
 }
+
+/**
+ * Whether `runtime` puts its workspaces behind their own egress proxy: Docker and host-vm, the
+ * runtimes whose `brokeredSecrets` row in the runtime table is supported (only a proxy brokers a
+ * secret). A host revocation is enforced only by a proxy, so a runtime without one cannot honor
+ * it: the table has no row of its own for revoked hosts, hence this list.
+ */
+export const runsEgressProxy = (runtime: string): boolean =>
+  runtime === "docker" || runtime === "host-vm";
 
 /**
  * A create's (and a restart's) runtime refusals, from the table `GET /v1/workspaces/runtimes`
@@ -3916,7 +3926,33 @@ export const restartWorkspace = (input: {
       recordedSpec.target.runtime.family === "auto"
         ? env.DEFAULT_RUNTIME_ADAPTER
         : recordedSpec.target.runtime.family;
-    yield* refuseUnsupportedRuntimeRequest(runtimeFamily, recordedSpec);
+    // The worker launches the recorded spec under the workspace's pinned policy ("Apply updated
+    // policy" replaces it), so that effective spec is what the runtime table judges. Stored host
+    // revocations need a proxy as well: only a proxy refuses a host. All before a launch is spent
+    // or the old executor is stopped.
+    const egress = yield* WorkspaceEgressRepo;
+    const pinnedPolicy = yield* withInternalError(
+      egress.getPolicy(workspace.id),
+      "Failed to load the workspace's network policy.",
+    );
+    const launchedSpec = yield* Effect.try({
+      try: () => withPinnedEgressPolicy(recordedSpec, pinnedPolicy),
+      catch: (error) =>
+        new WorkspaceInternalServerError({
+          message: toErrorMessage(error, "The workspace's stored network policy does not parse."),
+        }),
+    });
+    yield* refuseUnsupportedRuntimeRequest(runtimeFamily, launchedSpec);
+    const tombstones = yield* withInternalError(
+      egress.tombstones(workspace.id),
+      "Failed to load the workspace's revocations.",
+    );
+    if (tombstones.revokedHosts.length > 0 && !runsEgressProxy(runtimeFamily)) {
+      return yield* new WorkspaceRuntimeRequirementUnsupportedError({
+        message: `Workspace ${input.workspaceId} holds revoked hosts (${tombstones.revokedHosts.join(", ")}), and only an egress proxy refuses a host; the ${runtimeFamily} runtime runs none.`,
+        code: "runtime-requirement-unsupported",
+      });
+    }
     if (runtimeFamily === BOAT_RUNTIME_ID) yield* requireBoatConfigured;
     // A restart runs in the account the workspace was created in: one removed since is refused.
     yield* requireBoatAccount(recordedSpec, runtimeFamily);

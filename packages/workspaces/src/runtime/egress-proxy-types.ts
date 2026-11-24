@@ -99,8 +99,16 @@ export interface ProxyHeartbeat {
 export interface EgressProxyHostFacts {
   readonly operatorAllowedPrivateCidrs: readonly string[];
   readonly hostPublicIps: readonly string[];
-  /** Docker bridge gateways and the workspace's own networks, refused by the proxy too. */
+  /**
+   * Every Docker bridge's subnets and gateways on the host, the workspace's own network among
+   * them: refused by the proxy whatever its built-in private ranges miss (a bridge on a public
+   * range).
+   */
   readonly blockedCidrs: readonly string[];
+  /** The operator's mirror hosts on the proxy's network: the only mirrors a policy may grant. */
+  readonly mirrorHosts?: readonly string[];
+  /** Resource hosts the workspace may reach through its proxy, from its authorized attachments. */
+  readonly resourceHosts?: readonly string[];
 }
 
 /**

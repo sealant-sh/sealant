@@ -11,12 +11,14 @@ import type { ResourceInstanceState, ResourceInstanceVolume } from "@sealant/api
 import type { CredentialCipherService } from "@sealant/credentials";
 import type { ResourceInstanceRecord, ResourceNetworkKind } from "@sealant/db";
 
+import { EGRESS_PROXY_BACKED_LABEL } from "../runtime/docker-egress-proxy.js";
 import {
   cloudMetadataGuardArgv,
   createDockerCommandRunner,
   DEFAULT_NETWORK_GUARD_IMAGE,
   type DockerCommandRunner,
 } from "../runtime/docker-runtime-adapter.js";
+import { egressProxyName } from "../runtime/egress-proxy-orchestrator.js";
 import { callerInstanceName, type ResourceCallerConfig } from "./caller-config.js";
 import { DockerCallerRuntime } from "./docker-caller-runtime.js";
 import {
@@ -379,8 +381,28 @@ export class DockerResourceRuntime implements ResourceRuntime {
     if ((await this.inspectContainer(executor)) === undefined) {
       throw new Error(`The executor ${executor} is not on this Docker host.`);
     }
+    // A workspace behind its own egress proxy never joins a network that leads past it: its
+    // proxy joins the reach network in its place, and the workspace reaches a resource only as
+    // its policy grants, through the proxy. No proxy there: refused, never attached directly.
+    const member = (await this.isProxyBacked(executor)) ? egressProxyName(executor) : executor;
+    if (member !== executor && (await this.inspectContainer(member)) === undefined) {
+      throw new Error(
+        `The executor ${executor} runs behind an egress proxy, and its proxy ${member} is not on this Docker host: its resources are not attached.`,
+      );
+    }
     await this.ensureNetwork(network, "reach", executor);
-    await this.runTolerating(["network", "connect", network, executor], isPresent);
+    await this.runTolerating(["network", "connect", network, member], isPresent);
+  }
+
+  /** Whether an executor was launched behind its own egress proxy (`EGRESS_PROXY_BACKED_LABEL`). */
+  private async isProxyBacked(executor: string): Promise<boolean> {
+    const result = await this.run([
+      "inspect",
+      "--format",
+      `{{index .Config.Labels "${EGRESS_PROXY_BACKED_LABEL}"}}`,
+      executor,
+    ]);
+    return result.stdout.trim() === "true";
   }
 
   private async attach(attachments: ReadonlyArray<ReachAttachment>): Promise<void> {
