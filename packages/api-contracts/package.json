@@ -17,7 +17,8 @@
     "./workspace-environment": "./src/workspace-environment.ts",
     "./capture-owner-map": "./src/capture-owner-map.ts",
     "./connected-account-selector": "./src/connected-account-selector.ts",
-    "./network-policy": "./src/network-policy.ts"
+    "./network-policy": "./src/network-policy.ts",
+    "./control-scope": "./src/control-scope.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -41,6 +42,10 @@
       "./network-policy": {
         "types": "./dist/network-policy.d.ts",
         "import": "./dist/network-policy.js"
+      },
+      "./control-scope": {
+        "types": "./dist/control-scope.d.ts",
+        "import": "./dist/control-scope.js"
       }
     }
   },

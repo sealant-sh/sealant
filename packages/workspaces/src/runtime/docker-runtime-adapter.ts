@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -7,7 +7,12 @@ import { join as joinPath } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
+import {
+  EXECUTOR_CAPTURE_SOCKET,
+  EXECUTOR_CONTROL_MOUNT,
+} from "@sealant/api-contracts/control-scope";
 import { needsEgressProxy } from "@sealant/api-contracts/network-policy";
+import { wantsExecutorSockets } from "@sealant/validators";
 
 import { getHarnessIntegration } from "../harness/integrations.js";
 import {
@@ -118,6 +123,22 @@ const EVENT_STREAM_RECONNECT_MAX_MS = 30_000;
  * docker-exec/socat relay (gateway-spec §2.1).
  */
 const CONTROL_SOCKET_CONTAINER_PATH = "/run/sealant/control.sock";
+
+/**
+ * The control scope a container mounts at `/run/sealant` when its launch named one
+ * (`RuntimeAdapterLaunchInput.controlScope`), on the container itself: `recover` and `locate` read
+ * it back, whichever worker launched it. Absent, the scope is the container's name.
+ */
+const CONTROL_SCOPE_LABEL = "sealant.control-scope";
+
+/**
+ * `/run/sealant` when the workspace's processes reach the caller's `session.sock`
+ * (`executorSockets.session`): searchable, never listable, and nothing in it writable but by its
+ * owner. `control.sock` stays sealantd's alone (0600) and the staged secrets theirs (0700/0600).
+ * Otherwise the scope is the owner's alone (0700), as it always was.
+ */
+const CONTROL_SCOPE_SESSION_MODE = 0o711;
+const CONTROL_SCOPE_PRIVATE_MODE = 0o700;
 
 /** Readiness-probe cadence and default budget (overridable via DockerRuntimeAdapterOptions). */
 const READINESS_POLL_INTERVAL_MS = 250;
@@ -1107,6 +1128,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly controlSocketHostDir: string | undefined;
 
+  /** Each container mounts its own scope of `controlSocketHostDir` at `/run/sealant`. */
+  public readonly hasControlScopes: boolean;
+
   private readonly mountAllowedStoreRoots: string | undefined;
 
   private readonly volumeMappings: readonly DockerVolumeMapping[] | undefined;
@@ -1162,6 +1186,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.executorNetworks = options.executorNetworks;
     this.memoryPolicy = options.memory;
     this.controlSocketHostDir = options.controlSocketHostDir;
+    this.hasControlScopes = options.controlSocketHostDir !== undefined;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
     this.volumeMappings = options.volumeMappings;
     this.workspaceNetwork =
@@ -1227,14 +1252,49 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           });
   }
 
-  /** Build the legacy control-socket bind mount with its original recursive mkdir behavior. */
-  private async buildControlSocketMountArgs(containerName: string): Promise<string[]> {
+  /**
+   * Build the legacy control-socket bind mount with its original recursive mkdir behavior. A
+   * scope the launch names, or one the workspace's processes reach `session.sock` in, is given its
+   * mode (`mode`), and must be a directory, never a link: the caller may have made it, and bound
+   * its sockets in it, before the launch. Nothing in it is removed.
+   */
+  private async buildControlSocketMountArgs(
+    scope: string,
+    mode: number | undefined,
+  ): Promise<string[]> {
     if (this.controlSocketHostDir === undefined) {
       return [];
     }
-    const hostDir = joinPath(this.controlSocketHostDir, containerName);
-    await mkdir(hostDir, { recursive: true, mode: 0o700 });
+    const hostDir = joinPath(this.controlSocketHostDir, scope);
+    await mkdir(hostDir, { recursive: true, mode: CONTROL_SCOPE_PRIVATE_MODE });
+    if (mode !== undefined) {
+      const found = await lstat(hostDir);
+      if (!found.isDirectory()) {
+        throw createAdapterError(
+          "adapter-unavailable",
+          `The control scope '${scope}' in ${this.controlSocketHostDir} is not a directory; refusing to mount it.`,
+        );
+      }
+      await chmod(hostDir, mode);
+    }
     return ["-v", `${hostDir}:/run/sealant`];
+  }
+
+  /** The control scope a container was launched with (its label), or undefined when it has none. */
+  private async controlScopeOf(container: string): Promise<string | undefined> {
+    if (this.controlSocketHostDir === undefined) return undefined;
+    try {
+      const result = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        `{{index .Config.Labels "${CONTROL_SCOPE_LABEL}"}}`,
+        container,
+      ]);
+      const scope = result.stdout.trim();
+      return scope.length === 0 || scope === "<no value>" ? undefined : scope;
+    } catch {
+      return undefined;
+    }
   }
 
   private async isContainerNameAbsent(containerName: string): Promise<boolean> {
@@ -1314,6 +1374,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private async prepareVolumeLaunchMounts(
     input: RuntimeAdapterLaunchInput,
     containerName: string,
+    scope: string,
+    mode: number,
   ): Promise<DockerVolumeLaunchMountPlan | undefined> {
     const mappings = this.volumeMappings;
     if (mappings === undefined) return undefined;
@@ -1332,7 +1394,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       allowedStoreRoots: this.allowedStoreRoots,
     });
     const controlSocketIntent: RuntimeMountIntent = {
-      sourcePath: joinPath(controlSocketHostDir, containerName),
+      sourcePath: joinPath(controlSocketHostDir, scope),
       mountPath: "/run/sealant",
       readOnly: false,
       purpose: "launch-material",
@@ -1349,8 +1411,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // A retry can reuse the directory at any time; no Docker inspect can make online deletion safe.
     await prepareDockerControlDirectory({
       controlRoot: controlSocketHostDir,
-      directoryName: containerName,
+      directoryName: scope,
       containerNamePrefix: this.containerNamePrefix,
+      callerNamed: scope !== containerName,
+      mode,
     });
     return { mountArgsForIntent, controlSocketMountArgs };
   }
@@ -1446,9 +1510,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * control-socket reach does not depend on this value. We return a non-`ssh://` descriptor so nothing
    * mistakes the workspace for an sshd-exposing host.
    */
-  private resolveControlEndpoint(containerId: string, containerName: string): string {
+  private resolveControlEndpoint(containerId: string, scope: string): string {
     if (this.controlSocketHostDir !== undefined) {
-      return `unix://${joinPath(this.controlSocketHostDir, containerName, "control.sock")}`;
+      return `unix://${joinPath(this.controlSocketHostDir, scope, "control.sock")}`;
     }
     return `docker-exec://${containerId}${CONTROL_SOCKET_CONTAINER_PATH}`;
   }
@@ -2544,12 +2608,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * True once the daemon control socket is accepting. Strict volume mode proves a connection, so a
    * stale socket inode cannot report readiness; legacy bind mode retains its historical stat probe.
    */
-  private async isControlSocketAccepting(
-    containerId: string,
-    containerName: string,
-  ): Promise<boolean> {
+  private async isControlSocketAccepting(containerId: string, scope: string): Promise<boolean> {
     if (this.controlSocketHostDir !== undefined) {
-      const socketPath = joinPath(this.controlSocketHostDir, containerName, "control.sock");
+      const socketPath = joinPath(this.controlSocketHostDir, scope, "control.sock");
       if (this.volumeMappings !== undefined) {
         return this.canConnectToControlSocket(socketPath);
       }
@@ -2584,6 +2645,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private async awaitControlSocketReady(
     containerId: string,
     containerName: string,
+    /** The container's control scope, where its `control.sock` is. */
+    scope: string,
     signal?: AbortSignal,
   ): Promise<void> {
     const deadline = Date.now() + this.readinessTimeoutMs;
@@ -2591,7 +2654,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       if (signal?.aborted === true) {
         throw createAdapterError("adapter-unavailable", "The readiness wait was abandoned.");
       }
-      if (await this.isControlSocketAccepting(containerId, containerName)) {
+      if (await this.isControlSocketAccepting(containerId, scope)) {
         return;
       }
 
@@ -2702,7 +2765,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           () => (this.egress === undefined ? undefined : this.releaseNetworkGate(input.resourceId)),
         ),
         this.verifyRunning
-          ? this.awaitControlSocketReady(input.resourceId, input.reference ?? input.resourceId)
+          ? this.awaitControlSocketReady(
+              input.resourceId,
+              input.reference ?? input.resourceId,
+              (await this.controlScopeOf(input.resourceId)) ?? input.reference ?? input.resourceId,
+            )
           : undefined,
       ]);
     } catch (error) {
@@ -2800,11 +2867,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         `Docker inspect did not return an id for '${containerName}'.`,
       );
     }
+    const scope =
+      this.controlSocketHostDir === undefined
+        ? undefined
+        : ((await this.controlScopeOf(id)) ?? containerName);
     return {
       adapter: this.id,
       resourceId: id,
       reference: containerName,
-      endpoint: this.resolveControlEndpoint(id, containerName),
+      endpoint: this.resolveControlEndpoint(id, scope ?? containerName),
+      ...(scope === undefined ? {} : { controlScope: scope }),
     };
   }
 
@@ -3130,6 +3202,23 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     await this.assertRuntimeConfigured(parsed.blueprint.runtime.ociRuntime);
 
     const containerName = buildContainerName(parsed, this.containerNamePrefix);
+    // The directory of the control root this container mounts at `/run/sealant`: the one the
+    // launch names, where its caller may already serve `capture.sock` and `session.sock`, else
+    // the container's own name. None without a control root.
+    const sockets = parsed.blueprint.runtime.executorSockets;
+    if (
+      this.controlSocketHostDir === undefined &&
+      (parsed.controlScope !== undefined || wantsExecutorSockets(sockets))
+    ) {
+      throw createAdapterError(
+        "runtime-requirement-unsupported",
+        "This Docker worker mounts no control scope (WORKSPACE_CONTROL_SOCKET_HOST_DIR is unset), so it cannot take controlScope or runtime.executorSockets.",
+      );
+    }
+    const controlScope =
+      this.controlSocketHostDir === undefined ? undefined : (parsed.controlScope ?? containerName);
+    const controlScopeMode =
+      sockets?.session === true ? CONTROL_SCOPE_SESSION_MODE : CONTROL_SCOPE_PRIVATE_MODE;
     const holdsCaptures = launchHoldsCaptures(parsed.blueprint);
     const plannedStopGrace = holdsCaptures ? this.captureStopGraceSeconds : this.stopGraceSeconds;
     let acquisition: DockerContainerAcquisition | undefined;
@@ -3143,10 +3232,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       adapter: this.id,
       resourceId: containerId,
       reference: containerName,
-      endpoint: this.resolveControlEndpoint(containerId, containerName),
+      endpoint: this.resolveControlEndpoint(containerId, controlScope ?? containerName),
+      ...(controlScope === undefined ? {} : { controlScope }),
     });
     try {
-      const volumeMountPlan = await this.prepareVolumeLaunchMounts(parsed, containerName);
+      const volumeMountPlan = await this.prepareVolumeLaunchMounts(
+        parsed,
+        containerName,
+        controlScope ?? containerName,
+        controlScopeMode,
+      );
       const mountArgsForIntent = volumeMountPlan?.mountArgsForIntent ?? dockerBindArgsForIntent;
 
       const dockerServiceEnabled = parsed.blueprint.tooling.services?.docker?.enabled === true;
@@ -3262,7 +3357,20 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // inside it) and create the host dir 0700 to the gateway/worker uid before `docker run`.
       const controlSocketMountArgs =
         volumeMountPlan?.controlSocketMountArgs ??
-        (await this.buildControlSocketMountArgs(containerName));
+        (await this.buildControlSocketMountArgs(
+          controlScope ?? containerName,
+          // The legacy mount keeps its directory's mode unless the launch names the scope or asks
+          // for the session channel in it.
+          parsed.controlScope !== undefined || sockets?.session === true
+            ? controlScopeMode
+            : undefined,
+        ));
+      // sealant sets this, not the caller (`SEALANT_*` is refused in caller env): captures and
+      // presigned object requests go to the caller's relay in the control scope.
+      const captureDialArgs =
+        sockets?.capture === true
+          ? ["-e", `SEALANT_CAPTURE_DIAL=unix:${EXECUTOR_CONTROL_MOUNT}/${EXECUTOR_CAPTURE_SOCKET}`]
+          : [];
       // Worker-staged dotfiles archives ride a read-only bind; boot consumes them synchronously
       // before the control socket binds, so the mount must exist at `docker run` time.
       const dotfilesArchiveArgs =
@@ -3343,6 +3451,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ...workspaceMountArgs(parsed, mountArgsForIntent),
         ...extraMountArgs(parsed, mountArgsForIntent),
         ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots, this.captureStopGraceSeconds),
+        ...captureDialArgs,
+        // Only a named scope is labelled: without the label, the scope is the container's name.
+        ...(parsed.controlScope === undefined
+          ? []
+          : ["--label", `${CONTROL_SCOPE_LABEL}=${parsed.controlScope}`]),
         ...platformEnvArgs,
         // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
         // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token
@@ -3408,7 +3521,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           // Don't report a launch as done until the daemon's control socket is actually
           // accepting — otherwise the control plane reports "ready" before the socket binds (the
           // readiness TOCTOU that surfaced as intermittent "connection closed" in harness.run()).
-          await this.awaitControlSocketReady(containerId, containerName, readiness.signal);
+          await this.awaitControlSocketReady(
+            containerId,
+            containerName,
+            controlScope ?? containerName,
+            readiness.signal,
+          );
         }
       })();
       if (gate === undefined) {
@@ -3431,7 +3549,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // The endpoint is the daemon control target used by every control-plane session, independent
       // of whether the workspace also allows SSH access. Persisting it is what lets API containers
       // without a Docker CLI connect through the bind-mounted host Unix socket.
-      const endpoint = this.resolveControlEndpoint(containerId, containerName);
+      const endpoint = this.resolveControlEndpoint(containerId, controlScope ?? containerName);
 
       // The daemon answers: from here a writer can run in the container. A capture-sourced
       // launch that fails past this point keeps the container (`launch-retention.ts`).
@@ -3453,6 +3571,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             // "ready" (not "running"): the readiness probe above proved the control socket accepts.
             status: "ready",
             endpoint,
+            ...(controlScope === undefined ? {} : { controlScope }),
           });
         },
         // Not capture-sourced: the catch below removes what this launch created.

@@ -232,6 +232,14 @@ which gives P2-B its form without a stall.
   `workspace_egress_revocations`) and a proxy launch for host-vm workspaces; neither touches a Boat
   run. No covered function's statements, their order, or the Boat answers they act on changed, so no
   action moved. `sync` stays where it was: sealant#641's hunks are still unread against the models.
+- SLNT-1332 (executor control scopes), `process-workspace-build-job.ts` and
+  `workspace-runtime-instances.ts`: the build job reads its attempt's `control_scope` right after
+  the pinned policy, before runtime selection and before any `boat_runs` statement or Boat call.
+  Boat gives its executors no control scope, so selection refuses a Boat launch that names one or
+  asks for `runtime.executorSockets`. The scope the runtime mounted rides the existing runtime-row
+  writes (`upsertRuntimeInstance`, `identifyStrandedLaunch`) as one more column, which no Boat step
+  reads or writes. No covered statement, its order, or a Boat answer it acts on changed, so no
+  action moved, and `sync` stays.
 
 ## Each property fails on a broken variant
 

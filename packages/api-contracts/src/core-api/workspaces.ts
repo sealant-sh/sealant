@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import { CONTROL_SCOPE_PROBLEMS, controlScopeProblem } from "../control-scope.js";
 import {
   canonicalRevocationHost,
   brokeredSecretsProblems,
@@ -19,6 +20,11 @@ import { runCommandSchema, runSchema } from "./runs.js";
 import { workspaceProcessUserSchema } from "./sessions.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
+
+/** A control scope a create names (`controlScopeProblem`'s rules: one segment, not `sealant…`). */
+export const controlScopeSchema = Schema.String.check(
+  Schema.makeFilter(controlScopeProblem, refusalWords(...Object.values(CONTROL_SCOPE_PROBLEMS))),
+);
 
 /**
  * `retained`: the workspace's executor ended (or its capture launch failed after it started)
@@ -162,6 +168,14 @@ export const workspaceRuntimeSchema = Schema.Struct({
   runId: Schema.optional(NonEmptyString),
   /** The launch identity the create named for this executor (`launchId`), when it named one. */
   launchId: Schema.optional(NonEmptyString),
+  /**
+   * The executor's control scope (`control-scope.ts`): the subdirectory of the deployment's
+   * control root it mounts at `/run/sealant`, where the caller serves its `capture.sock` and
+   * `session.sock`. The create's `controlScope` when it named one, else the container name.
+   * Absent on a runtime with no control directory (Kubernetes, Boat, MicroVM, Cloudflare, Docker
+   * without `WORKSPACE_CONTROL_SOCKET_HOST_DIR`) and from older control planes.
+   */
+  controlScope: Schema.optional(NonEmptyString),
 });
 export type WorkspaceRuntime = typeof workspaceRuntimeSchema.Type;
 
@@ -404,6 +418,19 @@ export const createWorkspaceRequestSchema = Schema.Struct({
    * completion attestation that names a launch must name this one.
    */
   launchId: Schema.optional(NonEmptyString),
+  /**
+   * The control scope of the ONE executor this create launches: the subdirectory of the
+   * deployment's control root it mounts at `/run/sealant` (`control-scope.ts`). A caller that
+   * serves the executor's `capture.sock` and `session.sock` names it so it can bind both there
+   * BEFORE the create, and so before sealantd dials them. One path segment of lowercase letters,
+   * digits, `_`, `.` and `-`, never starting with `sealant` (sealant's own directories there do).
+   * Recorded on the launch attempt and unique for all time: a create naming a scope any executor
+   * has held is refused (`409`, code `control-scope-taken`), first come, first served, so mint it
+   * unguessable (from the launch id). Kept by the executor's recovery; a restart is a new
+   * executor, in its container name's scope. Refused on a runtime with no control directory.
+   * Omitted: the executor's container name, reported as `runtime.controlScope`.
+   */
+  controlScope: Schema.optional(controlScopeSchema),
   /**
    * The SSH gateway runs this workspace's SSH sessions as its owner's own Linux user: the person
    * the owner is bound to (`POST /v1/users/:id/person`). The create must carry a capture owner map
@@ -809,6 +836,11 @@ export const workspaceCaptureReplannedSchema = Schema.Struct({
   bytesSkipped: Schema.Number,
   removed: Schema.Number,
   unchanged: Schema.Boolean,
+  /**
+   * The claimed executor's control scope (`runtime.controlScope`), when its runtime has one: the
+   * subdirectory a caller claiming a standby serves its `capture.sock` and `session.sock` in.
+   */
+  controlScope: Schema.optional(NonEmptyString),
 });
 export type WorkspaceCaptureReplanned = typeof workspaceCaptureReplannedSchema.Type;
 
@@ -924,6 +956,12 @@ export const recoverWorkspaceResponseSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   state: Schema.Literals(["requested", "not-retained"]),
   recoverable: Schema.optional(Schema.Boolean),
+  /**
+   * The retained executor's control scope (`runtime.controlScope`), when its runtime has one: a
+   * recovery boot dials only `capture.sock` there, so the caller binds that (and no
+   * `session.sock`) before the recovery runs.
+   */
+  controlScope: Schema.optional(NonEmptyString),
 });
 export type RecoverWorkspaceResponse = typeof recoverWorkspaceResponseSchema.Type;
 
@@ -1377,6 +1415,8 @@ export const createWorkspaceResponseSchema = Schema.Struct({
   replayed: Schema.optional(Schema.Boolean),
   /** The launch identity the create named (`launchId`), recorded on its attempt. */
   launchId: Schema.optional(NonEmptyString),
+  /** The control scope the create named (`controlScope`), recorded on its attempt. */
+  controlScope: Schema.optional(NonEmptyString),
 });
 export type CreateWorkspaceResponse = typeof createWorkspaceResponseSchema.Type;
 

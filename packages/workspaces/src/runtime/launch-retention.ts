@@ -31,6 +31,12 @@ export interface RuntimeLaunchIdentity {
   readonly endpoint?: string;
   /** ISO-8601; the runtime's own lifetime deadline, where it has one. */
   readonly deadline?: string;
+  /**
+   * The control scope the executor mounts at `/run/sealant`, on a runtime that `hasControlScopes`:
+   * the launch's `controlScope`, else its container name. Recorded with the identity, so the caller
+   * learns where to serve its sockets.
+   */
+  readonly controlScope?: string;
 }
 
 /** Optional callbacks a launch caller hands the adapter. */

@@ -88,6 +88,7 @@ const runtimeInstance = (
   hostVmBaseImageDigest: null,
   captureClaimedAt: null,
   hostVmRunnerEgress: null,
+  controlScope: null,
   removedAt: null,
   sourceKind: null,
   createdAt: new Date("2026-09-01T00:00:00.000Z"),

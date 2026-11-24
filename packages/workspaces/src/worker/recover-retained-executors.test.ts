@@ -71,6 +71,7 @@ const instance = (overrides: Partial<WorkspaceRuntimeInstance> = {}): WorkspaceR
   hostVmBaseImageDigest: null,
   captureClaimedAt: null,
   hostVmRunnerEgress: null,
+  controlScope: null,
   removedAt: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60_000),

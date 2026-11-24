@@ -88,6 +88,7 @@ import {
   RunRepo,
   SshKeyRepo,
   WorkspaceAttemptRepo,
+  WorkspaceControlScopeTakenError,
   WorkspaceBuildJobRepo,
   WorkspaceCaptureDrainRepo,
   WorkspaceCreateReservationRepo,
@@ -1312,13 +1313,19 @@ const mapWorkspaceSummary = (
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
     retained,
   });
-  // The executor carries the launch identity its create named (recorded on its attempt).
-  const launchId =
-    attempt !== undefined && attempt.id === runtimeInstance?.runId ? attempt.launchId : null;
+  // The executor carries the launch identity and control scope its create named (recorded on
+  // its attempt); the scope the runtime recorded is the one it mounted.
+  const sameRun = attempt !== undefined && attempt.id === runtimeInstance?.runId;
+  const launchId = sameRun ? attempt.launchId : null;
+  const controlScope = resolvedRuntime?.controlScope ?? (sameRun ? attempt.controlScope : null);
   const runtime =
-    resolvedRuntime === undefined || launchId === null
+    resolvedRuntime === undefined
       ? resolvedRuntime
-      : { ...resolvedRuntime, launchId };
+      : {
+          ...resolvedRuntime,
+          ...(launchId === null ? {} : { launchId }),
+          ...(controlScope === null || controlScope === undefined ? {} : { controlScope }),
+        };
   const publication = resolveWorkspacePublication(latestJob);
   const publishedImage = resolveWorkspacePublishedImage(
     latestJob,
@@ -1485,6 +1492,9 @@ const replayedWorkspaceResponse = (workspace: WorkspaceRecord) => {
       ...(runId === undefined ? {} : { runId }),
       ...(summary.runtime === undefined ? {} : { runtime: summary.runtime }),
       replayed: true,
+      ...(attempt?.controlScope === null || attempt?.controlScope === undefined
+        ? {}
+        : { controlScope: attempt.controlScope }),
     };
     return response;
   });
@@ -1931,6 +1941,7 @@ export const createWorkspace = (input: {
           triggerType: "api",
           requestedByUserId: body.ownerUserId,
           ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
+          ...(body.controlScope === undefined ? {} : { controlScope: body.controlScope }),
         });
 
         yield* workspaces.linkWorkspaceAttempt({
@@ -2005,6 +2016,13 @@ export const createWorkspace = (input: {
         });
       }
 
+      if (persistenceError instanceof WorkspaceControlScopeTakenError) {
+        return yield* new WorkspaceConflictError({
+          code: "control-scope-taken",
+          message: `The control scope ${persistenceError.controlScope} is another executor's; name a scope no executor has held.`,
+        });
+      }
+
       if (idempotencyKey !== undefined && isUniqueConstraintError(persistenceError)) {
         const existing = yield* maybeReturnExistingIdempotentWorkspace(
           idempotencyKey,
@@ -2074,6 +2092,7 @@ export const createWorkspace = (input: {
       }),
       runId,
       ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
+      ...(body.controlScope === undefined ? {} : { controlScope: body.controlScope }),
     } satisfies CreateWorkspaceResponse;
   });
 };
@@ -3363,17 +3382,25 @@ export const replanWorkspaceCapture = (input: {
     // On record before the claim is sent: a claim whose outcome is unknown still counts, so a
     // host VM's "nothing to save" never releases an executor someone may have claimed.
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    // The claimed executor's control scope, where the claimer serves its sockets.
+    let controlScope: string | null = null;
     if (workspace.latestRunId !== null) {
       const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
       yield* withInternalError(
         runtimeInstances.markCaptureClaimed({ runId: workspace.latestRunId }),
         "Failed to record the claim.",
       );
+      const claimed = yield* withInternalError(
+        runtimeInstances.getRuntimeInstanceByRunId(workspace.latestRunId),
+        "Failed to load the workspace runtime.",
+      );
+      controlScope = claimed?.controlScope ?? null;
     }
-    return yield* withCaptureDaemon(
+    const replanned = yield* withCaptureDaemon(
       { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "re-plan" },
       (daemon) => daemon.captureReplan(),
     );
+    return controlScope === null ? replanned : { ...replanned, controlScope };
   });
 
 /**
@@ -3896,6 +3923,10 @@ export const recoverWorkspace = (input: {
       workspaceId: workspace.id,
       state: "requested",
       recoverable,
+      // A recovery boot dials only capture.sock in it.
+      ...(instance?.controlScope === null || instance?.controlScope === undefined
+        ? {}
+        : { controlScope: instance.controlScope }),
     };
     return response;
   });

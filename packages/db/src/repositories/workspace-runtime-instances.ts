@@ -27,6 +27,8 @@ export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly resourceId?: string;
   readonly reference?: string;
   readonly endpoint?: string;
+  /** The control scope the executor mounted at `/run/sealant` (see the column). */
+  readonly controlScope?: string;
   readonly errorCode?: string;
   readonly errorMessage?: string;
   /** Launch-time record of how each connected-account credential was injected (env vs file). */
@@ -310,6 +312,7 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly resourceId: string;
     readonly reference: string;
     readonly endpoint?: string;
+    readonly controlScope?: string;
     readonly unownedGraceMs: number;
   }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
   /**
@@ -511,6 +514,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               ...(input.resourceId === undefined ? {} : { resourceId: input.resourceId }),
               ...(input.reference === undefined ? {} : { reference: input.reference }),
               ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
+              ...(input.controlScope === undefined ? {} : { controlScope: input.controlScope }),
               ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
               ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
               ...(input.launchCredentialInjections === undefined
@@ -853,6 +857,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 resourceId: input.resourceId,
                 reference: input.reference,
                 ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
+                ...(input.controlScope === undefined ? {} : { controlScope: input.controlScope }),
               })
               .where(
                 and(

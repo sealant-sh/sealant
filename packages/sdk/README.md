@@ -484,6 +484,49 @@ const workspace = await sealant.workspaces.create({
   a cluster ConfigMap nor an image `ENV` can, and an environment variable name holding `=` is
   refused.
 
+## Serving an executor's capture and session sockets
+
+Each Docker or `host-vm` executor mounts one directory of the deployment's control root at
+`/run/sealant`: its _control scope_. sealantd's `control.sock` is there, and so are the two sockets
+the caller serves the executor, `capture.sock` (captures and presigned object requests) and
+`session.sock` (the session channel). Name the scope to bind both before the executor dials them:
+
+```ts
+const scope = `mend-${launchId}`;
+await bindSockets(`${controlRoot}/${scope}`); // your capture.sock and session.sock
+
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/billing-service",
+  harness: codex(),
+  launchId,
+  controlScope: scope,
+  executorSockets: { capture: true, session: true }, // Docker; host-vm relays both itself
+});
+workspace.launch?.controlScope; // "mend-…"
+```
+
+- **The scope is one path segment**: lowercase letters, digits, `_`, `.` and `-`, never starting
+  with `sealant` (sealant's own directories there do, among them each egress proxy's admin
+  directory). It is unique for all time: naming a scope any executor has held rejects with a
+  `SealantApiError` (409, code `control-scope-taken`). Omitted, the scope is the executor's
+  container name.
+- **Your sockets stay yours.** Launch and recovery never remove or replace `capture.sock` or
+  `session.sock`; only the executor's final removal takes the directory. Serve them as root or as a
+  member of the control directory's group: sealant sets the directory's owner and mode (on
+  `host-vm`, the runner's uid 65532 and the control group, 0770).
+- **Docker needs `executorSockets`.** `capture` makes sealantd dial `unix:/run/sealant/capture.sock`
+  (sealant sets `SEALANT_CAPTURE_DIAL`; a caller's `SEALANT_*` env is refused), so a workspace
+  behind its egress proxy still reaches your capture store. `session` makes `/run/sealant`
+  searchable (0711) so the workspace's non-root processes reach `session.sock`; nothing there is
+  listable, and `control.sock` stays sealantd's alone (0600). A `host-vm` executor relays vsock 1025
+  to `capture.sock` and 1027 to `session.sock` and needs neither flag.
+- **Where it is reported.** `runtime.controlScope` on `workspace.launch`, `details()` and every
+  read; `controlScope` on `capture.replan()` (a standby claim, whose scope was fixed when the
+  standby launched) and on `recover()`. A recovery keeps the executor's scope and dials only
+  `capture.sock`: bind that, and no `session.sock`, for it.
+- **Refused where there is no scope**: Kubernetes, Boat, MicroVM, Cloudflare, and Docker without
+  `WORKSPACE_CONTROL_SOCKET_HOST_DIR`. A restart is a new executor, in its container name's scope.
+
 ## Dotfiles and shell
 
 Bring your own environment: a login shell and dotfiles applied before the workspace accepts work.

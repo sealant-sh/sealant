@@ -205,6 +205,34 @@ describe("selectRuntimeAdapter", () => {
     expect(selection.adapterId).toBe("docker");
   });
 
+  it("hands a launch that names a control scope only to a runtime that gives its executors one", () => {
+    const k8sSupports = vi.fn(() => ({ supported: true as const }));
+    const scoped = (id: RuntimeAdapter["id"]): RuntimeAdapter => ({
+      ...createAdapter(id, () => ({ supported: true })),
+      hasControlScopes: true,
+    });
+    // Preferred and willing, but the caller's sockets in the scope would never be reached there.
+    const selection = selectRuntimeAdapter({
+      blueprint: createBlueprint({ target: { runtime: { family: "k8s", mode: "prefer" } } }),
+      adapters: [createAdapter("k8s", k8sSupports), scoped("docker")],
+      defaultAdapterId: "docker",
+      controlScope: "mend-exec-1",
+    });
+    expect(selection.adapterId).toBe("docker");
+    expect(k8sSupports).not.toHaveBeenCalled();
+
+    expect(() =>
+      selectRuntimeAdapter({
+        blueprint: createBlueprint({
+          runtime: { executorSockets: { capture: true, session: false } },
+          target: { runtime: { family: "boat", mode: "require" } },
+        }),
+        adapters: [createAdapter("boat", () => ({ supported: true }))],
+        defaultAdapterId: "boat",
+      }),
+    ).toThrow(/no control scope at \/run\/sealant, so it cannot take runtime\.executorSockets/);
+  });
+
   it("uses the default adapter when runtime target is auto", () => {
     const blueprint = createBlueprint();
     const selection = selectRuntimeAdapter({

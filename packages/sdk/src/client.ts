@@ -199,6 +199,7 @@ export class Sealant {
           replayed: created.replayed === true,
           ...(created.runId === undefined ? {} : { runId: created.runId }),
           ...(created.launchId === undefined ? {} : { launchId: created.launchId }),
+          ...(created.controlScope === undefined ? {} : { controlScope: created.controlScope }),
           ...(created.runtime === undefined ? {} : { runtime: toRuntimeInfo(created.runtime) }),
         },
       });

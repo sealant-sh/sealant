@@ -513,6 +513,32 @@ export const workspaceLegacyEnvSchema = z
 export const workspaceResourcesSchema = z.literal("none");
 export type WorkspaceResources = z.infer<typeof workspaceResourcesSchema>;
 
+/**
+ * The channels the caller serves the executor in its control scope (`controlScope`, mounted at
+ * `/run/sealant`), and so what the runtime connects them to. `host-vm` always relays both (vsock
+ * 1025 and 1027) and needs neither flag. On `docker`:
+ *
+ *  - `capture`: sealantd sends its captures and presigned object requests to
+ *    `/run/sealant/capture.sock` (`SEALANT_CAPTURE_DIAL`) instead of over the network, so a
+ *    workspace behind its egress proxy still reaches the capture store, and a recovery has the
+ *    only channel it needs.
+ *  - `session`: the workspace's processes, not only root, can reach `/run/sealant/session.sock`:
+ *    `/run/sealant` is searchable (0711) but not listable, and `control.sock` stays sealantd's
+ *    alone (0600).
+ *
+ * Refused on a runtime with no control directory. Kept for the workspace's life (a restart reads
+ * the same spec).
+ */
+export const workspaceExecutorSocketsSchema = z.strictObject({
+  capture: z.boolean().default(false),
+  session: z.boolean().default(false),
+});
+export type WorkspaceExecutorSockets = z.infer<typeof workspaceExecutorSocketsSchema>;
+
+/** Whether a spec asks for any channel in the executor's control scope (`executorSockets`). */
+export const wantsExecutorSockets = (sockets: WorkspaceExecutorSockets | undefined): boolean =>
+  sockets?.capture === true || sockets?.session === true;
+
 export const workspaceSpecRuntimeSchema = z
   .strictObject({
     env: workspaceLegacyEnvSchema,
@@ -528,6 +554,7 @@ export const workspaceSpecRuntimeSchema = z
     envFrom: z.array(workspaceEnvFromSourceSchema).max(16).default([]),
     kubernetes: workspaceSpecKubernetesSchema,
     resources: workspaceResourcesSchema.optional(),
+    executorSockets: workspaceExecutorSocketsSchema.optional(),
     /**
      * The stored Boat account (`POST /v1/boat-accounts`) the workspace's VMs run in and are billed
      * to. Only for a workspace that requires the Boat runtime. Absent: the install's default Boat

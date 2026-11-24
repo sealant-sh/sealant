@@ -210,8 +210,13 @@ const failureText = (error: unknown): string => {
   if (typeof stderr === "string" && stderr.trim().length > 0) return stderr.trim();
   return error instanceof Error ? error.message : String(error);
 };
+/**
+ * Whether a failed `docker` call says the container or network it named does not exist: "No such
+ * container: X" from the CLI and older engines, "network X not found" from Docker Engine 29's
+ * daemon (which `isNoSuchNetworkError` in the Docker adapter reads too).
+ */
 const isNoSuch = (error: unknown): boolean =>
-  /no such (container|network|object)/i.test(failureText(error));
+  /no such (container|network|object)|(container|network) \S+ not found/i.test(failureText(error));
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**

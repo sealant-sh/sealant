@@ -788,8 +788,9 @@ export const workerRuntimeEnvSchema = z.object({
   SEALANT_HOST_VM_DATA_DIR: z.string().trim().startsWith("/").optional(),
   // Optional sealant-vm-runner image (sealantd's vm-runner). Unset: the build sealant pins.
   SEALANT_VM_RUNNER_IMAGE: z.string().trim().min(1).optional(),
-  // Optional image holding e2fsprogs with libarchive, which turns an image into a base disk.
-  // Unset: built on this Docker host from alpine on first use.
+  // Optional image holding e2fsprogs with glibc libarchive (musl's refuses non-ASCII names),
+  // which turns an image into a base disk. Unset: built on this Docker host from Debian on first
+  // use.
   SEALANT_VM_DISK_TOOLS_IMAGE: z.string().trim().min(1).optional(),
 });
 

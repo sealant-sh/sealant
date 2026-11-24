@@ -198,6 +198,7 @@ export {
 export {
   WorkspaceAttemptRepo,
   WorkspaceAttemptRepoInvariantError,
+  WorkspaceControlScopeTakenError,
   WorkspaceAttemptRepoLive,
   WorkspaceAttemptRepoUnexpectedError,
   createWorkspaceAttemptRepository,

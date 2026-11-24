@@ -35,6 +35,8 @@ export interface WorkspaceRuntimeDetails {
   readonly deadline: string | null;
   /** The run (launch attempt) this executor belongs to. */
   readonly runId: string;
+  /** The control scope the executor mounted at `/run/sealant`, on a runtime that has one. */
+  readonly controlScope?: string;
 }
 
 export interface WorkspaceSshGatewayConfig {
@@ -292,6 +294,9 @@ export const resolveWorkspaceRuntime = (
     ...(endpoint === null || endpoint === undefined ? {} : { endpoint }),
     deadline: runtimeInstance.runtimeDeadlineAt?.toISOString() ?? null,
     runId: runtimeInstance.runId,
+    ...(runtimeInstance.controlScope === null
+      ? {}
+      : { controlScope: runtimeInstance.controlScope }),
   };
 };
 

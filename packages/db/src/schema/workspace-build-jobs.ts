@@ -212,6 +212,12 @@ export const workspaceRuntimeInstances = pgTable(
     publication: jsonb("publication").$type<WorkspacePublication>(),
     reference: text(),
     endpoint: text(),
+    /**
+     * The executor's control scope as the runtime mounted it at `/run/sealant` (the create's
+     * `controlScope`, else the container name). Null on a runtime with no control directory, and
+     * on rows written before it was recorded.
+     */
+    controlScope: text("control_scope"),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
     stopReason: text("stop_reason", { enum: workspaceRuntimeInstanceStopReasonValues }),

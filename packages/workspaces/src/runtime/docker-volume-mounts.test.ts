@@ -222,4 +222,31 @@ describe("Docker volume filesystem safety", () => {
       }),
     ).rejects.toThrow(/not owned/);
   });
+
+  it("takes a scope the launch names with the caller's sockets in it, never one of its own names", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sealant-control-root-"));
+    cleanups.push(root);
+    await mkdir(join(root, "mend-exec-1"), { mode: 0o755 });
+    await writeFile(join(root, "mend-exec-1", "capture.sock"), "caller's");
+
+    const scope = await prepareDockerControlDirectory({
+      controlRoot: root,
+      directoryName: "mend-exec-1",
+      containerNamePrefix: "sealant",
+      callerNamed: true,
+      mode: 0o711,
+    });
+    await expect(readFile(join(scope, "capture.sock"), "utf8")).resolves.toBe("caller's");
+    expect((await stat(scope)).mode & 0o777).toBe(0o711);
+
+    // A caller's scope may not be the directory of an executor or a proxy of this adapter.
+    await expect(
+      prepareDockerControlDirectory({
+        controlRoot: root,
+        directoryName: "sealant-run-1-proxy",
+        containerNamePrefix: "sealant",
+        callerNamed: true,
+      }),
+    ).rejects.toThrow(/not a control scope a launch may name/);
+  });
 });

@@ -15,7 +15,11 @@
  *    the Docker socket, never `mend_default`.
  *  - **Mounts**: the one base disk `<key>.img` read-only at `/var/lib/sealant/images/<key>.img`,
  *    the container's data directory at `/var/lib/sealant/data` (`data.img`), and its control
- *    directory at `/run/sealant`, where the runner binds `control.sock` and reads the staged files.
+ *    scope at `/run/sealant`, where the runner binds `control.sock`, reads the staged files and
+ *    relays the guest's vsock 1025 and 1027 to the caller's `capture.sock` and `session.sock`
+ *    (1025 only on a recovery). The scope is the launch's `controlScope`, else the container's
+ *    name; it is marked beside the data disk, so a recovery and the removal find it. Launch and
+ *    recovery never remove the caller's two sockets, which it may bind before either.
  *  - **Staged files** in the control directory: `<key>.config.json` (the image's saved OCI config),
  *    `boot-env.json` for a normal boot or `recovery-env.json` for a recovery
  *    (`{"mode","bootEnv","secretEnv","dockerd","dotfilesArchive"}`), and `executor-ca.pem` when the
@@ -467,6 +471,8 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
   public readonly id = "host-vm" as const;
   /** An ended runner leaves its data disk (and its stopped container) for the remove phase. */
   public readonly keepsRemains = true;
+  /** Every runner mounts its own control scope at `/run/sealant`. */
+  public readonly hasControlScopes = true;
 
   readonly #storage: HostVmStorage;
   readonly #records: HostVmDiskRecords;
@@ -538,12 +544,24 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     return `${this.#prefix}-${normalizeContainerToken(runId) || "run"}`;
   }
 
-  #endpoint(name: string): string {
-    return `unix://${joinPath(this.#storage.controlPath(name), "control.sock")}`;
+  /** The runner's `control.sock`, in its control scope. */
+  #endpoint(scope: string): string {
+    return `unix://${joinPath(this.#storage.controlPath(scope), "control.sock")}`;
   }
 
-  #identity(name: string): RuntimeLaunchIdentity {
-    return { adapter: this.id, resourceId: name, reference: name, endpoint: this.#endpoint(name) };
+  #identity(name: string, scope: string): RuntimeLaunchIdentity {
+    return {
+      adapter: this.id,
+      resourceId: name,
+      reference: name,
+      endpoint: this.#endpoint(scope),
+      controlScope: scope,
+    };
+  }
+
+  /** The control scope a runner's disk was prepared with: the marker, else the runner's name. */
+  async #scopeOf(name: string): Promise<string> {
+    return (await this.#storage.markedControlScope(name)) ?? name;
   }
 
   async #containerState(name: string): Promise<ContainerState> {
@@ -588,9 +606,9 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     return limits;
   }
 
-  /** Stage the files the runner reads (`protocol.rs`) in the container's control directory. */
+  /** Stage the files the runner reads (`protocol.rs`) in the runner's control scope. */
   async #stage(
-    name: string,
+    scope: string,
     base: HostVmBaseImage,
     files: {
       readonly launch?: HostVmStagedLaunch;
@@ -598,7 +616,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       readonly executorCaPem?: string;
     },
   ): Promise<void> {
-    const control = this.#storage.controlPath(name);
+    const control = this.#storage.controlPath(scope);
     // Only the base disk itself is mounted into the runner: its config is staged beside the
     // launch file, the first place the runner looks for it.
     const config = await readFile(base.configPath, "utf8");
@@ -627,6 +645,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
   /** The `docker run` argv of a runner container. */
   #runArgs(input: {
     readonly name: string;
+    readonly controlScope: string;
     readonly mode: HostVmBootMode;
     readonly baseImageDigest: string;
     readonly guestMib: number;
@@ -686,7 +705,12 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         true,
       ),
       ...hostVmMountArgs(this.#storage.dataDir, input.name, HOST_VM_DATA_TARGET, false),
-      ...hostVmMountArgs(this.#storage.controlDir, input.name, HOST_VM_CONTROL_TARGET, false),
+      ...hostVmMountArgs(
+        this.#storage.controlDir,
+        input.controlScope,
+        HOST_VM_CONTROL_TARGET,
+        false,
+      ),
       this.#runnerImage,
       "--mode",
       input.mode,
@@ -716,10 +740,10 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
    * the socket before the guest boots, so a connection alone proves nothing: only an answer from
    * the daemon does. Fails at once when the runner exits.
    */
-  async #awaitReady(name: string): Promise<void> {
+  async #awaitReady(name: string, scope: string): Promise<void> {
     const target = {
       kind: "unix-socket" as const,
-      socketPath: this.#endpoint(name).slice("unix://".length),
+      socketPath: this.#endpoint(scope).slice("unix://".length),
     };
     const deadline = Date.now() + this.#readinessTimeoutMs;
     for (;;) {
@@ -764,9 +788,11 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       );
     }
     const name = this.containerName(runId);
-    const identity = this.#identity(name);
+    // Where the runner binds control.sock and the caller serves capture.sock and session.sock.
+    const scope = parsed.controlScope ?? name;
+    const identity = this.#identity(name, scope);
     const holdsCaptures = launchHoldsCaptures(parsed.blueprint);
-    const bootEnvPath = joinPath(this.#storage.controlPath(name), LAUNCH_FILE.normal);
+    const bootEnvPath = joinPath(this.#storage.controlPath(scope), LAUNCH_FILE.normal);
     let executor: { readonly ended: boolean } | undefined;
     // What THIS launch made, and so may remove when it fails. Anything it found, adopted, or whose
     // creation it cannot vouch for (a failed inspection, a `docker run` whose outcome is unclear)
@@ -809,6 +835,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         const prepared = await this.#storage.prepareExecutor({
           containerName: name,
           baseImageDigest: digest,
+          controlScope: scope,
         });
         owned.disk = prepared.created;
         // On record before the container exists: from here a prune cannot lose the disk's owner.
@@ -844,7 +871,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         };
         const dockerService = parsed.blueprint.tooling.services?.docker?.enabled === true;
         const launchFiles = await this.#launchFiles(parsed, dockerService);
-        await this.#stage(name, base, {
+        await this.#stage(scope, base, {
           launch: launchFiles.normal,
           recoveryTemplate: launchFiles.recoveryTemplate,
           // The guest trusts the proxy's inspecting hosts through it (its combined CA bundle).
@@ -856,6 +883,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
             "docker",
             this.#runArgs({
               name,
+              controlScope: scope,
               mode: "normal",
               baseImageDigest: digest,
               guestMib: memory.guestMib,
@@ -879,12 +907,12 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       }
       executor = { ended: false };
       await reportStartedLaunch(hooks, identity);
-      await this.#awaitReady(name);
+      await this.#awaitReady(name, scope);
       // The guest has read its secrets: they are not left on disk.
       await rm(bootEnvPath, { force: true });
       const target = {
         kind: "unix-socket" as const,
-        socketPath: this.#endpoint(name).slice("unix://".length),
+        socketPath: this.#endpoint(scope).slice("unix://".length),
       };
       return await completeReadyLaunch({
         blueprint: parsed.blueprint,
@@ -901,6 +929,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
             reference: name,
             status: "ready",
             endpoint: identity.endpoint,
+            controlScope: scope,
           });
         },
       });
@@ -916,7 +945,12 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         cleanup: async () => {
           if (owned.container) await this.#run("docker", ["rm", "-f", name]).catch(() => undefined);
           if (owned.proxy) await egressProxy.proxies.remove(name).catch(() => undefined);
-          if (owned.disk) await this.#storage.removeExecutor(name).catch(() => undefined);
+          // The caller's sockets stay bound for the next launch of this executor.
+          if (owned.disk) {
+            await this.#storage
+              .removeExecutor(name, { controlScope: scope, keepCallerSockets: true })
+              .catch(() => undefined);
+          }
         },
       });
     }
@@ -1021,7 +1055,9 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       };
     }
     const base = this.#storage.baseImage(record.baseImageDigest);
-    const template = await this.#recoveryTemplate(name);
+    // The scope it was launched in: the caller binds capture.sock there (and no session.sock).
+    const scope = await this.#scopeOf(name);
+    const template = await this.#recoveryTemplate(name, scope);
     await this.#egressProxy?.proxies.park(name).catch(() => false);
     if (state.kind === "present") {
       // Stopped: it was made for a normal boot, and its mode is fixed at `docker run`.
@@ -1029,13 +1065,14 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     }
     const memory = hostVmMemory(await this.#limits(), false);
     try {
-      await this.#stage(name, base, {
+      await this.#stage(scope, base, {
         launch: { ...template, mode: "recover", secretEnv: input.secretEnv ?? {}, dockerd: false },
       });
       await this.#run(
         "docker",
         this.#runArgs({
           name,
+          controlScope: scope,
           mode: "recover",
           baseImageDigest: record.baseImageDigest,
           guestMib: memory.guestMib,
@@ -1043,7 +1080,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
           ...(input.runId === undefined ? {} : { runId: input.runId }),
         }),
       );
-      await this.#awaitReady(name);
+      await this.#awaitReady(name, scope);
     } catch (error) {
       if (error instanceof HostVmRunnerEnded && error.exitCode === SEALANTD_EXIT_NOTHING_TO_SAVE) {
         // The runner exits 76 only on the guest's synced "nothing to save" and a clean VMM exit.
@@ -1053,8 +1090,8 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     } finally {
       // Booted, ended or never started: the capture token goes, and the template comes back
       // without it for the next attempt.
-      await this.#stage(name, base, { recoveryTemplate: template }).catch(async () => {
-        await rm(joinPath(this.#storage.controlPath(name), LAUNCH_FILE.recover), {
+      await this.#stage(scope, base, { recoveryTemplate: template }).catch(async () => {
+        await rm(joinPath(this.#storage.controlPath(scope), LAUNCH_FILE.recover), {
           force: true,
         }).catch(() => undefined);
       });
@@ -1075,8 +1112,8 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       : { dataDiskPath: this.#storage.dataDiskPath(name), baseImageDigest: digest };
   }
 
-  async #recoveryTemplate(name: string): Promise<HostVmStagedLaunch> {
-    const path = joinPath(this.#storage.controlPath(name), LAUNCH_FILE.recover);
+  async #recoveryTemplate(name: string, scope: string): Promise<HostVmStagedLaunch> {
+    const path = joinPath(this.#storage.controlPath(scope), LAUNCH_FILE.recover);
     let text: string;
     try {
       text = await readFile(path, "utf8");
@@ -1110,8 +1147,10 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
   }): Promise<RuntimeLaunchIdentity | undefined> {
     const name = this.containerName(input.runId);
     const state = await this.#containerState(name);
-    if (state.kind === "present") return this.#identity(name);
-    return (await this.#storage.dataDiskExists(name)) ? this.#identity(name) : undefined;
+    if (state.kind === "present" || (await this.#storage.dataDiskExists(name))) {
+      return this.#identity(name, await this.#scopeOf(name));
+    }
+    return undefined;
   }
 
   /**
@@ -1139,10 +1178,12 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       }
     }
     const disk = await this.#storage.dataDiskExists(name);
+    // Read before the disk goes: the marker beside it names the scope.
+    const scope = disk ? await this.#scopeOf(name) : name;
     // Its proxy, its networks and their subnets go with it.
     await this.#egressProxy?.proxies.remove(name);
-    // The data disk and the control directory (its staged files and sockets) go together.
-    await this.#storage.removeExecutor(name);
+    // The data disk and the control scope (its staged files and sockets) go together.
+    await this.#storage.removeExecutor(name, { controlScope: scope });
     return parseRuntimeAdapterStopResult({
       adapter: this.id,
       resourceId: name,

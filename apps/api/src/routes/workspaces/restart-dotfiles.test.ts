@@ -187,6 +187,7 @@ const makeLayer = (store: Store) => {
         retryOfRunId: input.retryOfRunId ?? null,
         cancelReason: null,
         launchId: input.launchId ?? null,
+        controlScope: input.controlScope ?? null,
         queuedAt: input.queuedAt ?? now,
         startedAt: null,
         finishedAt: null,

@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir } from "node:fs/promises";
 import { posix as path } from "node:path";
 
+import { controlScopeProblem } from "@sealant/api-contracts/control-scope";
 import { z } from "zod";
 
 import type { RuntimeMountIntent } from "./mount-intent.js";
@@ -320,21 +321,44 @@ const assertOwnedDirectoryName = (directoryName: string, prefix: string): void =
   }
 };
 
-/** Create or verify one adapter-owned control directory without following a symlink at the child. */
+/**
+ * Create or verify one control directory without following a symlink at the child: an
+ * adapter-owned one (named `<prefix>-…`), or a scope the launch names (`controlScope`), which its
+ * caller may have made, and bound `capture.sock` and `session.sock` in, before the launch. Nothing
+ * in it is removed. Its mode is `mode` (0700 unless the workspace's processes reach
+ * `session.sock`).
+ */
 export const prepareDockerControlDirectory = async (input: {
   readonly controlRoot: string;
   readonly directoryName: string;
   readonly containerNamePrefix: string;
+  /** The launch named this scope; it is then never one of the adapter's own names. */
+  readonly callerNamed?: boolean;
+  readonly mode?: number;
 }): Promise<string> => {
-  assertOwnedDirectoryName(input.directoryName, input.containerNamePrefix);
+  if (input.callerNamed === true) {
+    assertCallerScopeName(input.directoryName, input.containerNamePrefix);
+  } else {
+    assertOwnedDirectoryName(input.directoryName, input.containerNamePrefix);
+  }
+  const mode = input.mode ?? 0o700;
   await ensureDirectoryPathWithoutSymlinks(input.controlRoot);
   const directory = path.join(input.controlRoot, input.directoryName);
   try {
-    await mkdir(directory, { mode: 0o700 });
+    await mkdir(directory, { mode });
   } catch (error) {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
   }
   await assertDirectoryWithoutSymlink(directory, "Docker workspace control directory");
-  await chmod(directory, 0o700);
+  await chmod(directory, mode);
   return directory;
+};
+
+/** A caller's scope: a valid one, and never a name the adapter makes for itself. */
+const assertCallerScopeName = (directoryName: string, prefix: string): void => {
+  if (controlScopeProblem(directoryName) !== undefined || directoryName.startsWith(`${prefix}-`)) {
+    throw new DockerVolumeMountError(
+      `Refusing to manage control directory '${directoryName}': it is not a control scope a launch may name`,
+    );
+  }
 };

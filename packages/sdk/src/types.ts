@@ -665,6 +665,12 @@ export interface WorkspaceStopCompletion {
 export interface WorkspaceRecoverResult {
   readonly state: "requested" | "not-retained";
   readonly recoverable?: boolean;
+  /**
+   * The retained executor's control scope (`WorkspaceRuntimeInfo.controlScope`), when its runtime
+   * has one. A recovery boot dials only `capture.sock` there (no session channel): bind that, and
+   * no `session.sock`, for the recovery.
+   */
+  readonly controlScope?: string;
 }
 
 /**
@@ -720,6 +726,11 @@ export interface WorkspaceCaptureReplanned {
   readonly removed: number;
   /** The plan named the worktree and epoch already in force; nothing moved. */
   readonly unchanged: boolean;
+  /**
+   * The claimed executor's control scope (`WorkspaceRuntimeInfo.controlScope`), when its runtime
+   * has one: where a caller claiming a standby serves its `capture.sock` and `session.sock`.
+   */
+  readonly controlScope?: string;
 }
 
 /** Options for `workspace.capture.flush()`: which flush the daemon runs, and its bounds. */
@@ -1043,6 +1054,25 @@ export interface CreateOptions {
    * removed with a 409, and naming one for a workspace not on Boat with a 400.
    */
   readonly boatAccountId?: string;
+  /**
+   * Connect the executor to the channels you serve in its control scope (`controlScope`), on
+   * Docker. A `host-vm` executor always relays both (vsock 1025 to `capture.sock`, 1027 to
+   * `session.sock`) and needs neither.
+   *
+   * - `capture`: sealantd sends its captures and presigned object requests to
+   *   `/run/sealant/capture.sock` (`SEALANT_CAPTURE_DIAL`, which sealant sets: a caller's
+   *   `SEALANT_*` env is refused) instead of over the network, so a workspace behind its egress
+   *   proxy still reaches your capture store.
+   * - `session`: the workspace's processes, not only root, can reach `/run/sealant/session.sock`.
+   *   `/run/sealant` is made searchable but not listable (0711); `control.sock` stays sealantd's
+   *   alone (0600).
+   *
+   * Kept for the workspace's life (a restart reads the same spec). Refused on a runtime with no
+   * control scope: Kubernetes, Boat, MicroVM, Cloudflare, and Docker without
+   * `WORKSPACE_CONTROL_SOCKET_HOST_DIR`. A control plane older than the option rejects the create
+   * (400): its spec is strict.
+   */
+  readonly executorSockets?: { readonly capture?: boolean; readonly session?: boolean };
   /** When true (default), resolve only once the workspace runtime is live. */
   readonly wait?: boolean;
   /**
@@ -1100,6 +1130,27 @@ export interface CreateOptions {
    * `runtime.launchId`; a `stop({ completion })` about this executor must name it.
    */
   readonly launchId?: string;
+  /**
+   * The control scope of the ONE executor this create launches: the subdirectory of the
+   * deployment's control root (Mend's `mend-control` volume) it mounts at `/run/sealant`. Name it
+   * to bind your `capture.sock` and `session.sock` in `<control root>/<controlScope>/` BEFORE the
+   * create, and so before sealantd dials them: launch and recovery never remove or replace them.
+   * Serve them as root or as a member of the control directory's group, since sealant sets the
+   * directory's owner and mode.
+   *
+   * One path segment: up to 128 lowercase letters, digits, `_`, `.` and `-`, starting with a letter
+   * or digit, and never starting with `sealant` (sealant's own directories there do). Unique for
+   * all time on the control plane: a create naming a scope any executor has held rejects with a
+   * `SealantApiError` (409, code `control-scope-taken`); first come, first served, so mint it
+   * unguessable, from the launch id. The executor's recovery keeps it; a restart is a new
+   * executor, in its container name's scope. Refused on a runtime with no control scope (see
+   * `executorSockets`).
+   *
+   * Omitted, the scope is the executor's container name. Either way it is reported as
+   * `runtime.controlScope` once the executor exists, on `workspace.launch`, `details()`,
+   * `capture.replan()` (a standby claim) and `recover()`.
+   */
+  readonly controlScope?: string;
 }
 
 /**
@@ -1140,6 +1191,13 @@ export interface WorkspaceRuntimeInfo {
   readonly runId?: string;
   /** The launch identity the create named for this executor (`CreateOptions.launchId`). */
   readonly launchId?: string;
+  /**
+   * The executor's control scope: the subdirectory of the deployment's control root it mounts at
+   * `/run/sealant`, where you serve its `capture.sock` and `session.sock`. The create's
+   * `controlScope`, else its container name. Absent on a runtime with no control scope, and from
+   * control planes before it.
+   */
+  readonly controlScope?: string;
   /** ISO-8601 instant the runtime ends it on its own; `null` where there is no such cap. */
   readonly deadline: string | null;
 }
@@ -1157,6 +1215,8 @@ export interface WorkspaceLaunch {
   readonly replayed: boolean;
   /** The launch identity the create named. */
   readonly launchId?: string;
+  /** The control scope the create named (`CreateOptions.controlScope`). */
+  readonly controlScope?: string;
   /** The image the executor booted, with its per-person capability; filled in by `ready()`. */
   readonly image?: WorkspaceImage;
   readonly publication?: WorkspacePublication;

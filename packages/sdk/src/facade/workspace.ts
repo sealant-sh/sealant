@@ -113,6 +113,7 @@ export const toRuntimeInfo = (runtime: WireWorkspaceRuntime): WorkspaceRuntimeIn
   status: runtime.status,
   ...(runtime.runId === undefined ? {} : { runId: runtime.runId }),
   ...(runtime.launchId === undefined ? {} : { launchId: runtime.launchId }),
+  ...(runtime.controlScope === undefined ? {} : { controlScope: runtime.controlScope }),
   deadline: runtime.deadline ?? null,
 });
 
@@ -894,6 +895,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           bytesSkipped: result.bytesSkipped,
           removed: result.removed,
           unchanged: result.unchanged,
+          ...(result.controlScope === undefined ? {} : { controlScope: result.controlScope }),
         };
       },
     },
@@ -1060,6 +1062,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       return {
         state: answered.state,
         ...(answered.recoverable === undefined ? {} : { recoverable: answered.recoverable }),
+        ...(answered.controlScope === undefined ? {} : { controlScope: answered.controlScope }),
       };
     },
 

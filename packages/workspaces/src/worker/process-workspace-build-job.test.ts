@@ -390,7 +390,11 @@ const provideRepos = (stubs: {
     ),
     Layer.succeed(WorkspaceBuildJobRepo, fakeService(stubs.jobs)),
     Layer.succeed(WorkspaceRuntimeInstanceRepo, fakeService(stubs.runtimeInstances)),
-    Layer.succeed(WorkspaceAttemptRepo, fakeService(stubs.attempts)),
+    Layer.succeed(
+      WorkspaceAttemptRepo,
+      // The launch reads its attempt's control scope: by default an attempt that names none.
+      fakeService({ getAttemptById: () => Effect.succeed(undefined), ...stubs.attempts }),
+    ),
     Layer.succeed(GitHubInstallationRepo, fakeService(stubs.installations ?? {})),
     Layer.succeed(
       GitHubInstallationRepositoryCacheRepo,

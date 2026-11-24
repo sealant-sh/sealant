@@ -2,10 +2,23 @@
  * The host VM disks, built for real on this machine's Docker: a workspace image becomes a
  * read-only ext4 base disk whose files keep their owners and setuid bits, and a runner's data disk
  * is made once, sparse and owned by the runner's uid. Read back with `debugfs` in the tools image.
+ * A control scope the caller made, with its sockets bound, keeps them through the runner's
+ * preparation and a failed launch's cleanup.
  *
  * Run with: `pnpm --filter @sealant/workspaces test:e2e src/images/host-vm-disk.e2e.ts`.
  */
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { createConnection, createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 
@@ -93,6 +106,47 @@ describe("host VM disks on a real Docker host", () => {
     expect(config.Env.some((entry: string) => entry.startsWith("PATH="))).toBe(true);
   }, 300_000);
 
+  it("converts an image whose file names and link targets are non-ASCII UTF-8", async () => {
+    // What `ca-certificates` installs on every managed Ubuntu image: musl's libarchive could not
+    // read this symlink ("Linkpath can't be converted from UTF-8 to current locale").
+    const certificate =
+      "/usr/share/ca-certificates/mozilla/NetLock_Arany_=Class_Gold=_Főtanúsítvány.crt";
+    const pem = "/etc/ssl/certs/NetLock_Arany_=Class_Gold=_Főtanúsítvány.pem";
+    // Short enough to be stored in the inode, where `debugfs` prints it.
+    const shortLink = "/etc/ssl/certs/Főtanúsítvány.pem";
+    const shortTarget = "NetLock_Arany_=Class_Gold=_Főtanúsítvány.pem";
+    const tag = "sealant-host-vm-e2e-utf8:latest";
+    await run("docker", ["build", "-q", "-t", tag, "-"], {
+      input: [
+        `FROM ${IMAGE}`,
+        `RUN mkdir -p /usr/share/ca-certificates/mozilla /etc/ssl/certs \\`,
+        ` && printf 'certificate' > '${certificate}' \\`,
+        ` && ln -s '${certificate}' '${pem}' \\`,
+        ` && ln -s '${shortTarget}' '${shortLink}'`,
+        "",
+      ].join("\n"),
+    });
+    try {
+      const utf8Digest = (
+        await run("docker", ["image", "inspect", "--format", "{{.Id}}", tag])
+      ).stdout.trim();
+      const base = await storage.ensureBaseImage({ digest: utf8Digest, reference: tag });
+      const stat = (path: string) =>
+        inspectDisk(base.imagePath, "debugfs", "-R", `stat ${path}`, "/disk.img");
+      // The file kept its name: found by it, with its content.
+      expect(
+        await inspectDisk(base.imagePath, "debugfs", "-R", `cat ${certificate}`, "/disk.img"),
+      ).toBe("certificate");
+      const long = await stat(pem);
+      expect(long).toMatch(/Type: symlink/);
+      // The whole target, byte for byte (it lives in a block, so only its length is printed).
+      expect(long).toMatch(new RegExp(`Size: ${String(Buffer.byteLength(certificate))}\\b`));
+      expect(await stat(shortLink)).toContain(`Fast link dest: "${shortTarget}"`);
+    } finally {
+      await run("docker", ["image", "rm", "-f", tag]).catch(() => undefined);
+    }
+  }, 300_000);
+
   it("makes a sparse data disk for the runner's uid, once", async () => {
     const { dataDiskPath: path, created } = await storage.prepareExecutor({
       containerName: "sealant-vm-e2e",
@@ -133,4 +187,75 @@ describe("host VM disks on a real Docker host", () => {
     expect((await stat(path)).size).toBe(256 * 1024 * 1024);
     expect(await storage.markedBaseImageDigest("sealant-vm-e2e")).toBe(digest);
   }, 120_000);
+
+  describe("a control scope the caller made first (SLNT-1332)", () => {
+    const servers: Server[] = [];
+    afterAll(async () => {
+      await Promise.all(
+        servers.map((server) => new Promise<void>((done) => server.close(() => done()))),
+      );
+    });
+    const listen = (path: string) =>
+      new Promise<void>((done, fail) => {
+        const server = createServer((socket) => socket.end("served\n"));
+        servers.push(server);
+        server.once("error", fail);
+        server.listen(path, () => done());
+      });
+    const answers = (path: string) =>
+      new Promise<string>((done, fail) => {
+        const socket = createConnection(path);
+        let text = "";
+        socket.on("data", (chunk) => (text += chunk.toString("utf8")));
+        socket.once("end", () => done(text));
+        socket.once("error", fail);
+      });
+
+    it("keeps the caller's bound sockets through preparation and a failed launch's cleanup", async () => {
+      const scope = joinPath(root, "control", "mend-e2e-scope");
+      await mkdir(scope, { recursive: true });
+      await listen(joinPath(scope, "capture.sock"));
+      await listen(joinPath(scope, "session.sock"));
+
+      await storage.prepareExecutor({
+        containerName: "sealant-vm-e2e-scope",
+        baseImageDigest: digest,
+        controlScope: "mend-e2e-scope",
+      });
+      // The runner's (65532) and the control group's, and nobody else's. (The setgid bit survives
+      // only where the control group is root's, as in Mend's volume: the tools container has no
+      // CAP_FSETID.)
+      expect(((await stat(scope)).mode & 0o777).toString(8)).toBe("770");
+      expect(await storage.markedControlScope("sealant-vm-e2e-scope")).toBe("mend-e2e-scope");
+      await writeFile(joinPath(scope, "boot-env.json"), "{}\n");
+
+      await storage.removeExecutor("sealant-vm-e2e-scope", {
+        controlScope: "mend-e2e-scope",
+        keepCallerSockets: true,
+      });
+      expect((await readdir(scope)).toSorted()).toEqual(["capture.sock", "session.sock"]);
+      expect((await lstat(joinPath(scope, "capture.sock"))).isSocket()).toBe(true);
+      // Still the caller's: the same listeners answer.
+      expect(await answers(joinPath(scope, "capture.sock"))).toBe("served\n");
+      expect(await answers(joinPath(scope, "session.sock"))).toBe("served\n");
+      expect(await storage.dataDiskExists("sealant-vm-e2e-scope")).toBe(false);
+
+      // Removed for good, the scope goes with it.
+      await storage.removeExecutor("sealant-vm-e2e-scope", { controlScope: "mend-e2e-scope" });
+      await expect(stat(scope)).rejects.toThrow(/ENOENT/);
+    }, 120_000);
+
+    it("refuses a scope that is a link rather than follow it", async () => {
+      const elsewhere = joinPath(root, "control", "elsewhere");
+      await mkdir(elsewhere, { recursive: true });
+      await symlink(elsewhere, joinPath(root, "control", "mend-e2e-link"));
+      await expect(
+        storage.prepareExecutor({
+          containerName: "sealant-vm-e2e-link",
+          baseImageDigest: digest,
+          controlScope: "mend-e2e-link",
+        }),
+      ).rejects.toThrow(/is a link/);
+    }, 120_000);
+  });
 });

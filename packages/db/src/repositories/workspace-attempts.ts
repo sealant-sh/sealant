@@ -26,6 +26,11 @@ export interface CreateQueuedWorkspaceAttemptInput {
   readonly queuedAt?: Date;
   /** The caller's immutable identity for the executor this attempt launches (see the column). */
   readonly launchId?: string;
+  /**
+   * The control scope the create named for this attempt's executor (see the column). An attempt
+   * of any run already holding it fails the create with `WorkspaceControlScopeTakenError`.
+   */
+  readonly controlScope?: string;
 }
 
 export interface SetWorkspaceAttemptSnapshotInput {
@@ -100,9 +105,16 @@ export class WorkspaceAttemptRepoUnexpectedError extends Schema.TaggedError<Work
   },
 ) {}
 
+/** Another executor already holds the control scope a create named: two never share one. */
+export class WorkspaceControlScopeTakenError extends Schema.TaggedError<WorkspaceControlScopeTakenError>()(
+  "WorkspaceControlScopeTakenError",
+  { controlScope: Schema.String },
+) {}
+
 export const workspaceAttemptRepoErrorSchema = Schema.Union([
   WorkspaceAttemptRepoInvariantError,
   WorkspaceAttemptRepoUnexpectedError,
+  WorkspaceControlScopeTakenError,
 ]);
 
 export type WorkspaceAttemptRepoError = typeof workspaceAttemptRepoErrorSchema.Type;
@@ -115,7 +127,8 @@ const mapWorkspaceAttemptRepoError = (
 ): WorkspaceAttemptRepoError => {
   if (
     cause instanceof WorkspaceAttemptRepoInvariantError ||
-    cause instanceof WorkspaceAttemptRepoUnexpectedError
+    cause instanceof WorkspaceAttemptRepoUnexpectedError ||
+    cause instanceof WorkspaceControlScopeTakenError
   ) {
     return cause;
   }
@@ -218,29 +231,38 @@ export const WorkspaceAttemptRepoLive = Layer.effect(
         withWorkspaceAttemptRepoError(
           "createQueuedAttempt",
           Effect.gen(function* () {
-            const [attempt] = yield* db
-              .insert(workspaceAttempts)
-              .values({
-                id: input.id,
-                ownerUserId: input.ownerUserId,
-                ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
-                ...(input.repositoryProfileRevisionId === undefined
-                  ? {}
-                  : { repositoryProfileRevisionId: input.repositoryProfileRevisionId }),
-                ...(input.profileRevisionId === undefined
-                  ? {}
-                  : { profileRevisionId: input.profileRevisionId }),
-                ...(input.triggerType === undefined ? {} : { triggerType: input.triggerType }),
-                ...(input.triggerRef === undefined ? {} : { triggerRef: input.triggerRef }),
-                ...(input.requestedByUserId === undefined
-                  ? {}
-                  : { requestedByUserId: input.requestedByUserId }),
-                ...(input.retryOfRunId === undefined ? {} : { retryOfRunId: input.retryOfRunId }),
-                ...(input.queuedAt === undefined ? {} : { queuedAt: input.queuedAt }),
-                ...(input.launchId === undefined ? {} : { launchId: input.launchId }),
-              } satisfies NewWorkspaceAttempt)
-              .returning();
+            const insert = db.insert(workspaceAttempts).values({
+              id: input.id,
+              ownerUserId: input.ownerUserId,
+              ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
+              ...(input.repositoryProfileRevisionId === undefined
+                ? {}
+                : { repositoryProfileRevisionId: input.repositoryProfileRevisionId }),
+              ...(input.profileRevisionId === undefined
+                ? {}
+                : { profileRevisionId: input.profileRevisionId }),
+              ...(input.triggerType === undefined ? {} : { triggerType: input.triggerType }),
+              ...(input.triggerRef === undefined ? {} : { triggerRef: input.triggerRef }),
+              ...(input.requestedByUserId === undefined
+                ? {}
+                : { requestedByUserId: input.requestedByUserId }),
+              ...(input.retryOfRunId === undefined ? {} : { retryOfRunId: input.retryOfRunId }),
+              ...(input.queuedAt === undefined ? {} : { queuedAt: input.queuedAt }),
+              ...(input.launchId === undefined ? {} : { launchId: input.launchId }),
+              ...(input.controlScope === undefined ? {} : { controlScope: input.controlScope }),
+            } satisfies NewWorkspaceAttempt);
+            // Only a held scope is skipped: any other conflict (the id) still fails the insert.
+            const [attempt] = yield* (
+              input.controlScope === undefined
+                ? insert
+                : insert.onConflictDoNothing({ target: workspaceAttempts.controlScope })
+            ).returning();
 
+            if (attempt === undefined && input.controlScope !== undefined) {
+              return yield* new WorkspaceControlScopeTakenError({
+                controlScope: input.controlScope,
+              });
+            }
             if (attempt === undefined) {
               return yield* new WorkspaceAttemptRepoInvariantError({
                 operation: "createQueuedAttempt",
