@@ -13,7 +13,7 @@ import {
 } from "@sealant/validators";
 import { z } from "zod";
 
-import type { EgressProxyLaunch } from "./egress-proxy-orchestrator.js";
+import type { EgressProxyLaunch } from "./egress-proxy-types.js";
 import type { RuntimeAdapterLaunchHooks, RuntimeLaunchIdentity } from "./launch-retention.js";
 
 export const runtimeAdapterBlueprintSchema = newWorkspaceSchema;

@@ -27,7 +27,7 @@ import { cidr, formatCidr } from "./cidr.js";
 import { mirrorConnectArgv, type WorkspaceMirrorContainer } from "./docker-egress.js";
 import { isolatedNetworkCreateArgv } from "./docker-isolated-network.js";
 import type { DockerCommandRunner } from "./docker-runtime-adapter.js";
-import type { EgressProxyHostFacts } from "./egress-proxy-policy.js";
+import type { EgressProxyLaunch } from "./egress-proxy-types.js";
 import {
   createProxyAdminClient,
   ProxyAdminRefusedError,
@@ -163,27 +163,7 @@ export type EgressRevocationOutcome =
   /** The proxy did not confirm it, so it was killed (confirmed not running). */
   | { readonly outcome: "killed"; readonly reason: string };
 
-/**
- * What a launch behind an egress proxy gets from the worker (`RuntimeAdapterLaunchInput.egressProxy`).
- * The CA's private key and the secrets' values stay behind `policyFor`, built only once the
- * launch has measured the host, so neither ever sits in the parsed launch input.
- */
-export interface EgressProxyLaunch {
-  /**
-   * Called once the launch has measured the host, before the proxy takes any policy: the worker
-   * records the run's proxy (its name, socket and these facts, so every later push rebuilds the
-   * same document), mints the run's executor CA or finds the one a first delivery of this launch
-   * minted, and answers the CA's public certificate with the proxy's first `PUT /v1/policy`.
-   */
-  readonly prepare: (input: {
-    readonly proxyContainer: string;
-    readonly adminSocketPath: string;
-    readonly proxyIp: string;
-    readonly host: EgressProxyHostFacts;
-  }) => Promise<{ readonly caCertPem: string; readonly document: ProxyPolicyDocument }>;
-  /** What the proxy confirmed taking. */
-  readonly confirmed?: (applied: ProxyPolicyApplied) => Promise<void>;
-}
+export type { EgressProxyLaunch } from "./egress-proxy-types.js";
 
 /** A proxy brought up for a launch: its networks, and the policy it confirmed. */
 export interface LaunchedEgressProxy {

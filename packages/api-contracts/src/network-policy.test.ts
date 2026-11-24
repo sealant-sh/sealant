@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Exit, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -149,19 +149,19 @@ describe("policy endpoints' requests", () => {
       networkPolicy: { mode: "standard", policyHash: "h" },
       brokeredSecrets: [secret()],
     });
-    expect(decoded._tag).toBe("Failure");
+    expect(Exit.isFailure(decoded)).toBe(true);
   });
 
   it("refuses a revocation that names nothing", () => {
     const decoded = Schema.decodeUnknownExit(revokeWorkspaceAccessRequestSchema)({
       ownerUserId: "user_1",
     });
-    expect(decoded._tag).toBe("Failure");
+    expect(Exit.isFailure(decoded)).toBe(true);
     const revoke = Schema.decodeUnknownExit(revokeWorkspaceAccessRequestSchema)({
       ownerUserId: "user_1",
       secretIds: ["psec_vercel"],
     });
-    expect(revoke._tag).toBe("Success");
+    expect(Exit.isSuccess(revoke)).toBe(true);
   });
 });
 

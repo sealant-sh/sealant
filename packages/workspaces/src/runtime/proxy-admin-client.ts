@@ -12,94 +12,25 @@
  */
 import { request } from "node:http";
 
-/** `allowHosts[]` of a policy (`AllowHostDocument`). */
-export interface ProxyAllowHost {
-  readonly host: string;
-  readonly ports?: readonly number[];
-  readonly inspectTls: boolean;
-  readonly methods?: readonly string[];
-  readonly pathPrefixes?: readonly string[];
-}
+import type {
+  ProxyHealth,
+  ProxyHeartbeat,
+  ProxyPolicyApplied,
+  ProxyPolicyDocument,
+  ProxyRevoked,
+  ProxyRevokeRequest,
+} from "./egress-proxy-types.js";
 
-/** `brokeredSecrets[]` of a policy (`BrokeredSecretDocument`): `value` is the real secret. */
-export interface ProxyBrokeredSecret {
-  readonly secretId: string;
-  readonly name?: string;
-  readonly placeholder: string;
-  readonly value: string;
-  readonly headerName: string;
-  readonly bindHosts: readonly string[];
-  readonly methods?: readonly string[];
-  readonly pathPrefixes?: readonly string[];
-}
-
-/** The body of `PUT /v1/policy` (`PolicyDocument`). */
-export interface ProxyPolicyDocument {
-  readonly mode: "standard" | "restricted";
-  readonly policyHash: string;
-  readonly revocationWatermark: number;
-  readonly leaseTtlSecs: number;
-  readonly operatorAllowedPrivateCidrs: readonly string[];
-  readonly hostPublicIps: readonly string[];
-  readonly blockedCidrs: readonly string[];
-  readonly allowHosts: readonly ProxyAllowHost[];
-  readonly allowMirrors: readonly {
-    readonly name: string;
-    readonly host: string;
-    readonly port: number;
-  }[];
-  readonly allowResources: readonly {
-    readonly name: string;
-    readonly host: string;
-    readonly port: number;
-    readonly guestIp: string;
-  }[];
-  readonly brokeredSecrets: readonly ProxyBrokeredSecret[];
-  readonly executorCaCertPem?: string;
-  readonly executorCaKeyPem?: string;
-  readonly revokedHosts: readonly string[];
-  readonly revokedSecretIds: readonly string[];
-}
-
-/** The body of `POST /v1/revoke` (`RevokeRequest`). */
-export interface ProxyRevokeRequest {
-  readonly revocationWatermark: number;
-  readonly revokeSecretIds: readonly string[];
-  readonly revokeHosts: readonly string[];
-  readonly revokeAll: boolean;
-}
-
-/** `GET /v1/health` (`Health`). */
-export interface ProxyHealth {
-  readonly initialized: boolean;
-  readonly mode?: "standard" | "restricted";
-  readonly policyHash?: string;
-  readonly revocationWatermark: number;
-  readonly activeConnections: number;
-  readonly leaseRemainingMs: number;
-  readonly leaseExpired: boolean;
-  readonly resyncRequired: boolean;
-}
-
-/** `PUT /v1/policy` answered 200 (`Applied`). */
-export interface ProxyPolicyApplied {
-  readonly policyHash: string;
-  readonly revocationWatermark: number;
-  readonly closed: number;
-}
-
-/** `POST /v1/revoke` answered 200 (`Revoked`): every matching stream is closed. */
-export interface ProxyRevoked {
-  readonly revocationWatermark: number;
-  readonly closed: number;
-}
-
-/** `POST /v1/heartbeat` answered 200 (`Renewed`). */
-export interface ProxyHeartbeat {
-  readonly resyncRequired: boolean;
-  readonly leaseRemainingMs: number;
-  readonly revocationWatermark: number;
-}
+export type {
+  ProxyAllowHost,
+  ProxyBrokeredSecret,
+  ProxyHealth,
+  ProxyHeartbeat,
+  ProxyPolicyApplied,
+  ProxyPolicyDocument,
+  ProxyRevoked,
+  ProxyRevokeRequest,
+} from "./egress-proxy-types.js";
 
 /** The proxy could not be reached, or did not answer within the bound: nothing is known. */
 export class ProxyAdminUnreachableError extends Error {

@@ -14,7 +14,11 @@ import {
 } from "@sealant/api-contracts";
 import { Redacted } from "effect";
 
-import type { ProxyPolicyDocument, ProxyRevokeRequest } from "./proxy-admin-client.js";
+import type {
+  EgressProxyHostFacts,
+  ProxyPolicyDocument,
+  ProxyRevokeRequest,
+} from "./egress-proxy-types.js";
 
 /** The revocations a policy must carry, as of `revocationWatermark`. */
 export interface EgressTombstones {
@@ -23,13 +27,7 @@ export interface EgressTombstones {
   readonly revokedHosts: readonly string[];
 }
 
-/** What the launch measured of the host, kept with the run's proxy. */
-export interface EgressProxyHostFacts {
-  readonly operatorAllowedPrivateCidrs: readonly string[];
-  readonly hostPublicIps: readonly string[];
-  /** Docker bridge gateways and the workspace's own networks, refused by the proxy too. */
-  readonly blockedCidrs: readonly string[];
-}
+export type { EgressProxyHostFacts } from "./egress-proxy-types.js";
 
 export interface EgressProxyPolicyInput {
   readonly networkPolicy: NetworkPolicy | undefined;
