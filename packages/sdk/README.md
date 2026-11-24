@@ -508,12 +508,16 @@ workspace.launch?.controlScope; // "mend-…"
 - **The scope is one path segment**: lowercase letters, digits, `_`, `.` and `-`, never starting
   with `sealant` (sealant's own directories there do, among them each egress proxy's admin
   directory). It is unique for all time: naming a scope any executor has held rejects with a
-  `SealantApiError` (409, code `control-scope-taken`). Omitted, the scope is the executor's
-  container name.
+  `SealantApiError` whose `status` is 409, `code` is `WorkspaceConflictError` and `reason` is
+  `control-scope-taken`. Mint it unguessable, from the launch id. Omitted, the scope is the
+  executor's container name.
 - **Your sockets stay yours.** Launch and recovery never remove or replace `capture.sock` or
   `session.sock`; only the executor's final removal takes the directory. Serve them as root or as a
   member of the control directory's group: sealant sets the directory's owner and mode (on
-  `host-vm`, the runner's uid 65532 and the control group, 0770).
+  `host-vm`, the runner's uid 65532 and the control group, 0770). Give the sockets themselves a mode
+  their clients can connect with: on `host-vm` the runner connects to both as uid 65532; on Docker
+  sealantd connects to `capture.sock` as root, and the workspace's non-root processes to
+  `session.sock`.
 - **Docker needs `executorSockets`.** `capture` makes sealantd dial `unix:/run/sealant/capture.sock`
   (sealant sets `SEALANT_CAPTURE_DIAL`; a caller's `SEALANT_*` env is refused), so a workspace
   behind its egress proxy still reaches your capture store. `session` makes `/run/sealant`

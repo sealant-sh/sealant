@@ -875,7 +875,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     // The workspace's pinned network policy ("Apply updated policy" replaces it), so runtime
     // selection and the launch both see the policy the workspace runs under now. A pinned policy
     // that cannot be read fails the launch: it never runs under an older one.
-    const spec = withPinnedEgressPolicy(createdSpec, yield* pinnedEgressPolicy(job.runId));
+    const pinnedSpec = withPinnedEgressPolicy(createdSpec, yield* pinnedEgressPolicy(job.runId));
     // The control scope the create named for this run's executor: only a runtime that gives its
     // executors one takes the launch, and the executor mounts that scope, where its caller may
     // already serve capture.sock and session.sock. Read strictly: a launch that lost it would
@@ -887,16 +887,19 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             .getAttemptById(job.runId)
             .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError)))?.controlScope ?? undefined);
 
-    const selectedAdapterId = yield* Effect.try({
+    const selection = yield* Effect.try({
       try: () =>
         selectRuntimeAdapter({
-          blueprint: spec,
+          blueprint: pinnedSpec,
           adapters: options.runtimes.map((runtime) => runtime.adapter),
           defaultAdapterId: options.defaultRuntimeAdapterId,
           ...(controlScope === undefined ? {} : { controlScope }),
-        }).adapterId,
+        }),
       catch: toWorkspaceBuildJobProcessingError,
     });
+    const selectedAdapterId = selection.adapterId;
+    // Built and launched as the runtime that took it (a preferred runtime's fallback included).
+    const spec = selection.blueprint;
     const runtime = options.runtimes.find(
       (candidate) => candidate.adapter.id === selectedAdapterId,
     );

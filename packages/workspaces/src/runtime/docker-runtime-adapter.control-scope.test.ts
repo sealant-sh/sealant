@@ -12,7 +12,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { cases } from "./docker-runtime-adapter.golden-fixture.js";
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
-import type { RuntimeAdapterLaunchInput } from "./runtime-adapter.js";
+import {
+  selectRuntimeAdapter,
+  type RuntimeAdapter,
+  type RuntimeAdapterLaunchInput,
+} from "./runtime-adapter.js";
 
 const RUNNING_STATE = '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n';
 const EXITED_STATE = '{"Status":"exited","Running":false,"ExitCode":0,"Error":""}\n';
@@ -196,5 +200,48 @@ describe("DockerRuntimeAdapter · a control scope the launch names", () => {
       adapter.recover({ resourceId: "container-id-123", reference: "sealant-run-golden-4" }),
     ).resolves.toEqual({ outcome: "restarted" });
     expect(await answers(join(dir, "capture.sock"))).toBe("caller capture\n");
+  });
+
+  it("takes a launch a preferred Kubernetes runtime could not, as Docker, and launches it", async () => {
+    const { root, dir } = await controlRoot(SCOPE);
+    const { calls, runner } = recordingRunner();
+    const docker = new DockerRuntimeAdapter({
+      commandRunner: runner,
+      runtimeCatalogLoader: catalog,
+      controlSocketHostDir: root,
+    });
+    // Willing, but its executors mount no control scope.
+    const kubernetes: RuntimeAdapter = {
+      id: "k8s",
+      supports: () => ({ supported: true }),
+      launch: () => Promise.reject(new Error("never launched")),
+      stop: () => Promise.reject(new Error("never stopped")),
+    };
+    const preferred = {
+      ...cases.capture,
+      controlScope: SCOPE,
+      blueprint: {
+        ...cases.capture.blueprint,
+        target: {
+          ...cases.capture.blueprint.target,
+          runtime: { family: "k8s" as const, mode: "prefer" as const },
+        },
+      },
+    };
+
+    const selection = selectRuntimeAdapter({
+      blueprint: preferred.blueprint,
+      adapters: [kubernetes, docker],
+      defaultAdapterId: "docker",
+      controlScope: SCOPE,
+    });
+    expect(selection.adapterId).toBe("docker");
+    expect(selection.blueprint.target.runtime.family).toBe("docker");
+
+    // The real adapter refuses the preferred family; it takes the one selection hands it.
+    await expect(docker.launch(preferred)).rejects.toMatchObject({ code: "unsupported-runtime" });
+    const result = await docker.launch({ ...preferred, blueprint: selection.blueprint });
+    expect(result).toMatchObject({ status: "ready", controlScope: SCOPE });
+    expect(workspaceRun(calls)).toContain(`${dir}:/run/sealant`);
   });
 });

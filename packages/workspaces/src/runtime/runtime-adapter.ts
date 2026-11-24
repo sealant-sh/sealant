@@ -645,7 +645,26 @@ export interface SelectRuntimeAdapterInput<A extends RuntimeAdapterLifecycle> {
 export interface RuntimeAdapterSelection<A extends RuntimeAdapterLifecycle> {
   readonly adapter: A;
   readonly adapterId: RuntimeAdapterId;
+  /**
+   * The blueprint to build and launch with: the one given, or, when a preferred runtime fell back
+   * to another, the same blueprint targeting the runtime that took it. An adapter accepts only its
+   * own family (or `auto`), so a fallback launched with the preferred family would be refused.
+   */
+  readonly blueprint: RuntimeAdapterBlueprint;
 }
+
+/** `blueprint` aimed at `adapterId` when it names another runtime family; `auto` stays `auto`. */
+const targetingAdapter = (
+  blueprint: RuntimeAdapterBlueprint,
+  adapterId: RuntimeAdapterId,
+): RuntimeAdapterBlueprint => {
+  const family = blueprint.target.runtime.family;
+  if (family === "auto" || family === adapterId) return blueprint;
+  return {
+    ...blueprint,
+    target: { ...blueprint.target, runtime: { ...blueprint.target.runtime, family: adapterId } },
+  };
+};
 
 const controlScopeRefusal = (
   adapter: RuntimeAdapterLifecycle,
@@ -701,11 +720,14 @@ export const selectRuntimeAdapter = <A extends RuntimeAdapterLifecycle>(
       continue;
     }
 
-    const support = adapter.supports(supportInput);
+    // A fallback is asked, and launched, as its own runtime family.
+    const blueprint = targetingAdapter(supportInput.blueprint, adapterId);
+    const support = adapter.supports({ ...supportInput, blueprint });
     if (support.supported) {
       return {
         adapter,
         adapterId,
+        blueprint,
       };
     }
 

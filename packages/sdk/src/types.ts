@@ -1141,7 +1141,7 @@ export interface CreateOptions {
    * One path segment: up to 128 lowercase letters, digits, `_`, `.` and `-`, starting with a letter
    * or digit, and never starting with `sealant` (sealant's own directories there do). Unique for
    * all time on the control plane: a create naming a scope any executor has held rejects with a
-   * `SealantApiError` (409, code `control-scope-taken`); first come, first served, so mint it
+   * `SealantApiError` (409, `reason` `control-scope-taken`); first come, first served, so mint it
    * unguessable, from the launch id. The executor's recovery keeps it; a restart is a new
    * executor, in its container name's scope. Refused on a runtime with no control scope (see
    * `executorSockets`).

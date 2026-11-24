@@ -58,6 +58,8 @@ const flushHarness = (
     readonly firstFlushClosed?: boolean;
     /** The owner map the workspace's executor was launched with. */
     readonly ownerMap?: unknown;
+    /** More of the executor's runtime row (its endpoint, its recorded control scope). */
+    readonly runtime?: Partial<Parameters<typeof runtimeInstanceRow>[0]>;
   } = {},
 ) => {
   const flushRequests: Array<CaptureFlushRequest | undefined> = [];
@@ -136,6 +138,7 @@ const flushHarness = (
               adapter: "docker",
               endpoint: "unix:///run/sealant/ws_1.sock",
               resourceId: "container_1",
+              ...options.runtime,
             }),
           ),
       }),
@@ -404,6 +407,26 @@ describe("a standby's claim names the owner map it needs (sealant#333 review P2-
       { id: "acct_b", uid: 40031 },
     ],
   };
+
+  it("names a claimed standby's control scope, recorded or read off its pre-upgrade endpoint", async () => {
+    const recorded = await flushHarness(REPORT, {
+      runtime: { controlScope: "mend-exec-1" },
+    }).replan({});
+    expect(recorded).toMatchObject({ success: { controlScope: "mend-exec-1" } });
+    // A standby launched before `control_scope` was recorded: its endpoint names the directory.
+    const upgraded = await flushHarness(REPORT, {
+      runtime: {
+        endpoint: "unix:///run/sealant/sockets/sealant-run-1/control.sock",
+        controlScope: null,
+      },
+    }).replan({});
+    expect(upgraded).toMatchObject({ success: { ...REPLANNED, controlScope: "sealant-run-1" } });
+    // No control directory at all (docker-exec reach): no scope to name.
+    const none = await flushHarness(REPORT, {
+      runtime: { endpoint: "docker-exec://container_1/run/sealant/control.sock" },
+    }).replan({});
+    expect(Result.isSuccess(none) && "controlScope" in none.success).toBe(false);
+  });
 
   it("re-plans when the executor was launched with that map, in any order of people", async () => {
     const h = flushHarness(REPORT, { ownerMap });

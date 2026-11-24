@@ -1,4 +1,5 @@
 import type { WorkspacePublication as PublicWorkspacePublication } from "@sealant/api-contracts";
+import { CONTROL_SCOPE_PATTERN } from "@sealant/api-contracts/control-scope";
 import {
   LAUNCH_RETAINED_ERROR_CODE,
   type WorkspaceRuntimeInstance,
@@ -245,6 +246,26 @@ export const resolveWorkspacePhase = (input: {
   };
 };
 
+/**
+ * The control scope an executor mounted at `/run/sealant`: the one its row records, or, on a row
+ * written before the scope was recorded, the directory its recorded
+ * `unix://<root>/<scope>/control.sock` endpoint names (a Docker executor with a control root,
+ * every host VM). Undefined where there is neither: a runtime with no control directory.
+ */
+export const recordedControlScope = (
+  runtimeInstance:
+    | Pick<WorkspaceRuntimeInstance, "controlScope" | "endpoint" | "adapter">
+    | undefined,
+): string | undefined => {
+  if (runtimeInstance === undefined) return undefined;
+  if (runtimeInstance.controlScope !== null) return runtimeInstance.controlScope;
+  if (runtimeInstance.adapter !== "docker" && runtimeInstance.adapter !== "host-vm") {
+    return undefined;
+  }
+  const scope = /^unix:\/\/.*\/([^/]+)\/control\.sock$/.exec(runtimeInstance.endpoint ?? "")?.[1];
+  return scope !== undefined && CONTROL_SCOPE_PATTERN.test(scope) ? scope : undefined;
+};
+
 export const resolveWorkspaceRuntime = (
   runtimeInstance: WorkspaceRuntimeInstance | undefined,
   options: {
@@ -281,6 +302,7 @@ export const resolveWorkspaceRuntime = (
       : `${gatewayUsernamePrefix}-${options.workspaceId}`;
   const formattedGatewayHost =
     gatewayHost === undefined || !gatewayHost.includes(":") ? gatewayHost : `[${gatewayHost}]`;
+  const controlScope = recordedControlScope(runtimeInstance);
   const endpoint =
     shouldUseGateway && gatewayUsername !== undefined && formattedGatewayHost !== undefined
       ? `ssh://${gatewayUsername}@${formattedGatewayHost}:${gatewayPort}`
@@ -294,9 +316,7 @@ export const resolveWorkspaceRuntime = (
     ...(endpoint === null || endpoint === undefined ? {} : { endpoint }),
     deadline: runtimeInstance.runtimeDeadlineAt?.toISOString() ?? null,
     runId: runtimeInstance.runId,
-    ...(runtimeInstance.controlScope === null
-      ? {}
-      : { controlScope: runtimeInstance.controlScope }),
+    ...(controlScope === undefined ? {} : { controlScope }),
   };
 };
 

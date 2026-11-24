@@ -7,8 +7,9 @@ A caller can now serve each executor's capture and session sockets. `workspaces.
 `controlScope`, the directory of the deployment's control root the executor mounts at
 `/run/sealant`, so you can bind `capture.sock` and `session.sock` there before the create. It is one
 path segment that never starts with `sealant`, and unique for all time: a scope any executor has
-held is refused (`409`, code `control-scope-taken`). Launch and recovery never remove the two
-sockets. Omitted, the scope is the container name, as before.
+held is refused (`409` `WorkspaceConflictError`, `reason` `control-scope-taken` on the SDK's
+`SealantApiError`). Launch and recovery never remove the two sockets. Omitted, the scope is the
+container name, as before.
 
 `create()` also takes `executorSockets: { capture, session }` for Docker workspaces: `capture` makes
 sealantd send captures and presigned object requests to `/run/sealant/capture.sock`, and `session`

@@ -49,6 +49,8 @@ const harness = (
     readonly launching?: WorkspaceBuildJob["status"];
     /** The launch's build job's error code, when it failed. */
     readonly launchErrorCode?: string;
+    /** More of the executor's runtime row (its endpoint, its recorded control scope). */
+    readonly runtime?: Partial<Parameters<typeof runtimeInstanceRow>[0]>;
   } = {},
 ) => {
   const cancelledJobs: string[] = [];
@@ -123,6 +125,7 @@ const harness = (
                   adapter: "docker",
                   resourceId: "container-1",
                   reference: "sealant-run-1",
+                  ...options.runtime,
                 }),
           ),
       }),
@@ -469,6 +472,24 @@ describe("recoverWorkspace", () => {
       recoverable: true,
     });
     expect(h.recoveries).toEqual(["run_1"]);
+  });
+
+  it("names the scope a retained host VM launched before scopes were recorded mounts", async () => {
+    // Recorded by a release before `control_scope`: only its endpoint names the directory.
+    const h = harness("stopped", {
+      retained: true,
+      runtime: {
+        adapter: "host-vm",
+        resourceId: "sealant-vm-run-1",
+        reference: "sealant-vm-run-1",
+        endpoint: "unix:///var/lib/mend/control/sealant-vm-run-1/control.sock",
+        controlScope: null,
+      },
+    });
+    expect(await h.recover()).toMatchObject({
+      state: "requested",
+      controlScope: "sealant-vm-run-1",
+    });
   });
 
   it("does nothing for a workspace with no retained executor", async () => {

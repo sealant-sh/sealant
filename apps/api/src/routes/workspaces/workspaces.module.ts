@@ -154,6 +154,7 @@ import {
   resolveWorkspacePublishedImage,
   resolveWorkspacePublication,
   BoatImageInspection,
+  recordedControlScope,
   resolveWorkspaceRuntime,
   resolveWorkspacePhase,
   resolveWorkspaceStatus,
@@ -3394,7 +3395,7 @@ export const replanWorkspaceCapture = (input: {
         runtimeInstances.getRuntimeInstanceByRunId(workspace.latestRunId),
         "Failed to load the workspace runtime.",
       );
-      controlScope = claimed?.controlScope ?? null;
+      controlScope = recordedControlScope(claimed) ?? null;
     }
     const replanned = yield* withCaptureDaemon(
       { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "re-plan" },
@@ -3916,6 +3917,8 @@ export const recoverWorkspace = (input: {
       "Failed to load the workspace runtime.",
     );
     const recoverable = runtimeRestartsRetainedExecutors(instance?.adapter);
+    // Recorded, or read off the endpoint of an executor launched before it was recorded.
+    const controlScope = recordedControlScope(instance);
     yield* Effect.logWarning(
       `Workspace ${workspace.id}: ${input.payload.ownerUserId} asked to recover run ${latestRunId}'s retained executor (${instance?.adapter ?? "unknown runtime"}); a recovery attempt is due now${recoverable ? "" : " (this runtime cannot restart it; it is reported and kept)"}.`,
     );
@@ -3924,9 +3927,7 @@ export const recoverWorkspace = (input: {
       state: "requested",
       recoverable,
       // A recovery boot dials only capture.sock in it.
-      ...(instance?.controlScope === null || instance?.controlScope === undefined
-        ? {}
-        : { controlScope: instance.controlScope }),
+      ...(controlScope === undefined ? {} : { controlScope }),
     };
     return response;
   });

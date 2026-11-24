@@ -238,8 +238,10 @@ which gives P2-B its form without a stall.
   Boat gives its executors no control scope, so selection refuses a Boat launch that names one or
   asks for `runtime.executorSockets`. The scope the runtime mounted rides the existing runtime-row
   writes (`upsertRuntimeInstance`, `identifyStrandedLaunch`) as one more column, which no Boat step
-  reads or writes. No covered statement, its order, or a Boat answer it acts on changed, so no
-  action moved, and `sync` stays.
+  reads or writes. Round 1 of its review made selection hand back the blueprint the build and launch
+  use, retargeted to the runtime that took a preferred runtime's fallback, so a fallback onto Boat
+  reaches Boat as the `boat` blueprint it would be if Boat were asked for. No covered statement, its
+  order, or a Boat answer it acts on changed, so no action moved, and `sync` stays.
 
 ## Each property fails on a broken variant
 
