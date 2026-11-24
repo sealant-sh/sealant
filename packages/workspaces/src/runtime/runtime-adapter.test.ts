@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   isRemovalPending,
@@ -161,6 +161,47 @@ const createAdapter = (
 };
 
 describe("selectRuntimeAdapter", () => {
+  const brokered = {
+    networkPolicy: { mode: "standard", policyHash: "h" },
+    brokeredSecrets: [
+      {
+        secretId: "psec_1",
+        name: "VERCEL_TOKEN",
+        placeholder: "mend_sec_0123456789abcdef",
+        secretRef: "ref-1",
+        headerName: "Authorization",
+        bindHosts: ["api.vercel.com"],
+      },
+    ],
+  };
+
+  it("never hands a brokered secret to a runtime with no egress proxy, whatever its adapter says", () => {
+    const supports = vi.fn(() => ({ supported: true as const }));
+    expect(() =>
+      selectRuntimeAdapter({
+        blueprint: createBlueprint({
+          ...brokered,
+          target: { runtime: { family: "k8s", mode: "require" } },
+        }),
+        adapters: [createAdapter("k8s", supports)],
+        defaultAdapterId: "k8s",
+      }),
+    ).toThrow(/cannot broker secrets/);
+    expect(supports).not.toHaveBeenCalled();
+  });
+
+  it("falls back from a preferred runtime that cannot enforce the policy to one that can", () => {
+    const selection = selectRuntimeAdapter({
+      blueprint: createBlueprint({ ...brokered, target: { runtime: { family: "boat", mode: "prefer" } } }),
+      adapters: [
+        createAdapter("boat", () => ({ supported: true })),
+        createAdapter("docker", () => ({ supported: true })),
+      ],
+      defaultAdapterId: "docker",
+    });
+    expect(selection.adapterId).toBe("docker");
+  });
+
   it("uses the default adapter when runtime target is auto", () => {
     const blueprint = createBlueprint();
     const selection = selectRuntimeAdapter({

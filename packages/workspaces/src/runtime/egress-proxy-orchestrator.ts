@@ -27,6 +27,7 @@ import { cidr, formatCidr } from "./cidr.js";
 import type { DockerCommandRunner } from "./docker-runtime-adapter.js";
 import { mirrorConnectArgv, type WorkspaceMirrorContainer } from "./docker-egress.js";
 import { isolatedNetworkCreateArgv } from "./docker-isolated-network.js";
+import type { EgressProxyHostFacts } from "./egress-proxy-policy.js";
 import {
   createProxyAdminClient,
   ProxyAdminRefusedError,
@@ -160,6 +161,33 @@ export type EgressRevocationOutcome =
   | { readonly outcome: "revoked"; readonly closed: number }
   /** The proxy did not confirm it, so it was killed (confirmed not running). */
   | { readonly outcome: "killed"; readonly reason: string };
+
+/**
+ * What a launch behind an egress proxy gets from the worker (`RuntimeAdapterLaunchInput.egressProxy`).
+ * The CA's private key and the secrets' values stay behind `policyFor`, built only once the
+ * launch has measured the host, so neither ever sits in the parsed launch input.
+ */
+export interface EgressProxyLaunch {
+  /** The run's executor CA certificate: the public part, which the workspace trusts. */
+  readonly caCertPem: string;
+  /**
+   * The proxy's first `PUT /v1/policy`, from the workspace's stored policy, revocations and
+   * secret values and the facts measured here (the worker keeps them with the run's proxy, so
+   * every later push rebuilds the same document).
+   */
+  readonly policyFor: (input: {
+    readonly proxyIp: string;
+    readonly host: EgressProxyHostFacts;
+  }) => Promise<ProxyPolicyDocument>;
+  /** What the proxy confirmed taking. */
+  readonly confirmed?: (applied: ProxyPolicyApplied) => Promise<void>;
+}
+
+/** A proxy brought up for a launch: its networks, and the policy it confirmed. */
+export interface LaunchedEgressProxy {
+  readonly networks: EgressProxyNetworks;
+  readonly applied: ProxyPolicyApplied;
+}
 
 export interface EgressProxyOrchestratorOptions {
   readonly run: DockerCommandRunner;
@@ -346,6 +374,44 @@ export class EgressProxyOrchestrator {
     }
     const health = await this.awaitHealthy(input.workspaceContainer);
     return { containerId: state.id, health };
+  }
+
+  /**
+   * Bring a launch's proxy up and loaded before anything of the workspace runs: its networks, the
+   * proxy itself, then its first policy. The proxy refuses all traffic until that policy is in,
+   * and the caller starts the workspace only after this returns. The networks' gateway and the
+   * workspace's own subnet are refused by the proxy as well (`blockedCidrs`), whatever the operator
+   * allowlist says.
+   */
+  public async launchProxy(input: {
+    readonly workspaceContainer: string;
+    readonly launch: EgressProxyLaunch;
+    readonly operatorAllowedPrivateCidrs: ReadonlyArray<string>;
+    readonly hostPublicIps: ReadonlyArray<string>;
+    readonly reachNetworks?: ReadonlyArray<string>;
+  }): Promise<LaunchedEgressProxy> {
+    const networks = await this.prepareNetworks(input.workspaceContainer);
+    await this.startProxy({
+      workspaceContainer: input.workspaceContainer,
+      networks,
+      ...(input.reachNetworks === undefined ? {} : { reachNetworks: input.reachNetworks }),
+    });
+    const outbound = cidr(networks.outbound.subnet);
+    const document = await input.launch.policyFor({
+      proxyIp: networks.proxyIp,
+      host: {
+        operatorAllowedPrivateCidrs: [...input.operatorAllowedPrivateCidrs],
+        hostPublicIps: [...input.hostPublicIps],
+        blockedCidrs: [
+          // The outbound bridge's gateway is the host itself.
+          formatCidr({ family: 4, base: outbound.base + 1n, prefix: 32 }),
+          networks.isolated.subnet,
+        ],
+      },
+    });
+    const applied = await this.pushPolicy(input.workspaceContainer, document);
+    await input.launch.confirmed?.(applied);
+    return { networks, applied };
   }
 
   /** Poll `GET /v1/health` until the proxy answers, failing early when its container ended. */

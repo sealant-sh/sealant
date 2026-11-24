@@ -441,20 +441,38 @@ const askedOf = (
       return request.runtime.dotfilesArchives.length > 0 ? support.dotfilesArchives : undefined;
     case "docker":
       return request.tooling.services?.docker?.enabled === true ? support.docker : undefined;
-    // A control plane that predates network policies reports none: a policy it cannot enforce
-    // is refused, never run without.
+    case "vmIsolation":
+    case "restrictedEgress":
+    case "brokeredSecrets":
+      return askedOfPolicy(support.networkPolicy, requirement, request);
+  }
+};
+
+type PolicyRequirement = "vmIsolation" | "restrictedEgress" | "brokeredSecrets";
+
+/**
+ * The network policy item `requirement` asks of a runtime's `policy` row. A control plane that
+ * predates network policies reports none: a policy it cannot enforce is refused, never run
+ * without.
+ */
+const askedOfPolicy = (
+  policy: RuntimeSupport["networkPolicy"],
+  requirement: PolicyRequirement,
+  request: Pick<RuntimeRequest, "networkPolicy" | "brokeredSecrets" | "tooling">,
+): RuntimeCapability | undefined => {
+  switch (requirement) {
     case "vmIsolation":
       return request.networkPolicy?.requireVmIsolation === true
-        ? (support.networkPolicy?.vmIsolation ?? UNREPORTED)
+        ? (policy?.vmIsolation ?? UNREPORTED)
         : undefined;
     case "restrictedEgress":
       if (request.networkPolicy?.mode !== "restricted") return undefined;
       return request.tooling.services?.docker?.enabled === true
-        ? (support.networkPolicy?.restrictedWithDocker ?? UNREPORTED)
-        : (support.networkPolicy?.restricted ?? UNREPORTED);
+        ? (policy?.restrictedWithDocker ?? UNREPORTED)
+        : (policy?.restricted ?? UNREPORTED);
     case "brokeredSecrets":
       return (request.brokeredSecrets?.length ?? 0) > 0
-        ? (support.networkPolicy?.brokeredSecrets ?? UNREPORTED)
+        ? (policy?.brokeredSecrets ?? UNREPORTED)
         : undefined;
   }
 };
@@ -502,6 +520,29 @@ export const runtimeRefusal = (
         code === "runtime-env-references-unsupported"
           ? `${asked.message}${requestedNames(requirement, request)}`
           : asked.message,
+    };
+  }
+  return undefined;
+};
+
+/**
+ * The network policy items alone (`vmIsolation`, `restrictedEgress`, `brokeredSecrets`) for a
+ * runtime, from the same table: what runtime selection refuses before any adapter is asked, so
+ * an adapter that knows nothing of network policies never launches a workspace with less than
+ * its policy asks.
+ */
+export const networkPolicyRefusal = (
+  runtime: RuntimeAdapterId,
+  request: Pick<RuntimeRequest, "networkPolicy" | "brokeredSecrets" | "tooling">,
+): RuntimeRefusal | undefined => {
+  const policy = networkPolicyFor(runtime);
+  for (const requirement of ["vmIsolation", "restrictedEgress", "brokeredSecrets"] as const) {
+    const asked = askedOfPolicy(policy, requirement, request);
+    if (asked === undefined || asked.supported) continue;
+    return {
+      code: "runtime-requirement-unsupported",
+      detail: DETAILS[requirement],
+      message: asked.message,
     };
   }
   return undefined;
