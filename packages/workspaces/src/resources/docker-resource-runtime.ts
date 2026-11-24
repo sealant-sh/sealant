@@ -39,12 +39,15 @@ import {
 } from "./docker-resource-argv.js";
 import type { ReachAttachment } from "./reach.js";
 
+/** The networks resource instances and their callers use; a workspace's own egress is not one. */
+export type ResourceInstanceNetworkKind = Exclude<ResourceNetworkKind, "workspace">;
+
 /** sealant's subnet pools (`ResourceInstanceRepo.allocateNetwork`), as the runtime needs them. */
 export interface ResourceSubnets {
   /** The network's subnet, the one it already holds or a new one. Throws when the pool is full. */
   readonly allocate: (input: {
     readonly name: string;
-    readonly kind: ResourceNetworkKind;
+    readonly kind: ResourceInstanceNetworkKind;
     readonly owner: string;
   }) => Promise<string>;
   readonly release: (name: string) => Promise<void>;
@@ -276,7 +279,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
   }
 
   /** The network on sealant's subnet: created when missing, its subnet held in sealant's table. */
-  private async ensureNetwork(name: string, kind: ResourceNetworkKind, owner: string) {
+  private async ensureNetwork(name: string, kind: ResourceInstanceNetworkKind, owner: string) {
     if (await this.networkExists(name)) return;
     const subnet = await this.subnets.allocate({ name, kind, owner });
     await this.runTolerating(networkCreateArgv(name, kind, subnet), isPresent);

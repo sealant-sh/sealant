@@ -33,7 +33,21 @@ export {
   type DockerRuntimeAdapterOptions,
   type DockerRuntimeCatalogLoader,
   type DockerSshEndpointExposureStrategy,
+  type DockerWorkspaceEgressOptions,
+  type DockerWorkspaceSubnets,
 } from "./docker-runtime-adapter.js";
+export {
+  parseDockerEgressPolicy,
+  parseWorkspaceMirrorContainers,
+  type DockerEgressPolicy,
+  type WorkspaceMirrorContainer,
+} from "./docker-egress.js";
+export {
+  isolatedNetworkCreateArgv,
+  probeIsolatedGatewaySupport,
+  type IsolatedGatewaySupport,
+  type IsolatedNetworkSpec,
+} from "./docker-isolated-network.js";
 
 export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";
 

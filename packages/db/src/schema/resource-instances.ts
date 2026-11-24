@@ -126,13 +126,14 @@ export const resourceWorkspaceLinks = pgTable(
   ],
 );
 
-export const resourceNetworkKindValues = ["reach", "egress", "caller"] as const;
+export const resourceNetworkKindValues = ["reach", "egress", "caller", "workspace"] as const;
 export type ResourceNetworkKind = (typeof resourceNetworkKindValues)[number];
 
 /**
  * The subnets sealant hands Docker for the networks it creates for instances, so they never draw on
  * the daemon's default address pools. `reach`: one internal network per linked executor. `egress`:
- * one per instance.
+ * one per instance. `workspace`: one Docker workspace's own egress network
+ * (`SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS`).
  */
 export const resourceNetworks = pgTable(
   "resource_networks",
@@ -140,13 +141,16 @@ export const resourceNetworks = pgTable(
     name: text().primaryKey(),
     kind: text({ enum: resourceNetworkKindValues }).notNull(),
     subnet: cidr().notNull(),
-    /** The executor's container name (reach), or the instance id (egress). */
+    /** The executor's container name (reach, workspace), or the instance id (egress). */
     owner: text().notNull(),
     createdAt: timestamp({ mode: "date", withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("resource_networks_subnet_idx").on(table.subnet),
-    check("resource_networks_kind", sql`${table.kind} in ('reach', 'egress', 'caller')`),
+    check(
+      "resource_networks_kind",
+      sql`${table.kind} in ('reach', 'egress', 'caller', 'workspace')`,
+    ),
   ],
 );
 

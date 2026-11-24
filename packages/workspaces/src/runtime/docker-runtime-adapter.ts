@@ -14,7 +14,20 @@ import {
   captureOwnerMapEnv,
   captureSourceEnv,
 } from "./capture-source.js";
+import type { Cidr } from "./cidr.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
+import {
+  attachedNetworks,
+  mirrorConnectArgv,
+  namespaceDnsServers,
+  prohibitRouteScript,
+  prohibitedEgress,
+  publicHostAddresses,
+  workspaceEgressNetworkCreateArgv,
+  workspaceEgressNetworkName,
+  type DockerEgressPolicy,
+  type WorkspaceMirrorContainer,
+} from "./docker-egress.js";
 import {
   dockerMemoryArgs,
   dockerMemoryPolicyNeedsHost,
@@ -118,7 +131,19 @@ const CLOUD_METADATA_GUARD_SCRIPT = [
  * with `NET_ADMIN` that the container itself never holds. Always runc: the route goes into the
  * namespace the kernel routes for.
  */
-export const cloudMetadataGuardArgv = (container: string, image: string): Array<string> => [
+export const cloudMetadataGuardArgv = (container: string, image: string): Array<string> =>
+  networkGuardArgv(container, image, CLOUD_METADATA_GUARD_SCRIPT);
+
+/**
+ * `docker run` of the guard image in a container's network namespace with `script`, holding the
+ * `NET_ADMIN` the container itself never does. Always runc: the routes go into the namespace the
+ * kernel routes for.
+ */
+export const networkGuardArgv = (
+  container: string,
+  image: string,
+  script: string,
+): Array<string> => [
   "run",
   "--rm",
   "--runtime",
@@ -135,12 +160,15 @@ export const cloudMetadataGuardArgv = (container: string, image: string): Array<
   "sh",
   image,
   "-c",
-  CLOUD_METADATA_GUARD_SCRIPT,
+  script,
 ];
 
 /** What an operator does about a guard that cannot run. */
 const NETWORK_GUARD_REMEDY =
   "Make the image pullable from the Docker host, or point SEALANT_DOCKER_NETWORK_GUARD_IMAGE at a reachable copy. A workspace that needs the address sets runtime.network.cloudMetadata.";
+
+/** How long a measured DNS-server or host-address list is reused before it is read again. */
+const EGRESS_FACTS_TTL_MS = 60_000;
 
 /** A guard run's bound, a first pull included: a hung pull or daemon never holds a launch. */
 const NETWORK_GUARD_TIMEOUT_MS = 60_000;
@@ -253,6 +281,26 @@ export interface DockerExecutorNetworkHooks {
     readonly executor: string;
   }) => Promise<void>;
   readonly removed: (executor: string) => Promise<void>;
+}
+
+/** sealant's subnet pool for workspace egress networks, held in its table by name. */
+export interface DockerWorkspaceSubnets {
+  /** The network's subnet: the one it already holds, or a free one. Throws when none is free. */
+  readonly allocate: (input: { readonly name: string; readonly owner: string }) => Promise<string>;
+  /** Idempotent: releasing a name that holds nothing does nothing. */
+  readonly release: (name: string) => Promise<void>;
+}
+
+/**
+ * Per-workspace egress (`SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS`, `docker-egress.ts`): every
+ * workspace on a bridge network of its own, and the extended private-range guard in its network
+ * namespace and its Docker service's.
+ */
+export interface DockerWorkspaceEgressOptions {
+  readonly policy: DockerEgressPolicy;
+  readonly subnets: DockerWorkspaceSubnets;
+  /** Containers that join each workspace's network (`SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS`). */
+  readonly mirrors?: ReadonlyArray<WorkspaceMirrorContainer>;
 }
 
 export interface DockerRuntimeAdapterOptions {
@@ -376,6 +424,12 @@ export interface DockerRuntimeAdapterOptions {
    * `docker info`. Unset: no limit and no OOM score, as before.
    */
   readonly memory?: DockerMemoryPolicy;
+  /**
+   * Per-workspace egress networks and the extended private-range guard. Exclusive with
+   * `workspaceNetwork`: a workspace on its own network never joins a shared one. Unset: the shared
+   * network (or the daemon's default bridge) and the metadata-only guard, as before.
+   */
+  readonly egress?: DockerWorkspaceEgressOptions;
 }
 
 /** `docker stop -t` for a planned stop: long enough for sealantd's SIGTERM flush to ship. */
@@ -889,7 +943,10 @@ const extraMountArgs = (
  * our own injection planner, but the command is still built defensively: any shell-metacharacter
  * beyond `$` is rejected rather than interpolated, and the mode is schema-validated octal.
  */
-const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSupport => {
+const supportForInput = (
+  input: RuntimeAdapterSupportInput,
+  egress: boolean,
+): RuntimeAdapterSupport => {
   const targetRuntime = input.blueprint.target.runtime.family;
 
   if (targetRuntime !== "auto" && targetRuntime !== "docker") {
@@ -917,7 +974,17 @@ const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSuppo
   }
 
   // gVisor's netstack takes its routes when the sandbox starts and ignores the namespace's own,
-  // so the metadata guard cannot reach it: such a workspace launches only with the address open.
+  // so no guard reaches it: with per-workspace egress, whose private-range guard nothing opens,
+  // it never launches.
+  if (egress && input.blueprint.runtime.ociRuntime === "runsc") {
+    return parseRuntimeAdapterSupport({
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+      message:
+        "The Docker runtime adapter cannot refuse private addresses inside a gVisor (runsc) workspace, and this host runs every workspace behind that guard. Use runc.",
+    });
+  }
+  // Without it, such a workspace launches only with the metadata address open.
   if (
     input.blueprint.runtime.ociRuntime === "runsc" &&
     !input.blueprint.runtime.network.cloudMetadata
@@ -991,6 +1058,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private readonly containerStopTimeoutSeconds: number;
   private readonly executorNetworks: DockerExecutorNetworkHooks | undefined;
   private readonly memoryPolicy: DockerMemoryPolicy | undefined;
+  private readonly egress: DockerWorkspaceEgressOptions | undefined;
+  /** Docker's namespace DNS servers and the host's detected public addresses, read lately. */
+  private dnsServersRead:
+    | { readonly at: number; readonly servers: ReadonlyArray<Cidr> }
+    | undefined;
+  private hostAddressesRead:
+    | { readonly at: number; readonly addresses: ReadonlyArray<Cidr> }
+    | undefined;
   /** The policy resolved against the host, once it has been: a failed read is tried again. */
   private memoryLimitsResolved: DockerMemoryLimits | undefined;
 
@@ -1022,6 +1097,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       options.workspaceNetwork === undefined
         ? undefined
         : assertDockerNetworkName(options.workspaceNetwork);
+    if (options.egress !== undefined && options.workspaceNetwork !== undefined) {
+      throw new Error(
+        "SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS and SEALANT_DOCKER_WORKSPACE_NETWORK cannot both be set: a workspace on its own egress network never joins a shared one.",
+      );
+    }
+    this.egress = options.egress;
     this.registryMirrors = options.registryMirrors ?? [];
     this.registryMirrorContainer =
       options.registryMirrorContainer === undefined
@@ -1401,10 +1482,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     containerName: string,
     acquisition: DockerContainerAcquisition | undefined,
     dockerService: DockerServiceProvision | undefined,
+    egressNetwork: string | undefined,
   ): Promise<void> {
     if (
       acquisition?.adopted === true ||
-      (acquisition === undefined && dockerService === undefined)
+      (acquisition === undefined && dockerService === undefined && egressNetwork === undefined)
     ) {
       return;
     }
@@ -1423,6 +1505,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // deleted online, even after confirmed container removal: a retry can already be using them.
     if (dockerService !== undefined) {
       await this.removeOwnedDockerServiceBestEffort(dockerService);
+    }
+    // The run's own network, once no container of the run is on it: what a launch failing after
+    // `ensureEgressNetwork` left. Best effort, like the sidecar; the stop of the run removes it too.
+    if (egressNetwork !== undefined && this.egress !== undefined) {
+      await this.removeEgressNetwork(this.egress, containerName).catch(() => undefined);
     }
   }
 
@@ -1474,7 +1561,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       await this.commandRunner("docker", ["start", service.id]);
       // A started container has a new network namespace, without the launch's routes.
       await Promise.all([
-        this.blockCloudMetadataForRecovery(service.id, serviceName),
+        this.guardNetworkForRecovery(service.id, serviceName),
         this.awaitDockerServiceReady(service.id, serviceName),
       ]);
       return true;
@@ -1491,7 +1578,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       return false;
     }
     await this.provisionDockerService(reference, (id, name) =>
-      this.blockCloudMetadataForRecovery(id, name),
+      this.guardNetworkForRecovery(id, name),
     );
     return true;
   }
@@ -1577,20 +1664,48 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * Refuse the cloud metadata address inside one container's network namespace
-   * (`CLOUD_METADATA_GUARD_SCRIPT`). The guard image joins the namespace with `NET_ADMIN`, which
-   * the container itself never holds: Docker grants a workspace no `NET_ADMIN`, so neither its
-   * root nor a per-person user can delete the route, and the rootless Docker service's own
-   * containers (privileged ones included) run in rootlesskit's namespace, below this one. Always
-   * runc: the route goes into the namespace the kernel routes for. A guard that fails throws.
+   * The network guard for one container (`networkGuardArgv`), run beside its readiness wait. The
+   * guard image joins the namespace with `NET_ADMIN`, which the container itself never holds:
+   * Docker grants a workspace no `NET_ADMIN`, so neither its root nor a per-person user can delete
+   * a route, and the rootless Docker service's own containers (privileged ones included) run in
+   * rootlesskit's namespace, below this one. A guard that fails throws.
+   *
+   * Without per-workspace egress it refuses the cloud metadata address only, and not at all for a
+   * blueprint that opened it. With it, every private, metadata and host address `prohibitedEgress`
+   * lists, less what the operator and the blueprint opened.
    */
-  private async blockCloudMetadata(containerId: string, name: string): Promise<void> {
-    try {
-      await this.commandRunner(
-        "docker",
+  private async guardNetwork(
+    containerId: string,
+    name: string,
+    cloudMetadataReachable: boolean,
+  ): Promise<void> {
+    if (this.egress === undefined) {
+      if (cloudMetadataReachable) return;
+      await this.runNetworkGuard(
         cloudMetadataGuardArgv(containerId, this.networkGuardImage),
-        { timeoutMs: NETWORK_GUARD_TIMEOUT_MS },
+        `Could not refuse the cloud metadata address in '${name}'`,
       );
+      return;
+    }
+    const failure = `Could not refuse private addresses in '${name}'`;
+    let script: string;
+    try {
+      script = await this.egressGuardScript(this.egress, containerId, cloudMetadataReachable);
+    } catch (error) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `${failure}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await this.runNetworkGuard(
+      networkGuardArgv(containerId, this.networkGuardImage, script),
+      failure,
+    );
+  }
+
+  private async runNetworkGuard(argv: Array<string>, failure: string): Promise<void> {
+    try {
+      await this.commandRunner("docker", argv, { timeoutMs: NETWORK_GUARD_TIMEOUT_MS });
     } catch (error) {
       const timedOut =
         typeof error === "object" && error !== null && "killed" in error && error.killed === true;
@@ -1601,9 +1716,237 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           : String(error);
       throw createAdapterError(
         "adapter-unavailable",
-        `Could not refuse the cloud metadata address in '${name}' with the guard image '${this.networkGuardImage}': ${message}. ${NETWORK_GUARD_REMEDY}`,
+        `${failure} with the guard image '${this.networkGuardImage}': ${message}. ${NETWORK_GUARD_REMEDY}`,
       );
     }
+  }
+
+  /**
+   * The extended guard's script for one running container: read its own networks (never covered),
+   * Docker's namespace DNS servers (forwarded from inside this namespace, so they stay open) and the
+   * host's public addresses, then `prohibitedEgress`. Anything that cannot be read throws: the guard
+   * fails closed rather than run with a hole or without a block.
+   */
+  private async egressGuardScript(
+    egress: DockerWorkspaceEgressOptions,
+    containerId: string,
+    cloudMetadataReachable: boolean,
+  ): Promise<string> {
+    const inspected = await this.commandRunner("docker", [
+      "inspect",
+      "--format",
+      "{{json .NetworkSettings.Networks}}",
+      containerId,
+    ]);
+    const networks = attachedNetworks(inspected.stdout);
+    const measureOn = networks.names.find((network) => network !== "bridge" && network !== "host");
+    if (measureOn === undefined) {
+      throw new Error("the container is on no user-defined network to measure its DNS servers on");
+    }
+    const [dnsServers, detected] = await Promise.all([
+      this.namespaceDnsServers(measureOn),
+      egress.policy.hostPublic.detect ? this.detectedHostAddresses() : Promise.resolve([]),
+    ]);
+    return prohibitRouteScript(
+      prohibitedEgress({
+        allowed: egress.policy.allowed,
+        hostPublic: [...egress.policy.hostPublic.listed, ...detected],
+        ownSubnets: networks.subnets,
+        dnsServers,
+        cloudMetadata: cloudMetadataReachable,
+      }),
+    );
+  }
+
+  /**
+   * The resolvers Docker's embedded DNS forwards to from a container's own namespace, read from a
+   * fresh container's Docker-written `resolv.conf` on `network` (never a workspace's own copy, which
+   * its root can edit). They follow the Docker host's resolver settings, so one reading serves
+   * every network for a minute.
+   */
+  private async namespaceDnsServers(network: string): Promise<ReadonlyArray<Cidr>> {
+    const cached = this.dnsServersRead;
+    if (cached !== undefined && Date.now() - cached.at < EGRESS_FACTS_TTL_MS) return cached.servers;
+    const result = await this.commandRunner(
+      "docker",
+      [
+        "run",
+        "--rm",
+        "--network",
+        network,
+        "--cap-drop",
+        "ALL",
+        "--entrypoint",
+        "cat",
+        this.networkGuardImage,
+        "/etc/resolv.conf",
+      ],
+      { timeoutMs: NETWORK_GUARD_TIMEOUT_MS },
+    );
+    const servers = namespaceDnsServers(result.stdout);
+    this.dnsServersRead = { at: Date.now(), servers };
+    return servers;
+  }
+
+  /** The public addresses on the Docker host's own interfaces (`SEALANT_HOST_PUBLIC_IPS=auto`). */
+  private async detectedHostAddresses(): Promise<ReadonlyArray<Cidr>> {
+    const cached = this.hostAddressesRead;
+    if (cached !== undefined && Date.now() - cached.at < EGRESS_FACTS_TTL_MS) {
+      return cached.addresses;
+    }
+    const result = await this.commandRunner(
+      "docker",
+      [
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "--cap-drop",
+        "ALL",
+        "--entrypoint",
+        "ip",
+        this.networkGuardImage,
+        "-o",
+        "addr",
+        "show",
+        "scope",
+        "global",
+      ],
+      { timeoutMs: NETWORK_GUARD_TIMEOUT_MS },
+    );
+    const addresses = publicHostAddresses(result.stdout);
+    this.hostAddressesRead = { at: Date.now(), addresses };
+    return addresses;
+  }
+
+  /**
+   * The workspace's own egress network, on the subnet sealant holds for it: created when missing,
+   * found when a launch of the same run (or a retained container) already has it. Configured
+   * mirrors join it before the workspace runs, so its first install already resolves them.
+   */
+  private async ensureEgressNetwork(
+    egress: DockerWorkspaceEgressOptions,
+    containerName: string,
+  ): Promise<string> {
+    const name = workspaceEgressNetworkName(containerName);
+    const found = await this.lookupNetwork(name);
+    if (found === "unknown") {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Whether the egress network '${name}' exists could not be told.`,
+      );
+    }
+    if (found === "absent") {
+      const subnet = await egress.subnets.allocate({ name, owner: containerName });
+      try {
+        await this.commandRunner("docker", [
+          ...workspaceEgressNetworkCreateArgv(name, subnet, containerName),
+        ]);
+      } catch (error) {
+        // A concurrent launch of the same run may have made it first.
+        if ((await this.lookupNetwork(name)) === "absent") {
+          await egress.subnets.release(name).catch(() => undefined);
+          const message = error instanceof Error ? error.message : String(error);
+          throw createAdapterError(
+            "adapter-unavailable",
+            `Could not create the egress network '${name}' on ${subnet}: ${message}`,
+          );
+        }
+      }
+    }
+    await this.joinWorkspaceMirrors(egress, name);
+    return name;
+  }
+
+  /**
+   * Connect each workspace mirror container to a workspace's egress network under its host names.
+   * Best effort: a mirror that is missing, stopped or already joined changes nothing, and a
+   * workspace that cannot reach a mirror falls back to the upstream registry.
+   */
+  private async joinWorkspaceMirrors(
+    egress: DockerWorkspaceEgressOptions,
+    network: string,
+  ): Promise<void> {
+    for (const mirror of egress.mirrors ?? []) {
+      await this.commandRunner("docker", [...mirrorConnectArgv(network, mirror)]).catch(
+        () => undefined,
+      );
+    }
+  }
+
+  /**
+   * Before a retained container starts again: its egress network back, when something removed it
+   * (the container is reattached on the same subnet), and the mirrors on it again (one recreated
+   * since the park is not).
+   */
+  private async restoreEgressNetwork(
+    egress: DockerWorkspaceEgressOptions,
+    reference: string,
+    containerId: string,
+  ): Promise<void> {
+    const name = workspaceEgressNetworkName(reference);
+    const found = await this.lookupNetwork(name);
+    if (found !== "absent") {
+      await this.joinWorkspaceMirrors(egress, name);
+      return;
+    }
+    await this.ensureEgressNetwork(egress, reference);
+    // The stopped container still names the removed network's id: drop that endpoint, join anew.
+    await this.commandRunner("docker", [
+      "network",
+      "disconnect",
+      "--force",
+      name,
+      containerId,
+    ]).catch(() => undefined);
+    await this.commandRunner("docker", ["network", "connect", name, containerId]);
+  }
+
+  /**
+   * Remove a workspace's egress network once its container is gone, then release its subnet. Every
+   * container still attached (the mirrors) is disconnected first: Docker refuses to remove a
+   * network with an endpoint on it. A network whose presence cannot be told, or that the daemon
+   * will not remove, fails the call and keeps the subnet held, so nothing is reused under it.
+   */
+  private async removeEgressNetwork(
+    egress: DockerWorkspaceEgressOptions,
+    reference: string,
+  ): Promise<void> {
+    const name = workspaceEgressNetworkName(reference);
+    const found = await this.lookupNetwork(name);
+    if (found === "unknown") {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Workspace container '${reference}' was removed, but whether its egress network '${name}' remains could not be told.`,
+      );
+    }
+    if (found !== "absent") {
+      const attached = await this.commandRunner("docker", [
+        "network",
+        "inspect",
+        "--format",
+        "{{range .Containers}}{{.Name}}\n{{end}}",
+        found.id,
+      ]).then(
+        (result) =>
+          result.stdout
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0),
+        () => [],
+      );
+      for (const container of attached) {
+        await this.commandRunner("docker", [
+          "network",
+          "disconnect",
+          "--force",
+          found.id,
+          container,
+        ]).catch(() => undefined);
+      }
+      await this.removeNetworkDefinitively(found.id, name);
+    }
+    await egress.subnets.release(name);
   }
 
   /**
@@ -1673,18 +2016,17 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * The guard for a recovery's start. A recovered container runs no harness and admits no work, so
-   * a guard that fails leaves the save to go on rather than lose the work it holds.
+   * The guard for a recovery's start, as for a launch that left the metadata address closed (the
+   * blueprint is not known here). A recovered container runs no harness and admits no work, so a
+   * guard that fails leaves the save to go on rather than lose the work it holds.
    */
-  private async blockCloudMetadataForRecovery(containerId: string, name: string): Promise<void> {
-    await this.blockCloudMetadata(containerId, name).catch((error: unknown) => {
-      console.warn(
-        "Cloud metadata guard failed on a recovery start; the container runs without it",
-        {
-          container: name,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      );
+  private async guardNetworkForRecovery(containerId: string, name: string): Promise<void> {
+    await this.guardNetwork(containerId, name, false).catch((error: unknown) => {
+      const guard = this.egress === undefined ? "Cloud metadata guard" : "Egress guard";
+      console.warn(`${guard} failed on a recovery start; the container runs without it`, {
+        container: name,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   }
 
@@ -1959,7 +2301,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // SSH access needs no key material here: the gateway reaches the workspace over the daemon
     // control socket (gateway-spec §2), and client keys are authorized against the control plane.
     const parsed = parseRuntimeAdapterSupportInput(input);
-    return supportForInput(parsed);
+    return supportForInput(parsed, this.egress !== undefined);
   }
 
   /**
@@ -2018,11 +2360,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // Its Docker sidecar first, when the park stopped it: without it the recovery's FINAL never
     // completes. A recovery that fails to start parks it again (the next attempt unparks it).
     const reference = input.reference ?? (await this.containerName(input.resourceId));
+    if (this.egress !== undefined && reference !== undefined) {
+      await this.restoreEgressNetwork(this.egress, reference, input.resourceId);
+    }
     const unparked = reference === undefined ? false : await this.unparkDockerService(reference);
     try {
       await this.commandRunner("docker", ["start", input.resourceId]);
       await Promise.all([
-        this.blockCloudMetadataForRecovery(input.resourceId, input.reference ?? input.resourceId),
+        this.guardNetworkForRecovery(input.resourceId, input.reference ?? input.resourceId),
         this.verifyRunning
           ? this.awaitControlSocketReady(input.resourceId, input.reference ?? input.resourceId)
           : undefined,
@@ -2058,8 +2403,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * retained (e2e 5: one still up after 28 minutes). Only while the workspace container itself is
    * not running. The sidecar's image store is not kept for the recovery: a sidecar created with
    * `--rm` goes with its anonymous volume, one without stays stopped. Nothing of the executor's
-   * own disk is touched, and the sidecar network stays (the container is attached to it; `docker
-   * start` needs it).
+   * own disk is touched, and the sidecar network and the workspace's egress network stay (the
+   * container is attached to them; `docker start` needs them).
    *
    * `recover` starts the sidecar again before it starts the workspace container (e2e 6: the
    * recovered daemon's FINAL counts an unreachable workspace Docker daemon as a writer still
@@ -2346,6 +2691,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     if (network !== undefined && network !== "absent") {
       await this.removeNetworkDefinitively(network.id, networkName ?? network.id);
     }
+    if (this.egress !== undefined && parsed.reference !== undefined) {
+      await this.removeEgressNetwork(this.egress, parsed.reference);
+    }
     // Retain the control directory: a concurrent launch can reuse it immediately after removal.
 
     return parseRuntimeAdapterStopResult({
@@ -2438,6 +2786,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     const plannedStopGrace = holdsCaptures ? this.captureStopGraceSeconds : this.stopGraceSeconds;
     let acquisition: DockerContainerAcquisition | undefined;
     let dockerService: DockerServiceProvision | undefined;
+    let egressNetworkName: string | undefined;
     // The executor this launch created, adopted or found ended: from the moment it exists a
     // capture-sourced launch that fails keeps it (`launch-retention.ts`).
     let executor: { readonly identity: RuntimeLaunchIdentity; readonly ended: boolean } | undefined;
@@ -2456,10 +2805,17 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       const cloudMetadataReachable = parsed.blueprint.runtime.network.cloudMetadata;
       dockerService = dockerServiceEnabled
         ? await this.provisionDockerService(containerName, (id, name) =>
-            cloudMetadataReachable ? Promise.resolve() : this.blockCloudMetadata(id, name),
+            this.guardNetwork(id, name, cloudMetadataReachable),
           )
         : undefined;
       const dockerNetworkName = dockerService?.networkName;
+      // With per-workspace egress, the workspace's own network instead of any shared one.
+      if (this.egress !== undefined) {
+        egressNetworkName = await this.ensureEgressNetwork(this.egress, containerName);
+      }
+      // Every route the guard adds is one a packet socket could skip: with the guard on, root has
+      // no NET_RAW (and `sudo` cannot get it back from the bounding set).
+      const guardsRoutes = this.egress !== undefined || !cloudMetadataReachable;
       const imageReference = parsed.publication.image.digestReference;
       // SSH "access" now means the gateway should be able to reach a shell over the daemon control
       // socket — it no longer publishes/injects an inner sshd (gateway-spec §4.3). The control reach is
@@ -2554,6 +2910,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         // fetch its plan over the shared network — never races a later `network connect`.
         ...(dockerNetworkName === undefined ? [] : ["--network", dockerNetworkName]),
         ...(this.workspaceNetwork === undefined ? [] : ["--network", this.workspaceNetwork]),
+        ...(egressNetworkName === undefined ? [] : ["--network", egressNetworkName]),
         // The host itself stays reachable by name on every engine: a Linux daemon has no
         // `host.docker.internal` of its own, and `host-gateway` resolves to the bridge gateway.
         "--add-host",
@@ -2581,10 +2938,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           "-e",
           `${key}=${value}`,
         ]),
-        // A packet socket skips the routing table, so root could reach the metadata address with
-        // raw frames past the guard's route. Dropped from the bounding set, `sudo` cannot get it
+        // A packet socket skips the routing table, so root could reach a refused address with raw
+        // frames past the guard's routes. Dropped from the bounding set, `sudo` cannot get it
         // back; `ping` keeps working through Docker's `ping_group_range`.
-        ...(cloudMetadataReachable ? [] : ["--cap-drop", "NET_RAW"]),
+        ...(guardsRoutes ? ["--cap-drop", "NET_RAW"] : []),
         ...(this.memoryPolicy === undefined
           ? []
           : dockerMemoryArgs((await this.memoryLimits()).workspace)),
@@ -2611,9 +2968,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // launch reports ready, so before any session starts. What sealantd runs at boot on its own
       // (lifecycle steps, the foreground harness) can start up to the guard's run (~0.7 s) earlier.
       // An adopted container gets it too.
-      const guarded = cloudMetadataReachable
-        ? Promise.resolve()
-        : this.blockCloudMetadata(containerId, containerName);
+      const guarded = this.guardNetwork(containerId, containerName, cloudMetadataReachable);
       void guarded.catch(() => undefined);
       const reached = this.executorNetworks
         ?.launched({ runId: parsed.runId, executor: containerName })
@@ -2677,7 +3032,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         identity: executor?.identity,
         runtime: executor?.ended === true ? "exited" : "running",
         error,
-        cleanup: () => this.cleanupFailedLaunch(containerName, acquisition, dockerService),
+        cleanup: () =>
+          this.cleanupFailedLaunch(containerName, acquisition, dockerService, egressNetworkName),
       });
     }
   }

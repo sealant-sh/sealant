@@ -313,6 +313,32 @@ describe("parseWorkerEnv", () => {
     ).toBe("mend_default");
   });
 
+  it("refuses egress guard settings without per-workspace networks, and a shared network beside them", () => {
+    expect(() => parseWorkerEnv({ SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS: "10.0.0.5" })).toThrow(
+      /SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS applies only with SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS/,
+    );
+    expect(() => parseWorkerEnv({ SEALANT_HOST_PUBLIC_IPS: "auto" })).toThrow(
+      /SEALANT_HOST_PUBLIC_IPS applies only/,
+    );
+    expect(() =>
+      parseWorkerEnv({
+        SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS: "10.233.0.0/16",
+        SEALANT_DOCKER_WORKSPACE_NETWORK: "mend_default",
+      }),
+    ).toThrow(/cannot both be set/);
+    const env = parseWorkerEnv({
+      SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS: "10.233.0.0/16",
+      SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS: "192.168.10.0/24",
+      SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS: "mend-npm-mirror:npm-mirror",
+    });
+    expect(env.SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS).toBe("10.233.0.0/16");
+    // Compose passes an unset variable as empty: still unset.
+    expect(
+      parseWorkerEnv({ SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS: "", SEALANT_HOST_PUBLIC_IPS: "" })
+        .SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS,
+    ).toBeUndefined();
+  });
+
   it("keeps the registry mirrors and their container for the adapters to parse", () => {
     const env = parseWorkerEnv({
       SEALANT_DOCKER_REGISTRY_MIRRORS: "http://mend-docker-mirror:5000",

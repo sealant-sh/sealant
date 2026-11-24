@@ -23,7 +23,12 @@ export {
   type IdleVerdict,
   type ReachAttachment,
 } from "./reach.js";
-export { repositorySubnets, resourceSubnetPools, type ResourceSubnetPools } from "./subnets.js";
+export {
+  repositorySubnets,
+  resourceSubnetPools,
+  workspaceEgressSubnets,
+  type ResourceSubnetPools,
+} from "./subnets.js";
 export {
   makeResourceReconciler,
   type ResourceReconciler,

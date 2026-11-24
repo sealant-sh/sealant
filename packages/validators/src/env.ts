@@ -758,7 +758,28 @@ export const workerRuntimeEnvSchema = z.object({
   // refuse the cloud metadata address (it needs busybox `ip`). Unset: a pinned busybox. Point it
   // at a mirrored copy where the Docker host cannot pull from Docker Hub.
   SEALANT_DOCKER_NETWORK_GUARD_IMAGE: z.string().trim().min(1).optional(),
+  // Optional IPv4 range each Docker workspace's own egress network is carved from (one /28 each,
+  // held in sealant's subnet table). Set, every workspace runs on a network of its own, never a
+  // shared one, behind the private-range guard. Unset: as before. Exclusive with
+  // SEALANT_DOCKER_WORKSPACE_NETWORK.
+  SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS: z.string().trim().regex(IPV4_RANGE).optional(),
+  // Comma-separated private addresses and blocks (IPv4 or IPv6) workspaces may still reach behind
+  // that guard. Grammar is checked by `parseDockerEgressPolicy`.
+  SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS: z.string().trim().min(1).optional(),
+  // Comma-separated public addresses of the Docker host that guard refuses, and/or `auto` (every
+  // public address on the host's own interfaces).
+  SEALANT_HOST_PUBLIC_IPS: z.string().trim().min(1).optional(),
+  // Comma-separated `container[:alias...]` joined to each workspace's own egress network, such as
+  // the npm and Docker mirrors.
+  SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS: z.string().trim().min(1).optional(),
 });
+
+/** The egress variables that mean nothing without per-workspace egress networks. */
+const DOCKER_EGRESS_DEPENDENTS = [
+  "SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS",
+  "SEALANT_HOST_PUBLIC_IPS",
+  "SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS",
+] as const;
 
 /**
  * Kubernetes runtime (worker only). Grammar only — semantic validation (mapping overlap, staging
@@ -915,6 +936,25 @@ export const workerServerEnvSchema = databaseEnvSchema
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addBoatProviderIssues(input, ctx);
+  // Per-workspace egress replaces the shared network, and its guard's settings mean nothing
+  // without it: a value set alone would look like a protection that is not there.
+  if (input.SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS === undefined) {
+    for (const key of DOCKER_EGRESS_DEPENDENTS) {
+      if (input[key] !== undefined)
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message: `${key} applies only with SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS, which puts each Docker workspace on its own network behind the private-range guard.`,
+        });
+    }
+  } else if (input.SEALANT_DOCKER_WORKSPACE_NETWORK !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["SEALANT_DOCKER_WORKSPACE_NETWORK"],
+      message:
+        "SEALANT_DOCKER_WORKSPACE_NETWORK and SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS cannot both be set: a workspace on its own egress network never joins a shared one.",
+    });
+  }
   // The resource gateway is optional, and all or nothing: its host, its image and where the worker
   // relays every tunnel to it. With it, Boat workspaces reach project resources and the gateways
   // run on this worker's Docker host. Without it, Boat needs no Docker host: the worker serves only
