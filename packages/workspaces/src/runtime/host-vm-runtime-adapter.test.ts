@@ -593,6 +593,12 @@ describe("HostVmRuntimeAdapter · admission (review R2)", () => {
   });
 });
 
+/** What the caller's two sockets in a scope hold now (stand-ins: files with known contents). */
+const callerSocketsIn = async (scope: string) => ({
+  capture: await readFile(joinPath(scope, "capture.sock"), "utf8").catch(() => undefined),
+  session: await readFile(joinPath(scope, "session.sock"), "utf8").catch(() => undefined),
+});
+
 describe("HostVmRuntimeAdapter · a control scope the caller named (SLNT-1332)", () => {
   const SCOPE = "mend-exec-1";
   /** The caller binds its two sockets in the scope before it creates the workspace. */
@@ -603,10 +609,6 @@ describe("HostVmRuntimeAdapter · a control scope the caller named (SLNT-1332)",
     await writeFile(joinPath(scope, "session.sock"), "caller's session channel");
     return scope;
   };
-  const callerSocketsIn = async (scope: string) => ({
-    capture: await readFile(joinPath(scope, "capture.sock"), "utf8").catch(() => undefined),
-    session: await readFile(joinPath(scope, "session.sock"), "utf8").catch(() => undefined),
-  });
   const bound = {
     capture: "caller's capture relay",
     session: "caller's session channel",

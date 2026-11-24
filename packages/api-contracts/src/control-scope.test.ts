@@ -4,6 +4,16 @@ import { describe, expect, it } from "vitest";
 import { CONTROL_SCOPE_PROBLEMS, controlScopeProblem } from "./control-scope.js";
 import { createWorkspaceRequestSchema } from "./core-api/workspaces.js";
 
+const create = (controlScope: string) =>
+  Schema.decodeUnknownExit(createWorkspaceRequestSchema)({
+    ownerUserId: "user_1",
+    registryId: "local",
+    repository: "demo",
+    tag: "latest",
+    spec: {},
+    controlScope,
+  });
+
 describe("controlScopeProblem", () => {
   it("takes one path segment a caller mints", () => {
     for (const scope of ["mend-exec-1", "0", "a.b_c-d", "x".repeat(128)]) {
@@ -26,15 +36,6 @@ describe("controlScopeProblem", () => {
   });
 
   it("is the rule a create's controlScope is decoded by", () => {
-    const create = (controlScope: string) =>
-      Schema.decodeUnknownExit(createWorkspaceRequestSchema)({
-        ownerUserId: "user_1",
-        registryId: "local",
-        repository: "demo",
-        tag: "latest",
-        spec: {},
-        controlScope,
-      });
     expect(Exit.isSuccess(create("mend-exec-1"))).toBe(true);
     expect(Exit.isFailure(create("sealant-run-1-proxy"))).toBe(true);
   });

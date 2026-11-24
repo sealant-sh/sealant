@@ -69,6 +69,16 @@ afterAll(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+/** What a Unix socket answers to one connection. */
+const answers = (path: string) =>
+  new Promise<string>((done, fail) => {
+    const socket = createConnection(path);
+    let text = "";
+    socket.on("data", (chunk) => (text += chunk.toString("utf8")));
+    socket.once("end", () => done(text));
+    socket.once("error", fail);
+  });
+
 /** A read-only look at a disk image with the converter's own tools. */
 const inspectDisk = async (image: string, ...command: string[]): Promise<string> => {
   const [entrypoint = "", ...args] = command;
@@ -131,17 +141,17 @@ describe("host VM disks on a real Docker host", () => {
         await run("docker", ["image", "inspect", "--format", "{{.Id}}", tag])
       ).stdout.trim();
       const base = await storage.ensureBaseImage({ digest: utf8Digest, reference: tag });
-      const stat = (path: string) =>
+      const debugfsStat = (path: string) =>
         inspectDisk(base.imagePath, "debugfs", "-R", `stat ${path}`, "/disk.img");
       // The file kept its name: found by it, with its content.
       expect(
         await inspectDisk(base.imagePath, "debugfs", "-R", `cat ${certificate}`, "/disk.img"),
       ).toBe("certificate");
-      const long = await stat(pem);
+      const long = await debugfsStat(pem);
       expect(long).toMatch(/Type: symlink/);
       // The whole target, byte for byte (it lives in a block, so only its length is printed).
       expect(long).toMatch(new RegExp(`Size: ${String(Buffer.byteLength(certificate))}\\b`));
-      expect(await stat(shortLink)).toContain(`Fast link dest: "${shortTarget}"`);
+      expect(await debugfsStat(shortLink)).toContain(`Fast link dest: "${shortTarget}"`);
     } finally {
       await run("docker", ["image", "rm", "-f", tag]).catch(() => undefined);
     }
@@ -201,14 +211,6 @@ describe("host VM disks on a real Docker host", () => {
         servers.push(server);
         server.once("error", fail);
         server.listen(path, () => done());
-      });
-    const answers = (path: string) =>
-      new Promise<string>((done, fail) => {
-        const socket = createConnection(path);
-        let text = "";
-        socket.on("data", (chunk) => (text += chunk.toString("utf8")));
-        socket.once("end", () => done(text));
-        socket.once("error", fail);
       });
 
     it("keeps the caller's bound sockets through preparation and a failed launch's cleanup", async () => {

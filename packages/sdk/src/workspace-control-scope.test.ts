@@ -97,7 +97,10 @@ const serve = async () => {
     [Symbol.asyncDispose]: async () => {
       await client.close();
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error === undefined ? resolve() : reject(error))),
+        server.close((error) => {
+          if (error !== undefined) reject(error);
+          else resolve();
+        }),
       );
     },
   };

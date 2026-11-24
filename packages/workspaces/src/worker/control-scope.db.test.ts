@@ -19,7 +19,7 @@ import {
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Result } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
@@ -62,8 +62,8 @@ describe.skipIf(DATABASE_URL === undefined)("executor control scopes (Postgres)"
     expect(first.controlScope).toBe(scope);
 
     const second = await run(Effect.result(attempt(scope)));
-    expect(second._tag).toBe("Failure");
-    if (second._tag === "Failure") {
+    expect(Result.isFailure(second)).toBe(true);
+    if (Result.isFailure(second)) {
       expect(second.failure).toBeInstanceOf(WorkspaceControlScopeTakenError);
     }
 
