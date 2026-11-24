@@ -900,6 +900,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     const selectedAdapterId = selection.adapterId;
     // Built and launched as the runtime that took it (a preferred runtime's fallback included).
     const spec = selection.blueprint;
+    // Every way this phase ends with a publication (a native snapshot, a reused plan, a fresh
+    // build) hands the launch the attempt's control scope through here, so none can drop it.
+    const withControlScope = <A extends object>(fields: A) => ({ ...fields, controlScope });
     const runtime = options.runtimes.find(
       (candidate) => candidate.adapter.id === selectedAdapterId,
     );
@@ -969,13 +972,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       };
       if (!(yield* markSucceeded({ builderId: "boat-native", resultPayload, publication })))
         return null;
-      return {
+      return withControlScope({
         prepared: preparedPublication(runtime.adapter, publication),
         spec,
         planned: null,
         scope,
         imageProbe: publication.evidence.imageProbe,
-      };
+      });
     }
     const imageBuilder = runtime.imageBuilder;
     const prepare = (image: PublishedImage, resultPayload: WorkspaceBuild): PreparedPublication => {
@@ -1031,13 +1034,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         `Workspace image plan unchanged (hash ${reuse.planHash}); skipped build and publish, reusing ${reuse.publishedImage.digestReference}.`,
       );
 
-      return {
+      return withControlScope({
         prepared: prepare(reuse.publishedImage, reuse.resultPayload),
         spec,
         planned,
         scope,
         imageProbe: reuse.resultPayload.metadata?.imageProbe,
-      };
+      });
     }
 
     // Publish under plan-keyed coordinates — one repository per OS family, one tag per plan hash —
@@ -1172,14 +1175,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       return null;
     }
 
-    return {
+    return withControlScope({
       prepared: prepare(publishedImage, compileResult),
       spec,
       planned,
       scope,
       imageProbe: compileResult.metadata?.imageProbe,
-      controlScope,
-    };
+    });
   });
 
   const built = yield* buildAndPublish.pipe(Effect.tapError(buildFailureCleanup));

@@ -1686,6 +1686,85 @@ describe("processWorkspaceBuildJobEffect", () => {
     );
   });
 
+  describe("the control scope the create named (SLNT-1332)", () => {
+    const planHash = "e".repeat(64);
+    const launchWith = (reusedPlan: boolean) => {
+      const jobs = workspaceBuildJobRepoStub({
+        claimJobById: () =>
+          buildJobRow({
+            id: "job_scope",
+            runId: "run_scope",
+            registryId: "local-zot",
+            requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+          }),
+        // A plan published before: the launch reuses its image and builds nothing.
+        ...(reusedPlan
+          ? {
+              getLatestSucceededJobByPlanHash: () =>
+                buildJobRow({
+                  id: "job_prior",
+                  status: "succeeded",
+                  registryId: "local-zot",
+                  repository: "session-aaaa",
+                  tag: "sdk-11111111",
+                  resultPayload: {
+                    ...createCompileResult({ id: "fedora" }),
+                    metadata: { notes: [], planHash },
+                  },
+                  publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+                  publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+                  publishedDigest: "sha256:prior",
+                }),
+            }
+          : {}),
+      });
+      const attempts = {
+        ...workspaceAttemptRepoStub(),
+        getAttemptById: vi.fn((_id: string) =>
+          Effect.succeed(attemptRow({ id: "run_scope", controlScope: "mend-exec-1" })),
+        ),
+      };
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
+      const runtimeAdapter = {
+        ...createRuntimeAdapterStub("docker"),
+        // A runtime whose executors mount a control scope: the one that may take the launch.
+        hasControlScopes: true,
+      };
+      return Effect.gen(function* () {
+        yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_scope",
+            compileWorkspaceSpec,
+            planWorkspaceSpec: vi.fn(() => ({
+              osFamily: "fedora" as const,
+              platform: "linux/amd64" as const,
+              imagePlan: plannedImage,
+              containerfile: "FROM fedora:41",
+              planHash,
+            })),
+            // The reused image is still where its plan published it.
+            registryClient: fakeService<RegistryClient>({
+              ...successRegistryClient(),
+              headManifest: vi.fn(async () => "sha256:prior"),
+            }),
+            runtimeAdapters: [runtimeAdapter],
+          }),
+        );
+        expect(compileWorkspaceSpec).toHaveBeenCalledTimes(reusedPlan ? 0 : 1);
+        expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+          expect.objectContaining({ runId: "run_scope", controlScope: "mend-exec-1" }),
+          expect.anything(),
+        );
+      }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+    };
+
+    it.effect("reaches the launch of a fresh build", () => launchWith(false));
+    it.effect("reaches the launch of a reused plan, whose image is not built again", () =>
+      launchWith(true),
+    );
+  });
+
   describe("a capture launch that fails after its executor became ready", () => {
     const captureJob = (id: string) =>
       workspaceBuildJobRepoStub({

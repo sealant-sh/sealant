@@ -240,8 +240,10 @@ which gives P2-B its form without a stall.
   writes (`upsertRuntimeInstance`, `identifyStrandedLaunch`) as one more column, which no Boat step
   reads or writes. Round 1 of its review made selection hand back the blueprint the build and launch
   use, retargeted to the runtime that took a preferred runtime's fallback, so a fallback onto Boat
-  reaches Boat as the `boat` blueprint it would be if Boat were asked for. No covered statement, its
-  order, or a Boat answer it acts on changed, so no action moved, and `sync` stays.
+  reaches Boat as the `boat` blueprint it would be if Boat were asked for. Round 2 sent every way
+  the build phase ends (a native snapshot, a reused plan, a fresh build) through one helper that
+  carries the scope to the launch; the Boat path's statements are unchanged. No covered statement,
+  its order, or a Boat answer it acts on changed, so no action moved, and `sync` stays.
 
 ## Each property fails on a broken variant
 
