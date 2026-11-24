@@ -221,12 +221,12 @@ which gives P2-B its form without a stall.
 ### Covered hunks read without a model change
 
 - SLNT-1320 (egress proxies), `process-workspace-build-job.ts`: the build job reads the workspace's
-  pinned network policy (`workspace_egress_policies`) right after it parses the spec, before
-  runtime selection and before any `boat_runs` statement or Boat call. A Boat workspace that would
-  need an egress proxy is refused by selection. The launch input gains an `egressProxy` hook, and
-  brokered placeholders join the staged secret env; both reach only proxy-backed Docker launches.
-  No covered function's statements, their order, or the Boat answers they act on changed, so no
-  action moved. `sync` stays where it was: sealant#641's hunks are still unread against the models.
+  pinned network policy (`workspace_egress_policies`) right after it parses the spec, before runtime
+  selection and before any `boat_runs` statement or Boat call. A Boat workspace that would need an
+  egress proxy is refused by selection. The launch input gains an `egressProxy` hook, and brokered
+  placeholders join the staged secret env; both reach only proxy-backed Docker launches. No covered
+  function's statements, their order, or the Boat answers they act on changed, so no action moved.
+  `sync` stays where it was: sealant#641's hunks are still unread against the models.
 
 ## Each property fails on a broken variant
 

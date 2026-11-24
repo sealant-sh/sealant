@@ -52,8 +52,8 @@ import { specHarnessId } from "../internal/blueprint.js";
 import { elapsed } from "../internal/clock.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
-import { requireValidNetworkPolicy } from "../internal/network-policy.js";
 import { requireCredentialPlacements } from "../internal/features.js";
+import { requireValidNetworkPolicy } from "../internal/network-policy.js";
 import { requireProcessUser } from "../internal/process-user.js";
 import type {
   CredentialPlacementLogin,

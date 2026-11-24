@@ -24,9 +24,9 @@ import { chmod, chown, mkdir } from "node:fs/promises";
 import { join as joinPath } from "node:path";
 
 import { cidr, formatCidr } from "./cidr.js";
-import type { DockerCommandRunner } from "./docker-runtime-adapter.js";
 import { mirrorConnectArgv, type WorkspaceMirrorContainer } from "./docker-egress.js";
 import { isolatedNetworkCreateArgv } from "./docker-isolated-network.js";
+import type { DockerCommandRunner } from "./docker-runtime-adapter.js";
 import type { EgressProxyHostFacts } from "./egress-proxy-policy.js";
 import {
   createProxyAdminClient,
@@ -70,7 +70,8 @@ const PROXY_EGRESS_NETWORK_LABEL = "sealant.proxy-egress";
 const DEFAULT_HEALTH_TIMEOUT_MS = 30_000;
 const HEALTH_POLL_MS = 200;
 
-export const egressProxyName = (workspaceContainer: string): string => `${workspaceContainer}-proxy`;
+export const egressProxyName = (workspaceContainer: string): string =>
+  `${workspaceContainer}-proxy`;
 export const isolatedNetworkName = (workspaceContainer: string): string =>
   `${workspaceContainer}-isolated`;
 export const proxyEgressNetworkName = (workspaceContainer: string): string =>
@@ -212,7 +213,8 @@ const failureText = (error: unknown): string => {
   if (typeof stderr === "string" && stderr.trim().length > 0) return stderr.trim();
   return error instanceof Error ? error.message : String(error);
 };
-const isNoSuch = (error: unknown): boolean => /no such (container|network|object)/i.test(failureText(error));
+const isNoSuch = (error: unknown): boolean =>
+  /no such (container|network|object)/i.test(failureText(error));
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class EgressProxyOrchestrator {
@@ -285,7 +287,9 @@ export class EgressProxyOrchestrator {
     ]);
     for (const mirror of this.#mirrors) {
       // Best effort: a mirror that is missing or already joined changes nothing.
-      await this.#run("docker", [...mirrorConnectArgv(outboundName, mirror)]).catch(() => undefined);
+      await this.#run("docker", [...mirrorConnectArgv(outboundName, mirror)]).catch(
+        () => undefined,
+      );
     }
     return {
       isolated: { name: isolatedName, subnet: isolatedSubnet },
@@ -295,11 +299,19 @@ export class EgressProxyOrchestrator {
   }
 
   async #ensureNetwork(name: string, subnet: string, createArgv: Array<string>): Promise<void> {
-    const exists = await this.#run("docker", ["network", "inspect", "--format", "{{.Id}}", name]).then(
+    const exists = await this.#run("docker", [
+      "network",
+      "inspect",
+      "--format",
+      "{{.Id}}",
+      name,
+    ]).then(
       (result) => result.stdout.trim().length > 0,
       (error: unknown) => {
         if (isNoSuch(error)) return false;
-        throw new Error(`Whether the network '${name}' exists could not be told: ${failureText(error)}`);
+        throw new Error(
+          `Whether the network '${name}' exists could not be told: ${failureText(error)}`,
+        );
       },
     );
     if (exists) return;
@@ -560,7 +572,9 @@ export class EgressProxyOrchestrator {
           .filter((line) => line.length > 0),
       (error: unknown) => {
         if (isNoSuch(error)) return undefined;
-        throw new Error(`Whether the network '${network}' remains could not be told: ${failureText(error)}`);
+        throw new Error(
+          `Whether the network '${network}' remains could not be told: ${failureText(error)}`,
+        );
       },
     );
     if (attached === undefined) return;
@@ -578,7 +592,9 @@ export class EgressProxyOrchestrator {
     }
   }
 
-  async #inspect(name: string): Promise<{ readonly id: string; readonly running: boolean } | undefined> {
+  async #inspect(
+    name: string,
+  ): Promise<{ readonly id: string; readonly running: boolean } | undefined> {
     try {
       const result = await this.#run("docker", [
         "inspect",

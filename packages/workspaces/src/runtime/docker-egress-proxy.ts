@@ -1,3 +1,5 @@
+import { NETWORK_GATE_MARKER } from "./docker-egress.js";
+import { EGRESS_PROXY_PORTS } from "./egress-proxy-orchestrator.js";
 /**
  * The workspace side of a proxy-backed Docker workspace (workspace isolation architecture §3.1):
  * the workspace container is on its isolated network alone with `<name>-proxy`, reaches out only
@@ -5,8 +7,6 @@
  * proxy inspects. Pure: the adapter runs what these build.
  */
 import { EXECUTOR_CA_ENV } from "./executor-ca.js";
-import { NETWORK_GATE_MARKER } from "./docker-egress.js";
-import { EGRESS_PROXY_PORTS } from "./egress-proxy-orchestrator.js";
 
 /** A tmpfs every start makes empty, where the gate writes the trust bundle. */
 export const EGRESS_CA_DIR = "/run/sealant-egress";
@@ -61,9 +61,12 @@ export const proxiedWorkspaceArgs = (input: {
   readonly dockerService: boolean;
 }): ReadonlyArray<string> => {
   const proxy = `http://${input.proxyIp}:${String(EGRESS_PROXY_PORTS.httpProxy)}`;
-  const noProxy = ["localhost", "127.0.0.1", "::1", ...(input.dockerService ? ["docker"] : [])].join(
-    ",",
-  );
+  const noProxy = [
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    ...(input.dockerService ? ["docker"] : []),
+  ].join(",");
   const env: ReadonlyArray<readonly [string, string]> = [
     ["HTTP_PROXY", proxy],
     ["HTTPS_PROXY", proxy],

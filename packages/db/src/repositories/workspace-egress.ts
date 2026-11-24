@@ -221,9 +221,10 @@ const make: Effect.Effect<WorkspaceEgressRepoService, never, SealantDB> = Effect
               .returning({ revocationWatermark: workspaceEgressPolicies.revocationWatermark });
             if (bumped === undefined) return yield* Effect.fail(new Error("no policy row"));
             const watermark = bumped.revocationWatermark;
-            const rows = [
-              ...new Set(input.secretIds.map((id) => id.trim())),
-            ].map((target) => ({ kind: "secret" as const, target }));
+            const rows = [...new Set(input.secretIds.map((id) => id.trim()))].map((target) => ({
+              kind: "secret" as const,
+              target,
+            }));
             const hosts = [...new Set(input.hosts.map((host) => host.trim().toLowerCase()))].map(
               (target) => ({ kind: "host" as const, target }),
             );

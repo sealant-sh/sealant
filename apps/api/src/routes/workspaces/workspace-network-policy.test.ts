@@ -83,9 +83,7 @@ const SECRET_VALUE = "Bearer vercel-real-secret";
 const cipher: CredentialCipherService = Effect.runSync(
   Effect.gen(function* () {
     return yield* CredentialCipher;
-  }).pipe(
-    Effect.provide(credentialCipherLayer({ key: Buffer.alloc(32, 9).toString("base64") })),
-  ),
+  }).pipe(Effect.provide(credentialCipherLayer({ key: Buffer.alloc(32, 9).toString("base64") }))),
 );
 
 const vercelSecret = (secretId = "sec_vercel"): BrokeredSecret => ({
@@ -382,7 +380,11 @@ describe("revokeWorkspaceAccess", () => {
         })
         .pipe(Effect.provide(launchedLayer(egress))),
     );
-    expect(response).toEqual({ workspaceId: "ws_1", revocationWatermark: 1, enforcement: "pending" });
+    expect(response).toEqual({
+      workspaceId: "ws_1",
+      revocationWatermark: 1,
+      enforcement: "pending",
+    });
     expect(egress.revocations).toHaveLength(1);
     expect(egress.proxies.get("run_1")?.confirmedRevocationWatermark).toBeNull();
   });

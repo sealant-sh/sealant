@@ -348,7 +348,8 @@ describe("network policy admission (fail closed, never downgraded)", () => {
     expect(enforced("docker")).toEqual(["restricted", "brokeredSecrets"]);
     expect(enforced("boat")).toEqual(["vmIsolation"]);
     expect(enforced("microvm")).toEqual(["vmIsolation"]);
-    for (const runtime of ["k8s", "k3s", "cloudflare"] as const) expect(enforced(runtime)).toEqual([]);
+    for (const runtime of ["k8s", "k3s", "cloudflare"] as const)
+      expect(enforced(runtime)).toEqual([]);
   });
 
   it("refuses restricted egress with Docker inside a Docker workspace, and tells the owner what to switch to", () => {

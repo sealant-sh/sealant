@@ -97,7 +97,11 @@ describe.skipIf(binary === undefined)("the admin wire of a real egress proxy", (
       brokeredValues: Redacted.make({ "ref-vercel": "Bearer not-a-real-token" }),
       ca,
       tombstones: { revocationWatermark, revokedSecretIds, revokedHosts: [] },
-      host: { operatorAllowedPrivateCidrs: ["10.42.0.0/16"], hostPublicIps: ["203.0.113.7/32"], blockedCidrs: [] },
+      host: {
+        operatorAllowedPrivateCidrs: ["10.42.0.0/16"],
+        hostPublicIps: ["203.0.113.7/32"],
+        blockedCidrs: [],
+      },
     });
 
   it("starts closed", async () => {
@@ -132,7 +136,12 @@ describe.skipIf(binary === undefined)("the admin wire of a real egress proxy", (
 
   it("revokes, and refuses a watermark behind its own as the error callers branch on", async () => {
     const revoked = await client.revoke(
-      proxyRevokeRequest({ revocationWatermark: 3, secretIds: [], hosts: ["api.github.com"], all: false }),
+      proxyRevokeRequest({
+        revocationWatermark: 3,
+        secretIds: [],
+        hosts: ["api.github.com"],
+        all: false,
+      }),
     );
     expect(revoked).toEqual({ revocationWatermark: 3, closed: 0 });
     const behind = await client.putPolicy(document(2)).then(
@@ -144,8 +153,14 @@ describe.skipIf(binary === undefined)("the admin wire of a real egress proxy", (
   });
 
   it("refuses a framing header the way sealant's own rules do", async () => {
-    const bad = { ...document(3), brokeredSecrets: [{ ...document(3).brokeredSecrets[0]!, headerName: "Host" }] };
-    await expect(client.putPolicy(bad)).rejects.toMatchObject({ status: 400, code: "invalid_policy" });
+    const bad = {
+      ...document(3),
+      brokeredSecrets: [{ ...document(3).brokeredSecrets[0]!, headerName: "Host" }],
+    };
+    await expect(client.putPolicy(bad)).rejects.toMatchObject({
+      status: 400,
+      code: "invalid_policy",
+    });
   });
 
   it("reports a socket nothing listens on as unreachable", async () => {

@@ -26,12 +26,7 @@ import { storedProxyPolicyDocument } from "../runtime/egress-proxy-store.js";
 /** A third of the proxy's 120 s lease: two heartbeats can be lost before it fails closed. */
 export const EGRESS_PROXY_HEARTBEAT_MS = 30_000;
 
-export type EgressProxySweepOutcome =
-  | "renewed"
-  | "pushed"
-  | "restarted"
-  | "launching"
-  | "failed";
+export type EgressProxySweepOutcome = "renewed" | "pushed" | "restarted" | "launching" | "failed";
 
 const failureText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -94,9 +89,10 @@ export const sweepEgressProxy = (input: {
     return "restarted" as const;
   }).pipe(
     Effect.catchCause((cause) =>
-      Effect.logError(`Egress proxy ${proxy.proxyContainer} could not be kept current.`, cause).pipe(
-        Effect.as("failed" as const),
-      ),
+      Effect.logError(
+        `Egress proxy ${proxy.proxyContainer} could not be kept current.`,
+        cause,
+      ).pipe(Effect.as("failed" as const)),
     ),
   );
 };
@@ -108,11 +104,13 @@ export const sweepEgressProxies = (input: {
   readonly proxies: EgressProxyOrchestrator;
 }): Effect.Effect<Readonly<Record<EgressProxySweepOutcome, number>>, never> =>
   Effect.gen(function* () {
-    const live = yield* input.repo.listLiveProxies().pipe(
-      Effect.catchCause((cause) =>
-        Effect.logError("Listing the live egress proxies failed.", cause).pipe(Effect.as([])),
-      ),
-    );
+    const live = yield* input.repo
+      .listLiveProxies()
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("Listing the live egress proxies failed.", cause).pipe(Effect.as([])),
+        ),
+      );
     const outcomes = yield* Effect.forEach(
       live,
       (each) => sweepEgressProxy({ ...input, live: each }),

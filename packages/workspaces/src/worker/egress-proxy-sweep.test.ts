@@ -54,7 +54,12 @@ const proxyRow = (overrides: Partial<WorkspaceEgressProxy> = {}): WorkspaceEgres
   caKeySealed,
   encryptionKeyId: "k1",
   caNotAfter: ca.notAfter,
-  network: { proxyIp: "10.233.0.14", operatorAllowedPrivateCidrs: [], hostPublicIps: [], blockedCidrs: [] },
+  network: {
+    proxyIp: "10.233.0.14",
+    operatorAllowedPrivateCidrs: [],
+    hostPublicIps: [],
+    blockedCidrs: [],
+  },
   confirmedPolicyHash: egressPolicyHash({ mode: "restricted", policyHash: "sha256:pinned" }, []),
   confirmedRevocationWatermark: 2,
   createdAt: new Date(),
@@ -70,7 +75,14 @@ const repoRecording = () => {
     revoke: () => Effect.die("unused"),
     listRevocations: () =>
       Effect.succeed([
-        { id: 1, workspaceId: "ws_1", revocationWatermark: 2, kind: "secret", target: "psec_old", createdAt: new Date() },
+        {
+          id: 1,
+          workspaceId: "ws_1",
+          revocationWatermark: 2,
+          kind: "secret",
+          target: "psec_old",
+          createdAt: new Date(),
+        },
       ]),
     tombstones: () => Effect.succeed(tombstonesOf(2, [])),
     ensureProxy: () => Effect.die("unused"),
@@ -78,7 +90,10 @@ const repoRecording = () => {
     getProxy: () => Effect.die("unused"),
     confirmProxy: (input) =>
       Effect.sync(() => {
-        confirmed.push({ policyHash: input.policyHash, revocationWatermark: input.revocationWatermark });
+        confirmed.push({
+          policyHash: input.policyHash,
+          revocationWatermark: input.revocationWatermark,
+        });
       }),
     listLiveProxies: () => Effect.succeed([]),
   };
@@ -103,13 +118,28 @@ const dockerWithProxy = (running: boolean) => {
 const clientWith = (overrides: Partial<ProxyAdminClient>) => {
   const pushed: ProxyPolicyDocument[] = [];
   const client: ProxyAdminClient = {
-    health: async () => ({ initialized: true, revocationWatermark: 2, activeConnections: 0, leaseRemainingMs: 1, leaseExpired: false, resyncRequired: false }),
+    health: async () => ({
+      initialized: true,
+      revocationWatermark: 2,
+      activeConnections: 0,
+      leaseRemainingMs: 1,
+      leaseExpired: false,
+      resyncRequired: false,
+    }),
     putPolicy: async (document) => {
       pushed.push(document);
-      return { policyHash: document.policyHash, revocationWatermark: document.revocationWatermark, closed: 0 };
+      return {
+        policyHash: document.policyHash,
+        revocationWatermark: document.revocationWatermark,
+        closed: 0,
+      };
     },
     revoke: async () => ({ revocationWatermark: 0, closed: 0 }),
-    heartbeat: async (watermark) => ({ resyncRequired: false, leaseRemainingMs: 120_000, revocationWatermark: watermark }),
+    heartbeat: async (watermark) => ({
+      resyncRequired: false,
+      leaseRemainingMs: 120_000,
+      revocationWatermark: watermark,
+    }),
     ...overrides,
   };
   return { client, pushed };
@@ -160,11 +190,19 @@ describe("the egress proxy sweep", () => {
 
   it("pushes the stored policy, tombstones included, when the proxy asks for a resync", async () => {
     const { client, pushed } = clientWith({
-      heartbeat: async (watermark) => ({ resyncRequired: true, leaseRemainingMs: 120_000, revocationWatermark: watermark }),
+      heartbeat: async (watermark) => ({
+        resyncRequired: true,
+        leaseRemainingMs: 120_000,
+        revocationWatermark: watermark,
+      }),
     });
     const { outcome, confirmed } = await sweep({ docker: dockerWithProxy(true), client });
     expect(outcome).toBe("pushed");
-    expect(pushed[0]).toMatchObject({ revocationWatermark: 2, revokedSecretIds: ["psec_old"], executorCaCertPem: ca.certPem });
+    expect(pushed[0]).toMatchObject({
+      revocationWatermark: 2,
+      revokedSecretIds: ["psec_old"],
+      executorCaCertPem: ca.certPem,
+    });
     expect(confirmed).toEqual([{ policyHash: pushed[0]?.policyHash, revocationWatermark: 2 }]);
   });
 
@@ -193,7 +231,11 @@ describe("the egress proxy sweep", () => {
 
   it("leaves a proxy whose launch has not measured the host to its launch", async () => {
     const { client } = clientWith({});
-    const { outcome } = await sweep({ docker: dockerWithProxy(true), client, proxy: proxyRow({ network: null }) });
+    const { outcome } = await sweep({
+      docker: dockerWithProxy(true),
+      client,
+      proxy: proxyRow({ network: null }),
+    });
     expect(outcome).toBe("launching");
   });
 });

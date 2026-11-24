@@ -36,7 +36,9 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
     );
   });
 
-  const run = <A, E>(effect: Effect.Effect<A, E, WorkspaceEgressRepo | WorkspaceRuntimeInstanceRepo>) =>
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, WorkspaceEgressRepo | WorkspaceRuntimeInstanceRepo>,
+  ) =>
     Effect.runPromise(
       effect.pipe(
         Effect.provide(
@@ -98,11 +100,18 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
           // Concurrent on purpose: the watermark row serialises them.
           { concurrency: "unbounded" },
         );
-        const third = yield* repo.revoke({ workspaceId, secretIds: ["psec_a"], hosts: [], all: true });
+        const third = yield* repo.revoke({
+          workspaceId,
+          secretIds: ["psec_a"],
+          hosts: [],
+          all: true,
+        });
         return { first, second, third };
       }),
     );
-    expect([tombstones.first.revocationWatermark, tombstones.second.revocationWatermark].toSorted()).toEqual([1, 2]);
+    expect(
+      [tombstones.first.revocationWatermark, tombstones.second.revocationWatermark].toSorted(),
+    ).toEqual([1, 2]);
     expect(tombstones.third).toEqual({
       revocationWatermark: 3,
       revokedSecretIds: ["psec_a"],
@@ -116,14 +125,32 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
     const after = await run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceEgressRepo;
-        yield* repo.putPolicy({ workspaceId, networkPolicy: { mode: "standard", policyHash: "h1" }, brokeredSecrets: [], brokeredValuesSealed: undefined, encryptionKeyId: undefined });
+        yield* repo.putPolicy({
+          workspaceId,
+          networkPolicy: { mode: "standard", policyHash: "h1" },
+          brokeredSecrets: [],
+          brokeredValuesSealed: undefined,
+          encryptionKeyId: undefined,
+        });
         yield* repo.revoke({ workspaceId, secretIds: ["psec_b"], hosts: [], all: false });
-        yield* repo.putPolicy({ workspaceId, networkPolicy: { mode: "restricted", policyHash: "h2" }, brokeredSecrets: [], brokeredValuesSealed: undefined, encryptionKeyId: undefined });
-        return { policy: yield* repo.getPolicy(workspaceId), tombstones: yield* repo.tombstones(workspaceId) };
+        yield* repo.putPolicy({
+          workspaceId,
+          networkPolicy: { mode: "restricted", policyHash: "h2" },
+          brokeredSecrets: [],
+          brokeredValuesSealed: undefined,
+          encryptionKeyId: undefined,
+        });
+        return {
+          policy: yield* repo.getPolicy(workspaceId),
+          tombstones: yield* repo.tombstones(workspaceId),
+        };
       }),
     );
     expect(after.policy?.networkPolicy?.policyHash).toBe("h2");
-    expect(after.tombstones).toMatchObject({ revocationWatermark: 1, revokedSecretIds: ["psec_b"] });
+    expect(after.tombstones).toMatchObject({
+      revocationWatermark: 1,
+      revokedSecretIds: ["psec_b"],
+    });
   });
 
   it("keeps the CA a run's first launch wrote, and never moves a confirmation backwards", async () => {
@@ -140,7 +167,10 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
     );
     expect(result.first.created).toBe(true);
     expect(result.again).toMatchObject({ created: false, proxy: { caCertPem: "CA-1" } });
-    expect(result.stored).toMatchObject({ confirmedPolicyHash: "h", confirmedRevocationWatermark: 5 });
+    expect(result.stored).toMatchObject({
+      confirmedPolicyHash: "h",
+      confirmedRevocationWatermark: 5,
+    });
   });
 
   it("sweeps only the current run's proxy, and only while its executor may run", async () => {

@@ -48,9 +48,9 @@ await run.record.replay();
 
 `workspaces.create({ repository, harness, runtime: "docker" })` requires Docker. The same option
 accepts `boat`, `k8s`, `k3s`, `cloudflare`, `microvm` or `host-vm` (each workspace in its own VM on
-the deployment's Linux KVM host). An unavailable or unsupported choice is
-refused rather than replaced with another runtime. Omit `runtime` to keep the deployment's default.
-The choice applies to this new workspace; it does not move an existing workspace.
+the deployment's Linux KVM host). An unavailable or unsupported choice is refused rather than
+replaced with another runtime. Omit `runtime` to keep the deployment's default. The choice applies
+to this new workspace; it does not move an existing workspace.
 
 Boat still requires the operator's admission settings, a supported image and a capture source.
 Selecting it through the SDK grants no admission. The SDK returns the control plane's refusal in
@@ -311,9 +311,9 @@ I/O, not files.
 
 ## Network policy and brokered secrets
 
-A network policy says what a workspace may reach. `standard` is the public internet without
-private, metadata and host addresses; `restricted` is only the hosts, mirrors and resources it
-lists. A brokered secret is one the workspace uses without ever holding it:
+A network policy says what a workspace may reach. `standard` is the public internet without private,
+metadata and host addresses; `restricted` is only the hosts, mirrors and resources it lists. A
+brokered secret is one the workspace uses without ever holding it:
 
 ```ts
 const workspace = await sealant.workspaces.create({
@@ -340,8 +340,8 @@ const workspace = await sealant.workspaces.create({
 
 - **The workspace only sees the placeholder.** It reads `sealant-github-placeholder` from
   `GITHUB_AUTH`. When it sends the placeholder in `Authorization` over HTTPS to `api.github.com`,
-  the workspace's egress proxy puts the real value in its place. Sent anywhere else, the
-  placeholder is worthless.
+  the workspace's egress proxy puts the real value in its place. Sent anywhere else, the placeholder
+  is worthless.
 - **Values are sealed, never shown.** `brokeredSecretValues` (keyed by `secretRef`) is sealed when
   the control plane receives it and handed only to the egress proxy, again after every restart. It
   is never in the spec, the workspace's environment or any read.
@@ -354,8 +354,8 @@ const workspace = await sealant.workspaces.create({
 - **Checked before anything is sent**, with the control plane's rules and words (exported as
   `networkPolicyProblems`, `brokeredSecretsProblems` and `brokeredSecretValuesProblems`): exact host
   names only, never a wildcard; one header name per secret, never one that frames or routes the
-  request (`Host`, `Content-Length`, `Proxy-Authorization`…); a value for every secret. A refusal has
-  code `invalid_network_policy` and never quotes a value.
+  request (`Host`, `Content-Length`, `Proxy-Authorization`…); a value for every secret. A refusal
+  has code `invalid_network_policy` and never quotes a value.
 
 Change the policy on a live workspace, take access away, and read what holds now:
 

@@ -140,7 +140,8 @@ const field = <T>(
   check: (value: unknown) => value is T,
 ): T => {
   const value = body[name];
-  if (!check(value)) throw new ProxyAdminUnreachableError(`the egress proxy answered without ${name}`);
+  if (!check(value))
+    throw new ProxyAdminUnreachableError(`the egress proxy answered without ${name}`);
   return value;
 };
 const isNumber = (value: unknown): value is number => typeof value === "number";

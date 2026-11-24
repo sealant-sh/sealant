@@ -30,7 +30,10 @@ const fakeDocker = () => {
     if (verb === "network" && sub === "inspect") {
       const members = networks.get(last);
       if (members === undefined) throw noSuch("network");
-      return { stdout: args.includes("{{.Id}}") ? `id-${last}\n` : [...members].join("\n"), stderr: "" };
+      return {
+        stdout: args.includes("{{.Id}}") ? `id-${last}\n` : [...members].join("\n"),
+        stderr: "",
+      };
     }
     if (verb === "network" && sub === "create") {
       networks.set(last, new Set());
@@ -112,7 +115,11 @@ const healthyClient = (overrides: Partial<ProxyAdminClient> = {}): ProxyAdminCli
   }),
   putPolicy: async () => ({ policyHash: "h", revocationWatermark: 0, closed: 0 }),
   revoke: async (request) => ({ revocationWatermark: request.revocationWatermark, closed: 2 }),
-  heartbeat: async () => ({ resyncRequired: false, leaseRemainingMs: 120_000, revocationWatermark: 0 }),
+  heartbeat: async () => ({
+    resyncRequired: false,
+    leaseRemainingMs: 120_000,
+    revocationWatermark: 0,
+  }),
   ...overrides,
 });
 
@@ -187,8 +194,15 @@ describe("EgressProxyOrchestrator", () => {
       outbound: { name: "sealant-run1-proxy-egress", subnet: "10.210.0.16/28" },
       proxyIp: "10.210.0.14",
     });
-    const create = docker.calls.find((call) => call.includes("sealant-run1-isolated") && call[1] === "create");
-    expect(create).toEqual(expect.arrayContaining(["--internal", "com.docker.network.bridge.gateway_mode_ipv4=isolated"]));
+    const create = docker.calls.find(
+      (call) => call.includes("sealant-run1-isolated") && call[1] === "create",
+    );
+    expect(create).toEqual(
+      expect.arrayContaining([
+        "--internal",
+        "com.docker.network.bridge.gateway_mode_ipv4=isolated",
+      ]),
+    );
     // The mirror joins the proxy's outbound network, never the workspace's.
     expect(docker.networks.get("sealant-run1-proxy-egress")?.has("npm-mirror")).toBe(true);
     expect(docker.networks.get("sealant-run1-isolated")?.has("npm-mirror")).toBe(false);
@@ -198,10 +212,17 @@ describe("EgressProxyOrchestrator", () => {
     const docker = fakeDocker();
     const { orchestrator: proxies } = orchestrator(docker);
     const networks = await proxies.prepareNetworks("sealant-run1");
-    await proxies.startProxy({ workspaceContainer: "sealant-run1", networks, reachNetworks: ["sealant-run1-reach"] });
+    await proxies.startProxy({
+      workspaceContainer: "sealant-run1",
+      networks,
+      reachNetworks: ["sealant-run1-reach"],
+    });
     const at = (match: (call: string[]) => boolean) => docker.calls.findIndex(match);
     const proxyJoins = (network: string) =>
-      at((call) => call[1] === "connect" && call.at(-2) === network && call.at(-1) === "sealant-run1-proxy");
+      at(
+        (call) =>
+          call[1] === "connect" && call.at(-2) === network && call.at(-1) === "sealant-run1-proxy",
+      );
     const created = at((call) => call[0] === "create");
     const started = at((call) => call[0] === "start");
     expect(created).toBeGreaterThanOrEqual(0);
@@ -238,9 +259,9 @@ describe("EgressProxyOrchestrator", () => {
       }),
     );
     const networks = await proxies.prepareNetworks("sealant-run1");
-    await expect(proxies.startProxy({ workspaceContainer: "sealant-run1", networks })).rejects.toThrow(
-      /exited before it answered/,
-    );
+    await expect(
+      proxies.startProxy({ workspaceContainer: "sealant-run1", networks }),
+    ).rejects.toThrow(/exited before it answered/);
   });
 
   describe("revocation", () => {
@@ -251,11 +272,19 @@ describe("EgressProxyOrchestrator", () => {
       await proxies.startProxy({ workspaceContainer: "sealant-run1", networks });
       return { docker, proxies };
     };
-    const request = { revocationWatermark: 4, revokeSecretIds: ["psec_1"], revokeHosts: [], revokeAll: false };
+    const request = {
+      revocationWatermark: 4,
+      revokeSecretIds: ["psec_1"],
+      revokeHosts: [],
+      revokeAll: false,
+    };
 
     it("is confirmed by the proxy once its streams are closed, and kills nothing", async () => {
       const { docker, proxies } = await started(healthyClient());
-      expect(await proxies.revoke("sealant-run1", request)).toEqual({ outcome: "revoked", closed: 2 });
+      expect(await proxies.revoke("sealant-run1", request)).toEqual({
+        outcome: "revoked",
+        closed: 2,
+      });
       expect(docker.calls.some((call) => call[0] === "kill")).toBe(false);
     });
 
@@ -276,7 +305,11 @@ describe("EgressProxyOrchestrator", () => {
       const { proxies } = await started(
         healthyClient({
           revoke: async () => {
-            throw new ProxyAdminRefusedError(500, "close_unconfirmed", "1 connection(s) did not confirm closing");
+            throw new ProxyAdminRefusedError(
+              500,
+              "close_unconfirmed",
+              "1 connection(s) did not confirm closing",
+            );
           },
         }),
       );
@@ -304,7 +337,10 @@ describe("EgressProxyOrchestrator", () => {
           },
         }),
       );
-      expect(await proxies.revoke("sealant-run1", request)).toEqual({ outcome: "revoked", closed: 0 });
+      expect(await proxies.revoke("sealant-run1", request)).toEqual({
+        outcome: "revoked",
+        closed: 0,
+      });
     });
   });
 

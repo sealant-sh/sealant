@@ -53,7 +53,9 @@ export const openBrokeredValues = (
         Effect.mapError((error) =>
           error._tag === "CredentialCipherError"
             ? error
-            : new EgressProxyStoreError({ message: "Stored brokered values are not a string map." }),
+            : new EgressProxyStoreError({
+                message: "Stored brokered values are not a string map.",
+              }),
         ),
         Effect.map((values) => Redacted.make(values)),
       );
@@ -67,10 +69,7 @@ export const storedProxyPolicyDocument = (input: {
   readonly proxy: WorkspaceEgressProxy;
   readonly policy: WorkspaceEgressPolicy | undefined;
   readonly revocations: readonly WorkspaceEgressRevocation[];
-}): Effect.Effect<
-  ProxyPolicyDocument | undefined,
-  CredentialCipherError | EgressProxyStoreError
-> =>
+}): Effect.Effect<ProxyPolicyDocument | undefined, CredentialCipherError | EgressProxyStoreError> =>
   Effect.gen(function* () {
     const network = input.proxy.network;
     if (network === null) return undefined;

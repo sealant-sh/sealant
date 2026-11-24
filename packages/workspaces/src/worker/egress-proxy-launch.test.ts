@@ -106,9 +106,12 @@ describe("the worker's half of a proxy-backed launch", () => {
     const { repo, proxies } = memoryRepo(storedPolicy());
     const launch = egressProxyLaunch({ runId: "run-1", workspaceId: "ws_1", repo, cipher });
     const first = await launch.prepare(measured);
-    const again = await egressProxyLaunch({ runId: "run-1", workspaceId: "ws_1", repo, cipher }).prepare(
-      measured,
-    );
+    const again = await egressProxyLaunch({
+      runId: "run-1",
+      workspaceId: "ws_1",
+      repo,
+      cipher,
+    }).prepare(measured);
     expect(again.caCertPem).toBe(first.caCertPem);
     expect(new X509Certificate(first.caCertPem).ca).toBe(true);
     const stored = proxies.get("run-1");
@@ -151,7 +154,10 @@ describe("what a proxy-backed workspace boots with", () => {
   it("launches under the pinned policy, not the one it was created with", () => {
     const created: {
       readonly harness: string;
-      readonly networkPolicy?: { readonly mode: "standard" | "restricted"; readonly policyHash: string };
+      readonly networkPolicy?: {
+        readonly mode: "standard" | "restricted";
+        readonly policyHash: string;
+      };
       readonly brokeredSecrets?: readonly (typeof BROKERED)[];
     } = { harness: "x", networkPolicy: { mode: "standard", policyHash: "sha256:created" } };
     const pinned = withPinnedEgressPolicy(created, storedPolicy());

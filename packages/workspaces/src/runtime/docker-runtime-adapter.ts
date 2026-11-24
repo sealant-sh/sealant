@@ -19,6 +19,11 @@ import {
 import { formatCidr, type Cidr } from "./cidr.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
+  EGRESS_PROXY_BACKED_LABEL,
+  egressProxyGateArgs,
+  proxiedWorkspaceArgs,
+} from "./docker-egress-proxy.js";
+import {
   attachedNetworks,
   imageCommand,
   metadataDnsServer,
@@ -34,11 +39,6 @@ import {
   type DockerEgressPolicy,
   type WorkspaceMirrorContainer,
 } from "./docker-egress.js";
-import {
-  EGRESS_PROXY_BACKED_LABEL,
-  egressProxyGateArgs,
-  proxiedWorkspaceArgs,
-} from "./docker-egress-proxy.js";
 import { probeIsolatedGatewaySupport } from "./docker-isolated-network.js";
 import {
   dockerMemoryArgs,
@@ -49,7 +49,6 @@ import {
   type DockerMemoryPolicy,
 } from "./docker-memory-limits.js";
 import { dockerdRegistryMirrorArgs, registryMirrorHostNames } from "./docker-registry-mirrors.js";
-import { EgressProxyOrchestrator, isolatedNetworkName } from "./egress-proxy-orchestrator.js";
 import {
   assertDockerVolumeConfiguration,
   assertDockerVolumeSourceDirectories,
@@ -60,6 +59,7 @@ import {
   type DockerVolumeMapping,
   type ResolvedDockerVolumeMount,
 } from "./docker-volume-mounts.js";
+import { EgressProxyOrchestrator, isolatedNetworkName } from "./egress-proxy-orchestrator.js";
 import {
   completeReadyLaunch,
   failLaunch,
@@ -3148,7 +3148,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         }
         await this.assertIsolatedGatewaySupport();
         proxyLaunched = true;
-        const hostPublic = egress.policy.hostPublic.detect ? await this.detectedHostAddresses() : [];
+        const hostPublic = egress.policy.hostPublic.detect
+          ? await this.detectedHostAddresses()
+          : [];
         const proxy = await proxies.launchProxy({
           workspaceContainer: containerName,
           launch,

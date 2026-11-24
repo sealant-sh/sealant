@@ -192,7 +192,10 @@ describe("selectRuntimeAdapter", () => {
 
   it("falls back from a preferred runtime that cannot enforce the policy to one that can", () => {
     const selection = selectRuntimeAdapter({
-      blueprint: createBlueprint({ ...brokered, target: { runtime: { family: "boat", mode: "prefer" } } }),
+      blueprint: createBlueprint({
+        ...brokered,
+        target: { runtime: { family: "boat", mode: "prefer" } },
+      }),
       adapters: [
         createAdapter("boat", () => ({ supported: true })),
         createAdapter("docker", () => ({ supported: true })),

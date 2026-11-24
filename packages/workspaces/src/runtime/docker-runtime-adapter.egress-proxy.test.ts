@@ -11,12 +11,15 @@ import { join } from "node:path";
 import { Redacted } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { parseDockerEgressPolicy } from "./docker-egress.js";
 import { EGRESS_PROXY_GATE_SCRIPT } from "./docker-egress-proxy.js";
+import { parseDockerEgressPolicy } from "./docker-egress.js";
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
 import { buildProxyPolicyDocument } from "./egress-proxy-policy.js";
 import { generateExecutorCa } from "./executor-ca.js";
-import { parseRuntimeAdapterLaunchInput, parseRuntimeAdapterSupportInput } from "./runtime-adapter.js";
+import {
+  parseRuntimeAdapterLaunchInput,
+  parseRuntimeAdapterSupportInput,
+} from "./runtime-adapter.js";
 
 const SECRET_VALUE = "Bearer sk-live-never-in-argv";
 
@@ -32,7 +35,11 @@ const BROKERED = {
 const blueprint = (extra: Record<string, unknown> = {}) => ({
   sources: { workspace: { kind: "git", url: "https://github.com/example/repo.git" } },
   harness: { id: "opencode" },
-  networkPolicy: { mode: "restricted", policyHash: "sha256:policy", allowHosts: [{ host: "registry.npmjs.org" }] },
+  networkPolicy: {
+    mode: "restricted",
+    policyHash: "sha256:policy",
+    allowHosts: [{ host: "registry.npmjs.org" }],
+  },
   brokeredSecrets: [BROKERED],
   ...extra,
 });
@@ -55,7 +62,8 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
   const calls: string[][] = [];
   const networks = new Map<string, Set<string>>();
   const containers = new Map<string, { running: boolean; labels: Record<string, string> }>();
-  const noSuch = (what: string) => Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
+  const noSuch = (what: string) =>
+    Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
   const run = vi.fn(async (_command: string, args: Array<string>) => {
     calls.push([...args]);
     const last = args.at(-1) ?? "";
@@ -70,7 +78,9 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
       const members = networks.get(name);
       if (members === undefined) throw noSuch("network");
       return {
-        stdout: args.some((arg) => arg.startsWith("{{range")) ? [...members].join("\n") : `${name}-id\n`,
+        stdout: args.some((arg) => arg.startsWith("{{range"))
+          ? [...members].join("\n")
+          : `${name}-id\n`,
         stderr: "",
       };
     }
@@ -102,7 +112,8 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
       for (const members of networks.values()) members.delete(name);
       return { stdout: "", stderr: "" };
     }
-    if (verb === "image") return { stdout: '["/usr/local/bin/sealantd","boot"]\tnull\n', stderr: "" };
+    if (verb === "image")
+      return { stdout: '["/usr/local/bin/sealantd","boot"]\tnull\n', stderr: "" };
     if (verb === "run" && args.includes("NET_ADMIN")) return { stdout: "", stderr: "" };
     if (verb === "run" && args.includes("cat")) {
       return { stdout: "# ExtServers: [host(127.0.0.53)]\n", stderr: "" };
@@ -111,7 +122,9 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
     if (verb === "run") {
       const name = args[args.indexOf("--name") + 1] ?? "";
       const labels = Object.fromEntries(
-        args.flatMap((arg, index) => (args[index - 1] === "--label" ? [arg.split("=") as [string, string]] : [])),
+        args.flatMap((arg, index) =>
+          args[index - 1] === "--label" ? [arg.split("=") as [string, string]] : [],
+        ),
       );
       containers.set(name, { running: true, labels });
       return { stdout: `${name}-cid\n`, stderr: "" };
@@ -124,18 +137,28 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
       if (format.includes("NetworkSettings")) {
         return {
           stdout: JSON.stringify({
-            [`${name}-isolated`]: { NetworkID: `${name}-isolated-id`, IPAddress: "10.233.0.2", IPPrefixLen: 28 },
+            [`${name}-isolated`]: {
+              NetworkID: `${name}-isolated-id`,
+              IPAddress: "10.233.0.2",
+              IPPrefixLen: 28,
+            },
           }),
           stderr: "",
         };
       }
       if (format.includes("{{json .State}}")) {
         return {
-          stdout: JSON.stringify({ Status: container.running ? "running" : "exited", Running: container.running, ExitCode: 0, Error: "" }),
+          stdout: JSON.stringify({
+            Status: container.running ? "running" : "exited",
+            Running: container.running,
+            ExitCode: 0,
+            Error: "",
+          }),
           stderr: "",
         };
       }
-      if (format.includes("Labels")) return { stdout: `${container.labels["sealant.egress-proxy-backed"] ?? ""}\n`, stderr: "" };
+      if (format.includes("Labels"))
+        return { stdout: `${container.labels["sealant.egress-proxy-backed"] ?? ""}\n`, stderr: "" };
       if (format.includes("{{.Name}}")) return { stdout: `/${name}\n`, stderr: "" };
       return { stdout: `${name}-cid\t${String(container.running)}\n`, stderr: "" };
     }
@@ -171,12 +194,28 @@ const adminSocket = async (path: string) => {
       requests.push({ method: req.method ?? "", url: req.url ?? "", body });
       res.setHeader("content-type", "application/json");
       if (req.url === "/v1/health") {
-        res.end(JSON.stringify({ initialized: false, revocationWatermark: 0, activeConnections: 0, leaseRemainingMs: 0, leaseExpired: true, resyncRequired: false }));
+        res.end(
+          JSON.stringify({
+            initialized: false,
+            revocationWatermark: 0,
+            activeConnections: 0,
+            leaseRemainingMs: 0,
+            leaseExpired: true,
+            resyncRequired: false,
+          }),
+        );
         return;
       }
       if (req.url === "/v1/policy") {
         const doc = JSON.parse(body) as { policyHash: string; revocationWatermark: number };
-        res.end(JSON.stringify({ ok: true, policyHash: doc.policyHash, revocationWatermark: doc.revocationWatermark, closed: 0 }));
+        res.end(
+          JSON.stringify({
+            ok: true,
+            policyHash: doc.policyHash,
+            revocationWatermark: doc.revocationWatermark,
+            closed: 0,
+          }),
+        );
         return;
       }
       res.statusCode = 404;
@@ -227,7 +266,11 @@ describe("a Docker workspace behind its own egress proxy", () => {
       publication,
       runId: "run-1",
       egressProxy: {
-        prepare: async ({ host }: { host: Parameters<typeof buildProxyPolicyDocument>[0]["host"] }) => ({
+        prepare: async ({
+          host,
+        }: {
+          host: Parameters<typeof buildProxyPolicyDocument>[0]["host"];
+        }) => ({
           caCertPem: ca.certPem,
           document: buildProxyPolicyDocument({
             networkPolicy: { mode: "restricted", policyHash: "sha256:policy" },
@@ -245,8 +288,12 @@ describe("a Docker workspace behind its own egress proxy", () => {
     const docker = dockerHost();
     await adapterOn(docker).launch(launchInput());
 
-    const workspaceRun = docker.calls.findIndex((call) => call[0] === "run" && call.includes("sealant-run-1"));
-    const proxyStart = docker.calls.findIndex((call) => call[0] === "start" && call.at(-1) === "sealant-run-1-proxy");
+    const workspaceRun = docker.calls.findIndex(
+      (call) => call[0] === "run" && call.includes("sealant-run-1"),
+    );
+    const proxyStart = docker.calls.findIndex(
+      (call) => call[0] === "start" && call.at(-1) === "sealant-run-1-proxy",
+    );
     expect(proxyStart).toBeGreaterThanOrEqual(0);
     expect(workspaceRun).toBeGreaterThan(proxyStart);
     // The proxy was told its whole policy (and only then the workspace ran).
@@ -259,7 +306,9 @@ describe("a Docker workspace behind its own egress proxy", () => {
       operatorAllowedPrivateCidrs: ["10.42.0.0/16"],
       hostPublicIps: ["203.0.113.9/32"],
       executorCaCertPem: ca.certPem,
-      brokeredSecrets: [expect.objectContaining({ value: SECRET_VALUE, headerName: "Authorization" })],
+      brokeredSecrets: [
+        expect.objectContaining({ value: SECRET_VALUE, headerName: "Authorization" }),
+      ],
     });
     expect(document["blockedCidrs"]).toEqual(["10.233.0.17/32", "10.233.0.0/28"]);
 
@@ -289,15 +338,29 @@ describe("a Docker workspace behind its own egress proxy", () => {
     const docker = dockerHost();
     await adapterOn(docker).launch(launchInput());
     const create = docker.calls.find((call) => call[0] === "create") ?? [];
-    expect(create).toEqual(expect.arrayContaining(["--network", "sealant-run-1-isolated", "--ip", "10.233.0.14", "--read-only"]));
-    expect(docker.networks.get("sealant-run-1-proxy-egress")?.has("sealant-run-1-proxy")).toBe(true);
+    expect(create).toEqual(
+      expect.arrayContaining([
+        "--network",
+        "sealant-run-1-isolated",
+        "--ip",
+        "10.233.0.14",
+        "--read-only",
+      ]),
+    );
+    expect(docker.networks.get("sealant-run-1-proxy-egress")?.has("sealant-run-1-proxy")).toBe(
+      true,
+    );
     expect(docker.networks.get("sealant-run-1-isolated")).toEqual(new Set(["sealant-run-1-proxy"]));
   });
 
   it("refuses the launch, with nothing started, on an engine that cannot isolate the network", async () => {
     const docker = dockerHost({ engine: "27.5.1" });
-    await expect(adapterOn(docker).launch(launchInput())).rejects.toThrow(/cannot isolate a workspace/);
-    expect(docker.calls.some((call) => call[0] === "run" && call.includes("sealant-run-1"))).toBe(false);
+    await expect(adapterOn(docker).launch(launchInput())).rejects.toThrow(
+      /cannot isolate a workspace/,
+    );
+    expect(docker.calls.some((call) => call[0] === "run" && call.includes("sealant-run-1"))).toBe(
+      false,
+    );
     expect(docker.calls.some((call) => call[0] === "create")).toBe(false);
   });
 
@@ -318,12 +381,18 @@ describe("a Docker workspace behind its own egress proxy", () => {
     const launched = await adapter.launch(launchInput());
     const workspace = docker.containers.get("sealant-run-1");
     if (workspace !== undefined) workspace.running = false;
-    expect(await adapter.parkRetained({ resourceId: launched.resourceId, reference: "sealant-run-1" })).toEqual({
+    expect(
+      await adapter.parkRetained({ resourceId: launched.resourceId, reference: "sealant-run-1" }),
+    ).toEqual({
       stopped: ["sealant-run-1-proxy"],
     });
     expect(docker.containers.get("sealant-run-1-proxy")?.running).toBe(false);
 
-    await adapter.stop({ resourceId: launched.resourceId, reference: "sealant-run-1", phase: "remove" });
+    await adapter.stop({
+      resourceId: launched.resourceId,
+      reference: "sealant-run-1",
+      phase: "remove",
+    });
     expect(docker.containers.has("sealant-run-1-proxy")).toBe(false);
     expect(docker.networks.has("sealant-run-1-isolated")).toBe(false);
     expect(docker.networks.has("sealant-run-1-proxy-egress")).toBe(false);
@@ -338,38 +407,54 @@ describe("a Docker workspace behind its own egress proxy", () => {
     if (workspace !== undefined) workspace.running = false;
     await adapter.parkRetained({ resourceId: launched.resourceId, reference: "sealant-run-1" });
     const before = docker.calls.length;
-    expect(await adapter.recover({ resourceId: launched.resourceId, reference: "sealant-run-1" })).toEqual({
+    expect(
+      await adapter.recover({ resourceId: launched.resourceId, reference: "sealant-run-1" }),
+    ).toEqual({
       outcome: "restarted",
     });
     const recoveryCalls = docker.calls.slice(before);
-    expect(recoveryCalls.some((call) => call[0] === "start" && call.at(-1) === "sealant-run-1-proxy")).toBe(false);
+    expect(
+      recoveryCalls.some((call) => call[0] === "start" && call.at(-1) === "sealant-run-1-proxy"),
+    ).toBe(false);
     expect(docker.containers.get("sealant-run-1-proxy")?.running).toBe(false);
   });
 });
 
 describe("admission of a network policy on Docker", () => {
   const supports = (adapter: DockerRuntimeAdapter, extra: Record<string, unknown>) =>
-    adapter.supports({ blueprint: parseRuntimeAdapterSupportInput({ blueprint: blueprint(extra) }).blueprint });
+    adapter.supports({
+      blueprint: parseRuntimeAdapterSupportInput({ blueprint: blueprint(extra) }).blueprint,
+    });
   const plain = new DockerRuntimeAdapter({ commandRunner: vi.fn() });
 
   it("refuses VM isolation and points at host-vm", () => {
     expect(
-      supports(plain, { networkPolicy: { mode: "standard", policyHash: "h", requireVmIsolation: true }, brokeredSecrets: [] }),
+      supports(plain, {
+        networkPolicy: { mode: "standard", policyHash: "h", requireVmIsolation: true },
+        brokeredSecrets: [],
+      }),
     ).toMatchObject({ supported: false, message: expect.stringContaining("host-vm") });
   });
 
   it("refuses restricted egress with Docker inside", () => {
-    expect(supports(plain, { tooling: { services: { docker: { enabled: true } } } })).toMatchObject({
-      supported: false,
-      message: expect.stringContaining("Docker inside a Docker workspace"),
-    });
+    expect(supports(plain, { tooling: { services: { docker: { enabled: true } } } })).toMatchObject(
+      {
+        supported: false,
+        message: expect.stringContaining("Docker inside a Docker workspace"),
+      },
+    );
   });
 
   it("refuses a brokered secret, even under standard egress, where no proxy is configured", () => {
+    expect(supports(plain, { networkPolicy: { mode: "standard", policyHash: "h" } })).toMatchObject(
+      { supported: false, message: expect.stringContaining("egress proxy") },
+    );
     expect(
-      supports(plain, { networkPolicy: { mode: "standard", policyHash: "h" } }),
-    ).toMatchObject({ supported: false, message: expect.stringContaining("egress proxy") });
-    expect(supports(plain, { networkPolicy: { mode: "standard", policyHash: "h" }, brokeredSecrets: [] })).toEqual({
+      supports(plain, {
+        networkPolicy: { mode: "standard", policyHash: "h" },
+        brokeredSecrets: [],
+      }),
+    ).toEqual({
       supported: true,
     });
   });

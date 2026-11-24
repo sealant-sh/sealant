@@ -125,7 +125,9 @@ const NO_EGRESS_PROXY = (runtime: RuntimeAdapterId) => ({
 });
 
 /** What `runtime` enforces of a network policy. */
-const networkPolicyFor = (runtime: RuntimeAdapterId): NonNullable<RuntimeSupport["networkPolicy"]> => {
+const networkPolicyFor = (
+  runtime: RuntimeAdapterId,
+): NonNullable<RuntimeSupport["networkPolicy"]> => {
   switch (runtime) {
     case "host-vm":
       return {

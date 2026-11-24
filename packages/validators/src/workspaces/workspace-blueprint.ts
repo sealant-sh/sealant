@@ -650,38 +650,40 @@ export const workspaceBrokeredSecretsSchema = z
 
 export type WorkspaceBrokeredSecret = z.infer<typeof workspaceBrokeredSecretsSchema>[number];
 
-export const workspaceBlueprintSchema = z.strictObject({
-  version: z.literal(workspaceBlueprintVersion).default(workspaceBlueprintVersion),
-  sources: z.strictObject({
-    workspace: workspaceSourceSchema,
-    inputs: z.array(workspaceInputSourceSchema).default([]),
-    mounts: z.array(workspaceExtraMountSchema).default([]),
-  }),
-  harness: workspaceHarnessSchema,
-  access: workspaceAccessSchema.prefault({}),
-  tooling: workspaceToolingSchema.prefault({}),
-  customization: workspaceCustomizationSchema.prefault({}),
-  lifecycle: workspaceLifecycleSchema.prefault({}),
-  runtime: workspaceSpecRuntimeSchema.prefault({}),
-  target: workspaceTargetSchema.prefault({}),
-  networkPolicy: workspaceNetworkPolicySchema.optional(),
-  brokeredSecrets: workspaceBrokeredSecretsSchema.optional(),
-}).superRefine((blueprint, ctx) => {
-  // The workspace reads each placeholder from its variable: a variable the spec also sets would
-  // be ambiguous, and whichever value won, one of them would be lost.
-  const setByEnv = new Set([
-    ...Object.keys(blueprint.runtime.env),
-    ...Object.keys(blueprint.runtime.userEnv),
-  ]);
-  for (const secret of blueprint.brokeredSecrets ?? []) {
-    if (setByEnv.has(secret.name)) {
-      ctx.addIssue({
-        code: "custom",
-        message: `brokeredSecrets \`${secret.secretId}\`: ${secret.name} is also set in runtime.env or runtime.userEnv`,
-      });
+export const workspaceBlueprintSchema = z
+  .strictObject({
+    version: z.literal(workspaceBlueprintVersion).default(workspaceBlueprintVersion),
+    sources: z.strictObject({
+      workspace: workspaceSourceSchema,
+      inputs: z.array(workspaceInputSourceSchema).default([]),
+      mounts: z.array(workspaceExtraMountSchema).default([]),
+    }),
+    harness: workspaceHarnessSchema,
+    access: workspaceAccessSchema.prefault({}),
+    tooling: workspaceToolingSchema.prefault({}),
+    customization: workspaceCustomizationSchema.prefault({}),
+    lifecycle: workspaceLifecycleSchema.prefault({}),
+    runtime: workspaceSpecRuntimeSchema.prefault({}),
+    target: workspaceTargetSchema.prefault({}),
+    networkPolicy: workspaceNetworkPolicySchema.optional(),
+    brokeredSecrets: workspaceBrokeredSecretsSchema.optional(),
+  })
+  .superRefine((blueprint, ctx) => {
+    // The workspace reads each placeholder from its variable: a variable the spec also sets would
+    // be ambiguous, and whichever value won, one of them would be lost.
+    const setByEnv = new Set([
+      ...Object.keys(blueprint.runtime.env),
+      ...Object.keys(blueprint.runtime.userEnv),
+    ]);
+    for (const secret of blueprint.brokeredSecrets ?? []) {
+      if (setByEnv.has(secret.name)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `brokeredSecrets \`${secret.secretId}\`: ${secret.name} is also set in runtime.env or runtime.userEnv`,
+        });
+      }
     }
-  }
-});
+  });
 
 export type WorkspaceBlueprint = z.infer<typeof workspaceBlueprintSchema>;
 

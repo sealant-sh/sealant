@@ -86,8 +86,7 @@ const workspaceRuntimeOf = (workspaceId: string, latestRunId: string | null) =>
             "Failed to load the workspace runtime.",
           );
     const family = spec?.target.runtime.family ?? "auto";
-    const runtime =
-      instance?.adapter ?? (family === "auto" ? env.DEFAULT_RUNTIME_ADAPTER : family);
+    const runtime = instance?.adapter ?? (family === "auto" ? env.DEFAULT_RUNTIME_ADAPTER : family);
     return { runtime, spec };
   });
 
