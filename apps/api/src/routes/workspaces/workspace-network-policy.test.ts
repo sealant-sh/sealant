@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 import {
   WorkspaceBadRequestError,
+  WorkspaceNotFoundError,
   WorkspaceRuntimeRequirementUnsupportedError,
   type BrokeredSecret,
   type CreateWorkspaceRequest,
@@ -437,7 +438,7 @@ describe("revokeWorkspaceAccess", () => {
         })
         .pipe(Effect.result, Effect.provide(launchedLayer(egress))),
     );
-    expect(Result.isFailure(result) && result.failure._tag).toBe("WorkspaceNotFoundError");
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(WorkspaceNotFoundError);
     expect(egress.revocations).toEqual([]);
   });
 });

@@ -991,13 +991,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     );
     const runEgressProxySweep = (): void => {
       for (const proxies of egressProxies) {
-        void Effect.runPromise(sweepEgressProxies({ repo: egressRepo, cipher, proxies })).then(
-          (counts) => {
-            if (counts.pushed + counts.restarted + counts.failed > 0) {
-              console.log("Egress proxy sweep", counts);
-            }
-          },
-        );
+        void (async () => {
+          const counts = await Effect.runPromise(
+            sweepEgressProxies({ repo: egressRepo, cipher, proxies }),
+          );
+          if (counts.pushed + counts.restarted + counts.failed > 0) {
+            console.log("Egress proxy sweep", counts);
+          }
+        })();
       }
     };
     runEgressProxySweep();
