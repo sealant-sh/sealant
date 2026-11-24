@@ -251,3 +251,15 @@ export {
 } from "./boat-accounts.js";
 export { boatRuns, type BoatRunRow } from "./boat-runs.js";
 export { boatTunnels } from "./boat-tunnels.js";
+
+export {
+  type WorkspaceEgressPolicy,
+  type WorkspaceEgressProxy,
+  type WorkspaceEgressProxyNetwork,
+  type WorkspaceEgressRevocation,
+  type WorkspaceEgressRevocationKind,
+  workspaceEgressPolicies,
+  workspaceEgressProxies,
+  workspaceEgressRevocations,
+  workspaceEgressRevocationKindValues,
+} from "./workspace-egress.js";

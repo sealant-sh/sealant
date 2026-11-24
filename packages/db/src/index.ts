@@ -588,3 +588,12 @@ export {
   createWalletOf as createBoatWalletOf,
   type BoatCreateWallet,
 } from "./repositories/boat-wallets.js";
+export {
+  tombstonesOf,
+  WorkspaceEgressRepo,
+  WorkspaceEgressRepoError,
+  workspaceEgressRepoLayer,
+  type LiveWorkspaceEgressProxy,
+  type WorkspaceEgressRepoService,
+  type WorkspaceEgressTombstones,
+} from "./repositories/workspace-egress.js";
