@@ -24,6 +24,7 @@ describe("isolatedNetworkCreateArgv", () => {
       "com.docker.network.bridge.gateway_mode_ipv4=isolated",
       "--subnet",
       "10.233.0.0/29",
+      "--ipv6=false",
       "--label",
       "sealant.workspace=sealant-run",
       "sealant-run-egress",
@@ -48,6 +49,7 @@ const probeDocker = (answers: {
   readonly version?: string;
   readonly create?: "refused";
   readonly bridgeAddresses?: string;
+  readonly removals?: "refused";
 }) => {
   const calls: Array<ReadonlyArray<string>> = [];
   const run: DockerCommandRunner = async (_command, args) => {
@@ -65,6 +67,11 @@ const probeDocker = (answers: {
       };
     }
     if (args[0] === "run") return { stdout: answers.bridgeAddresses ?? "", stderr: "" };
+    if (args[0] === "network" && args[1] === "rm" && answers.removals === "refused") {
+      throw new Error(
+        "Error response from daemon: error while removing network: has active endpoints",
+      );
+    }
     return { stdout: "", stderr: "" };
   };
   return { run, calls };
@@ -111,5 +118,19 @@ describe("probeIsolatedGatewaySupport", () => {
     const result = await probeIsolatedGatewaySupport({ run: ignoring.run, image: "busybox" });
     expect(result).toEqual({ supported: false, reason: expect.stringContaining("host address") });
     expect(ignoring.calls.at(-1)?.slice(0, 2)).toEqual(["network", "rm"]);
+  });
+
+  it("labels its throwaway network, and names it when two removals fail", async () => {
+    const docker = probeDocker({ removals: "refused" });
+    const result = await probeIsolatedGatewaySupport({
+      run: docker.run,
+      image: "busybox",
+      networkName: "probe-net",
+    });
+    expect(result).toEqual({ supported: true, engineVersion: "29.1.0", leftover: "probe-net" });
+    const create = docker.calls.find((args) => args[1] === "create") ?? [];
+    expect(create).toContain("sealant.isolation-probe=true");
+    expect(create).toContain("--ipv6=false");
+    expect(docker.calls.filter((args) => args[1] === "rm")).toHaveLength(2);
   });
 });

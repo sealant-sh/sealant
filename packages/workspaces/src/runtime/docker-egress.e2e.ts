@@ -60,8 +60,13 @@ const WORKSPACE_SUBNETS = "10.249.0.0/16";
 /** Each run carves its own /24 of the pool, so a run killed before its cleanup never blocks the next. */
 const RUN_OCTET = process.pid % 250;
 const PUBLISHED_PORT = String(18_000 + (process.pid % 1000));
+/** A port the host serves on every address, so on each bridge's gateway too. */
+const HOST_PORT = String(19_000 + (process.pid % 1000));
+/** A public address the operator lists as the host's own (TEST-NET-2, routed nowhere). */
+const LISTED_HOST_ADDRESS = "198.51.100.7";
 const mirror = `sealant-egress-e2e-mirror-${tag}`;
 const published = `sealant-egress-e2e-published-${tag}`;
+const hostService = `sealant-egress-e2e-host-${tag}`;
 
 /** sealant's subnet table, in memory, carving the pool the way the repository does. */
 const memorySubnets = () => {
@@ -195,6 +200,7 @@ describe("per-workspace Docker egress", () => {
       ]);
     await serve(mirror, [], "mirror-ok");
     await serve(published, ["-p", `${gateway}:${PUBLISHED_PORT}:80`], "published-ok");
+    await serve(hostService, ["-p", `${HOST_PORT}:80`], "host-ok");
 
     const common = {
       commandRunner: docker,
@@ -203,17 +209,22 @@ describe("per-workspace Docker egress", () => {
       mountAllowedStoreRoots: fixtureDir,
       stopGraceSeconds: 1,
     };
-    const policy = (operatorAllowedPrivateEgress?: string) =>
+    const policy = (operatorAllowedPrivateEgress?: string, hostPublicIps?: string) =>
       parseDockerEgressPolicy({
         workspaceSubnets: WORKSPACE_SUBNETS,
         reachSubnets: "10.248.0.0/16",
+        resourceEgressSubnets: "10.247.0.0/16",
         operatorAllowedPrivateEgress,
-        hostPublicIps: undefined,
+        hostPublicIps,
       });
     const mirrors = [{ container: mirror, aliases: ["npm-mirror"] }];
     strict = new DockerRuntimeAdapter({
       ...common,
-      egress: { policy: policy(), subnets: table.subnets, mirrors },
+      egress: {
+        policy: policy(undefined, `auto,${LISTED_HOST_ADDRESS}`),
+        subnets: table.subnets,
+        mirrors,
+      },
     });
     allowed = new DockerRuntimeAdapter({
       ...common,
@@ -230,7 +241,7 @@ describe("per-workspace Docker egress", () => {
         console.warn("e2e cleanup could not stop a workspace", { reference, error });
       });
     }
-    for (const name of [mirror, published]) {
+    for (const name of [mirror, published, hostService]) {
       await docker("docker", ["rm", "-f", name]).catch(() => undefined);
     }
     if (image !== undefined) {
@@ -314,6 +325,65 @@ describe("per-workspace Docker egress", () => {
       "169.254.169.254/32",
     ]);
     expect(removal.output).toContain("Operation not permitted");
+  });
+
+  it("refuses the host behind its own network's gateway, and still routes out through it", async () => {
+    const own = (
+      await docker("docker", [
+        "inspect",
+        "--format",
+        `{{(index .NetworkSettings.Networks "${b.name}-egress").Gateway}}`,
+        b.id,
+      ])
+    ).stdout.trim();
+    expect(own).toMatch(/^10\.249\./);
+    // Without the guard this answers: a port the host serves on every address is on the gateway.
+    const probe = await fetch(b.id, `http://${own}:${HOST_PORT}/`);
+    expect(probe.ok).toBe(false);
+    expect(probe.output).toContain("Permission denied");
+    expect(probe.ms).toBeLessThan(5_000);
+
+    expect((await fetch(b.id, "http://npm-mirror/")).output.trim()).toBe("mirror-ok");
+    const resolved = await attempt(["exec", b.id, "nslookup", "mirror.gcr.io"]);
+    expect(resolved.ok, resolved.output).toBe(true);
+    const outbound = await attempt([
+      "exec",
+      b.id,
+      "wget",
+      "-T",
+      "20",
+      "-qO-",
+      "http://mirror.gcr.io/v2/",
+    ]);
+    expect(outbound.output).not.toContain("Permission denied");
+    expect(outbound.output).not.toContain("bad address");
+  });
+
+  it("refuses the host's own public addresses, and only those", async () => {
+    const listed = await fetch(b.id, `http://${LISTED_HOST_ADDRESS}/`);
+    expect(listed.output).toContain("Permission denied");
+    expect(listed.ms).toBeLessThan(5_000);
+    const neighbour = await attempt([
+      "exec",
+      b.id,
+      "wget",
+      "-T",
+      "3",
+      "-qO-",
+      "http://198.51.100.8/",
+    ]);
+    expect(neighbour.ok).toBe(false);
+    expect(neighbour.output).not.toContain("Permission denied");
+  });
+
+  it("starts the image's own command only after the guard, as PID 1", async () => {
+    const command = await docker("docker", ["exec", b.id, "cat", "/proc/1/cmdline"]);
+    expect(command.stdout.split("\0").filter((part) => part.length > 0)).toEqual([
+      "sleep",
+      "infinity",
+    ]);
+    const marker = await attempt(["exec", b.id, "test", "-e", "/dev/shm/.sealant-network-guarded"]);
+    expect(marker.ok).toBe(true);
   });
 
   it("gives the workspace's Docker service the same routes", async () => {

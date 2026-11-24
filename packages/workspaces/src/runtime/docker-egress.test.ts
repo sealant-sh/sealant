@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import { cidr, cidrContains, cidrsOverlap, formatCidr, type Cidr } from "./cidr.js";
 import {
   attachedNetworks,
+  imageCommand,
+  metadataDnsServer,
   mirrorConnectArgv,
   namespaceDnsServers,
+  NETWORK_GATE_MARKER,
+  networkGateArgs,
   parseDockerEgressPolicy,
   parseHostPublicIps,
   parseWorkspaceMirrorContainers,
@@ -21,6 +25,7 @@ const policy = (overrides: {
   parseDockerEgressPolicy({
     workspaceSubnets: overrides.workspaceSubnets ?? "10.233.0.0/16",
     reachSubnets: "10.231.0.0/16",
+    resourceEgressSubnets: "10.232.0.0/16",
     operatorAllowedPrivateEgress: overrides.operatorAllowedPrivateEgress,
     hostPublicIps: overrides.hostPublicIps,
   });
@@ -28,7 +33,14 @@ const policy = (overrides: {
 const refused = (blocks: ReadonlyArray<Cidr>, address: string): boolean =>
   blocks.some((block) => cidrContains(block, cidr(address)));
 
-const none = { allowed: [], hostPublic: [], ownSubnets: [], dnsServers: [], cloudMetadata: false };
+const none = {
+  allowed: [],
+  hostPublic: [],
+  ownSubnets: [],
+  gateways: [],
+  dnsServers: [],
+  cloudMetadata: false,
+};
 
 describe("parseDockerEgressPolicy", () => {
   it("reads the operator's exceptions and the host's public addresses", () => {
@@ -80,9 +92,22 @@ describe("parseDockerEgressPolicy", () => {
     );
   });
 
-  it("detects host addresses only when asked", () => {
-    expect(parseHostPublicIps(undefined)).toEqual({ listed: [], detect: false });
+  it("reads the host's own interfaces unless told none, or given addresses without auto", () => {
+    expect(parseHostPublicIps(undefined)).toEqual({ listed: [], detect: true });
+    expect(policy({}).hostPublic).toEqual({ listed: [], detect: true });
     expect(parseHostPublicIps("auto")).toEqual({ listed: [], detect: true });
+    expect(parseHostPublicIps("none")).toEqual({ listed: [], detect: false });
+    expect(parseHostPublicIps("203.0.113.7").detect).toBe(false);
+    expect(() => parseHostPublicIps("none,203.0.113.7")).toThrow(/takes no other entry/);
+  });
+
+  it("refuses a workspace range or an exception over the resource instances' egress range", () => {
+    expect(() => policy({ workspaceSubnets: "10.232.0.0/16" })).toThrow(
+      /overlaps SEALANT_RESOURCE_EGRESS_SUBNETS/,
+    );
+    expect(() => policy({ operatorAllowedPrivateEgress: "10.232.9.0/24" })).toThrow(
+      /overlaps SEALANT_RESOURCE_EGRESS_SUBNETS/,
+    );
   });
 });
 
@@ -96,6 +121,8 @@ describe("prohibitedEgress", () => {
       "169.254.169.254/32",
       "172.16.0.0/12",
       "192.168.0.0/16",
+      "64:ff9b::/96",
+      "64:ff9b:1::/48",
       "fc00::/7",
       "fd00:ec2::254/128",
       "fe80::/10",
@@ -158,10 +185,35 @@ describe("prohibitedEgress", () => {
     expect(refused(operator, "169.254.0.1")).toBe(false);
   });
 
-  it("keeps the resolver reachable when Docker forwards to the wireserver (Azure DNS)", () => {
-    const blocks = prohibitedEgress({ ...none, dnsServers: [cidr("168.63.129.16")] });
-    expect(refused(blocks, "168.63.129.16")).toBe(false);
-    expect(refused(blocks, "169.254.169.254")).toBe(true);
+  it("never lets a DNS server open a metadata address, and names one that is (Azure, GCE)", () => {
+    for (const server of ["168.63.129.16", "169.254.169.254", "fd00:ec2::254"]) {
+      const dnsServers = [cidr("10.0.0.2"), cidr(server)];
+      const blocks = prohibitedEgress({ ...none, dnsServers });
+      expect(refused(blocks, server), server).toBe(true);
+      expect(refused(blocks, "10.0.0.2"), server).toBe(false);
+      expect(formatCidr(metadataDnsServer(dnsServers) ?? cidr("0.0.0.0/32")), server).toBe(
+        formatCidr(cidr(server)),
+      );
+    }
+    expect(metadataDnsServer([cidr("169.254.169.253"), cidr("10.0.0.2")])).toBeUndefined();
+  });
+
+  it("refuses the gateway of each of its networks, and still lets traffic route through it", () => {
+    const blocks = prohibitedEgress({
+      ...none,
+      ownSubnets: [cidr("10.233.0.16/28"), cidr("172.18.0.0/16")],
+      gateways: [cidr("10.233.0.17"), cidr("172.18.0.1"), cidr("fd00:1::1")],
+      allowed: [cidr("172.18.0.1")],
+    });
+    expect(refused(blocks, "10.233.0.17")).toBe(true);
+    expect(refused(blocks, "fd00:1::1")).toBe(true);
+    // The rest of its own network stays on-link; an operator exception opens a gateway.
+    expect(refused(blocks, "10.233.0.18")).toBe(false);
+    expect(refused(blocks, "172.18.0.1")).toBe(false);
+    // Only the address itself: the default route through it is untouched.
+    expect(
+      blocks.filter((block) => cidrsOverlap(block, cidr("10.233.0.16/28"))).map(formatCidr),
+    ).toEqual(["10.233.0.17/32"]);
   });
 
   it("never refuses an opened address and always refuses a closed one (seeded rule)", () => {
@@ -219,12 +271,14 @@ describe("the guard's inputs and script", () => {
       "# ExtServers: [192.168.1.1 host(127.0.0.53) fd00::53 [2001:db8::1]]",
       "# Overrides: []",
     ].join("\n");
-    expect(namespaceDnsServers(conf).map(formatCidr)).toEqual([
+    expect((namespaceDnsServers(conf) ?? []).map(formatCidr)).toEqual([
       "192.168.1.1/32",
       "fd00::53/128",
       "2001:db8::1/128",
     ]);
-    expect(namespaceDnsServers("nameserver 127.0.0.11\n")).toEqual([]);
+    expect(namespaceDnsServers("# ExtServers: [host(127.0.0.53)]\n")).toEqual([]);
+    // No ExtServers line (Docker before 25): unknown, never an empty carve-out.
+    expect(namespaceDnsServers("nameserver 127.0.0.11\n")).toBeUndefined();
   });
 
   it("finds the host's public addresses among its interfaces", () => {
@@ -245,12 +299,22 @@ describe("the guard's inputs and script", () => {
   it("reads a container's own networks, and refuses settings it cannot read", () => {
     const networks = attachedNetworks(
       JSON.stringify({
-        "sealant-run-egress": { IPAddress: "10.233.0.2", IPPrefixLen: 28, GlobalIPv6Address: "" },
+        "sealant-run-egress": {
+          NetworkID: "egress-id",
+          IPAddress: "10.233.0.2",
+          IPPrefixLen: 28,
+          Gateway: "10.233.0.1",
+          GlobalIPv6Address: "",
+          IPv6Gateway: "",
+        },
         "sealant-run-network": {
+          NetworkID: "sidecar-id",
           IPAddress: "172.18.0.3",
           IPPrefixLen: 16,
+          Gateway: "172.18.0.1",
           GlobalIPv6Address: "fd00:1::3",
           GlobalIPv6PrefixLen: 64,
+          IPv6Gateway: "fd00:1::1",
         },
       }),
     );
@@ -260,6 +324,16 @@ describe("the guard's inputs and script", () => {
       "172.18.0.0/16",
       "fd00:1::/64",
     ]);
+    expect(networks.ids).toEqual({
+      "sealant-run-egress": "egress-id",
+      "sealant-run-network": "sidecar-id",
+    });
+    expect(networks.gateways.map(formatCidr)).toEqual([
+      "10.233.0.1/32",
+      "172.18.0.1/32",
+      "fd00:1::1/128",
+    ]);
+    expect(() => attachedNetworks('{"n":{"Gateway":"not-an-address"}}')).toThrow(/gateway/);
     expect(() => attachedNetworks("null")).toThrow();
     expect(() => attachedNetworks('{"n":{"IPAddress":"10.0.0.1","IPPrefixLen":"x"}}')).toThrow();
   });
@@ -285,5 +359,26 @@ describe("the guard's inputs and script", () => {
         /SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS/,
       );
     }
+  });
+});
+
+describe("the network gate", () => {
+  it("hands over to the image's own entrypoint and command, and refuses an image that runs nothing", () => {
+    const command = imageCommand('["/usr/local/bin/sealantd","boot"]\t["--verbose"]\n');
+    expect(command).toEqual(["/usr/local/bin/sealantd", "boot", "--verbose"]);
+    expect(imageCommand('null\t["sleep","infinity"]')).toEqual(["sleep", "infinity"]);
+    const gate = networkGateArgs(command);
+    expect(gate.entrypoint).toEqual(["--entrypoint", "/bin/sh"]);
+    expect(gate.args.slice(0, 1)).toEqual(["-c"]);
+    expect(gate.args.slice(2)).toEqual([
+      "sealant-network-gate",
+      "/usr/local/bin/sealantd",
+      "boot",
+      "--verbose",
+    ]);
+    expect(gate.args[1]).toContain(`while [ ! -e ${NETWORK_GATE_MARKER} ]`);
+    expect(gate.args[1]?.endsWith('exec "$@"')).toBe(true);
+    expect(() => imageCommand("null\tnull")).toThrow(/no entrypoint or command/);
+    expect(() => imageCommand('"sh -c x"\tnull')).toThrow(/unreadable command/);
   });
 });

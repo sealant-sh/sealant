@@ -353,6 +353,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           const policy = parseDockerEgressPolicy({
             workspaceSubnets: egressSubnets,
             reachSubnets: env.SEALANT_RESOURCE_REACH_SUBNETS,
+            resourceEgressSubnets: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
             operatorAllowedPrivateEgress: env.SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS,
             hostPublicIps: env.SEALANT_HOST_PUBLIC_IPS,
           });

@@ -14,12 +14,16 @@ import {
   captureOwnerMapEnv,
   captureSourceEnv,
 } from "./capture-source.js";
-import type { Cidr } from "./cidr.js";
+import { formatCidr, type Cidr } from "./cidr.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
   attachedNetworks,
+  imageCommand,
+  metadataDnsServer,
   mirrorConnectArgv,
   namespaceDnsServers,
+  NETWORK_GATE_MARKER,
+  networkGateArgs,
   prohibitRouteScript,
   prohibitedEgress,
   publicHostAddresses,
@@ -1722,10 +1726,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * The extended guard's script for one running container: read its own networks (never covered),
-   * Docker's namespace DNS servers (forwarded from inside this namespace, so they stay open) and the
-   * host's public addresses, then `prohibitedEgress`. Anything that cannot be read throws: the guard
-   * fails closed rather than run with a hole or without a block.
+   * The extended guard's script for one running container: read its own networks (never covered)
+   * and their gateways (always refused), Docker's namespace DNS servers (forwarded from inside this
+   * namespace, so they stay open) and the host's public addresses, then `prohibitedEgress`. Anything
+   * that cannot be read throws: the guard fails closed rather than run with a hole or without a
+   * block. The launch measured the DNS servers and the host before the container started
+   * (`prepareEgressFacts`), so this normally reads them from the cache.
    */
   private async egressGuardScript(
     egress: DockerWorkspaceEgressOptions,
@@ -1743,26 +1749,54 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     if (measureOn === undefined) {
       throw new Error("the container is on no user-defined network to measure its DNS servers on");
     }
-    const [dnsServers, detected] = await Promise.all([
-      this.namespaceDnsServers(measureOn),
-      egress.policy.hostPublic.detect ? this.detectedHostAddresses() : Promise.resolve([]),
-    ]);
+    const facts = await this.prepareEgressFacts(egress, measureOn, cloudMetadataReachable);
     return prohibitRouteScript(
       prohibitedEgress({
         allowed: egress.policy.allowed,
-        hostPublic: [...egress.policy.hostPublic.listed, ...detected],
+        hostPublic: facts.hostPublic,
         ownSubnets: networks.subnets,
-        dnsServers,
+        gateways: networks.gateways,
+        dnsServers: facts.dnsServers,
         cloudMetadata: cloudMetadataReachable,
       }),
     );
   }
 
   /**
+   * What the guard needs to know beyond the container itself, measured on `network`: Docker's
+   * namespace DNS servers and the host's public addresses. Throws, before anything starts when a
+   * launch calls it first, on a DNS server that is a metadata address the workspace did not open:
+   * Docker would forward its lookups there from inside the workspace, and a route cannot open port
+   * 53 alone.
+   */
+  private async prepareEgressFacts(
+    egress: DockerWorkspaceEgressOptions,
+    network: string,
+    cloudMetadataReachable: boolean,
+  ): Promise<{
+    readonly dnsServers: ReadonlyArray<Cidr>;
+    readonly hostPublic: ReadonlyArray<Cidr>;
+  }> {
+    const [dnsServers, detected] = await Promise.all([
+      this.namespaceDnsServers(network),
+      egress.policy.hostPublic.detect ? this.detectedHostAddresses() : Promise.resolve([]),
+    ]);
+    const metadataServer = cloudMetadataReachable ? undefined : metadataDnsServer(dnsServers);
+    if (metadataServer !== undefined) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Docker's DNS on this host forwards workspace lookups to ${formatCidr(metadataServer)}, a cloud metadata address, from inside the workspace. A workspace cannot reach it without reaching the metadata service. Set a resolver that is not a metadata address in the Docker daemon's configuration ("dns" in /etc/docker/daemon.json, such as the VPC resolver's other address or a public resolver) and restart Docker.`,
+      );
+    }
+    return { dnsServers, hostPublic: [...egress.policy.hostPublic.listed, ...detected] };
+  }
+
+  /**
    * The resolvers Docker's embedded DNS forwards to from a container's own namespace, read from a
    * fresh container's Docker-written `resolv.conf` on `network` (never a workspace's own copy, which
    * its root can edit). They follow the Docker host's resolver settings, so one reading serves
-   * every network for a minute.
+   * every network for a minute. A `resolv.conf` without Docker's `# ExtServers:` line (an engine
+   * older than 25) throws: which resolvers to keep open cannot be told.
    */
   private async namespaceDnsServers(network: string): Promise<ReadonlyArray<Cidr>> {
     const cached = this.dnsServersRead;
@@ -1784,8 +1818,39 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       { timeoutMs: NETWORK_GUARD_TIMEOUT_MS },
     );
     const servers = namespaceDnsServers(result.stdout);
+    if (servers === undefined) {
+      throw new Error(
+        "Docker wrote no '# ExtServers:' line into a container's resolv.conf, so the resolvers its DNS forwards to cannot be told (Docker Engine 25 or newer writes it)",
+      );
+    }
     this.dnsServersRead = { at: Date.now(), servers };
     return servers;
+  }
+
+  /**
+   * The command `image` runs, put behind the network gate (`networkGateArgs`): the launch's
+   * `--entrypoint` and the arguments after the image.
+   */
+  private async gatedCommand(image: string): Promise<ReturnType<typeof networkGateArgs>> {
+    const inspected = await this.commandRunner("docker", [
+      "image",
+      "inspect",
+      "--format",
+      "{{json .Config.Entrypoint}}\t{{json .Config.Cmd}}",
+      image,
+    ]);
+    return networkGateArgs(imageCommand(inspected.stdout));
+  }
+
+  /** Let a gated workspace's own command start: its guard's routes are in. */
+  private async releaseNetworkGate(containerId: string): Promise<void> {
+    await this.commandRunner("docker", [
+      "exec",
+      containerId,
+      "sh",
+      "-c",
+      `: > ${NETWORK_GATE_MARKER}`,
+    ]);
   }
 
   /** The public addresses on the Docker host's own interfaces (`SEALANT_HOST_PUBLIC_IPS=auto`). */
@@ -1886,12 +1951,26 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   ): Promise<void> {
     const name = workspaceEgressNetworkName(reference);
     const found = await this.lookupNetwork(name);
+    if (found === "unknown") {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Whether the egress network '${name}' of '${reference}' exists could not be told.`,
+      );
+    }
     if (found !== "absent") {
       await this.joinWorkspaceMirrors(egress, name);
-      return;
+      // The container must be on this network, not on one of the same name since removed.
+      const inspected = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        "{{json .NetworkSettings.Networks}}",
+        containerId,
+      ]);
+      if (attachedNetworks(inspected.stdout).ids[name] === found.id) return;
+    } else {
+      await this.ensureEgressNetwork(egress, reference);
     }
-    await this.ensureEgressNetwork(egress, reference);
-    // The stopped container still names the removed network's id: drop that endpoint, join anew.
+    // The stopped container names another network's id: drop that endpoint, join anew.
     await this.commandRunner("docker", [
       "network",
       "disconnect",
@@ -2367,7 +2446,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     try {
       await this.commandRunner("docker", ["start", input.resourceId]);
       await Promise.all([
-        this.guardNetworkForRecovery(input.resourceId, input.reference ?? input.resourceId),
+        // A container launched behind the network gate waits at it again on every start: released
+        // once its guard has run (or failed, which a recovery tolerates so the save goes on).
+        this.guardNetworkForRecovery(input.resourceId, input.reference ?? input.resourceId).then(
+          () => (this.egress === undefined ? undefined : this.releaseNetworkGate(input.resourceId)),
+        ),
         this.verifyRunning
           ? this.awaitControlSocketReady(input.resourceId, input.reference ?? input.resourceId)
           : undefined,
@@ -2803,20 +2886,26 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       const dockerServiceEnabled = parsed.blueprint.tooling.services?.docker?.enabled === true;
       // Every workspace refuses the cloud metadata address unless its blueprint opts in.
       const cloudMetadataReachable = parsed.blueprint.runtime.network.cloudMetadata;
+      const imageReference = parsed.publication.image.digestReference;
+      // With per-workspace egress: the workspace's own network instead of any shared one, what its
+      // guard needs measured on it (a DNS server on a metadata address fails the launch here, with
+      // nothing started), and the image's command put behind the network gate, which holds it until
+      // the guard's routes are in.
+      let gate: ReturnType<typeof networkGateArgs> | undefined;
+      if (this.egress !== undefined) {
+        egressNetworkName = await this.ensureEgressNetwork(this.egress, containerName);
+        await this.prepareEgressFacts(this.egress, egressNetworkName, cloudMetadataReachable);
+        gate = await this.gatedCommand(imageReference);
+      }
       dockerService = dockerServiceEnabled
         ? await this.provisionDockerService(containerName, (id, name) =>
             this.guardNetwork(id, name, cloudMetadataReachable),
           )
         : undefined;
       const dockerNetworkName = dockerService?.networkName;
-      // With per-workspace egress, the workspace's own network instead of any shared one.
-      if (this.egress !== undefined) {
-        egressNetworkName = await this.ensureEgressNetwork(this.egress, containerName);
-      }
       // Every route the guard adds is one a packet socket could skip: with the guard on, root has
       // no NET_RAW (and `sudo` cannot get it back from the bounding set).
       const guardsRoutes = this.egress !== undefined || !cloudMetadataReachable;
-      const imageReference = parsed.publication.image.digestReference;
       // SSH "access" now means the gateway should be able to reach a shell over the daemon control
       // socket — it no longer publishes/injects an inner sshd (gateway-spec §4.3). The control reach is
       // always available via `docker exec` (or the §2.2 bind-mount), so no SSH port or `SEALANT_SSH_*`
@@ -2945,7 +3034,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ...(this.memoryPolicy === undefined
           ? []
           : dockerMemoryArgs((await this.memoryLimits()).workspace)),
+        ...(gate?.entrypoint ?? []),
         imageReference,
+        ...(gate?.args ?? []),
       ];
       // Never `--rm` a capture workspace: Docker would delete its disk the moment it exits, and
       // an exit (75 after an incomplete final flush) is exactly when that disk is the only copy.
@@ -2968,7 +3059,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // launch reports ready, so before any session starts. What sealantd runs at boot on its own
       // (lifecycle steps, the foreground harness) can start up to the guard's run (~0.7 s) earlier.
       // An adopted container gets it too.
-      const guarded = this.guardNetwork(containerId, containerName, cloudMetadataReachable);
+      // A gated workspace runs nothing of its own until this releases it.
+      const guarded = this.guardNetwork(containerId, containerName, cloudMetadataReachable).then(
+        () => (gate === undefined ? undefined : this.releaseNetworkGate(containerId)),
+      );
       void guarded.catch(() => undefined);
       const reached = this.executorNetworks
         ?.launched({ runId: parsed.runId, executor: containerName })

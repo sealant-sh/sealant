@@ -32,16 +32,28 @@ export const isolatedNetworkCreateArgv = (spec: IsolatedNetworkSpec): ReadonlyAr
   `${GATEWAY_MODE_IPV4_OPTION}=isolated`,
   "--subnet",
   spec.subnet,
+  // IPv6 only when asked for, and isolated then too: a daemon that enables IPv6 by default would
+  // otherwise give the bridge an IPv6 gateway on the host.
   ...(spec.ipv6Subnet === undefined
-    ? []
+    ? ["--ipv6=false"]
     : ["--ipv6", "--subnet", spec.ipv6Subnet, "--opt", `${GATEWAY_MODE_IPV6_OPTION}=isolated`]),
   ...Object.entries(spec.labels ?? {}).flatMap(([key, value]) => ["--label", `${key}=${value}`]),
   spec.name,
 ];
 
-export type IsolatedGatewaySupport =
+/** The label on the probe's throwaway network, so one a lost worker left is findable. */
+export const ISOLATION_PROBE_LABEL = "sealant.isolation-probe";
+
+/** Each step of the probe is bounded: a hung daemon or pull never holds the caller. */
+const PROBE_STEP_TIMEOUT_MS = 60_000;
+
+export type IsolatedGatewaySupport = (
   | { readonly supported: true; readonly engineVersion: string }
-  | { readonly supported: false; readonly reason: string };
+  | { readonly supported: false; readonly reason: string }
+) & {
+  /** The probe network, when it could not be removed (twice): labelled `ISOLATION_PROBE_LABEL`. */
+  readonly leftover?: string;
+};
 
 const engineAtLeast = (version: string, minimum: { major: number; minor: number }): boolean => {
   const match = /^(\d+)\.(\d+)/.exec(version);
@@ -62,7 +74,8 @@ const failureText = (error: unknown): string => {
  * Whether this Docker Engine makes isolated internal bridges, proved rather than assumed: the
  * engine is new enough, it creates a throwaway network with the option, and that network's bridge
  * device on the host carries no IPv4 address (read by `image` with the host's network, every
- * capability dropped). The throwaway network is always removed.
+ * capability dropped). Every step is bounded. The throwaway network is removed, tried twice; one
+ * that stays is named in `leftover`.
  */
 export const probeIsolatedGatewaySupport = async (input: {
   readonly run: DockerCommandRunner;
@@ -71,10 +84,11 @@ export const probeIsolatedGatewaySupport = async (input: {
   readonly networkName?: string;
 }): Promise<IsolatedGatewaySupport> => {
   const { run, image } = input;
+  const bounded = { timeoutMs: PROBE_STEP_TIMEOUT_MS };
   let engineVersion: string;
   try {
     engineVersion = (
-      await run("docker", ["version", "--format", "{{.Server.Version}}"])
+      await run("docker", ["version", "--format", "{{.Server.Version}}"], bounded)
     ).stdout.trim();
   } catch (error) {
     return { supported: false, reason: `Docker Engine version unreadable: ${failureText(error)}` };
@@ -91,16 +105,23 @@ export const probeIsolatedGatewaySupport = async (input: {
   let networkId: string;
   try {
     networkId = (
-      await run("docker", [
-        "network",
-        "create",
-        "--driver",
-        "bridge",
-        "--internal",
-        "--opt",
-        `${GATEWAY_MODE_IPV4_OPTION}=isolated`,
-        name,
-      ])
+      await run(
+        "docker",
+        [
+          "network",
+          "create",
+          "--driver",
+          "bridge",
+          "--internal",
+          "--ipv6=false",
+          "--opt",
+          `${GATEWAY_MODE_IPV4_OPTION}=isolated`,
+          "--label",
+          `${ISOLATION_PROBE_LABEL}=true`,
+          name,
+        ],
+        bounded,
+      )
     ).stdout.trim();
   } catch (error) {
     return {
@@ -108,38 +129,48 @@ export const probeIsolatedGatewaySupport = async (input: {
       reason: `the engine refused an isolated bridge: ${failureText(error)}`,
     };
   }
-  try {
-    const bridge = `br-${networkId.slice(0, 12)}`;
-    const addresses = await run("docker", [
-      "run",
-      "--rm",
-      "--network",
-      "host",
-      "--cap-drop",
-      "ALL",
-      "--entrypoint",
-      "ip",
-      image,
-      "-o",
-      "-4",
-      "addr",
-      "show",
-      "dev",
-      bridge,
-    ]);
-    if (/\binet\s/.test(addresses.stdout)) {
+  const verdict = await (async (): Promise<IsolatedGatewaySupport> => {
+    try {
+      const bridge = `br-${networkId.slice(0, 12)}`;
+      const addresses = await run(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "--cap-drop",
+          "ALL",
+          "--entrypoint",
+          "ip",
+          image,
+          "-o",
+          "-4",
+          "addr",
+          "show",
+          "dev",
+          bridge,
+        ],
+        bounded,
+      );
+      if (/\binet\s/.test(addresses.stdout)) {
+        return {
+          supported: false,
+          reason: `the engine accepted ${GATEWAY_MODE_IPV4_OPTION}=isolated but gave the bridge ${bridge} a host address anyway.`,
+        };
+      }
+      return { supported: true, engineVersion };
+    } catch (error) {
       return {
         supported: false,
-        reason: `the engine accepted ${GATEWAY_MODE_IPV4_OPTION}=isolated but gave the bridge ${bridge} a host address anyway.`,
+        reason: `the isolated bridge could not be inspected: ${failureText(error)}`,
       };
     }
-    return { supported: true, engineVersion };
-  } catch (error) {
-    return {
-      supported: false,
-      reason: `the isolated bridge could not be inspected: ${failureText(error)}`,
-    };
-  } finally {
-    await run("docker", ["network", "rm", networkId]).catch(() => undefined);
-  }
+  })();
+  const removed = async (): Promise<boolean> =>
+    run("docker", ["network", "rm", networkId], bounded).then(
+      () => true,
+      () => false,
+    );
+  return (await removed()) || (await removed()) ? verdict : { ...verdict, leftover: name };
 };
