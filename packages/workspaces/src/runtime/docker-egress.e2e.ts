@@ -245,7 +245,10 @@ describe("per-workspace Docker egress", () => {
     const networks = (
       await docker("docker", ["inspect", "--format", "{{json .NetworkSettings.Networks}}", b.id])
     ).stdout;
-    expect(Object.keys(JSON.parse(networks) as object)).toEqual([`${b.name}-egress`]);
+    const parsed: unknown = JSON.parse(networks);
+    expect(typeof parsed === "object" && parsed !== null ? Object.keys(parsed) : []).toEqual([
+      `${b.name}-egress`,
+    ]);
     const subnet = (
       await docker("docker", [
         "network",

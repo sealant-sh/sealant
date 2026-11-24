@@ -179,7 +179,7 @@ describe("prohibitedEgress", () => {
       ][Math.floor(random() * 3)] ?? "10.0.0.1";
     for (let round = 0; round < 200; round += 1) {
       const allowed = Array.from({ length: Math.floor(random() * 3) }, () =>
-        cidr(`${privateAddress()}`),
+        cidr(privateAddress()),
       );
       const own = cidr(privateAddress());
       const blocks = prohibitedEgress({ ...none, allowed, ownSubnets: [own] });

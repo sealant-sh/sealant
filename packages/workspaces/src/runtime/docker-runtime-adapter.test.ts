@@ -3094,38 +3094,44 @@ describe("DockerRuntimeAdapter runtime observation", () => {
   });
 });
 
-describe("DockerRuntimeAdapter with per-workspace egress", () => {
-  const egressPolicy = (operatorAllowedPrivateEgress?: string, hostPublicIps?: string) =>
-    parseDockerEgressPolicy({
-      workspaceSubnets: "10.233.0.0/16",
-      reachSubnets: "10.231.0.0/16",
-      operatorAllowedPrivateEgress,
-      hostPublicIps,
-    });
+const egressPolicy = (operatorAllowedPrivateEgress?: string, hostPublicIps?: string) =>
+  parseDockerEgressPolicy({
+    workspaceSubnets: "10.233.0.0/16",
+    reachSubnets: "10.231.0.0/16",
+    operatorAllowedPrivateEgress,
+    hostPublicIps,
+  });
 
-  /** sealant's subnet table, in memory: allocations and releases, in order. */
-  const subnetTable = () => {
-    const held = new Map<string, string>();
-    const events: string[] = [];
-    let next = 0;
-    return {
-      held,
-      events,
-      subnets: {
-        allocate: async ({ name, owner }: { name: string; owner: string }) => {
-          const subnet = held.get(name) ?? `10.233.0.${String(16 * next++)}/28`;
-          held.set(name, subnet);
-          events.push(`allocate ${name} ${owner} ${subnet}`);
-          return subnet;
-        },
-        release: async (name: string) => {
-          held.delete(name);
-          events.push(`release ${name}`);
-        },
+/** sealant's subnet table, in memory: allocations and releases, in order. */
+const subnetTable = () => {
+  const held = new Map<string, string>();
+  const events: string[] = [];
+  let next = 0;
+  return {
+    held,
+    events,
+    subnets: {
+      allocate: async ({ name, owner }: { name: string; owner: string }) => {
+        const subnet = held.get(name) ?? `10.233.0.${String(16 * next++)}/28`;
+        held.set(name, subnet);
+        events.push(`allocate ${name} ${owner} ${subnet}`);
+        return subnet;
       },
-    };
+      release: async (name: string) => {
+        held.delete(name);
+        events.push(`release ${name}`);
+      },
+    },
   };
+};
 
+/** The blocks a guard script prohibits. */
+const prohibited = (script: string | undefined) =>
+  [...(script ?? "").matchAll(/prohibit (\S+)/g)].map((match) => cidr(match[1] ?? ""));
+const refuses = (script: string | undefined, address: string) =>
+  prohibited(script).some((block) => cidrContains(block, cidr(address)));
+
+describe("DockerRuntimeAdapter with per-workspace egress", () => {
   /**
    * A Docker daemon for egress launches: networks by name, the guard's scripts, the DNS and host
    * address readings, and every call in order.
@@ -3208,12 +3214,6 @@ describe("DockerRuntimeAdapter with per-workspace egress", () => {
     });
     return { commandRunner, calls, scripts, networks, runs: () => runs };
   };
-
-  /** The blocks a guard script prohibits. */
-  const prohibited = (script: string | undefined) =>
-    [...(script ?? "").matchAll(/prohibit (\S+)/g)].map((match) => cidr(match[1] ?? ""));
-  const refuses = (script: string | undefined, address: string) =>
-    prohibited(script).some((block) => cidrContains(block, cidr(address)));
 
   it("launches each workspace on its own network from the pool, with its mirrors, and guards it", async () => {
     const table = subnetTable();
