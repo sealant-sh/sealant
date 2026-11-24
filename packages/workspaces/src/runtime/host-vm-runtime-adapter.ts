@@ -49,6 +49,10 @@ import {
   type HostVmStorage,
 } from "../images/host-vm-disk.js";
 import {
+  probeIsolatedGatewaySupport,
+  type IsolatedGatewaySupport,
+} from "./docker-isolated-network.js";
+import {
   AUTO_DOCKER_MEMORY_POLICY,
   dockerMemoryArgs,
   parseDockerHostMemory,
@@ -57,6 +61,7 @@ import {
   type DockerMemoryPolicy,
 } from "./docker-memory-limits.js";
 import {
+  DEFAULT_NETWORK_GUARD_IMAGE,
   isDaemonErrorResponse,
   isNoSuchContainerError,
   normalizeContainerToken,
@@ -64,6 +69,7 @@ import {
   type DockerEventStream,
   type DockerEventStreamOpener,
 } from "./docker-runtime-adapter.js";
+import type { EgressProxyOrchestrator } from "./egress-proxy-orchestrator.js";
 import { liveControlChannel, type ControlChannel } from "./kubernetes/adapter.js";
 import {
   completeReadyLaunch,
@@ -103,6 +109,14 @@ import {
 
 const MiB = 1024 * 1024;
 const GiB = 1024 * MiB;
+
+/**
+ * The `sealant-vm-runner` image a host VM runs in: sealantd's multi-arch `vm-runner-next`, pinned
+ * by digest to the same build as the guest's sealantd (`buildkit-builder.ts`), since the runner and
+ * `sealantd --vm` speak one boot protocol. `SEALANT_VM_RUNNER_IMAGE` replaces it.
+ */
+export const DEFAULT_HOST_VM_RUNNER_IMAGE =
+  "ghcr.io/sealant-sh/vm-runner-next:0.21.0-next.208@sha256:d25156b5598effed96c79b7a2d84e252a3e5ad026b8b046725990429dcccb770";
 
 /** Where the runner reads its disks and staged files (`sealant-vm-runner` defaults). */
 export const HOST_VM_IMAGES_TARGET = "/var/lib/sealant/images";
@@ -175,46 +189,59 @@ export interface HostVmDiskRecords {
 
 /**
  * The per-workspace egress proxy (`<name>-proxy`, §3.1, §7) the runner sends every guest packet
- * to. Supplied by the egress proxy orchestrator; without one `host-vm` launches nothing, since a
- * normal boot needs `--proxy-ip` and a VM with no proxy has no network.
+ * to, run by the egress proxy orchestrator the Docker runtime shares. Every host VM boots behind
+ * one, whatever its policy: the runner's normal boot needs `--proxy-ip`, and the VM has no other
+ * way out. Without it, `host-vm` launches nothing.
  */
-export interface HostVmEgressProxy {
+export interface HostVmEgressProxyOptions {
+  readonly proxies: EgressProxyOrchestrator;
   /**
-   * Start (or adopt) `<name>-proxy` and the private network it shares with the runner, for a
-   * normal boot. Idempotent per container name.
+   * The operator's private ranges a proxy lets through and the host's own public addresses it
+   * refuses (`SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS`, `SEALANT_HOST_PUBLIC_IPS`), measured when a
+   * launch needs them.
    */
-  readonly start: (input: {
-    readonly containerName: string;
-    readonly runId: string;
-    readonly blueprint: RuntimeAdapterLaunchInput["blueprint"];
-  }) => Promise<HostVmEgressAttachment>;
-  /** Stop `<name>-proxy` and keep its state and network. Answers whether it was running. */
-  readonly park: (containerName: string) => Promise<boolean>;
-  /** Remove `<name>-proxy` and its network. Idempotent. */
-  readonly remove: (containerName: string) => Promise<void>;
+  readonly hostPolicy: () => Promise<{
+    readonly operatorAllowedPrivateCidrs: readonly string[];
+    readonly hostPublicIps: readonly string[];
+  }>;
+  /** Test seam: whether this engine makes `gateway_mode_ipv4=isolated` networks (probed once). */
+  readonly isolatedGatewayProbe?: () => Promise<IsolatedGatewaySupport>;
 }
 
-/** What a started proxy tells the runner. */
-export interface HostVmEgressAttachment {
-  /** The `--internal` network the runner joins (`mend-egress-<id>`). */
+/** What the runner is told of its proxy. */
+interface HostVmEgressAttachment {
+  /** The workspace's `--internal`, gateway-isolated network the runner joins alone with its proxy. */
   readonly network: string;
   /** `<name>-proxy`'s address on it (`--proxy-ip`). */
   readonly proxyIp: string;
-  /** The worktree's Access policy network mode; `standard` when absent. */
-  readonly egress?: "standard" | "restricted";
+  readonly egress: "standard" | "restricted";
   /** TCP ports `restricted` allows besides 80 and 443. */
-  readonly allowTcpPorts?: readonly number[];
-  /** The executor's public CA, staged as `executor-ca.pem` for the guest's CA bundle. */
-  readonly executorCaPem?: string;
+  readonly allowTcpPorts: readonly number[];
 }
+
+/**
+ * The runner's egress flags from the workspace's policy: `restricted` lets through 80, 443 and
+ * the TCP ports its allowed hosts and mirrors name; anything else is `standard`.
+ */
+export const hostVmEgressFlags = (
+  policy: RuntimeAdapterLaunchInput["blueprint"]["networkPolicy"],
+): Pick<HostVmEgressAttachment, "egress" | "allowTcpPorts"> => {
+  if (policy?.mode !== "restricted") return { egress: "standard", allowTcpPorts: [] };
+  const ports = new Set<number>();
+  for (const host of policy.allowHosts ?? []) for (const port of host.ports ?? []) ports.add(port);
+  for (const mirror of policy.allowMirrors ?? []) ports.add(mirror.port);
+  ports.delete(80);
+  ports.delete(443);
+  return { egress: "restricted", allowTcpPorts: [...ports].toSorted((a, b) => a - b) };
+};
 
 export interface HostVmRuntimeAdapterOptions {
   readonly storage: HostVmStorage;
   readonly diskRecords: HostVmDiskRecords;
   readonly commandRunner: DockerCommandRunner;
-  /** `ghcr.io/sealant-sh/vm-runner` at the build this install pins (`SEALANT_VM_RUNNER_IMAGE`). */
-  readonly runnerImage: string;
-  readonly egressProxy?: HostVmEgressProxy;
+  /** The runner image (`SEALANT_VM_RUNNER_IMAGE`); defaults to `DEFAULT_HOST_VM_RUNNER_IMAGE`. */
+  readonly runnerImage?: string;
+  readonly egressProxy?: HostVmEgressProxyOptions;
   /** The same policy Docker workspaces use (`SEALANT_DOCKER_*_MEMORY_LIMIT`); `auto` by default. */
   readonly memory?: DockerMemoryPolicy;
   readonly vcpus?: number;
@@ -367,7 +394,8 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
   readonly #records: HostVmDiskRecords;
   readonly #run: DockerCommandRunner;
   readonly #runnerImage: string;
-  readonly #egressProxy: HostVmEgressProxy | undefined;
+  readonly #egressProxy: HostVmEgressProxyOptions | undefined;
+  #isolatedGatewayProved = false;
   readonly #memoryPolicy: DockerMemoryPolicy;
   readonly #vcpus: number;
   readonly #shutdownGraceSeconds: number;
@@ -383,7 +411,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     this.#storage = options.storage;
     this.#records = options.diskRecords;
     this.#run = options.commandRunner;
-    this.#runnerImage = options.runnerImage;
+    this.#runnerImage = options.runnerImage ?? DEFAULT_HOST_VM_RUNNER_IMAGE;
     this.#egressProxy = options.egressProxy;
     this.#memoryPolicy = options.memory ?? AUTO_DOCKER_MEMORY_POLICY;
     this.#vcpus = options.vcpus ?? DEFAULT_VCPUS;
@@ -405,6 +433,26 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
 
   public supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport {
     return supportFor(parseRuntimeAdapterSupportInput(input), this.#egressProxy !== undefined);
+  }
+
+  /** The egress proxies this adapter runs, for the worker's lease and revocation sweep. */
+  public get egressProxies(): EgressProxyOrchestrator | undefined {
+    return this.#egressProxy?.proxies;
+  }
+
+  async #assertIsolatedGatewaySupport(egress: HostVmEgressProxyOptions): Promise<void> {
+    if (this.#isolatedGatewayProved) return;
+    const verdict = await (
+      egress.isolatedGatewayProbe ??
+      (() => probeIsolatedGatewaySupport({ run: this.#run, image: DEFAULT_NETWORK_GUARD_IMAGE }))
+    )();
+    if (!verdict.supported) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `This Docker host cannot isolate a host VM behind its egress proxy: ${verdict.reason}`,
+      );
+    }
+    this.#isolatedGatewayProved = true;
   }
 
   /** The runner container's name for a run: one container per run, recreated under one name. */
@@ -579,11 +627,8 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
             "--proxy-ip",
             input.egress.proxyIp,
             "--egress",
-            input.egress.egress ?? "standard",
-            ...(input.egress.allowTcpPorts ?? []).flatMap((port) => [
-              "--allow-tcp-port",
-              String(port),
-            ]),
+            input.egress.egress,
+            ...input.egress.allowTcpPorts.flatMap((port) => ["--allow-tcp-port", String(port)]),
           ]),
     ];
   }
@@ -694,18 +739,36 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
           dataDiskPath: prepared.dataDiskPath,
           baseImageDigest: digest,
         });
-        const egress = await egressProxy.start({
-          containerName: name,
-          runId,
-          blueprint: parsed.blueprint,
+        // The proxy comes up on the workspace's isolated network and takes its first policy
+        // before the runner exists, so the VM never has a moment without it (§7.1).
+        const launch = parsed.egressProxy;
+        if (launch === undefined) {
+          throw createAdapterError(
+            "adapter-unavailable",
+            "A host VM boots only behind its egress proxy, and this launch carries no executor CA or policy for it.",
+          );
+        }
+        await this.#assertIsolatedGatewaySupport(egressProxy);
+        owned.proxy = (await egressProxy.proxies.state(name)) === undefined;
+        const host = await egressProxy.hostPolicy();
+        const proxy = await egressProxy.proxies.launchProxy({
+          workspaceContainer: name,
+          launch,
+          operatorAllowedPrivateCidrs: host.operatorAllowedPrivateCidrs,
+          hostPublicIps: host.hostPublicIps,
         });
-        owned.proxy = true;
+        const egress: HostVmEgressAttachment = {
+          network: proxy.networks.isolated.name,
+          proxyIp: proxy.networks.proxyIp,
+          ...hostVmEgressFlags(parsed.blueprint.networkPolicy),
+        };
         const dockerService = parsed.blueprint.tooling.services?.docker?.enabled === true;
         const launchFiles = await this.#launchFiles(parsed, dockerService);
         await this.#stage(name, base, {
           launch: launchFiles.normal,
           recoveryTemplate: launchFiles.recoveryTemplate,
-          ...(egress.executorCaPem === undefined ? {} : { executorCaPem: egress.executorCaPem }),
+          // The guest trusts the proxy's inspecting hosts through it (its combined CA bundle).
+          executorCaPem: proxy.caCertPem,
         });
         const memory = hostVmMemory(await this.#limits(), dockerService);
         try {
@@ -769,7 +832,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         error,
         cleanup: async () => {
           if (owned.container) await this.#run("docker", ["rm", "-f", name]).catch(() => undefined);
-          if (owned.proxy) await egressProxy.remove(name).catch(() => undefined);
+          if (owned.proxy) await egressProxy.proxies.remove(name).catch(() => undefined);
           if (owned.disk) await this.#storage.removeExecutor(name).catch(() => undefined);
         },
       });
@@ -876,7 +939,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     }
     const base = this.#storage.baseImage(record.baseImageDigest);
     const template = await this.#recoveryTemplate(name);
-    await this.#egressProxy?.park(name).catch(() => false);
+    await this.#egressProxy?.proxies.park(name).catch(() => false);
     if (state.kind === "present") {
       // Stopped: it was made for a normal boot, and its mode is fixed at `docker run`.
       await this.#run("docker", ["rm", "-f", name]);
@@ -954,7 +1017,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
   public async parkRetained(input: RuntimeAdapterParkInput): Promise<RuntimeAdapterParkResult> {
     const state = await this.#containerState(input.resourceId).catch(() => undefined);
     if (state === undefined || (state.kind === "present" && state.running)) return { stopped: [] };
-    const stopped = (await this.#egressProxy?.park(input.resourceId)) ?? false;
+    const stopped = (await this.#egressProxy?.proxies.park(input.resourceId)) ?? false;
     return { stopped: stopped ? [`${input.resourceId}-proxy`] : [] };
   }
 
@@ -993,7 +1056,8 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       }
     }
     const disk = await this.#storage.dataDiskExists(name);
-    await this.#egressProxy?.remove(name);
+    // Its proxy, its networks and their subnets go with it.
+    await this.#egressProxy?.proxies.remove(name);
     // The data disk and the control directory (its staged files and sockets) go together.
     await this.#storage.removeExecutor(name);
     return parseRuntimeAdapterStopResult({

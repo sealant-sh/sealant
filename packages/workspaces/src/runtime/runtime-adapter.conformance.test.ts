@@ -32,7 +32,12 @@ import { bridgeLaunchRequestSchema } from "./cloudflare/bridge-contract.js";
 import { cloudflareRuntimeConfigSchema } from "./cloudflare/config.js";
 import { cases, publishedImage } from "./docker-runtime-adapter.golden-fixture.js";
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
-import { createHostVmHarness, HOST_VM_DIGEST, HOST_VM_REFERENCE } from "./host-vm.fixture.js";
+import {
+  createHostVmHarness,
+  fakeEgressLaunch,
+  HOST_VM_DIGEST,
+  HOST_VM_REFERENCE,
+} from "./host-vm.fixture.js";
 import { KubernetesRuntimeAdapter } from "./kubernetes/adapter.js";
 import { kubernetesRuntimeConfigSchema } from "./kubernetes/config.js";
 import { fakeCluster } from "./kubernetes/fake-cluster.fixture.js";
@@ -171,6 +176,7 @@ const hostVmLaunch = async (
           digestReference: HOST_VM_REFERENCE,
         },
       },
+      egressProxy: fakeEgressLaunch(),
     });
   } catch (error) {
     await harness.cleanup();

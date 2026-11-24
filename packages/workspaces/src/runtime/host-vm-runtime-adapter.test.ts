@@ -4,9 +4,15 @@ import { join as joinPath } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { cases, publishedImage } from "./docker-runtime-adapter.golden-fixture.js";
-import { hostVmMemory, HostVmRuntimeAdapter } from "./host-vm-runtime-adapter.js";
+import {
+  hostVmEgressFlags,
+  hostVmMemory,
+  HostVmRuntimeAdapter,
+} from "./host-vm-runtime-adapter.js";
 import {
   createHostVmHarness,
+  EXECUTOR_CA_PEM,
+  fakeEgressLaunch,
   HOST_VM_DIGEST,
   HOST_VM_KEY,
   HOST_VM_REFERENCE,
@@ -29,6 +35,8 @@ const onHostVm = (input: RuntimeAdapterLaunchInput): RuntimeAdapterLaunchInput =
     ...input.publication,
     image: { ...publishedImage, digest: HOST_VM_DIGEST, digestReference: HOST_VM_REFERENCE },
   },
+  // The worker hands every host-vm launch its proxy launch (`egressProxyLaunch`).
+  egressProxy: fakeEgressLaunch(),
 });
 
 const exists = (path: string) =>
@@ -85,7 +93,9 @@ describe("HostVmRuntimeAdapter.launch", () => {
     ]);
     // Never privileged, never the Docker socket, never Mend's own network.
     expect(run.join(" ")).not.toMatch(/--privileged|docker\.sock|mend_default/);
-    expect(valuesOf(run, "--network")).toEqual([`mend-egress-${name}`]);
+    // Alone with its proxy on its isolated network: no gateway, no other way out.
+    expect(valuesOf(run, "--network")).toEqual([`${name}-isolated`]);
+    expect(h.networks.get(`${name}-isolated`)).toEqual(new Set([`${name}-proxy`]));
     // Only this executor's base disk, read-only; its own data and control directories.
     expect(valuesOf(run, "--mount")).toEqual([
       `type=bind,source=${joinPath(h.imagesDir, `${HOST_VM_KEY}.img`)},target=/var/lib/sealant/images/${HOST_VM_KEY}.img,readonly`,
@@ -106,7 +116,8 @@ describe("HostVmRuntimeAdapter.launch", () => {
       "--shutdown-grace-secs",
       "20",
       "--proxy-ip",
-      "172.30.0.3",
+      // The last usable address of the isolated /29 (`proxyAddressOf`).
+      "10.250.1.6",
       "--egress",
       "standard",
     ]);
@@ -157,7 +168,12 @@ describe("HostVmRuntimeAdapter.launch", () => {
   it("records the data disk and base image on the run's row before the runner exists", async () => {
     const h = await make();
     await h.adapter.launch(onHostVm(cases.gitSource));
-    expect(h.events).toEqual(["record:run-golden-1", "run:sealant-vm-run-golden-1"]);
+    // The disk on record, then the proxy loaded with its first policy, then the runner.
+    expect(h.events).toEqual([
+      "record:run-golden-1",
+      "policy:sealant-vm-run-golden-1",
+      "run:sealant-vm-run-golden-1",
+    ]);
     expect(h.records.get("run-golden-1")).toEqual({
       dataDiskPath: joinPath(h.dataDir, "sealant-vm-run-golden-1", "data.img"),
       baseImageDigest: HOST_VM_DIGEST,
@@ -433,5 +449,57 @@ describe("HostVmRuntimeAdapter · a data directory that is not there", () => {
     await expect(h.adapter.inspect({ resourceId: "sealant-vm-run-x" })).rejects.toThrow(
       /data directory .* is missing/,
     );
+  });
+});
+
+describe("HostVmRuntimeAdapter · its egress proxy", () => {
+  it("loads the proxy before the runner and hands the guest the executor CA", async () => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.gitSource));
+    const name = "sealant-vm-run-golden-1";
+    expect(h.policies).toEqual([
+      expect.objectContaining({
+        container: name,
+        document: expect.objectContaining({
+          mode: "standard",
+          hostPublicIps: ["203.0.113.7/32"],
+          // The isolated network and the proxy's outbound one are refused, with every bridge.
+          blockedCidrs: expect.arrayContaining(["172.17.0.0/16", "10.250.1.0/29", "10.250.2.0/29"]),
+        }),
+      }),
+    ]);
+    expect(await readFile(joinPath(h.controlDir, name, "executor-ca.pem"), "utf8")).toBe(
+      EXECUTOR_CA_PEM,
+    );
+  });
+
+  it("is refused a launch that carries no proxy launch, before anything is made", async () => {
+    const h = await make();
+    const { egressProxy: _none, ...bare } = onHostVm(cases.gitSource);
+    await expect(h.adapter.launch(bare)).rejects.toThrow(/behind its egress proxy/);
+    expect(runnerRun(h)).toEqual([]);
+    expect(h.proxy.started).toEqual([]);
+  });
+
+  it("takes the proxy and both its networks with the executor", async () => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.gitSource));
+    const name = "sealant-vm-run-golden-1";
+    await h.adapter.stop({ resourceId: name });
+    expect(h.proxy.removed).toEqual([name]);
+    expect(h.networks.has(`${name}-isolated`)).toBe(false);
+    expect(h.networks.has(`${name}-proxy-egress`)).toBe(false);
+  });
+
+  it("tells the runner a restricted policy's mode and the ports it allows", () => {
+    expect(
+      hostVmEgressFlags({
+        mode: "restricted",
+        policyHash: "sha256:p",
+        allowHosts: [{ host: "db.example.com", ports: [5432, 443] }, { host: "git.example.com" }],
+        allowMirrors: [{ name: "npm", host: "npm-mirror", port: 4873 }],
+      }),
+    ).toEqual({ egress: "restricted", allowTcpPorts: [4873, 5432] });
+    expect(hostVmEgressFlags(undefined)).toEqual({ egress: "standard", allowTcpPorts: [] });
   });
 });

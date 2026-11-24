@@ -54,6 +54,7 @@ export {
 export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";
 
 export {
+  DEFAULT_HOST_VM_RUNNER_IMAGE,
   DEFAULT_HOST_VM_SHUTDOWN_GRACE_SECONDS,
   DEFAULT_HOST_VM_STOP_TIMEOUT_SECONDS,
   HOST_VM_BASE_IMAGE_LABEL,
@@ -62,8 +63,8 @@ export {
   hostVmMemory,
   type HostVmDiskRecord,
   type HostVmDiskRecords,
-  type HostVmEgressAttachment,
-  type HostVmEgressProxy,
+  hostVmEgressFlags,
+  type HostVmEgressProxyOptions,
   type HostVmRuntimeAdapterOptions,
 } from "./host-vm-runtime-adapter.js";
 

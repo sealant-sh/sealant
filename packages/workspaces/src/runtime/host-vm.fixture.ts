@@ -11,10 +11,11 @@ import { join as joinPath } from "node:path";
 
 import { HostVmStorage, type DockerPipeRunner } from "../images/host-vm-disk.js";
 import type { DockerCommandRunner } from "./docker-runtime-adapter.js";
+import { EgressProxyOrchestrator } from "./egress-proxy-orchestrator.js";
+import type { EgressProxyLaunch, ProxyPolicyDocument } from "./egress-proxy-types.js";
 import {
   HostVmRuntimeAdapter,
   type HostVmDiskRecord,
-  type HostVmEgressProxy,
   type HostVmRuntimeAdapterOptions,
 } from "./host-vm-runtime-adapter.js";
 import type { ControlChannel } from "./kubernetes/adapter.js";
@@ -48,6 +49,10 @@ export interface HostVmHarness {
   /** The order the disk record and the runner's `docker run` happened in. */
   readonly events: string[];
   readonly proxy: { started: string[]; parked: string[]; removed: string[] };
+  /** Every policy a proxy took, by workspace container. */
+  readonly policies: Array<{ readonly container: string; readonly document: ProxyPolicyDocument }>;
+  /** Docker networks and their members. */
+  readonly networks: Map<string, Set<string>>;
   /** Free bytes the data directory's filesystem reports. */
   freeBytes: number;
   /** When set, the next runner exits with this code before its daemon answers. */
@@ -64,6 +69,36 @@ export interface HostVmHarness {
 }
 
 const ok = (stdout = "") => ({ stdout, stderr: "" });
+
+/** The workspace container a proxy (`<name>-proxy`) belongs to. */
+const workspaceOf = (proxyName: string) => proxyName.replace(/-proxy$/, "");
+
+export const EXECUTOR_CA_PEM =
+  "-----BEGIN CERTIFICATE-----\nMIIBfixture\n-----END CERTIFICATE-----\n";
+
+/** The worker's half of a proxy launch, as the build job hands it over: a CA and a policy. */
+export const fakeEgressLaunch = (
+  mode: "standard" | "restricted" = "standard",
+): EgressProxyLaunch => ({
+  prepare: async (measured) => ({
+    caCertPem: EXECUTOR_CA_PEM,
+    document: {
+      mode,
+      policyHash: `sha256:${mode}`,
+      revocationWatermark: 0,
+      leaseTtlSecs: 120,
+      operatorAllowedPrivateCidrs: [...measured.host.operatorAllowedPrivateCidrs],
+      hostPublicIps: [...measured.host.hostPublicIps],
+      blockedCidrs: [...measured.host.blockedCidrs],
+      allowHosts: [],
+      allowMirrors: [],
+      allowResources: [],
+      brokeredSecrets: [],
+      revokedHosts: [],
+      revokedSecretIds: [],
+    },
+  }),
+});
 
 /** The host directory a converter's argv mounts at /out. */
 export const scratchOf = (argv: readonly string[]): string => {
@@ -97,6 +132,10 @@ export const createHostVmHarness = async (
   const stagedAtRun: Array<{ readonly mode: string; readonly launch: unknown }> = [];
   const absentImages = new Set<string>();
   const proxy = { started: [] as string[], parked: [] as string[], removed: [] as string[] };
+  const policies: Array<{ readonly container: string; readonly document: ProxyPolicyDocument }> =
+    [];
+  const networks = new Map<string, Set<string>>();
+  const proxies = new Map<string, { running: boolean }>();
 
   const harness = {
     root,
@@ -109,6 +148,8 @@ export const createHostVmHarness = async (
     records,
     events,
     proxy,
+    policies,
+    networks,
     freeBytes: 100 * GiB,
     exitOnBoot: undefined as number | undefined,
     inspectFails: false,
@@ -119,7 +160,56 @@ export const createHostVmHarness = async (
 
   const commandRunner: DockerCommandRunner = async (_command, args) => {
     calls.push([...args]);
-    const [verb] = args;
+    const [verb, sub] = args;
+    const last = args.at(-1) ?? "";
+    if (verb === "network") {
+      if (sub === "create") {
+        networks.set(last, new Set());
+        return ok(`${last}-id\n`);
+      }
+      if (sub === "ls") return ok("bridge-1\n");
+      if (sub === "inspect" && args.includes("{{json .IPAM.Config}}")) {
+        return ok('[{"Subnet":"172.17.0.0/16","Gateway":"172.17.0.1"}]\n');
+      }
+      if (sub === "inspect") {
+        const members = networks.get(last);
+        if (members === undefined) throw noSuch(`network: ${last}`);
+        return ok(
+          args.some((arg) => arg.startsWith("{{range")) ? [...members].join("\n") : `${last}-id\n`,
+        );
+      }
+      if (sub === "rm") {
+        networks.delete(last);
+        return ok();
+      }
+      if (sub === "connect") networks.get(args.at(-2) ?? "")?.add(last);
+      if (sub === "disconnect") networks.get(args.at(-2) ?? "")?.delete(last);
+      return ok();
+    }
+    if (verb === "create" && args.includes("--name")) {
+      const name = args[args.indexOf("--name") + 1] ?? "";
+      proxies.set(name, { running: false });
+      networks.get(args[args.indexOf("--network") + 1] ?? "")?.add(name);
+      proxy.started.push(workspaceOf(name));
+      return ok(`${name}-cid\n`);
+    }
+    if (last.endsWith("-proxy")) {
+      const state = proxies.get(last);
+      if (verb === "inspect") {
+        if (state === undefined) throw noSuch(`container: ${last}`);
+        return ok(`${last}-cid\t${String(state.running)}\n`);
+      }
+      if (verb === "start" && state !== undefined) state.running = true;
+      if ((verb === "stop" || verb === "kill") && state !== undefined) {
+        if (verb === "stop" && state.running) proxy.parked.push(workspaceOf(last));
+        state.running = false;
+      }
+      if (verb === "rm") {
+        if (proxies.delete(last)) proxy.removed.push(workspaceOf(last));
+        else throw noSuch(`container: ${last}`);
+      }
+      return ok();
+    }
     if (verb === "image" && args[1] === "inspect") {
       const reference = args.at(-1) ?? "";
       if (reference.startsWith("sealant-vm-disk-tools:")) return ok("sha256:tools\n");
@@ -260,19 +350,51 @@ export const createHostVmHarness = async (
     writeCredentialFiles: async () => undefined,
   };
 
-  const egressProxy: HostVmEgressProxy = {
-    start: async ({ containerName }) => {
-      proxy.started.push(containerName);
-      return { network: `mend-egress-${containerName}`, proxyIp: "172.30.0.3" };
+  let subnets = 0;
+  const orchestrator = new EgressProxyOrchestrator({
+    run: commandRunner,
+    subnets: {
+      allocate: async () => {
+        subnets += 1;
+        return `10.250.${String(subnets)}.0/29`;
+      },
+      release: async () => undefined,
     },
-    park: async (containerName) => {
-      proxy.parked.push(containerName);
-      return true;
+    controlDir,
+    controlMountArgs: (proxyName) => ["-v", `${joinPath(controlDir, proxyName)}:/run/sealant`],
+    ownControlDirectory: async () => undefined,
+    adminClient: (socketPath) => {
+      const container = workspaceOf(socketPath.split("/").at(-2) ?? "");
+      return {
+        health: async () => ({
+          initialized: true,
+          revocationWatermark: 0,
+          activeConnections: 0,
+          leaseRemainingMs: 120_000,
+          leaseExpired: false,
+          resyncRequired: false,
+        }),
+        putPolicy: async (document) => {
+          events.push(`policy:${container}`);
+          policies.push({ container, document });
+          return {
+            policyHash: document.policyHash,
+            revocationWatermark: document.revocationWatermark,
+            closed: 0,
+          };
+        },
+        revoke: async (revocation) => ({
+          revocationWatermark: revocation.revocationWatermark,
+          closed: 0,
+        }),
+        heartbeat: async (revocationWatermark) => ({
+          resyncRequired: false,
+          leaseRemainingMs: 120_000,
+          revocationWatermark,
+        }),
+      };
     },
-    remove: async (containerName) => {
-      proxy.removed.push(containerName);
-    },
-  };
+  });
 
   const { withoutProxy, ...adapterOverrides } = overrides;
   const adapter = new HostVmRuntimeAdapter({
@@ -288,7 +410,18 @@ export const createHostVmHarness = async (
     runnerImage: "ghcr.io/sealant-sh/vm-runner:test",
     controlChannel,
     readinessTimeoutMs: 2_000,
-    ...(withoutProxy === true ? {} : { egressProxy }),
+    ...(withoutProxy === true
+      ? {}
+      : {
+          egressProxy: {
+            proxies: orchestrator,
+            hostPolicy: async () => ({
+              operatorAllowedPrivateCidrs: [],
+              hostPublicIps: ["203.0.113.7/32"],
+            }),
+            isolatedGatewayProbe: async () => ({ supported: true, engineVersion: "29.0.0" }),
+          },
+        }),
     ...adapterOverrides,
   });
 

@@ -99,8 +99,40 @@ export interface HostVmDirectory {
   readonly path: string;
   readonly mount?:
     | { readonly kind: "bind"; readonly hostPath: string }
-    | { readonly kind: "volume"; readonly volume: string };
+    | {
+        readonly kind: "volume";
+        readonly volume: string;
+        /** Where in the volume `path` is; absent, the volume's root. */
+        readonly subpath?: string;
+      };
 }
+
+/**
+ * The `HostVmDirectory` of a worker path: on a worker whose mounts are named volumes
+ * (`SEALANT_DOCKER_VOLUME_MAPPINGS`), the volume whose logical root holds it, at its subpath;
+ * otherwise the same path on the host.
+ */
+export const hostVmDirectoryFor = (
+  directory: string,
+  mappings: ReadonlyArray<{ readonly logicalRoot: string; readonly volumeName: string }> = [],
+): HostVmDirectory => {
+  for (const mapping of mappings) {
+    if (directory === mapping.logicalRoot) {
+      return { path: directory, mount: { kind: "volume", volume: mapping.volumeName } };
+    }
+    if (directory.startsWith(`${mapping.logicalRoot}/`)) {
+      return {
+        path: directory,
+        mount: {
+          kind: "volume",
+          volume: mapping.volumeName,
+          subpath: directory.slice(mapping.logicalRoot.length + 1),
+        },
+      };
+    }
+  }
+  return { path: directory };
+};
 
 /**
  * The `--mount` for `subpath` of `directory` (the whole directory when empty) at `target` in a
@@ -116,7 +148,8 @@ export const hostVmMountArgs = (
   const mode = readOnly ? ",readonly" : "";
   const mount = directory.mount;
   if (mount?.kind === "volume") {
-    const sub = subpath.length === 0 ? "" : `,volume-subpath=${subpath}`;
+    const full = [mount.subpath ?? "", subpath].filter((part) => part.length > 0).join("/");
+    const sub = full.length === 0 ? "" : `,volume-subpath=${full}`;
     return ["--mount", `type=volume,source=${mount.volume}${sub},target=${target}${mode}`];
   }
   const root = mount?.kind === "bind" ? mount.hostPath : directory.path;

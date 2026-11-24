@@ -6,6 +6,7 @@ export {
   HOST_VM_TOOLS_IMAGE_TAG,
   HostVmStorage,
   hostVmBaseImageKey,
+  hostVmDirectoryFor,
   type DockerPipeRunner,
   type HostVmBaseImage,
   type HostVmDirectory,

@@ -1654,6 +1654,29 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return this.proxies;
   }
 
+  /**
+   * What every egress proxy on this host is told of it: the operator's private exceptions and the
+   * host's own public addresses (listed, and detected when asked). Shared with the host-vm runtime,
+   * whose proxies run on the same orchestrator.
+   */
+  public async egressHostPolicy(): Promise<{
+    readonly operatorAllowedPrivateCidrs: readonly string[];
+    readonly hostPublicIps: readonly string[];
+  }> {
+    const egress = this.egress;
+    if (egress === undefined) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        "This Docker worker has no per-workspace egress, so it runs no egress proxy.",
+      );
+    }
+    const detected = egress.policy.hostPublic.detect ? await this.detectedHostAddresses() : [];
+    return {
+      operatorAllowedPrivateCidrs: egress.policy.allowed.map(formatCidr),
+      hostPublicIps: [...egress.policy.hostPublic.listed, ...detected].map(formatCidr),
+    };
+  }
+
   /** Wait until the Docker sidecar's daemon answers `docker info`, within the readiness timeout. */
   private async awaitDockerServiceReady(containerId: string, serviceName: string): Promise<void> {
     const deadline = Date.now() + this.readinessTimeoutMs;
@@ -3159,14 +3182,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         }
         await this.assertIsolatedGatewaySupport();
         proxyLaunched = true;
-        const hostPublic = egress.policy.hostPublic.detect
-          ? await this.detectedHostAddresses()
-          : [];
+        const hostPolicy = await this.egressHostPolicy();
         const proxy = await proxies.launchProxy({
           workspaceContainer: containerName,
           launch,
-          operatorAllowedPrivateCidrs: egress.policy.allowed.map(formatCidr),
-          hostPublicIps: [...egress.policy.hostPublic.listed, ...hostPublic].map(formatCidr),
+          operatorAllowedPrivateCidrs: hostPolicy.operatorAllowedPrivateCidrs,
+          hostPublicIps: hostPolicy.hostPublicIps,
         });
         egressNetworkName = proxy.networks.isolated.name;
         proxied = { proxyIp: proxy.networks.proxyIp, caCertPem: proxy.caCertPem };
