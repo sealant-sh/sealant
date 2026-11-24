@@ -133,7 +133,8 @@ const memoryEgress = () => {
         const existing = policies.get(input.workspaceId);
         const row: WorkspaceEgressPolicy = {
           ...(existing ?? emptyPolicy(input.workspaceId)),
-          policyRevision: existing === undefined ? 0 : existing.policyRevision + 1,
+          // As the repository does: a first write is revision 1, every later one bumps it.
+          policyRevision: existing === undefined ? 1 : existing.policyRevision + 1,
           networkPolicy: input.networkPolicy ?? null,
           brokeredSecrets: input.brokeredSecrets,
           brokeredValuesSealed: input.brokeredValuesSealed ?? null,
@@ -452,6 +453,31 @@ describe("revokeWorkspaceAccess", () => {
     );
     expect(response.enforcement).toBe("next-start");
     expect(admin.calls).toEqual([]);
+  });
+
+  it("revokes all on a Docker workspace with Docker inside: its secrets and the `all` row, no derived host", async () => {
+    const egress = memoryEgress();
+    egress.policies.set("ws_1", {
+      workspaceId: "ws_1",
+      networkPolicy: standardPolicy("ph_1"),
+      brokeredSecrets: [vercelSecret()],
+      brokeredValuesSealed: null,
+      encryptionKeyId: null,
+      revocationWatermark: 0,
+      policyRevision: 1,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const response = await Effect.runPromise(
+      routes
+        .revokeWorkspaceAccess({ workspaceId: "ws_1", payload: { ownerUserId: OWNER, all: true } })
+        .pipe(Effect.provide(launchedLayer(egress, { dockerInside: true }))),
+    );
+    expect(response.revocationWatermark).toBe(1);
+    expect(egress.revocations.map((row) => [row.kind, row.target])).toEqual([
+      ["secret", "sec_vercel"],
+      ["all", null],
+    ]);
   });
 
   it("revokes every grant the stored policy holds when it revokes all", async () => {
@@ -780,11 +806,12 @@ describe("applyWorkspaceNetworkPolicy · what a live proxy can take", () => {
     expect(admin.calls[0]?.body).toMatchObject({
       brokeredSecrets: [{ secretId: "sec_vercel", value: "Bearer vercel-rotated" }],
     });
-    // Same policy hash as before: only the revision tells the proxy has the new value.
-    expect(egress.policies.get("ws_1")?.policyRevision).toBe(1);
+    // Same policy hash as before: only the revision (first write 1, the rotation 2) tells the
+    // proxy has the new value.
+    expect(egress.policies.get("ws_1")?.policyRevision).toBe(2);
     expect(egress.proxies.get("run_1")).toMatchObject({
       confirmedPolicyHash: "ph_5",
-      confirmedPolicyRevision: 1,
+      confirmedPolicyRevision: 2,
     });
   });
 });

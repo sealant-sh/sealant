@@ -192,6 +192,9 @@ const make: Effect.Effect<WorkspaceEgressRepoService, never, SealantDB> = Effect
                 brokeredSecrets: input.brokeredSecrets,
                 brokeredValuesSealed: input.brokeredValuesSealed ?? null,
                 encryptionKeyId: input.encryptionKeyId ?? null,
+                // A first write is revision 1: a run launched with no stored policy confirmed 0,
+                // so the sweep pushes this one even when the API's own push did not land.
+                policyRevision: 1,
               })
               .onConflictDoUpdate({
                 target: workspaceEgressPolicies.workspaceId,

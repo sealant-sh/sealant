@@ -140,10 +140,13 @@ const isIpv6 = (value: string): boolean => {
   const tail =
     halves.length === 2 && (halves[1] ?? "").length > 0 ? (halves[1] ?? "").split(":") : [];
   const groups = [...head, ...tail];
+  // The dotted quad is the address's last 32 bits: the final group, after any `::` (so never in a
+  // head that `::` ends, as in `1.2.3.4::`).
+  const quadAllowed = halves.length === 1 || tail.length > 0;
   let width = 0;
   for (const [index, group] of groups.entries()) {
     const last = index === groups.length - 1;
-    if (last && group.includes(".")) {
+    if (quadAllowed && last && group.includes(".")) {
       if (ipv4Octets(group) === undefined) return false;
       width += 2;
     } else if (HEX_GROUP.test(group)) {

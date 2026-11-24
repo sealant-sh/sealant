@@ -270,24 +270,31 @@ export const revokeWorkspaceAccess = (input: {
           ),
         )
       : { secretIds: [], hosts: [] };
+    const named = payload.hosts ?? [];
+    // Only an egress proxy refuses a host, and not past Docker inside a Docker workspace, whose
+    // service reaches out on its own. A host the caller names where that holds is refused before
+    // anything is stored. A host `all` found among the grants is not the caller's request: there it
+    // is left out (its secrets and the `all` row are still stored, which is what such a runtime
+    // enforces), so the workspace is not refused on its next start for a tombstone it never asked
+    // for. A secret revocation stays allowed everywhere (with no proxy it holds from the next
+    // start).
+    const hostRefusal =
+      named.length > 0 || grants.hosts.length > 0
+        ? yield* workspaceRuntimeOf(workspace.id, workspace.latestRunId).pipe(
+            Effect.map(({ runtime, spec }) => hostRevocationRefusal(runtime, spec)),
+          )
+        : undefined;
+    if (named.length > 0 && hostRefusal !== undefined) {
+      return yield* new WorkspaceRuntimeRequirementUnsupportedError({
+        message: hostRefusal,
+        code: "runtime-requirement-unsupported",
+      });
+    }
     const revocation = {
       secretIds: [...grants.secretIds, ...(payload.secretIds ?? [])],
-      hosts: [...grants.hosts, ...(payload.hosts ?? [])],
+      hosts: [...(hostRefusal === undefined ? grants.hosts : []), ...named],
       all,
     };
-    // Only an egress proxy refuses a host: a host revocation on a runtime that runs none could
-    // never be enforced, so it is refused before anything is stored. A secret revocation stays
-    // allowed everywhere (with no proxy it holds from the next start).
-    if (revocation.hosts.length > 0) {
-      const { runtime, spec } = yield* workspaceRuntimeOf(workspace.id, workspace.latestRunId);
-      const refusal = hostRevocationRefusal(runtime, spec);
-      if (refusal !== undefined) {
-        return yield* new WorkspaceRuntimeRequirementUnsupportedError({
-          message: refusal,
-          code: "runtime-requirement-unsupported",
-        });
-      }
-    }
     // Durable before anything is told: it holds for the workspace's life whatever happens next.
     const tombstones = yield* withInternalError(
       egress.revoke({ workspaceId: workspace.id, ...revocation }),

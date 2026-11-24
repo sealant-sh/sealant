@@ -679,4 +679,34 @@ describe("restartWorkspace · the workspace's pinned network policy", () => {
     expect(stops).toEqual([]);
     expect(newJobs).toBe(0);
   });
+
+  it("restarts a Docker workspace with Docker inside after a revocation of all: no host was stored", async () => {
+    const { result, stops, newJobs } = await restartAfter(
+      "usr_revoked_all_dind",
+      (store, runId) => {
+        const spec = store.snapshots.get(runId);
+        if (spec === undefined) throw new Error("the create recorded no snapshot");
+        store.snapshots.set(runId, {
+          ...spec,
+          tooling: { ...spec.tooling, services: { docker: { enabled: true } } },
+        });
+        store.egressPolicy = pinnedPolicy(null, 1);
+        const workspaceId = store.workspace?.id ?? "";
+        store.revocations.push(
+          {
+            id: 1,
+            workspaceId,
+            revocationWatermark: 1,
+            kind: "secret",
+            target: "sec_vercel",
+            createdAt: now,
+          },
+          { id: 2, workspaceId, revocationWatermark: 1, kind: "all", target: null, createdAt: now },
+        );
+      },
+    );
+    expect(Result.isSuccess(result)).toBe(true);
+    expect(stops).toHaveLength(1);
+    expect(newJobs).toBe(1);
+  });
 });

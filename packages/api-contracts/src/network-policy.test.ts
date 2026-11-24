@@ -206,6 +206,10 @@ describe("IP literals in a policy", () => {
     "::ffff::1",
     "1:2:3:4:5:6:7:8:9",
     "fe80::1%eth0",
+    // A dotted quad is only ever the last 32 bits.
+    "1.2.3.4::",
+    "192.0.2.1::",
+    "1:2.3.4.5::",
   ])("refuses %s as a host, at revoke admission and in allowHosts", (host) => {
     expect(canonicalRevocationHost(host)).toBeUndefined();
     expect(

@@ -246,7 +246,9 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
         return { first, rotated, proxy: yield* repo.getProxy(runId) };
       }),
     );
-    expect(result.rotated.policyRevision).toBeGreaterThan(result.first.policyRevision);
+    // A first write is revision 1, above the 0 a run with no stored policy confirms.
+    expect(result.first.policyRevision).toBe(1);
+    expect(result.rotated.policyRevision).toBe(2);
     expect(result.proxy?.confirmedPolicyRevision).toBe(result.rotated.policyRevision);
   });
 
