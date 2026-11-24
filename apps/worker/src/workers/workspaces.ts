@@ -12,6 +12,8 @@ import {
   type ResourceWorkspaceLink,
   ResourceInstanceRepo,
   ResourceInstanceRepoLive,
+  WorkspaceEgressRepo,
+  workspaceEgressRepoLayer,
   ResourceDomainRepo,
   ResourceDomainRepoLive,
   WorkspaceCredentialHomeRepoLive,
@@ -41,6 +43,8 @@ import {
   consumeBoatResourceLinkJobs,
   consumeRunExecJobs,
   sweepRunExecJobRows,
+  sweepEgressProxies,
+  EGRESS_PROXY_HEARTBEAT_MS,
   sweepCredentialPlacements,
   type PlacementSweepBackoff,
   consumeWorkspaceBuildJobs,
@@ -530,6 +534,16 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           containerStopTimeoutSeconds: env.SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS,
           memory: dockerMemory,
           ...(dockerEgress === undefined ? {} : { egress: dockerEgress }),
+          // Proxy-backed workspaces (a restricted policy, a brokered secret) need both the egress
+          // networks and the control directory; without them such a workspace is refused.
+          ...(dockerEgress === undefined || env.WORKSPACE_CONTROL_SOCKET_HOST_DIR === undefined
+            ? {}
+            : {
+                egressProxy:
+                  env.SEALANT_EGRESS_PROXY_IMAGE === undefined
+                    ? {}
+                    : { image: env.SEALANT_EGRESS_PROXY_IMAGE },
+              }),
           ...(resourceReconciler === undefined
             ? {}
             : { executorNetworks: resourceReconciler.hooks }),
@@ -953,6 +967,43 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       console.error("Runtime exit watch failed; reconnecting", { error });
     },
   });
+
+  // Egress proxies (workspace isolation §7.3): every live proxy's lease is renewed with the stored
+  // revocation watermark, a proxy behind storage is pushed again, and one that stops answering is
+  // killed and started again with the same CA and the full stored policy. Its first pass runs at
+  // boot, so a worker restart reconnects within one tick, well inside the proxies' 120 s lease.
+  const egressProxies = dockerAdapters.flatMap((adapter) =>
+    adapter.egressProxies === undefined ? [] : [adapter.egressProxies],
+  );
+  if (egressProxies.length > 0 && credentialCipher === undefined) {
+    console.warn(
+      "Egress proxies are configured but SEALANT_CREDENTIALS_KEY is not: proxy-backed workspaces cannot launch, and no proxy lease is renewed.",
+    );
+  }
+  if (egressProxies.length > 0 && credentialCipher !== undefined) {
+    const cipher = credentialCipher;
+    const egressRepo = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* WorkspaceEgressRepo;
+      }).pipe(
+        Effect.provide(workspaceEgressRepoLayer.pipe(Layer.provide(Layer.succeed(SealantDB, db)))),
+      ),
+    );
+    const runEgressProxySweep = (): void => {
+      for (const proxies of egressProxies) {
+        void Effect.runPromise(sweepEgressProxies({ repo: egressRepo, cipher, proxies })).then(
+          (counts) => {
+            if (counts.pushed + counts.restarted + counts.failed > 0) {
+              console.log("Egress proxy sweep", counts);
+            }
+          },
+        );
+      }
+    };
+    runEgressProxySweep();
+    const egressProxySweepTimer = setInterval(runEgressProxySweep, EGRESS_PROXY_HEARTBEAT_MS);
+    egressProxySweepTimer.unref();
+  }
 
   // Image retention: images no live workspace launched from and no retained plan needs are
   // deleted from the store; build scratch that outlived its build (a worker that died mid-build,

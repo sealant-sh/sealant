@@ -758,6 +758,12 @@ export const workerRuntimeEnvSchema = z.object({
   // refuse the cloud metadata address (it needs busybox `ip`). Unset: a pinned busybox. Point it
   // at a mirrored copy where the Docker host cannot pull from Docker Hub.
   SEALANT_DOCKER_NETWORK_GUARD_IMAGE: z.string().trim().min(1).optional(),
+  // Optional image of the per-workspace egress proxy (`<name>-proxy`, sealantd's
+  // sealant-egress-proxy) that a Docker workspace with a restricted policy or a brokered secret
+  // runs behind. Used only with SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS and
+  // WORKSPACE_CONTROL_SOCKET_HOST_DIR, which the proxy needs; without them such a workspace is
+  // refused. Unset: the image sealant pins.
+  SEALANT_EGRESS_PROXY_IMAGE: z.string().trim().min(1).optional(),
   // Optional IPv4 range each Docker workspace's own egress network is carved from (one /28 each,
   // held in sealant's subnet table). Set, every workspace runs on a network of its own, never a
   // shared one, behind the private-range guard. Unset: as before. Exclusive with
