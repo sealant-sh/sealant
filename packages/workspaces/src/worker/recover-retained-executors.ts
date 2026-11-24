@@ -66,6 +66,7 @@ import { z } from "zod";
 import {
   executorClaimEvidence,
   runtimeChecksClaimBeforeNothingToSave,
+  storedStatusNamesWork,
   runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
   decideExecutorDeletion,
@@ -648,7 +649,10 @@ const recoverOne = (
           const claimed = executorClaimEvidence({
             launchNamedWorktree: blueprintNamesWorktree(snapshot),
             reachedReady: instance.launchedAt !== null,
-            recordedCaptureStatus: row.lastStatus !== null || row.unsavedStatuses.length > 0,
+            claimRecorded: instance.captureClaimedAt !== null,
+            recordedStatusNamesWork:
+              storedStatusNamesWork(row.lastStatus) ||
+              row.unsavedStatuses.some((entry) => storedStatusNamesWork(entry.status)),
           });
           if (claimed.claimed) {
             if (restaged) {

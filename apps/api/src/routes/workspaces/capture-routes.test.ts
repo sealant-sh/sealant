@@ -124,6 +124,10 @@ const flushHarness = (
     Layer.succeed(
       WorkspaceRuntimeInstanceRepo,
       fakeService<WorkspaceRuntimeInstanceRepoService>({
+        markCaptureClaimed: () =>
+          Effect.sync(() => {
+            calls.push("claim");
+          }),
         getRuntimeInstanceByRunId: () =>
           Effect.succeed(
             runtimeInstanceRow({
@@ -407,7 +411,8 @@ describe("a standby's claim names the owner map it needs (sealant#333 review P2-
       expectedOwnerMap: { ...ownerMap, people: ownerMap.people.toReversed() },
     });
     expect(Result.isSuccess(answer)).toBe(true);
-    expect(h.calls).toEqual(["replan"]);
+    // The claim is on record before it is sent: one whose outcome is lost still counts.
+    expect(h.calls).toEqual(["claim", "replan"]);
   });
 
   it("refuses another map, and none where one was expected, before the daemon is reached", async () => {
@@ -435,7 +440,7 @@ describe("a standby's claim names the owner map it needs (sealant#333 review P2-
     expect(Result.isSuccess(await none.replan({ expectedOwnerMap: null }))).toBe(true);
     const unasked = flushHarness(REPORT, { ownerMap });
     expect(Result.isSuccess(await unasked.replan({}))).toBe(true);
-    expect([...none.calls, ...unasked.calls]).toEqual(["replan", "replan"]);
+    expect([...none.calls, ...unasked.calls]).toEqual(["claim", "replan", "claim", "replan"]);
   });
 
   it("answers whether the executor booted under an owner map in its capture status", () => {

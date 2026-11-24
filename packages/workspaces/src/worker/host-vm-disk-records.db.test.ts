@@ -89,6 +89,23 @@ describe.skipIf(DATABASE_URL === undefined)("host VM disk records (Postgres)", (
     expect(await mine()).toEqual([{ runId, dataDiskPath, baseImageDigest: DIGEST, removed: true }]);
   });
 
+  it("keeps the first instant a claim was asked for, through every later write", async () => {
+    const runId = await pendingRun();
+    const claimedAt = () =>
+      repo((instances) => instances.getRuntimeInstanceByRunId(runId)).then(
+        (row) => row?.captureClaimedAt ?? null,
+      );
+    expect(await claimedAt()).toBeNull();
+    await repo((instances) => instances.markCaptureClaimed({ runId }));
+    const first = await claimedAt();
+    expect(first).toBeInstanceOf(Date);
+    await repo((instances) => instances.markCaptureClaimed({ runId }));
+    await repo((instances) =>
+      instances.upsertRuntimeInstance({ runId, status: "ready", adapter: "host-vm" }),
+    );
+    expect(await claimedAt()).toEqual(first);
+  });
+
   it("refuses to record disks for a run with no launch row", async () => {
     await expect(
       databaseHostVmDiskRecords(db).record({

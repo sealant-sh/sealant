@@ -61,6 +61,7 @@ const runtimeInstance = (
   daemonRecoveryBoot: null,
   hostVmDataDiskPath: null,
   hostVmBaseImageDigest: null,
+  captureClaimedAt: null,
   removedAt: null,
   // Null = a row that predates the column: the stop path reads the attempt snapshot.
   sourceKind: null,
@@ -177,6 +178,7 @@ const makeHarness = (input: {
     listStoppedWithRemains: () => Effect.succeed([]),
     recordHostVmDisk: () => Effect.die("unused"),
     listHostVmBaseImages: () => Effect.succeed([]),
+    markCaptureClaimed: () => Effect.void,
     markStopRequested,
     markRemoved,
   });

@@ -1,10 +1,11 @@
-import { access, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, readdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join as joinPath } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createHostVmHarness,
+  scratchOf,
   HOST_VM_DIGEST,
   HOST_VM_KEY,
   HOST_VM_REFERENCE,
@@ -118,6 +119,12 @@ describe("HostVmStorage.ensureBaseImage", () => {
     expect(converter.slice(0, 3)).toEqual(["run", "--rm", "-i"]);
     expect(converter).toEqual(expect.arrayContaining(["--network", "none", "--cap-drop", "ALL"]));
     expect(converter).not.toContain("--cap-add");
+    // Only a scratch directory of its own, never the directory every base disk lives in.
+    const scratch = scratchOf(converter);
+    expect(scratch.startsWith(`${h.imagesDir}/.tmp-${HOST_VM_KEY}-`)).toBe(true);
+    expect(converter).toEqual(
+      expect.arrayContaining(["--read-only", "--pids-limit", "64", "--memory", "2g"]),
+    );
     expect(converter.join(" ")).not.toMatch(/docker\.sock|--privileged/);
     const script = converter[converter.indexOf("-c") + 1] ?? "";
     // tar straight into mke2fs, then read-only as its own step.
@@ -162,8 +169,7 @@ describe("HostVmStorage.ensureBaseImage", () => {
         return { stdout: "", stderr: "" };
       },
       pipeRunner: async (_from, to) => {
-        const target = to.find((arg) => arg.startsWith("/out/.tmp-")) ?? "";
-        await writeFile(joinPath(h.imagesDir, target.slice("/out/".length)), "half");
+        await writeFile(joinPath(scratchOf(to), "disk.img"), "half");
         throw new Error("mke2fs: No space left on device");
       },
       toolsImage: "tools",
@@ -181,13 +187,19 @@ describe("HostVmStorage.prepareExecutor", () => {
   it("formats a data disk once and never again", async () => {
     const h = await make();
     const name = "sealant-vm-run-1";
-    const path = await h.storage.prepareExecutor({
+    const first = await h.storage.prepareExecutor({
       containerName: name,
       baseImageDigest: HOST_VM_DIGEST,
     });
-    await writeFile(path, "work");
-    await h.storage.prepareExecutor({ containerName: name, baseImageDigest: HOST_VM_DIGEST });
-    expect(await readFile(path, "utf8")).toBe("work");
+    expect(first.created).toBe(true);
+    await writeFile(first.dataDiskPath, "work");
+    const again = await h.storage.prepareExecutor({
+      containerName: name,
+      baseImageDigest: HOST_VM_DIGEST,
+    });
+    // The second prepare made nothing, and says so: its launch may not remove the disk.
+    expect(again).toEqual({ dataDiskPath: first.dataDiskPath, created: false });
+    expect(await readFile(first.dataDiskPath, "utf8")).toBe("work");
     expect(await h.storage.markedBaseImageDigest(name)).toBe(HOST_VM_DIGEST);
 
     // The tools container gets only what making 65532's files needs.
@@ -212,5 +224,18 @@ describe("HostVmStorage.prepareExecutor", () => {
     await expect(
       h.storage.prepareExecutor({ containerName: "../escape", baseImageDigest: HOST_VM_DIGEST }),
     ).rejects.toThrow(/not a host VM runner container name/);
+  });
+});
+
+describe("HostVmStorage · a reused base disk", () => {
+  it("is fresh again for base-image GC when a launch reuses it", async () => {
+    const h = await make();
+    const image = { digest: HOST_VM_DIGEST, reference: HOST_VM_REFERENCE };
+    const base = await h.storage.ensureBaseImage(image);
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    await utimes(base.imagePath, old, old);
+    await h.storage.ensureBaseImage(image);
+    expect((await stat(base.imagePath)).mtimeMs).toBeGreaterThan(Date.now() - 60_000);
+    expect(h.pipes).toHaveLength(1);
   });
 });

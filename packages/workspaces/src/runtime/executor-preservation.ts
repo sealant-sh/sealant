@@ -352,16 +352,23 @@ export const runtimeChecksClaimBeforeNothingToSave = (
 ): boolean => adapterId === "host-vm";
 
 /**
- * What sealant itself knows of whether a worktree claimed an executor (§6.2): its launch named a
- * worktree (a standby names none until it is bound), it reached readiness (a capture-sourced
- * daemon answers only after it has materialized its worktree), or its daemon answered a capture
- * status that sealant recorded. Unknown counts as claimed (fail closed).
+ * Whether sealant's own records AFFIRMATIVELY show an executor was a warm standby that nobody ever
+ * claimed (§6.2): its launch named no worktree (a standby is bound to one at claim), it reached
+ * readiness (a standby becomes warm by answering), no claim of it was ever asked for through
+ * sealant (`capture_claimed_at`), and no capture status sealant recorded from it names a worktree
+ * or a capture head. Only such an executor's "nothing to save" is believed on a runtime whose
+ * guest sends it. Anything less is claimed: a session that named no worktree and failed while
+ * booting looks no different from a standby that never became one, and is kept. Unknown is
+ * claimed (fail closed).
  */
 export const executorClaimEvidence = (input: {
   /** The launch named a worktree; `undefined` when its blueprint could not be read. */
   readonly launchNamedWorktree: boolean | undefined;
   readonly reachedReady: boolean;
-  readonly recordedCaptureStatus: boolean;
+  /** A claim of it was asked for through sealant (`capture_claimed_at`). */
+  readonly claimRecorded: boolean;
+  /** A capture status sealant recorded from it names a worktree or a capture head. */
+  readonly recordedStatusNamesWork: boolean;
 }): { readonly claimed: false } | { readonly claimed: true; readonly why: string } => {
   if (input.launchNamedWorktree === undefined) {
     return { claimed: true, why: "sealant cannot read which worktree its launch named" };
@@ -369,14 +376,28 @@ export const executorClaimEvidence = (input: {
   if (input.launchNamedWorktree) {
     return { claimed: true, why: "its launch named a worktree, which its daemon claims at boot" };
   }
-  if (input.reachedReady) {
+  if (input.claimRecorded) {
+    return { claimed: true, why: "a claim of it was asked for through sealant" };
+  }
+  if (input.recordedStatusNamesWork) {
+    return { claimed: true, why: "sealant recorded a capture status from it naming its work" };
+  }
+  if (!input.reachedReady) {
     return {
       claimed: true,
-      why: "it reached readiness, so its daemon had materialized a worktree",
+      why: "it never reached readiness, so nothing shows it was a warm standby rather than a session that failed while booting",
     };
   }
-  if (input.recordedCaptureStatus) {
-    return { claimed: true, why: "sealant recorded a capture status from its daemon" };
-  }
   return { claimed: false };
+};
+
+/** Whether a stored capture status names a worktree or a capture head (`executorClaimEvidence`). */
+export const storedStatusNamesWork = (
+  stored: Readonly<Record<string, unknown>> | null | undefined,
+): boolean => {
+  if (stored === null || stored === undefined) return false;
+  const worktreeId = stored["worktreeId"];
+  return (
+    (typeof worktreeId === "string" && worktreeId.length > 0) || typeof stored["headN"] === "number"
+  );
 };

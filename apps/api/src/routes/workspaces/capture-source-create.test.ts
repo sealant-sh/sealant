@@ -753,6 +753,7 @@ describe("createWorkspace · idempotency key", () => {
     daemonRecoveryBoot: null,
     hostVmDataDiskPath: null,
     hostVmBaseImageDigest: null,
+    captureClaimedAt: null,
     removedAt: null,
     sourceKind: "capture",
     createdAt: now,

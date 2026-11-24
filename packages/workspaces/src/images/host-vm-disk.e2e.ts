@@ -94,7 +94,7 @@ describe("host VM disks on a real Docker host", () => {
   }, 300_000);
 
   it("makes a sparse data disk for the runner's uid, once", async () => {
-    const path = await storage.prepareExecutor({
+    const { dataDiskPath: path, created } = await storage.prepareExecutor({
       containerName: "sealant-vm-e2e",
       baseImageDigest: digest,
     });
@@ -122,7 +122,12 @@ describe("host VM disks on a real Docker host", () => {
     expect(Number(size)).toBe(256 * 1024 * 1024);
     // Sparse: it takes far less than its logical size.
     expect(Number(blocks) * Number(blockSize)).toBeLessThan(Number(size));
-    await storage.prepareExecutor({ containerName: "sealant-vm-e2e", baseImageDigest: digest });
+    expect(created).toBe(true);
+    const again = await storage.prepareExecutor({
+      containerName: "sealant-vm-e2e",
+      baseImageDigest: digest,
+    });
+    expect(again.created).toBe(false);
     // Not formatted again: the same file, untouched.
     expect(await seen()).toBe(first);
     expect((await stat(path)).size).toBe(256 * 1024 * 1024);

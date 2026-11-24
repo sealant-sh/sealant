@@ -110,6 +110,7 @@ export const runtimeInstanceRow = (
   daemonRecoveryBoot: null,
   hostVmDataDiskPath: null,
   hostVmBaseImageDigest: null,
+  captureClaimedAt: null,
   createdAt: new Date(0),
   updatedAt: new Date(0),
   ...overrides,

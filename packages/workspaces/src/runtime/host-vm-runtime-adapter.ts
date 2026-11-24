@@ -35,6 +35,7 @@
  * For the same reason the executor's `resourceId` is its container NAME, which a recreated runner
  * keeps, not the container id, which it does not.
  */
+import { randomBytes } from "node:crypto";
 import { readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join as joinPath } from "node:path";
 
@@ -257,11 +258,16 @@ const withTimeout = <A>(promise: Promise<A>, ms: number, what: string): Promise<
   ]).finally(() => clearTimeout(timer));
 };
 
-/** Write `content` to `path` by a rename, so the runner never reads half a file. */
+/**
+ * Write `content` to `path` by a rename, so the runner never reads half a file. The control
+ * directory is shared with the runner's uid: the temporary name is random and created exclusively
+ * (`O_CREAT|O_EXCL`, never through a link planted there), and `rename` replaces whatever is at
+ * `path` itself rather than following it.
+ */
 const writeAtomically = async (path: string, content: string, mode: number): Promise<void> => {
-  const temporary = `${path}.tmp-${String(process.pid)}-${String(Date.now())}`;
+  const temporary = `${path}.tmp-${randomBytes(12).toString("hex")}`;
   try {
-    await writeFile(temporary, content, { mode });
+    await writeFile(temporary, content, { mode, flag: "wx" });
     await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });
@@ -637,8 +643,12 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     const name = this.containerName(runId);
     const identity = this.#identity(name);
     const holdsCaptures = launchHoldsCaptures(parsed.blueprint);
+    const bootEnvPath = joinPath(this.#storage.controlPath(name), LAUNCH_FILE.normal);
     let executor: { readonly ended: boolean } | undefined;
-    let created = false;
+    // What THIS launch made, and so may remove when it fails. Anything it found, adopted, or whose
+    // creation it cannot vouch for (a failed inspection, a `docker run` whose outcome is unclear)
+    // is left for the reconcilers and the recovery sweep.
+    const owned = { container: false, proxy: false, disk: false };
     try {
       const existing = await this.#containerState(name);
       const adopt = existing.kind === "present" && existing.running;
@@ -673,17 +683,23 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
           digest,
           reference: parsed.publication.image.digestReference,
         });
-        const dataDiskPath = await this.#storage.prepareExecutor({
+        const prepared = await this.#storage.prepareExecutor({
           containerName: name,
           baseImageDigest: digest,
         });
+        owned.disk = prepared.created;
         // On record before the container exists: from here a prune cannot lose the disk's owner.
-        await this.#records.record({ runId, dataDiskPath, baseImageDigest: digest });
+        await this.#records.record({
+          runId,
+          dataDiskPath: prepared.dataDiskPath,
+          baseImageDigest: digest,
+        });
         const egress = await egressProxy.start({
           containerName: name,
           runId,
           blueprint: parsed.blueprint,
         });
+        owned.proxy = true;
         const dockerService = parsed.blueprint.tooling.services?.docker?.enabled === true;
         const launchFiles = await this.#launchFiles(parsed, dockerService);
         await this.#stage(name, base, {
@@ -705,18 +721,21 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
               egress,
             }),
           );
-          created = true;
+          owned.container = true;
         } catch (error) {
-          // A concurrent launch of the same run created it first: adopt it when it runs.
+          // A concurrent launch of the same run created it first: adopt it when it runs. Its
+          // proxy is that launch's too.
           const raced = await this.#containerState(name).catch(() => undefined);
           if (raced?.kind !== "present" || !raced.running) throw error;
+          owned.proxy = false;
+          owned.disk = false;
         }
       }
       executor = { ended: false };
       await reportStartedLaunch(hooks, identity);
       await this.#awaitReady(name);
       // The guest has read its secrets: they are not left on disk.
-      await rm(joinPath(this.#storage.controlPath(name), LAUNCH_FILE.normal), { force: true });
+      await rm(bootEnvPath, { force: true });
       const target = {
         kind: "unix-socket" as const,
         socketPath: this.#endpoint(name).slice("unix://".length),
@@ -740,17 +759,18 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         },
       });
     } catch (error) {
+      // Whatever failed, the launch's secrets never stay on disk: a runner that boots later reads
+      // none, and a kept executor is recovered from the secret-free template.
+      await rm(bootEnvPath, { force: true }).catch(() => undefined);
       return failLaunch({
         blueprint: parsed.blueprint,
         identity: executor === undefined ? undefined : identity,
         runtime: executor?.ended === true ? "exited" : "running",
         error,
         cleanup: async () => {
-          // Nothing this launch did not create is removed: an adopted runner is another launch's.
-          if (executor !== undefined && !created) return;
-          await this.#run("docker", ["rm", "-f", name]).catch(() => undefined);
-          await egressProxy.remove(name).catch(() => undefined);
-          await this.#storage.removeExecutorDisk(name).catch(() => undefined);
+          if (owned.container) await this.#run("docker", ["rm", "-f", name]).catch(() => undefined);
+          if (owned.proxy) await egressProxy.remove(name).catch(() => undefined);
+          if (owned.disk) await this.#storage.removeExecutor(name).catch(() => undefined);
         },
       });
     }
@@ -856,27 +876,27 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     }
     const base = this.#storage.baseImage(record.baseImageDigest);
     const template = await this.#recoveryTemplate(name);
-    await this.#stage(name, base, {
-      launch: { ...template, mode: "recover", secretEnv: input.secretEnv ?? {}, dockerd: false },
-    });
     await this.#egressProxy?.park(name).catch(() => false);
     if (state.kind === "present") {
       // Stopped: it was made for a normal boot, and its mode is fixed at `docker run`.
       await this.#run("docker", ["rm", "-f", name]);
     }
     const memory = hostVmMemory(await this.#limits(), false);
-    await this.#run(
-      "docker",
-      this.#runArgs({
-        name,
-        mode: "recover",
-        baseImageDigest: record.baseImageDigest,
-        guestMib: memory.guestMib,
-        containerBytes: memory.containerBytes,
-        ...(input.runId === undefined ? {} : { runId: input.runId }),
-      }),
-    );
     try {
+      await this.#stage(name, base, {
+        launch: { ...template, mode: "recover", secretEnv: input.secretEnv ?? {}, dockerd: false },
+      });
+      await this.#run(
+        "docker",
+        this.#runArgs({
+          name,
+          mode: "recover",
+          baseImageDigest: record.baseImageDigest,
+          guestMib: memory.guestMib,
+          containerBytes: memory.containerBytes,
+          ...(input.runId === undefined ? {} : { runId: input.runId }),
+        }),
+      );
       await this.#awaitReady(name);
     } catch (error) {
       if (error instanceof HostVmRunnerEnded && error.exitCode === SEALANTD_EXIT_NOTHING_TO_SAVE) {
@@ -885,9 +905,13 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       }
       throw error;
     } finally {
-      // The runner has read it by now (its daemon answered, or it ended): the template goes back
-      // without the token, for the next attempt.
-      await this.#stage(name, base, { recoveryTemplate: template }).catch(() => undefined);
+      // Booted, ended or never started: the capture token goes, and the template comes back
+      // without it for the next attempt.
+      await this.#stage(name, base, { recoveryTemplate: template }).catch(async () => {
+        await rm(joinPath(this.#storage.controlPath(name), LAUNCH_FILE.recover), {
+          force: true,
+        }).catch(() => undefined);
+      });
     }
     return { outcome: "restarted" };
   }
@@ -946,8 +970,8 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
 
   /**
    * `end` stops the runner (`docker stop -t`, longer than the guest's shutdown grace) and keeps
-   * the container and its data disk; `remove` takes the container, its proxy and its data disk.
-   * Absent, both. The control directory stays: a relaunch of the run reuses it.
+   * the container and its data disk; `remove` takes the container, its proxy, its data disk and
+   * its control directory. Absent, both.
    */
   public async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
     const parsed = parseRuntimeAdapterStopInput(input);
@@ -970,7 +994,8 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     }
     const disk = await this.#storage.dataDiskExists(name);
     await this.#egressProxy?.remove(name);
-    if (disk) await this.#storage.removeExecutorDisk(name);
+    // The data disk and the control directory (its staged files and sockets) go together.
+    await this.#storage.removeExecutor(name);
     return parseRuntimeAdapterStopResult({
       adapter: this.id,
       resourceId: name,

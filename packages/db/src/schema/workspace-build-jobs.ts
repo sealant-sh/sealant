@@ -281,6 +281,14 @@ export const workspaceRuntimeInstances = pgTable(
      */
     hostVmDataDiskPath: text("host_vm_data_disk_path"),
     hostVmBaseImageDigest: text("host_vm_base_image_digest"),
+    /**
+     * When a claim of this executor was first asked for (`capture.replan`, a standby being bound to
+     * a worktree), written before the claim is sent: once set, sealant treats the executor as
+     * claimed, whether or not the claim went through. A host VM's "nothing to save" (exit 76, the
+     * guest's own word) releases its disk only for a warm standby nobody claimed. Null: no claim
+     * was asked for through sealant.
+     */
+    captureClaimedAt: timestamp("capture_claimed_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),

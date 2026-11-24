@@ -23,7 +23,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, statfs, utimes, writeFile } from "node:fs/promises";
 import { join as joinPath, posix } from "node:path";
 
 import { z } from "zod";
@@ -271,6 +271,8 @@ const PREPARE_SCRIPT = [
   '  chmod 0600 "$d/data.img.tmp"',
   '  printf "%s\\n" "$3" > "$d/base-image-digest"',
   '  mv "$d/data.img.tmp" "$d/data.img"',
+  // Says so on stdout: only a launch that made the disk may remove it when it fails.
+  "  echo created",
   "fi",
   `chown ${String(HOST_VM_RUNNER_UID)}:${String(HOST_VM_RUNNER_UID)} "$d"`,
   'chmod 0755 "$d"',
@@ -280,7 +282,21 @@ const PREPARE_SCRIPT = [
   'chmod 2770 "$c"',
 ].join("\n");
 
-const REMOVE_SCRIPT = ["set -eu", 'rm -rf "/data/$1"'].join("\n");
+/** The runner's data directory and its control directory (staged files, sockets). */
+const REMOVE_SCRIPT = ["set -eu", 'rm -rf "/data/$1" "/control/$1"'].join("\n");
+
+/** Bounds on the containers that read untrusted input (an image's tar) or write as root. */
+const UNTRUSTED_CONTAINER_LIMITS = [
+  "--read-only",
+  "--tmpfs",
+  "/tmp:rw,nosuid,nodev,noexec,size=64m",
+  "--pids-limit",
+  "64",
+  "--memory",
+  "2g",
+  "--memory-swap",
+  "2g",
+] as const;
 
 /** What `HostVmStorage.headroom` measured on the data directory's filesystem. */
 export interface HostVmHeadroom {
@@ -406,7 +422,20 @@ export class HostVmStorage {
     }
   }
 
+  /**
+   * Whether a runner's data disk is there. Throws when the data directory itself is missing (an
+   * unmounted volume, a moved directory): "no disk" must never be read off a filesystem that is not
+   * there, or a retained executor's disk would be reported lost.
+   */
   public async dataDiskExists(containerName: string): Promise<boolean> {
+    if (!(await fileExists(this.#options.dataDir.path))) {
+      throw Object.assign(
+        new Error(
+          `The host VM data directory ${this.#options.dataDir.path} is missing; is its volume mounted? Nothing can be said of any data disk until it is back.`,
+        ),
+        { code: "adapter-unavailable" },
+      );
+    }
     return fileExists(this.dataDiskPath(containerName));
   }
 
@@ -430,6 +459,10 @@ export class HostVmStorage {
 
   async #convertOnce(target: HostVmBaseImage, reference: string): Promise<HostVmBaseImage> {
     if ((await fileExists(target.imagePath)) && (await fileExists(target.configPath))) {
+      // Reused: fresh again for base-image GC, which keeps a young disk until a run's row names it.
+      const now = new Date();
+      await utimes(target.imagePath, now, now);
+      await utimes(target.configPath, now, now);
       return target;
     }
     await mkdir(this.#options.imagesDir.path, { recursive: true });
@@ -446,10 +479,12 @@ export class HostVmStorage {
     }
 
     const toolsImage = await this.#ensureToolsImage();
-    // The converter runs as the images directory's owner, so it can write there with no
-    // capability at all.
-    const owner = await stat(this.#options.imagesDir.path);
-    const imageTemp = temporaryName(target.key, ".img");
+    // The converter reads an untrusted tar: it gets a scratch directory of its own, never the
+    // directory every base disk lives in, and runs as the scratch directory's owner (this worker)
+    // with no capability at all. The finished disk is moved into place from here.
+    const scratchName = temporaryName(target.key, ".d");
+    const scratch = joinPath(this.#options.imagesDir.path, scratchName);
+    await mkdir(scratch, { mode: 0o700 });
     const created = await run("docker", [
       "create",
       "--entrypoint",
@@ -457,9 +492,13 @@ export class HostVmStorage {
       "--label",
       "sealant.host-vm.export=1",
       reference,
-    ]);
+    ]).catch(async (error: unknown) => {
+      await rm(scratch, { recursive: true, force: true });
+      throw error;
+    });
     const containerId = created.stdout.trim();
     try {
+      const owner = await stat(scratch);
       await this.#options.pipeRunner(
         ["export", containerId],
         [
@@ -472,25 +511,24 @@ export class HostVmStorage {
           "ALL",
           "--security-opt",
           "no-new-privileges:true",
+          ...UNTRUSTED_CONTAINER_LIMITS,
           "--user",
           `${String(owner.uid)}:${String(owner.gid)}`,
-          ...hostVmMountArgs(this.#options.imagesDir, "", "/out", false),
+          ...hostVmMountArgs(this.#options.imagesDir, scratchName, "/out", false),
           "--entrypoint",
           "sh",
           toolsImage,
           "-c",
           CONVERT_SCRIPT,
           "sealant-convert",
-          `/out/${imageTemp}`,
+          "/out/disk.img",
           String(baseDiskBuildMiB(inspected.sizeBytes)),
         ],
         { timeoutMs: this.#options.convertTimeoutMs ?? 30 * 60_000 },
       );
-      await rename(joinPath(this.#options.imagesDir.path, imageTemp), target.imagePath);
+      await rename(joinPath(scratch, "disk.img"), target.imagePath);
     } finally {
-      await rm(joinPath(this.#options.imagesDir.path, imageTemp), { force: true }).catch(
-        () => undefined,
-      );
+      await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
       await run("docker", ["rm", "-f", containerId]).catch(() => undefined);
     }
     return target;
@@ -530,34 +568,38 @@ export class HostVmStorage {
 
   /**
    * Make a runner container's data disk (once; an existing one is kept as it is), the marker of
-   * the base image it was made for, and its control directory. Returns the data disk's path.
+   * the base image it was made for, and its control directory. Answers the data disk's path and
+   * whether this call made it.
    */
   public async prepareExecutor(input: {
     readonly containerName: string;
     readonly baseImageDigest: string;
-  }): Promise<string> {
+  }): Promise<{ readonly dataDiskPath: string; readonly created: boolean }> {
     const name = assertContainerName(input.containerName);
     hostVmBaseImageKey(input.baseImageDigest);
     await mkdir(this.#options.dataDir.path, { recursive: true });
     await mkdir(this.#options.controlDir.path, { recursive: true });
     const group = this.#options.controlGroupId ?? (await stat(this.#options.controlDir.path)).gid;
-    await this.#runTools(PREPARE_SCRIPT, [
+    const output = await this.#runTools(PREPARE_SCRIPT, [
       name,
       String(this.#options.dataDiskBytes ?? DEFAULT_HOST_VM_DATA_DISK_BYTES),
       input.baseImageDigest,
       String(group),
     ]);
-    return this.dataDiskPath(name);
+    return {
+      dataDiskPath: this.dataDiskPath(name),
+      created: output.split("\n").some((line) => line.trim() === "created"),
+    };
   }
 
-  /** Delete a runner container's data disk directory. Idempotent. */
-  public async removeExecutorDisk(containerName: string): Promise<void> {
+  /** Delete a runner container's data disk and its control directory. Idempotent. */
+  public async removeExecutor(containerName: string): Promise<void> {
     await this.#runTools(REMOVE_SCRIPT, [assertContainerName(containerName)]);
   }
 
-  async #runTools(script: string, args: readonly string[]): Promise<void> {
+  async #runTools(script: string, args: readonly string[]): Promise<string> {
     const toolsImage = await this.#ensureToolsImage();
-    await this.#options.commandRunner("docker", [
+    const result = await this.#options.commandRunner("docker", [
       "run",
       "--rm",
       "--network",
@@ -573,6 +615,7 @@ export class HostVmStorage {
       "FOWNER",
       "--security-opt",
       "no-new-privileges:true",
+      ...UNTRUSTED_CONTAINER_LIMITS,
       "--user",
       "0:0",
       ...hostVmMountArgs(this.#options.dataDir, "", "/data", false),
@@ -585,6 +628,7 @@ export class HostVmStorage {
       "sealant-host-vm",
       ...args,
     ]);
+    return result.stdout;
   }
 
   /** Free space on the data directory's filesystem, against the launch and idle-stop floors. */

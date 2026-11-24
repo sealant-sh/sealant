@@ -52,6 +52,10 @@ export interface HostVmHarness {
   freeBytes: number;
   /** When set, the next runner exits with this code before its daemon answers. */
   exitOnBoot: number | undefined;
+  /** The next `docker inspect` of a container fails as an unreachable daemon does. */
+  inspectFails: boolean;
+  /** The next runner's `docker run` fails, creating nothing. */
+  runFails: boolean;
   /** Images `docker image inspect` does not know until they are pulled. */
   readonly absentImages: Set<string>;
   /** The staged launch file each `docker run` of a runner found, by mode. */
@@ -60,6 +64,12 @@ export interface HostVmHarness {
 }
 
 const ok = (stdout = "") => ({ stdout, stderr: "" });
+
+/** The host directory a converter's argv mounts at /out. */
+export const scratchOf = (argv: readonly string[]): string => {
+  const mount = argv.find((arg) => arg.includes("target=/out")) ?? "";
+  return /source=([^,]+)/.exec(mount)?.[1] ?? "";
+};
 
 const noSuch = (what: string): Error =>
   Object.assign(new Error(`Error response from daemon: No such ${what}`), {
@@ -101,6 +111,8 @@ export const createHostVmHarness = async (
     proxy,
     freeBytes: 100 * GiB,
     exitOnBoot: undefined as number | undefined,
+    inspectFails: false,
+    runFails: false,
     absentImages,
     stagedAtRun,
   };
@@ -140,6 +152,10 @@ export const createHostVmHarness = async (
       return ok(digests.join("\n"));
     }
     if (verb === "inspect") {
+      if (harness.inspectFails) {
+        harness.inspectFails = false;
+        throw new Error("Cannot connect to the Docker daemon at unix:///var/run/docker.sock");
+      }
       const container = containers.get(args.at(-1) ?? "");
       if (container === undefined) throw noSuch(`container: ${args.at(-1) ?? ""}`);
       return ok(
@@ -183,14 +199,20 @@ export const createHostVmHarness = async (
         if (!exists) {
           await writeFile(disk, "ext4");
           await writeFile(joinPath(dataDir, name, "base-image-digest"), `${digest}\n`);
+          return ok("created\n");
         }
       } else if (script.includes("rm -rf")) {
         await rm(joinPath(dataDir, name), { recursive: true, force: true });
+        await rm(joinPath(controlDir, name), { recursive: true, force: true });
       }
       return ok();
     }
     if (verb === "run") {
       const name = args[args.indexOf("--name") + 1] ?? "";
+      if (harness.runFails) {
+        harness.runFails = false;
+        throw new Error("docker: Error response from daemon: failed to create task");
+      }
       if (containers.has(name))
         throw new Error(`Conflict. The container name "/${name}" is already in use`);
       events.push(`run:${name}`);
@@ -209,9 +231,8 @@ export const createHostVmHarness = async (
 
   const pipeRunner: DockerPipeRunner = async (from, to) => {
     pipes.push([from, to]);
-    // The converter writes its temporary image where its script was told.
-    const target = to.find((arg) => arg.startsWith("/out/.tmp-")) ?? "";
-    await writeFile(joinPath(imagesDir, target.slice("/out/".length)), "ext4-base");
+    // The converter writes `disk.img` into the scratch directory mounted at /out.
+    await writeFile(joinPath(scratchOf(to), "disk.img"), "ext4-base");
     return { stdout: "", stderr: "" };
   };
 

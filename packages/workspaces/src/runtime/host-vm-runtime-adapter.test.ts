@@ -1,4 +1,4 @@
-import { access, readFile, writeFile, mkdir } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join as joinPath } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -348,5 +348,90 @@ describe("HostVmRuntimeAdapter recovery", () => {
     });
     // The disk stays for the recovery.
     expect(await exists(joinPath(h.dataDir, name, "data.img"))).toBe(true);
+  });
+});
+
+describe("HostVmRuntimeAdapter · what a failed launch may remove (review R1)", () => {
+  it("removes nothing when it cannot tell what the run already has", async () => {
+    const h = await make();
+    const name = "sealant-vm-run-golden-4";
+    await mkdir(joinPath(h.dataDir, name), { recursive: true });
+    await writeFile(joinPath(h.dataDir, name, "data.img"), "work");
+    h.inspectFails = true;
+    await expect(h.adapter.launch(onHostVm(cases.capture))).rejects.toThrow(/Docker daemon/);
+    expect(await readFile(joinPath(h.dataDir, name, "data.img"), "utf8")).toBe("work");
+    expect(h.calls.filter((args) => args[0] === "rm")).toEqual([]);
+    expect(h.proxy.removed).toEqual([]);
+  });
+
+  it("removes what it made, and keeps a data disk it found, when its runner fails", async () => {
+    const h = await make();
+    const name = "sealant-vm-run-golden-1";
+    // A git launch of a run whose earlier attempt left a disk: not this launch's to remove.
+    await mkdir(joinPath(h.dataDir, name), { recursive: true });
+    await writeFile(joinPath(h.dataDir, name, "data.img"), "earlier");
+    h.exitOnBoot = 1;
+    await expect(h.adapter.launch(onHostVm(cases.gitSource))).rejects.toThrow(/exited with 1/);
+    expect(h.containers.has(name)).toBe(false);
+    expect(h.proxy.removed).toEqual([name]);
+    expect(await readFile(joinPath(h.dataDir, name, "data.img"), "utf8")).toBe("earlier");
+  });
+
+  it("removes the disk it made when its runner never starts", async () => {
+    const h = await make();
+    h.runFails = true;
+    await expect(h.adapter.launch(onHostVm(cases.gitSource))).rejects.toThrow(/failed to create/);
+    expect(await exists(joinPath(h.dataDir, "sealant-vm-run-golden-1"))).toBe(false);
+  });
+});
+
+describe("HostVmRuntimeAdapter · staged secrets (review R1)", () => {
+  it("leaves no boot-env.json behind a boot that fails", async () => {
+    const h = await make();
+    const name = "sealant-vm-run-golden-4";
+    h.exitOnBoot = 1;
+    await expect(h.adapter.launch(onHostVm(cases.capture))).rejects.toBeInstanceOf(
+      LaunchRetainedError,
+    );
+    // Kept for its work, and its secrets are not.
+    expect(await exists(joinPath(h.dataDir, name, "data.img"))).toBe(true);
+    expect(await exists(joinPath(h.controlDir, name, "boot-env.json"))).toBe(false);
+  });
+
+  it("takes the capture token back off disk when a recovery runner never starts", async () => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.capture));
+    const name = "sealant-vm-run-golden-4";
+    await h.adapter.stop({ resourceId: name, phase: "end" });
+    h.runFails = true;
+    await expect(
+      h.adapter.recover({
+        resourceId: name,
+        runId: "run-golden-4",
+        secretEnv: { SEALANT_CAPTURE_TOKEN: "capture-only" },
+      }),
+    ).rejects.toThrow(/failed to create/);
+    const staged = await readFile(joinPath(h.controlDir, name, "recovery-env.json"), "utf8");
+    expect(staged).not.toContain("capture-only");
+    expect(JSON.parse(staged)).toMatchObject({ mode: "recover", secretEnv: {} });
+  });
+
+  it("removes the control directory with the data disk", async () => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.gitSource));
+    const name = "sealant-vm-run-golden-1";
+    await h.adapter.stop({ resourceId: name });
+    expect(await exists(joinPath(h.controlDir, name))).toBe(false);
+    expect(await exists(joinPath(h.dataDir, name))).toBe(false);
+  });
+});
+
+describe("HostVmRuntimeAdapter · a data directory that is not there", () => {
+  it("refuses to say a disk is missing when the data directory itself is gone", async () => {
+    const h = await make();
+    await rm(h.dataDir, { recursive: true, force: true });
+    await expect(h.adapter.inspect({ resourceId: "sealant-vm-run-x" })).rejects.toThrow(
+      /data directory .* is missing/,
+    );
   });
 });

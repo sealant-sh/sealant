@@ -100,6 +100,7 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "upsertRuntimeInstance",
   "recordHostVmDisk",
   "listHostVmBaseImages",
+  "markCaptureClaimed",
 ]);
 
 export class WorkspaceRuntimeInstanceRepoInvariantError extends Schema.TaggedError<WorkspaceRuntimeInstanceRepoInvariantError>()(
@@ -395,6 +396,14 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly HostVmBaseImageReference[],
     WorkspaceRuntimeInstanceRepoError
   >;
+  /**
+   * A claim of the run's executor is about to be asked for (`capture.replan`): `capture_claimed_at`
+   * is set, the first instant standing. Written before the claim is sent, so a claim whose outcome
+   * is unknown still counts. A run with no runtime row changes nothing.
+   */
+  readonly markCaptureClaimed: (input: {
+    readonly runId: string;
+  }) => Effect.Effect<void, WorkspaceRuntimeInstanceRepoError>;
 }
 
 /** A `host-vm` executor's disks, as recorded on its run's runtime row. */
@@ -1082,6 +1091,21 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                   ],
             );
           }),
+        ),
+
+      markCaptureClaimed: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "markCaptureClaimed",
+          db
+            .update(workspaceRuntimeInstances)
+            .set({ captureClaimedAt: new Date() })
+            .where(
+              and(
+                eq(workspaceRuntimeInstances.runId, input.runId),
+                isNull(workspaceRuntimeInstances.captureClaimedAt),
+              ),
+            )
+            .pipe(Effect.asVoid),
         ),
     } satisfies WorkspaceRuntimeInstanceRepoService;
   }),

@@ -64,6 +64,7 @@ const instance = (overrides: Partial<WorkspaceRuntimeInstance> = {}): WorkspaceR
   daemonRecoveryBoot: true,
   hostVmDataDiskPath: null,
   hostVmBaseImageDigest: null,
+  captureClaimedAt: null,
   removedAt: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60_000),
@@ -86,6 +87,8 @@ const harness = (input: {
   readonly stop?: RuntimeAdapter["stop"];
   /** The runtime answers for an executor nothing was started on (`recoverAnswersUnstarted`). */
   readonly recoverAnswersUnstarted?: boolean;
+  /** A capture status sealant recorded from the executor (`last_status`). */
+  readonly lastStatus?: Readonly<Record<string, unknown>>;
   /** The launch's stored blueprint; absent, the sweep has no attempt repository at all. */
   readonly blueprintPayload?: ReturnType<typeof attemptSnapshotRow>["blueprintPayload"];
 }) => {
@@ -99,6 +102,7 @@ const harness = (input: {
     recoveryAttempts: input.attempts ?? 0,
     captureTokenSealed:
       input.captureTokenSealed === undefined ? "sealed:token" : input.captureTokenSealed,
+    ...(input.lastStatus === undefined ? {} : { lastStatus: input.lastStatus }),
   });
   const drains = fakeService<WorkspaceCaptureDrainRepoService>({
     listRetainedDue: () => Effect.succeed([row]),
@@ -825,20 +829,30 @@ describe("recoverRetainedExecutorsEffect · a host VM whose recovery boot says n
       ...overrides,
     });
 
-  it("deletes the disk of an executor no worktree ever claimed", async () => {
-    const h = hostVm({ blueprintPayload: standby, instance: { launchedAt: null } });
+  it("releases the disk of a warm standby that reached readiness and was never claimed", async () => {
+    const h = hostVm({ blueprintPayload: standby });
     expect((await h.run()).get("run_1")).toBe("released");
     expect(h.stop).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     [
-      "its launch named a worktree",
-      { blueprintPayload: forWorktree, instance: { launchedAt: null } },
-      "named a worktree",
+      "a session that named no worktree failed before it reached readiness",
+      { blueprintPayload: standby, instance: { launchedAt: null } },
+      "never reached readiness",
     ],
-    ["it reached readiness", { blueprintPayload: standby }, "reached readiness"],
-    ["its launch cannot be read", { instance: { launchedAt: null } }, "cannot read"],
+    ["its launch named a worktree", { blueprintPayload: forWorktree }, "named a worktree"],
+    [
+      "a claim of it was asked for",
+      { blueprintPayload: standby, instance: { captureClaimedAt: new Date(NOW - 5_000) } },
+      "a claim of it was asked for",
+    ],
+    [
+      "sealant recorded a status naming its work",
+      { blueprintPayload: standby, lastStatus: { epoch: 2, worktreeId: "wt_7", headN: 3 } },
+      "naming its work",
+    ],
+    ["its launch cannot be read", {}, "cannot read"],
   ] as const)("keeps the disk when %s, whatever the guest said", async (_name, overrides, why) => {
     const h = hostVm(overrides);
     expect((await h.run()).get("run_1")).toBe("retained");

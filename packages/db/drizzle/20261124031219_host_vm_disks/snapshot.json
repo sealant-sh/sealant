@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "f48ab603-9cc2-475b-8878-fbfd658769fb",
+  "id": "61172263-d6b1-4c67-bc38-a14cfce1b9db",
   "prevIds": ["968f9905-0db5-4ef9-b1bd-d10c8411bda0"],
   "ddl": [
     {
@@ -6216,6 +6216,19 @@
       "generated": null,
       "identity": null,
       "name": "host_vm_base_image_digest",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workspace_runtime_instances"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "capture_claimed_at",
       "entityType": "columns",
       "schema": "public",
       "table": "workspace_runtime_instances"

@@ -3360,6 +3360,16 @@ export const replanWorkspaceCapture = (input: {
         expected,
       });
     }
+    // On record before the claim is sent: a claim whose outcome is unknown still counts, so a
+    // host VM's "nothing to save" never releases an executor someone may have claimed.
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    if (workspace.latestRunId !== null) {
+      const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+      yield* withInternalError(
+        runtimeInstances.markCaptureClaimed({ runId: workspace.latestRunId }),
+        "Failed to record the claim.",
+      );
+    }
     return yield* withCaptureDaemon(
       { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "re-plan" },
       (daemon) => daemon.captureReplan(),
