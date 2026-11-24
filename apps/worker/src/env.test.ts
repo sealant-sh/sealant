@@ -5,6 +5,44 @@ import { join } from "node:path";
 import { parseWorkerEnv, parseAppEnv } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
 
+describe("parseWorkerEnv · the host VM runtime", () => {
+  const complete = {
+    SEALANT_HOST_VM_IMAGE_DIR: "/var/lib/mend/vm-images",
+    SEALANT_HOST_VM_DATA_DIR: "/var/lib/mend/vm-data",
+    DOCKER_RUNTIME_ENABLED: "true",
+    SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS: "10.240.0.0/16",
+    WORKSPACE_CONTROL_SOCKET_HOST_DIR: "/run/sealant/sockets",
+    SEALANT_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
+  };
+
+  it("starts with both directories and what its egress proxies need", () => {
+    const env = parseWorkerEnv({ ...complete, DEFAULT_RUNTIME_ADAPTER: "host-vm" });
+    expect(env.SEALANT_HOST_VM_DATA_DIR).toBe("/var/lib/mend/vm-data");
+  });
+
+  it("refuses one directory without the other", () => {
+    const { SEALANT_HOST_VM_DATA_DIR: _data, ...half } = complete;
+    expect(() => parseWorkerEnv(half)).toThrow(/both SEALANT_HOST_VM_IMAGE_DIR/);
+  });
+
+  it("refuses to start host VMs it could not put behind a proxy", () => {
+    const {
+      SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS: _subnets,
+      SEALANT_CREDENTIALS_KEY: _key,
+      ...bare
+    } = complete;
+    expect(() => parseWorkerEnv(bare)).toThrow(
+      /needs SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS, SEALANT_CREDENTIALS_KEY/,
+    );
+  });
+
+  it("refuses host-vm as the default runtime without its directories", () => {
+    expect(() => parseWorkerEnv({ DEFAULT_RUNTIME_ADAPTER: "host-vm" })).toThrow(
+      /DEFAULT_RUNTIME_ADAPTER=host-vm requires SEALANT_HOST_VM_IMAGE_DIR/,
+    );
+  });
+});
+
 describe("parseWorkerEnv", () => {
   it.each([
     { SEALANT_BOAT_AUTOMATIC_PARKING: "false", SEALANT_BOAT_PARKING_DELAY_SECONDS: "3600" },

@@ -98,6 +98,9 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "markStopped",
   "markRemoved",
   "upsertRuntimeInstance",
+  "recordHostVmDisk",
+  "listHostVmBaseImages",
+  "markCaptureClaimed",
 ]);
 
 export class WorkspaceRuntimeInstanceRepoInvariantError extends Schema.TaggedError<WorkspaceRuntimeInstanceRepoInvariantError>()(
@@ -376,6 +379,49 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly olderThanMs: number;
     readonly limit: number;
   }) => Effect.Effect<readonly WorkspaceRuntimeInstance[], WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Record a `host-vm` executor's data disk and base image digest on its run's row, before its
+   * runner container is created (see the columns). The launch's `pending` row must exist; a run
+   * with none fails with `WorkspaceRuntimeInstanceRepoInvariantError`.
+   */
+  readonly recordHostVmDisk: (
+    input: HostVmDiskRecord,
+  ) => Effect.Effect<void, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Every row that names a `host-vm` base image, with whether its executor's removal was
+   * confirmed (`removed_at`). Base-image GC keeps a base image while any row naming it is not
+   * removed, or names a data disk still on disk.
+   */
+  readonly listHostVmBaseImages: () => Effect.Effect<
+    readonly HostVmBaseImageReference[],
+    WorkspaceRuntimeInstanceRepoError
+  >;
+  /**
+   * A claim of the run's executor is about to be asked for (`capture.replan`): `capture_claimed_at`
+   * is set, the first instant standing. Written before the claim is sent, so a claim whose outcome
+   * is unknown still counts. A run with no runtime row changes nothing.
+   */
+  readonly markCaptureClaimed: (input: {
+    readonly runId: string;
+  }) => Effect.Effect<void, WorkspaceRuntimeInstanceRepoError>;
+}
+
+/** A `host-vm` executor's disks, as recorded on its run's runtime row. */
+export interface HostVmDiskRecord {
+  readonly runId: string;
+  readonly dataDiskPath: string;
+  readonly baseImageDigest: string;
+  /** What its runner's firewall lets out, recorded with a normal launch (see the column). */
+  readonly runnerEgress?: {
+    readonly mode: "standard" | "restricted";
+    readonly allowTcpPorts: readonly number[];
+  };
+}
+
+/** A row naming a `host-vm` base image (`listHostVmBaseImages`). */
+export interface HostVmBaseImageReference extends HostVmDiskRecord {
+  /** The runtime confirmed the executor removed (`removed_at` set). */
+  readonly removed: boolean;
 }
 
 /**
@@ -1001,6 +1047,73 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               .limit(Math.max(1, Math.round(input.limit)));
             return yield* Effect.forEach(rows, (row) => parseInstance(row.instance));
           }),
+        ),
+
+      recordHostVmDisk: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "recordHostVmDisk",
+          Effect.gen(function* () {
+            const updated = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                hostVmDataDiskPath: input.dataDiskPath,
+                hostVmBaseImageDigest: input.baseImageDigest,
+                ...(input.runnerEgress === undefined
+                  ? {}
+                  : { hostVmRunnerEgress: input.runnerEgress }),
+              })
+              .where(eq(workspaceRuntimeInstances.runId, input.runId))
+              .returning({ runId: workspaceRuntimeInstances.runId });
+            if (updated.length === 0) {
+              return yield* new WorkspaceRuntimeInstanceRepoInvariantError({
+                operation: "recordHostVmDisk",
+                message: `No runtime instance exists for run ${input.runId}.`,
+              });
+            }
+          }),
+        ),
+
+      listHostVmBaseImages: () =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listHostVmBaseImages",
+          Effect.gen(function* () {
+            const rows = yield* db
+              .select({
+                runId: workspaceRuntimeInstances.runId,
+                dataDiskPath: workspaceRuntimeInstances.hostVmDataDiskPath,
+                baseImageDigest: workspaceRuntimeInstances.hostVmBaseImageDigest,
+                removedAt: workspaceRuntimeInstances.removedAt,
+              })
+              .from(workspaceRuntimeInstances)
+              .where(isNotNull(workspaceRuntimeInstances.hostVmBaseImageDigest));
+            return rows.flatMap((row) =>
+              row.baseImageDigest === null || row.dataDiskPath === null
+                ? []
+                : [
+                    {
+                      runId: row.runId,
+                      dataDiskPath: row.dataDiskPath,
+                      baseImageDigest: row.baseImageDigest,
+                      removed: row.removedAt !== null,
+                    },
+                  ],
+            );
+          }),
+        ),
+
+      markCaptureClaimed: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "markCaptureClaimed",
+          db
+            .update(workspaceRuntimeInstances)
+            .set({ captureClaimedAt: new Date() })
+            .where(
+              and(
+                eq(workspaceRuntimeInstances.runId, input.runId),
+                isNull(workspaceRuntimeInstances.captureClaimedAt),
+              ),
+            )
+            .pipe(Effect.asVoid),
         ),
     } satisfies WorkspaceRuntimeInstanceRepoService;
   }),

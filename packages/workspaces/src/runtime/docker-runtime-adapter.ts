@@ -542,7 +542,10 @@ export const createDockerCommandRunner = (dockerSocketPath: string): DockerComma
   };
 };
 
-const createDefaultEventStreamOpener = (dockerSocketPath: string): DockerEventStreamOpener => {
+/** The live `docker events` stream against `dockerSocketPath`, reconnected by its caller. */
+export const createDefaultEventStreamOpener = (
+  dockerSocketPath: string,
+): DockerEventStreamOpener => {
   return ({ args, onLine, onEnd }) => {
     const child = spawn("docker", [...args], {
       env: {
@@ -709,7 +712,7 @@ const createAdapterError = (code: string, message: string): Error & { code: stri
 // message and `.stderr`. That is the one failure `stop` treats as success — the container is
 // already gone. `stop` double-checks structurally (a follow-up inspect) before failing, so this
 // prose match is a fast path, not the load-bearing mechanism.
-const isNoSuchContainerError = (error: unknown): boolean => {
+export const isNoSuchContainerError = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -746,7 +749,7 @@ const isNoSuchNetworkError = (error: unknown): boolean => {
  * waits for that removal instead.
  */
 /** The Docker CLI relayed the daemon's own error answer (the request was answered, not lost). */
-const isDaemonErrorResponse = (error: unknown): boolean => {
+export const isDaemonErrorResponse = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -768,7 +771,8 @@ const isRemovalInProgressError = (error: unknown): boolean => {
 const CONCURRENT_REMOVAL_WAIT_MS = 30_000;
 const CONCURRENT_REMOVAL_POLL_MS = 250;
 
-const normalizeContainerToken = (value: string): string => {
+/** A run id as a container name token: lowercase, `[a-z0-9_.-]`, at most 48 characters. */
+export const normalizeContainerToken = (value: string): string => {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9_.-]+/g, "-")
@@ -1648,6 +1652,29 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   /** The egress proxies this adapter runs, for the worker's lease and revocation sweep. */
   public get egressProxies(): EgressProxyOrchestrator | undefined {
     return this.proxies;
+  }
+
+  /**
+   * What every egress proxy on this host is told of it: the operator's private exceptions and the
+   * host's own public addresses (listed, and detected when asked). Shared with the host-vm runtime,
+   * whose proxies run on the same orchestrator.
+   */
+  public async egressHostPolicy(): Promise<{
+    readonly operatorAllowedPrivateCidrs: readonly string[];
+    readonly hostPublicIps: readonly string[];
+  }> {
+    const egress = this.egress;
+    if (egress === undefined) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        "This Docker worker has no per-workspace egress, so it runs no egress proxy.",
+      );
+    }
+    const detected = egress.policy.hostPublic.detect ? await this.detectedHostAddresses() : [];
+    return {
+      operatorAllowedPrivateCidrs: egress.policy.allowed.map(formatCidr),
+      hostPublicIps: [...egress.policy.hostPublic.listed, ...detected].map(formatCidr),
+    };
   }
 
   /** Wait until the Docker sidecar's daemon answers `docker info`, within the readiness timeout. */
@@ -3155,14 +3182,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         }
         await this.assertIsolatedGatewaySupport();
         proxyLaunched = true;
-        const hostPublic = egress.policy.hostPublic.detect
-          ? await this.detectedHostAddresses()
-          : [];
+        const hostPolicy = await this.egressHostPolicy();
         const proxy = await proxies.launchProxy({
           workspaceContainer: containerName,
           launch,
-          operatorAllowedPrivateCidrs: egress.policy.allowed.map(formatCidr),
-          hostPublicIps: [...egress.policy.hostPublic.listed, ...hostPublic].map(formatCidr),
+          operatorAllowedPrivateCidrs: hostPolicy.operatorAllowedPrivateCidrs,
+          hostPublicIps: hostPolicy.hostPublicIps,
         });
         egressNetworkName = proxy.networks.isolated.name;
         proxied = { proxyIp: proxy.networks.proxyIp, caCertPem: proxy.caCertPem };

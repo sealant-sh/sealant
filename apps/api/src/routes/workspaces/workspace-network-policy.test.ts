@@ -314,6 +314,8 @@ const launchedLayer = (
     readonly status?: WorkspaceRuntimeInstance["status"];
     /** The workspace runs Docker inside (`tooling.services.docker`). */
     readonly dockerInside?: boolean;
+    /** What a host VM's runner was started letting out (`host_vm_runner_egress`). */
+    readonly runnerEgress?: WorkspaceRuntimeInstance["hostVmRunnerEgress"];
   } = {},
 ) => {
   const spec = newWorkspaceSchema.parse({
@@ -358,6 +360,7 @@ const launchedLayer = (
             runId,
             adapter: options.runtime ?? "docker",
             status: options.status ?? "ready",
+            hostVmRunnerEgress: options.runnerEgress ?? null,
           }),
         ),
     }),
@@ -1052,5 +1055,50 @@ describe("createWorkspace · network policy and brokered secrets", () => {
       WorkspaceRuntimeRequirementUnsupportedError,
     );
     expect(egress.policies.size).toBe(0);
+  });
+});
+
+/** A restricted policy that lets one host out on `ports`. */
+const restrictedOn = (policyHash: string, ports: number[]): NetworkPolicy => ({
+  mode: "restricted",
+  policyHash,
+  allowHosts: [{ host: "git.example.com", ports }],
+});
+
+describe("applyWorkspaceNetworkPolicy · a running host VM's own firewall (review R2)", () => {
+  const apply = async (networkPolicy: NetworkPolicy) => {
+    const egress = memoryEgress();
+    const admin = await startAdminSocket(egress, 0);
+    egress.proxies.set("run_1", proxyRow(admin.socketPath));
+    const response = await Effect.runPromise(
+      routes
+        .applyWorkspaceNetworkPolicy({
+          workspaceId: "ws_1",
+          payload: { ownerUserId: OWNER, networkPolicy },
+        })
+        .pipe(
+          Effect.provide(
+            launchedLayer(egress, {
+              runtime: "host-vm",
+              runnerEgress: { mode: "restricted", allowTcpPorts: [5432] },
+            }),
+          ),
+        ),
+    );
+    return { response, admin };
+  };
+
+  it("answers next-start for a port the runner drops, though the proxy took it", async () => {
+    const { response, admin } = await apply(restrictedOn("ph_22", [22]));
+    expect(response.enforcement).toBe("next-start");
+    expect(admin.calls.map((call) => [call.method, call.url])).toEqual([["PUT", "/v1/policy"]]);
+  });
+
+  it("answers next-start for standard egress on a restricted runner", async () => {
+    expect((await apply(standardPolicy("ph_std"))).response.enforcement).toBe("next-start");
+  });
+
+  it("enforces a narrower policy at once: the proxy refuses what the runner still forwards", async () => {
+    expect((await apply(restrictedOn("ph_narrow", [5432]))).response.enforcement).toBe("enforced");
   });
 });

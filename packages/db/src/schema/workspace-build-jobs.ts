@@ -271,6 +271,34 @@ export const workspaceRuntimeInstances = pgTable(
      * unknown is not recoverable in place (kept, reported).
      */
     daemonRecoveryBoot: boolean("daemon_recovery_boot"),
+    /**
+     * A `host-vm` executor's writable data disk (`<vm data dir>/<runner container>/data.img`, as the
+     * worker sees the path) and the digest of the image its read-only root disk was made from
+     * (`<vm images dir>/<digest>.img`). Written before the runner container is created, and never
+     * cleared. The disk outlives the container (`docker container prune` takes only the container),
+     * so a recovery recreates a runner on the two, and base-image GC keeps every base image a row
+     * whose executor was not removed still names. Null on every other runtime.
+     */
+    hostVmDataDiskPath: text("host_vm_data_disk_path"),
+    hostVmBaseImageDigest: text("host_vm_base_image_digest"),
+    /**
+     * What a `host-vm` runner's own firewall lets out, fixed at `docker run` (`--egress`,
+     * `--allow-tcp-port`): a policy applied later that widens it (to `standard`, or a port it does
+     * not list) holds from the next start, whatever the proxy takes now. Null on every other
+     * runtime, and on a run launched before it was recorded (treated as unknown: next start).
+     */
+    hostVmRunnerEgress: jsonb("host_vm_runner_egress").$type<{
+      readonly mode: "standard" | "restricted";
+      readonly allowTcpPorts: readonly number[];
+    }>(),
+    /**
+     * When a claim of this executor was first asked for (`capture.replan`, a standby being bound to
+     * a worktree), written before the claim is sent: once set, sealant treats the executor as
+     * claimed, whether or not the claim went through. A host VM's "nothing to save" (exit 76, the
+     * guest's own word) releases its disk only for a warm standby nobody claimed. Null: no claim
+     * was asked for through sealant.
+     */
+    captureClaimedAt: timestamp("capture_claimed_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),

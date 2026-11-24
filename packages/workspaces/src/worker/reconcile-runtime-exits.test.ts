@@ -84,6 +84,10 @@ const runtimeInstance = (
   launchLeaseExpiresAt: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
+  hostVmDataDiskPath: null,
+  hostVmBaseImageDigest: null,
+  captureClaimedAt: null,
+  hostVmRunnerEgress: null,
   removedAt: null,
   sourceKind: null,
   createdAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -150,6 +154,9 @@ const makeHarness = (input: {
     listStoppedWithRemains,
     markStopRequested: () => Effect.void,
     markRemoved,
+    recordHostVmDisk: () => Effect.die("unused"),
+    listHostVmBaseImages: () => Effect.succeed([]),
+    markCaptureClaimed: () => Effect.void,
   };
   const attempts = fakeService<WorkspaceAttemptRepoService>({
     getAttemptSnapshotByRunId: () =>

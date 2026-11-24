@@ -26,6 +26,8 @@ export {
 export {
   DEFAULT_NETWORK_GUARD_IMAGE,
   DockerRuntimeAdapter,
+  createDefaultEventStreamOpener,
+  createDockerCommandRunner,
   type DockerExecutorNetworkHooks,
   type DockerCommandResult,
   type DockerCommandRunner,
@@ -50,6 +52,24 @@ export {
 } from "./docker-isolated-network.js";
 
 export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";
+
+export {
+  DEFAULT_HOST_VM_RUNNER_IMAGE,
+  DEFAULT_HOST_VM_SHUTDOWN_GRACE_SECONDS,
+  DEFAULT_HOST_VM_STOP_TIMEOUT_SECONDS,
+  HOST_VM_BASE_IMAGE_LABEL,
+  HostVmRunnerEnded,
+  HostVmRuntimeAdapter,
+  hostVmMemory,
+  type HostVmDiskRecord,
+  type HostVmDiskRecords,
+  hostVmEgressFlags,
+  hostVmRunnerWidens,
+  underRecoveredRoot,
+  type HostVmRunnerEgress,
+  type HostVmEgressProxyOptions,
+  type HostVmRuntimeAdapterOptions,
+} from "./host-vm-runtime-adapter.js";
 
 export {
   DockerVolumeMountError,
@@ -208,6 +228,9 @@ export {
   attestationCoversObservations,
   decideExecutorDeletion,
   observedCaptureFromStored,
+  executorClaimEvidence,
+  isStandbyLaunch,
+  runtimeChecksClaimBeforeNothingToSave,
   runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
   type CompletionAttestation,

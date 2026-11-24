@@ -321,15 +321,88 @@ export const attestationCoversObservations = (
  * MicroVM can while the VM runs on after its daemon ended (the agent starts sealantd again in
  * recovery mode on the VM's disk); a TERMINATED VM's disk is gone, which `recover` reports as
  * `missing`. Boat can the same way: a Boat VM runs on after its daemon ended, and its agent starts
- * sealantd again in recovery mode on the VM's disk. Kubernetes cannot restart an ended Pod.
+ * sealantd again in recovery mode on the VM's disk. A host VM can: its data disk outlives its
+ * runner container, and a fresh runner boots it in recovery mode even after the container was
+ * pruned. Kubernetes cannot restart an ended Pod.
  */
 export const runtimeRestartsRetainedExecutors = (adapterId: string | null | undefined): boolean =>
-  adapterId === "docker" || adapterId === "microvm" || adapterId === "boat";
+  adapterId === "docker" ||
+  adapterId === "microvm" ||
+  adapterId === "boat" ||
+  adapterId === "host-vm";
 
 /**
  * Whether the runtime hands the recovery boot its capture token itself (`recover({ secretEnv })`:
- * the MicroVM and Boat agents write it on the VM) rather than reading a secret env file the worker
- * stages on its host again (Docker).
+ * the MicroVM and Boat agents write it on the VM, the host VM adapter stages it in the recovery
+ * runner's `recovery-env.json`) rather than reading a secret env file the worker stages on its
+ * host again (Docker).
  */
 export const runtimeRecoveryTakesSecretEnv = (adapterId: string | null | undefined): boolean =>
-  adapterId === "microvm" || adapterId === "boat";
+  adapterId === "microvm" || adapterId === "boat" || adapterId === "host-vm";
+
+/**
+ * Whether a runtime's "nothing to save" (exit 76) is honoured only once sealant's own records say
+ * no worktree ever claimed the executor (`executorClaimEvidence`). On a host VM the exit status is
+ * the guest's own frame, and code that ran as root in the guest could forge it to have its disk
+ * deleted; so an executor sealant knows was claimed keeps its disk until a verified final capture
+ * or its owner's discard. Every other runtime reads 76 from a process the workspace never owned.
+ */
+export const runtimeChecksClaimBeforeNothingToSave = (
+  adapterId: string | null | undefined,
+): boolean => adapterId === "host-vm";
+
+/**
+ * Whether sealant's own records AFFIRMATIVELY show an executor was a standby that nobody ever
+ * claimed (§6.2): its launch declared a standby (`standby:<id>`, sealantd's `is_standby_launch`,
+ * the one identity under which the daemon writes its unclaimed marker), it named no worktree (a
+ * standby is bound to one at claim), no claim of it was ever asked for through sealant
+ * (`capture_claimed_at`), and no capture status sealant recorded from it names a worktree or a
+ * capture head. Only such an executor's "nothing to save" is believed on a runtime whose guest
+ * sends it. Anything less is claimed: a session that names no worktree takes one from the channel
+ * at boot, and its harness's writes are that session's work. Unknown is claimed (fail closed).
+ */
+export const executorClaimEvidence = (input: {
+  /** The launch declared a standby (`standby:<id>`); `undefined` when it could not be read. */
+  readonly standbyLaunch: boolean | undefined;
+  /** The launch named a worktree; `undefined` when its blueprint could not be read. */
+  readonly launchNamedWorktree: boolean | undefined;
+  /** A claim of it was asked for through sealant (`capture_claimed_at`). */
+  readonly claimRecorded: boolean;
+  /** A capture status sealant recorded from it names a worktree or a capture head. */
+  readonly recordedStatusNamesWork: boolean;
+}): { readonly claimed: false } | { readonly claimed: true; readonly why: string } => {
+  if (input.standbyLaunch === undefined || input.launchNamedWorktree === undefined) {
+    return { claimed: true, why: "sealant cannot read what its launch declared" };
+  }
+  if (!input.standbyLaunch) {
+    return {
+      claimed: true,
+      why: "its launch was a session's, not a standby's, and a session's work is never nothing",
+    };
+  }
+  if (input.launchNamedWorktree) {
+    return { claimed: true, why: "its launch named a worktree, which its daemon claims at boot" };
+  }
+  if (input.claimRecorded) {
+    return { claimed: true, why: "a claim of it was asked for through sealant" };
+  }
+  if (input.recordedStatusNamesWork) {
+    return { claimed: true, why: "sealant recorded a capture status from it naming its work" };
+  }
+  return { claimed: false };
+};
+
+/** A standby's launch id (`standby:<id>`), as sealantd's `is_standby_launch` reads it. */
+export const isStandbyLaunch = (launchId: string | null | undefined): boolean =>
+  launchId !== null && launchId !== undefined && /^standby:./.test(launchId);
+
+/** Whether a stored capture status names a worktree or a capture head (`executorClaimEvidence`). */
+export const storedStatusNamesWork = (
+  stored: Readonly<Record<string, unknown>> | null | undefined,
+): boolean => {
+  if (stored === null || stored === undefined) return false;
+  const worktreeId = stored["worktreeId"];
+  return (
+    (typeof worktreeId === "string" && worktreeId.length > 0) || typeof stored["headN"] === "number"
+  );
+};

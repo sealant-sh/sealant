@@ -435,7 +435,7 @@ const renderBase = (plan: ResolvedImagePlan, platform: WorkspaceImagePlatform): 
  */
 export const sealantdImageReference =
   process.env["SEALANT_SEALANTD_IMAGE"] ??
-  "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.203@sha256:8597fd60baccd4f884ed8d454d08020ee238d6425b616bba8d9ec81a95c91924";
+  "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.208@sha256:7bf442077dfc2114adc6132def675a150c53f74b4faa586fe6761ad20c9f80f5";
 const dockerCliImageReference = process.env["SEALANT_DOCKER_CLI_IMAGE"] ?? "docker:27.5.1-cli";
 
 /**
@@ -1593,6 +1593,7 @@ const writeBuildContext = async (
   plan: ResolvedImagePlan,
   containerfile: string,
   platform: WorkspaceImagePlatform,
+  contextFiles: readonly ContainerfileContextFile[] = [],
 ) => {
   const contextDirectory = await mkdtemp(join(tmpdir(), `sealant-buildkit-${plan.osFamily}-`));
   const containerfilePath = join(contextDirectory, "Containerfile");
@@ -1620,6 +1621,9 @@ const writeBuildContext = async (
       ARCHLINUXARM_BUILDER_KEY,
       "utf8",
     );
+  }
+  for (const file of contextFiles) {
+    await writeFile(join(contextDirectory, file.name), file.content);
   }
   await writeFile(imagePlanPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   await writeFile(buildSpecPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
@@ -1833,12 +1837,39 @@ export interface PlannedWorkspaceImageBuild {
   readonly imagePlan: ResolvedImagePlan;
   readonly containerfile: string;
   readonly planHash: string;
+  /** Files an extension's lines copy in, written into the build context beside the Containerfile. */
+  readonly contextFiles?: readonly ContainerfileContextFile[];
 }
+
+export interface ContainerfileContextFile {
+  readonly name: string;
+  readonly content: Uint8Array;
+}
+
+/**
+ * What a runtime's builder adds to the rendered Containerfile, just before its `ENTRYPOINT` (the
+ * host VM's guest Docker engine), and the files those lines copy in. Its lines are part of the
+ * Containerfile and so of the plan hash; a line naming each file's digest makes the hash follow
+ * the files too.
+ */
+export interface ContainerfileExtension {
+  readonly lines: readonly string[];
+  readonly files: readonly ContainerfileContextFile[];
+}
+
+/** The runtime's extension for a plan of this OS family and blueprint, or none. May throw. */
+export type ContainerfileExtender = (
+  osFamily: BuildkitTargetOsFamily,
+  blueprint: WorkspaceBlueprint,
+) => ContainerfileExtension | undefined;
+
+const FINAL_ENTRYPOINT = /^ENTRYPOINT \[.*\]\s*$/m;
 
 export const planWorkspaceImageBuild = (input: {
   readonly blueprint: WorkspaceBlueprint;
   readonly platform: WorkspaceImagePlatform;
   readonly options?: Pick<BuildkitCompilerOptions, "autoOsFamilyOrder">;
+  readonly extend?: ContainerfileExtender;
 }): PlannedWorkspaceImageBuild => {
   const parsed = parseBuildkitOsBuilderCompileInput({
     blueprint: parseWorkspaceBlueprint(input.blueprint),
@@ -1850,13 +1881,24 @@ export const planWorkspaceImageBuild = (input: {
       : { autoOsFamilyOrder: input.options.autoOsFamilyOrder }),
   });
   const imagePlan = mapBlueprintToResolvedImagePlan(parsed.blueprint, osFamily, input.platform);
-  const containerfile = renderContainerfile(imagePlan, input.platform);
+  const rendered = renderContainerfile(imagePlan, input.platform);
+  const extension = input.extend?.(osFamily, parsed.blueprint);
+  if (extension !== undefined && !FINAL_ENTRYPOINT.test(rendered)) {
+    throw new Error("The planned Containerfile has no ENTRYPOINT line to extend before.");
+  }
+  const containerfile =
+    extension === undefined
+      ? rendered
+      : rendered.replace(FINAL_ENTRYPOINT, (line) => [...extension.lines, line].join("\n"));
 
   return {
     osFamily,
     platform: input.platform,
     imagePlan,
     containerfile,
+    ...(extension === undefined || extension.files.length === 0
+      ? {}
+      : { contextFiles: extension.files }),
     // The platform as well: most families render one Containerfile for both, and an image built
     // for one must never be reused for the other.
     planHash: createHash("sha256")
@@ -1870,10 +1912,16 @@ export const compileWorkspaceBuildSpec = async (input: {
   readonly blueprint: WorkspaceBlueprint;
   readonly platform: WorkspaceImagePlatform;
   readonly options?: BuildkitCompilerOptions;
+  readonly extend?: ContainerfileExtender;
 }): Promise<BuildkitOsBuilderCompileResult> => {
   const planned = planWorkspaceImageBuild(input);
   const { osFamily, imagePlan, platform } = planned;
-  const buildContext = await writeBuildContext(imagePlan, planned.containerfile, platform);
+  const buildContext = await writeBuildContext(
+    imagePlan,
+    planned.containerfile,
+    platform,
+    planned.contextFiles ?? [],
+  );
   const commandRunner = input.options?.commandRunner ?? runBuildkitCommand;
   const emitTarball = input.options?.emitTarball ?? true;
 

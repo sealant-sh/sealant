@@ -5,18 +5,26 @@
  * stays retained; evidence that arrived since (an attestation) releases it without recovery.
  */
 import {
+  WorkspaceAttemptRepo,
   WorkspaceCaptureDrainRepo,
   WorkspaceRuntimeInstanceRepo,
+  type WorkspaceAttemptRepoService,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainRepoService,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import { fakeService } from "@sealant/db/testing/fake-service";
-import { captureDrainRow, runtimeInstanceRow } from "@sealant/db/testing/rows";
+import {
+  attemptRow,
+  attemptSnapshotRow,
+  captureDrainRow,
+  runtimeInstanceRow,
+} from "@sealant/db/testing/rows";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
+import { cases } from "../runtime/docker-runtime-adapter.golden-fixture.js";
 import {
   runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
@@ -59,6 +67,10 @@ const instance = (overrides: Partial<WorkspaceRuntimeInstance> = {}): WorkspaceR
   launchLeaseExpiresAt: null,
   daemonImage: "ghcr.io/sealant-sh/sealantd:0.19.0",
   daemonRecoveryBoot: true,
+  hostVmDataDiskPath: null,
+  hostVmBaseImageDigest: null,
+  captureClaimedAt: null,
+  hostVmRunnerEgress: null,
   removedAt: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60_000),
@@ -81,6 +93,12 @@ const harness = (input: {
   readonly stop?: RuntimeAdapter["stop"];
   /** The runtime answers for an executor nothing was started on (`recoverAnswersUnstarted`). */
   readonly recoverAnswersUnstarted?: boolean;
+  /** A capture status sealant recorded from the executor (`last_status`). */
+  readonly lastStatus?: Readonly<Record<string, unknown>>;
+  /** The launch id its create named (`standby:<id>` for a standby); default none. */
+  readonly launchId?: string | null;
+  /** The launch's stored blueprint; absent, the sweep has no attempt repository at all. */
+  readonly blueprintPayload?: ReturnType<typeof attemptSnapshotRow>["blueprintPayload"];
 }) => {
   const order: string[] = [];
   const ledger = inMemoryCaptureDrainLedger({ now: () => NOW });
@@ -92,6 +110,7 @@ const harness = (input: {
     recoveryAttempts: input.attempts ?? 0,
     captureTokenSealed:
       input.captureTokenSealed === undefined ? "sealed:token" : input.captureTokenSealed,
+    ...(input.lastStatus === undefined ? {} : { lastStatus: input.lastStatus }),
   });
   const drains = fakeService<WorkspaceCaptureDrainRepoService>({
     listRetainedDue: () => Effect.succeed([row]),
@@ -162,6 +181,8 @@ const harness = (input: {
     ...(input.recoverAnswersUnstarted === true ? { recoverAnswersUnstarted: true } : {}),
   };
   const daemon = input.daemon ?? fakeCaptureDaemon(["unreachable"]);
+  const blueprintPayload = input.blueprintPayload;
+  const launchId = input.launchId ?? null;
   const run = () =>
     Effect.runPromise(
       recoverRetainedExecutorsEffect({
@@ -187,6 +208,16 @@ const harness = (input: {
             Layer.succeed(WorkspaceCaptureDrainRepo, drains),
             Layer.succeed(WorkspaceRuntimeInstanceRepo, instances),
             daemon.layer,
+            blueprintPayload === undefined
+              ? Layer.empty
+              : Layer.succeed(
+                  WorkspaceAttemptRepo,
+                  fakeService<WorkspaceAttemptRepoService>({
+                    getAttemptSnapshotByRunId: () =>
+                      Effect.succeed(attemptSnapshotRow({ blueprintPayload })),
+                    getAttemptById: () => Effect.succeed(attemptRow({ launchId })),
+                  }),
+                ),
           ),
         ),
       ),
@@ -790,11 +821,90 @@ describe("recoverRetainedExecutorsEffect · a runtime that answers for an execut
   });
 });
 
+describe("recoverRetainedExecutorsEffect · a host VM whose recovery boot says nothing to save (§6.2)", () => {
+  // The golden capture launch names worktree wt_1; a standby names none until it is bound.
+  const forWorktree = cases.capture.blueprint;
+  const source = forWorktree.sources.workspace;
+  if (source.kind !== "capture") throw new Error("the golden capture case is not capture-sourced");
+  const { worktreeId: _bound, ...unbound } = source;
+  const standby = { ...forWorktree, sources: { ...forWorktree.sources, workspace: unbound } };
+  const hostVm = (overrides: Omit<Parameters<typeof harness>[0], "inspect" | "adapterId">) =>
+    harness({
+      adapterId: "host-vm",
+      inspect: { state: "exited", platformEnded: false },
+      recover: async () => ({
+        outcome: "nothing-to-save",
+        detail: "sealantd boot: nothing to save",
+      }),
+      ...overrides,
+    });
+
+  it("releases the disk of a standby nobody ever claimed", async () => {
+    const h = hostVm({ blueprintPayload: standby, launchId: "standby:wt-pool-3" });
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      "an ordinary session named no worktree (the channel names it at boot)",
+      { blueprintPayload: standby, launchId: "launch_7f3", instance: { launchedAt: null } },
+      "a session's, not a standby's",
+    ],
+    [
+      "a session named no launch at all",
+      { blueprintPayload: standby, launchId: null },
+      "a session's, not a standby's",
+    ],
+    [
+      "its launch named a worktree",
+      { blueprintPayload: forWorktree, launchId: "standby:wt-pool-3" },
+      "named a worktree",
+    ],
+    [
+      "a claim of it was asked for",
+      {
+        blueprintPayload: standby,
+        launchId: "standby:wt-pool-3",
+        instance: { captureClaimedAt: new Date(NOW - 5_000) },
+      },
+      "a claim of it was asked for",
+    ],
+    [
+      "sealant recorded a status naming its work",
+      {
+        blueprintPayload: standby,
+        launchId: "standby:wt-pool-3",
+        lastStatus: { epoch: 2, worktreeId: "wt_7", headN: 3 },
+      },
+      "naming its work",
+    ],
+    ["its launch cannot be read", {}, "cannot read"],
+  ] as const)("keeps the disk when %s, whatever the guest said", async (_name, overrides, why) => {
+    const h = hostVm(overrides);
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.stop).not.toHaveBeenCalled();
+    expect(h.attempts).toEqual([expect.objectContaining({ error: expect.stringContaining(why) })]);
+  });
+
+  it("still believes the 76 of a runtime whose guest does not send it (Docker)", async () => {
+    const h = harness({
+      inspect: { state: "exited", exitCode: 75 },
+      recover: async () => ({
+        outcome: "nothing-to-save",
+        detail: "sealantd boot: nothing to save",
+      }),
+    });
+    expect((await h.run()).get("run_1")).toBe("released");
+  });
+});
+
 describe("which runtimes restart a retained executor, and how it gets its capture token", () => {
   it.each([
     ["docker", true, false],
     ["microvm", true, true],
     ["boat", true, true],
+    ["host-vm", true, true],
     ["k8s", false, false],
     ["k3s", false, false],
     ["cloudflare", false, false],

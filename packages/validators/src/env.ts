@@ -778,7 +778,77 @@ export const workerRuntimeEnvSchema = z.object({
   // Comma-separated `container[:alias...]` joined to each workspace's own egress network, such as
   // the npm and Docker mirrors.
   SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS: z.string().trim().min(1).optional(),
+  // The host VM runtime (`host-vm`, each workspace its own microVM on this host's KVM): where this
+  // worker keeps the read-only base disks built from workspace images, and each VM's writable data
+  // disk. Both set, this worker launches host VM workspaces behind the same egress proxies Docker
+  // workspaces use (it needs SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS,
+  // WORKSPACE_CONTROL_SOCKET_HOST_DIR and SEALANT_CREDENTIALS_KEY). A path below a
+  // SEALANT_DOCKER_VOLUME_MAPPINGS root is mounted from that volume. Unset: no host VM workspaces.
+  SEALANT_HOST_VM_IMAGE_DIR: z.string().trim().startsWith("/").optional(),
+  SEALANT_HOST_VM_DATA_DIR: z.string().trim().startsWith("/").optional(),
+  // Optional sealant-vm-runner image (sealantd's vm-runner). Unset: the build sealant pins.
+  SEALANT_VM_RUNNER_IMAGE: z.string().trim().min(1).optional(),
+  // Optional image holding e2fsprogs with libarchive, which turns an image into a base disk.
+  // Unset: built on this Docker host from alpine on first use.
+  SEALANT_VM_DISK_TOOLS_IMAGE: z.string().trim().min(1).optional(),
 });
+
+/**
+ * The host VM runtime's settings: both directories or neither, and what its egress proxies need. A
+ * host VM never boots without its proxy, so a half-configured worker refuses to start instead.
+ */
+const addHostVmIssues = (
+  input: {
+    readonly SEALANT_HOST_VM_IMAGE_DIR?: string | undefined;
+    readonly SEALANT_HOST_VM_DATA_DIR?: string | undefined;
+    readonly DEFAULT_RUNTIME_ADAPTER: string;
+    readonly DOCKER_RUNTIME_ENABLED: boolean;
+    readonly SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS?: string | undefined;
+    readonly WORKSPACE_CONTROL_SOCKET_HOST_DIR?: string | undefined;
+    readonly SEALANT_CREDENTIALS_KEY?: string | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void => {
+  const images = input.SEALANT_HOST_VM_IMAGE_DIR;
+  const data = input.SEALANT_HOST_VM_DATA_DIR;
+  if ((images === undefined) !== (data === undefined)) {
+    ctx.addIssue({
+      code: "custom",
+      path: [images === undefined ? "SEALANT_HOST_VM_IMAGE_DIR" : "SEALANT_HOST_VM_DATA_DIR"],
+      message:
+        "The host VM runtime needs both SEALANT_HOST_VM_IMAGE_DIR and SEALANT_HOST_VM_DATA_DIR, or neither.",
+    });
+    return;
+  }
+  if (images === undefined) {
+    if (input.DEFAULT_RUNTIME_ADAPTER === "host-vm") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DEFAULT_RUNTIME_ADAPTER"],
+        message:
+          "DEFAULT_RUNTIME_ADAPTER=host-vm requires SEALANT_HOST_VM_IMAGE_DIR and SEALANT_HOST_VM_DATA_DIR.",
+      });
+    }
+    return;
+  }
+  const missing = [
+    ...(input.DOCKER_RUNTIME_ENABLED ? [] : ["DOCKER_RUNTIME_ENABLED=true"]),
+    ...(input.SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS === undefined
+      ? ["SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS"]
+      : []),
+    ...(input.WORKSPACE_CONTROL_SOCKET_HOST_DIR === undefined
+      ? ["WORKSPACE_CONTROL_SOCKET_HOST_DIR"]
+      : []),
+    ...(input.SEALANT_CREDENTIALS_KEY === undefined ? ["SEALANT_CREDENTIALS_KEY"] : []),
+  ];
+  if (missing.length > 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["SEALANT_HOST_VM_IMAGE_DIR"],
+      message: `Host VM workspaces boot only behind their own egress proxy, which needs ${missing.join(", ")}.`,
+    });
+  }
+};
 
 /** The egress variables that mean nothing without per-workspace egress networks. */
 const DOCKER_EGRESS_DEPENDENTS = [
@@ -942,6 +1012,7 @@ export const workerServerEnvSchema = databaseEnvSchema
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addBoatProviderIssues(input, ctx);
+  addHostVmIssues(input, ctx);
   // Per-workspace egress replaces the shared network, and its guard's settings mean nothing
   // without it: a value set alone would look like a protection that is not there.
   if (input.SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS === undefined) {

@@ -176,6 +176,8 @@ export {
   WorkspaceRuntimeInstanceRepoLive,
   WorkspaceRuntimeInstanceRepoUnexpectedError,
   createWorkspaceRuntimeInstanceRepository,
+  type HostVmBaseImageReference,
+  type HostVmDiskRecord,
   type MarkWorkspaceRuntimeInstanceExitedInput,
   type WorkspaceRuntimeInstanceRepoError,
   type WorkspaceRuntimeInstanceRepoService,

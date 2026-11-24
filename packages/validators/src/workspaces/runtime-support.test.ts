@@ -442,3 +442,29 @@ describe("boatSupport and boatLaunchSupport", () => {
     ).toMatchObject({ reason: "runtime-os-unsupported", detail: "native-unsupported-os" });
   });
 });
+
+describe("what the host VM runtime reports", () => {
+  const hostVm = runtimeSupport("host-vm", install());
+
+  it("reports project resources unreachable until its proxy joins their network", () => {
+    expect(hostVm.resources).toMatchObject({ supported: false });
+    // Docker workspaces on the same install still reach them live.
+    expect(runtimeSupport("docker", install()).resources).toEqual({
+      supported: true,
+      attach: "live",
+    });
+  });
+
+  it("refuses Docker inside a VM on a custom base image, and allows each alone", () => {
+    const docker = { tooling: { packages: [], services: { docker: { enabled: true } } } };
+    const custom = { target: { os: { family: "custom", baseImage: "registry.example/img:1" } } };
+    expect(runtimeRefusal(hostVm, withSpec({ ...docker, ...custom }))).toMatchObject({
+      code: "workspace-docker-unsupported",
+      message: expect.stringContaining("needs a managed base image"),
+    });
+    expect(runtimeRefusal(hostVm, withSpec(custom))).toBeUndefined();
+    expect(
+      runtimeRefusal(hostVm, withSpec({ ...docker, target: { os: { family: "ubuntu" } } })),
+    ).toBeUndefined();
+  });
+});

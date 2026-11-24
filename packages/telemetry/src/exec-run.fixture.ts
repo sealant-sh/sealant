@@ -413,6 +413,10 @@ export const fakeWorkspaceRepos = (
     launchLeaseExpiresAt: null,
     daemonImage: null,
     daemonRecoveryBoot: null,
+    hostVmDataDiskPath: null,
+    hostVmBaseImageDigest: null,
+    captureClaimedAt: null,
+    hostVmRunnerEgress: null,
     createdAt: new Date(0),
     updatedAt: new Date(0),
   };
@@ -455,6 +459,9 @@ export const fakeWorkspaceRepos = (
     listPreservationCandidates: unscripted("listPreservationCandidates"),
     listUnsettledCaptureExecutors: unscripted("listUnsettledCaptureExecutors"),
     listStoppedWithRemains: unscripted("listStoppedWithRemains"),
+    recordHostVmDisk: unscripted("recordHostVmDisk"),
+    listHostVmBaseImages: unscripted("listHostVmBaseImages"),
+    markCaptureClaimed: unscripted("markCaptureClaimed"),
   };
   return Layer.mergeAll(
     Layer.succeed(WorkspaceRepo, workspaces),

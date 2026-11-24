@@ -20,6 +20,7 @@ export * from "./worker/egress-proxy-launch.js";
 export * from "./worker/egress-proxy-sweep.js";
 export * from "./worker/harness-credentials-sync-back.js";
 export * from "./worker/home-placements.js";
+export * from "./worker/host-vm-disk-records.js";
 export * from "./worker/placement-login.js";
 export * from "./worker/process-workspace-build-job.js";
 export * from "./worker/process-workspace-stop.js";

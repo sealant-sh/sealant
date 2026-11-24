@@ -1,5 +1,21 @@
 export {
+  createDockerPipeRunner,
+  DEFAULT_HOST_VM_DATA_DISK_BYTES,
+  DEFAULT_HOST_VM_IDLE_STOP_FLOOR_BYTES,
+  DEFAULT_HOST_VM_LAUNCH_FLOOR_BYTES,
+  HOST_VM_TOOLS_IMAGE_TAG,
+  HostVmStorage,
+  hostVmBaseImageKey,
+  hostVmDirectoryFor,
+  type DockerPipeRunner,
+  type HostVmBaseImage,
+  type HostVmDirectory,
+  type HostVmHeadroom,
+  type HostVmStorageOptions,
+} from "./host-vm-disk.js";
+export {
   createDockerWorkspaceImageBuilder,
+  guestDockerExtender,
   type BuildAndPublishInput,
   type FindPublishedInput,
   type BuildAndPublishResult,

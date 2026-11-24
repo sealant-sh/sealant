@@ -59,9 +59,16 @@ import {
   createZotRegistryClient,
   CloudflareRuntimeAdapter,
   cloudflareRuntimeConfigFromEnv,
+  createDefaultEventStreamOpener,
+  createDockerCommandRunner,
+  createDockerPipeRunner,
   createDockerWorkspaceImageBuilder,
+  databaseHostVmDiskRecords,
   dockerDaemonImagePlatform,
   DockerRuntimeAdapter,
+  hostVmDirectoryFor,
+  HostVmRuntimeAdapter,
+  HostVmStorage,
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
   MicrovmEndpointTokens,
@@ -86,6 +93,7 @@ import {
   kubernetesRuntimeConfigFromEnv,
   KubernetesWorkspaceImageBuilder,
   reapStaleWorkspaceBuildJobs,
+  reapHostVmBaseImages,
   reapWorkspaceImages,
   reconcileRuntimeExits,
   recoverRetainedExecutors,
@@ -568,6 +576,51 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     );
   }
 
+  // Host VM workspaces (each its own microVM on this host's KVM, `host-vm`): every one boots
+  // behind its own egress proxy, on the Docker adapter's orchestrator, so they share its subnet
+  // pool and the proxies' lease and revocation sweep below. The worker env refuses a host VM
+  // configuration without the egress networks, the control directory or the credential key.
+  const hostVmAssembly = await (async () => {
+    const imagesDir = env.SEALANT_HOST_VM_IMAGE_DIR;
+    const dataDir = env.SEALANT_HOST_VM_DATA_DIR;
+    if (imagesDir === undefined || dataDir === undefined) return undefined;
+    const docker = dockerAdapters[0];
+    const proxies = docker?.egressProxies;
+    const controlDir = env.WORKSPACE_CONTROL_SOCKET_HOST_DIR;
+    if (docker === undefined || proxies === undefined || controlDir === undefined) {
+      throw new Error(
+        "Host VM workspaces boot only behind an egress proxy, and this worker runs none: they need DOCKER_RUNTIME_ENABLED, SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS and WORKSPACE_CONTROL_SOCKET_HOST_DIR.",
+      );
+    }
+    const commandRunner = createDockerCommandRunner(env.DOCKER_SOCKET_PATH);
+    const mappings = dockerVolumeMappings ?? [];
+    const storage = new HostVmStorage({
+      imagesDir: hostVmDirectoryFor(imagesDir, mappings),
+      dataDir: hostVmDirectoryFor(dataDir, mappings),
+      controlDir: hostVmDirectoryFor(controlDir, mappings),
+      commandRunner,
+      pipeRunner: createDockerPipeRunner(env.DOCKER_SOCKET_PATH),
+      ...(env.SEALANT_VM_DISK_TOOLS_IMAGE === undefined
+        ? {}
+        : { toolsImage: env.SEALANT_VM_DISK_TOOLS_IMAGE }),
+    });
+    const adapter = new HostVmRuntimeAdapter({
+      storage,
+      diskRecords: databaseHostVmDiskRecords(db),
+      commandRunner,
+      ...(env.SEALANT_VM_RUNNER_IMAGE === undefined
+        ? {}
+        : { runnerImage: env.SEALANT_VM_RUNNER_IMAGE }),
+      egressProxy: { proxies, hostPolicy: () => docker.egressHostPolicy() },
+      memory: dockerMemory,
+      eventStreamOpener: createDefaultEventStreamOpener(env.DOCKER_SOCKET_PATH),
+    });
+    // The guest runs its own dockerd: the image carries the engine, from the release's pinned
+    // installer (the one MicroVM images use).
+    const downloadScript = await (await loadMicrovmContextFiles()).read("download-docker.sh");
+    return { adapter, commandRunner, imagesDir, dataDir, downloadScript };
+  })();
+
   // Cloudflare: registered only when the bridge Worker is configured (URL + token pair).
   const cloudflareConfig = cloudflareRuntimeConfigFromEnv(env);
   const cloudflareAdapters =
@@ -602,6 +655,21 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             ? {}
             : { cacheDirectory: env.WORKSPACE_IMAGE_BUILD_CACHE_DIR }),
         }));
+  // A host VM boots the same OCI image, built on this Docker host with the guest's own engine
+  // when its blueprint turns Docker on.
+  const hostVmImageBuilder =
+    hostVmAssembly === undefined
+      ? undefined
+      : (imageBuilder ??
+        createDockerWorkspaceImageBuilder({
+          registryClient,
+          platform: env.SEALANT_WORKSPACE_IMAGE_PLATFORM ?? (await dockerImagePlatform()),
+          stallTimeoutMs: env.WORKSPACE_IMAGE_BUILD_STALL_MS,
+          ...(env.WORKSPACE_IMAGE_BUILD_CACHE_DIR === undefined
+            ? {}
+            : { cacheDirectory: env.WORKSPACE_IMAGE_BUILD_CACHE_DIR }),
+          guestDocker: { downloadScript: hostVmAssembly.downloadScript },
+        }));
   const runtimes = [
     ...(containerImageBuilder === undefined
       ? []
@@ -610,6 +678,15 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           adapter,
           imageBuilder: containerImageBuilder,
         }))),
+    ...(hostVmAssembly === undefined || hostVmImageBuilder === undefined
+      ? []
+      : [
+          {
+            kind: "oci" as const,
+            adapter: hostVmAssembly.adapter,
+            imageBuilder: hostVmImageBuilder,
+          },
+        ]),
     ...microvmRuntimes,
     ...(boatAssembly?.registration === undefined ? [] : [boatAssembly.registration]),
   ];
@@ -1034,6 +1111,18 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           staleBuildContextsRemoved: contexts.removed,
           staleBuildContextBytes: contexts.reclaimedBytes,
         });
+      }
+      // Host VM base disks: kept while a runner, an unremoved run or a kept data disk needs one.
+      if (hostVmAssembly !== undefined) {
+        const baseDisks = await reapHostVmBaseImages({
+          db,
+          imagesDir: hostVmAssembly.imagesDir,
+          dataDir: hostVmAssembly.dataDir,
+          commandRunner: hostVmAssembly.commandRunner,
+        });
+        if (baseDisks.deleted > 0 || baseDisks.failed > 0) {
+          console.log("Host VM base disk retention", baseDisks);
+        }
       }
     })().catch((error: unknown) => {
       console.error("Workspace image retention tick failed", { error });

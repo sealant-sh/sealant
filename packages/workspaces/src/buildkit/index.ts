@@ -29,6 +29,8 @@ export type {
   BuildkitCommandOptions,
   BuildkitCommandResult,
   BuildkitCommandRunner,
+  ContainerfileExtender,
+  ContainerfileExtension,
   PlannedWorkspaceImageBuild,
 } from "./buildkit-builder.js";
 export {

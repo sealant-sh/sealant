@@ -29,6 +29,7 @@ import {
 import { networkPolicyRefusal, type NewWorkspace } from "@sealant/validators";
 import {
   grantsOf,
+  hostVmRunnerWidens,
   pushToProxy,
   revokeOnProxy,
   storedProxyPolicyDocument,
@@ -49,11 +50,11 @@ import {
 const LIVE_STATUSES: ReadonlySet<string> = new Set(["pending", "running", "ready"]);
 
 /**
- * The latest run's proxy, when that run's executor is up: the one a change is pushed to. A run
- * launched without a proxy, or one no longer running, has none, and the change applies at the
- * next start.
+ * The latest run's proxy and runtime row, when that run's executor is up: the one a change is
+ * pushed to. A run launched without a proxy, or one no longer running, has none, and the change
+ * applies at the next start.
  */
-const liveProxyOf = (latestRunId: string | null) =>
+const liveRunOf = (latestRunId: string | null) =>
   Effect.gen(function* () {
     if (latestRunId === null) return undefined;
     const proxy = yield* withInternalError(
@@ -65,8 +66,13 @@ const liveProxyOf = (latestRunId: string | null) =>
       (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(latestRunId),
       "Failed to load the workspace runtime.",
     );
-    return instance !== undefined && LIVE_STATUSES.has(instance.status) ? proxy : undefined;
+    return instance !== undefined && LIVE_STATUSES.has(instance.status)
+      ? { proxy, instance }
+      : undefined;
   });
+
+const liveProxyOf = (latestRunId: string | null) =>
+  liveRunOf(latestRunId).pipe(Effect.map((live) => live?.proxy));
 
 /**
  * What the workspace runs on, and the spec it last launched from: the latest run's runtime
@@ -227,13 +233,19 @@ export const applyWorkspaceNetworkPolicy = (input: {
       revocationWatermark: stored.revocationWatermark,
     };
 
-    const proxy = yield* liveProxyOf(workspace.latestRunId);
-    if (proxy === undefined) {
+    const live = yield* liveRunOf(workspace.latestRunId);
+    if (live === undefined) {
       return {
         ...stays,
         enforcement: "next-start",
       } satisfies ApplyWorkspaceNetworkPolicyResponse;
     }
+    const { proxy, instance } = live;
+    // A host VM's runner fixed its own firewall at start: a policy that lets out more than it
+    // does is taken by the proxy now and reaches the VM only from its next start.
+    const runnerWidened =
+      instance.adapter === "host-vm" &&
+      hostVmRunnerWidens(instance.hostVmRunnerEgress, payload.networkPolicy);
     // Pushed even when the update holds only from the next start: the proxy takes the policy's
     // allow list and the secrets' values now, and the workspace gets the placeholders at boot.
     const pushed = yield* pushStoredPolicy({ workspaceId: workspace.id, proxy, policy: stored });
@@ -245,7 +257,9 @@ export const applyWorkspaceNetworkPolicy = (input: {
     return {
       ...stays,
       policyHash: pushed.policyHash ?? stays.policyHash,
-      ...(nextStartOnly ? { enforcement: "next-start" as const } : outcomeFields(pushed.outcome)),
+      ...(nextStartOnly || runnerWidened
+        ? { enforcement: "next-start" as const }
+        : outcomeFields(pushed.outcome)),
     } satisfies ApplyWorkspaceNetworkPolicyResponse;
   });
 

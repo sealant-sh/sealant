@@ -162,6 +162,17 @@ export const sealantTargetForRuntimeInstance = (
       }
       return sealantTargetForDockerContainer(instance.resourceId, socketPath);
     }
+    // A host VM's daemon is reached through its runner's `control.sock` on this host, bridged to
+    // the guest's vsock port 1024: only the persisted `unix://` endpoint addresses it (there is no
+    // `docker exec` into a VM).
+    case "host-vm": {
+      const endpointSocketPath = endpoint?.startsWith(UNIX_ENDPOINT_PREFIX)
+        ? endpoint.slice(UNIX_ENDPOINT_PREFIX.length)
+        : "";
+      return endpointSocketPath.length === 0
+        ? undefined
+        : { kind: "unix-socket", socketPath: endpointSocketPath };
+    }
     case "k8s":
     case "k3s": {
       if (
@@ -226,6 +237,9 @@ export const describeUnaddressableRuntimeInstance = (
   }
   if (instance.adapter === "docker") {
     return "the docker instance has neither a unix:// endpoint nor a container id";
+  }
+  if (instance.adapter === "host-vm") {
+    return "the host-vm instance has no unix:// endpoint recorded";
   }
   if (instance.adapter === "boat")
     return options.boatConnectMaterial === undefined

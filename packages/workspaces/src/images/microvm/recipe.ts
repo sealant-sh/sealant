@@ -50,6 +50,24 @@ const DOCKER_SERVICE_PACKAGES: Readonly<Record<string, string>> = {
 export const microvmDockerServiceFamilies = (): readonly string[] =>
   Object.keys(DOCKER_SERVICE_PACKAGES);
 
+/**
+ * The Containerfile lines that give an image its own Docker engine, for an OS family that can carry
+ * one (`microvmDockerServiceFamilies`): what its networking needs, then the pinned engine and CLI
+ * plugins from `download-docker.sh`, which the build context must hold. Undefined for any other
+ * family. Shared by every VM runtime whose guest runs its own `dockerd` (MicroVM, host VM).
+ */
+export const guestDockerLayer = (osFamily: string): readonly string[] | undefined => {
+  const packages = DOCKER_SERVICE_PACKAGES[osFamily];
+  return packages === undefined
+    ? undefined
+    : [
+        "# Guest-local Docker: the engine, pinned by checksum, and what its networking needs.",
+        `RUN ${packages}`,
+        "COPY --chmod=755 download-docker.sh /opt/sealant/download-docker.sh",
+        "RUN /opt/sealant/download-docker.sh && rm /opt/sealant/download-docker.sh",
+      ];
+};
+
 const DOCKER_HUB_LIBRARY_MIRROR = "public.ecr.aws/docker/library/";
 
 /**
@@ -119,7 +137,7 @@ export const microvmRecipe = (
       "The planned Containerfile copies no sealantd from a released image, so the MicroVM recipe cannot take sealantctl from beside it.",
     );
   }
-  const dockerPackages = DOCKER_SERVICE_PACKAGES[planned.osFamily];
+  const dockerPackages = guestDockerLayer(planned.osFamily);
   if (settings.dockerService && dockerPackages === undefined) {
     throw new Error(
       `Workspace-scoped Docker on a MicroVM needs one of the ${microvmDockerServiceFamilies().join(", ")} OS families; this blueprint resolves to ${planned.osFamily}.`,
@@ -129,10 +147,7 @@ export const microvmRecipe = (
     !settings.dockerService || dockerPackages === undefined
       ? []
       : [
-          "# Guest-local Docker: the engine, pinned by checksum, and what its networking needs.",
-          `RUN ${dockerPackages}`,
-          "COPY --chmod=755 download-docker.sh /opt/sealant/download-docker.sh",
-          "RUN /opt/sealant/download-docker.sh && rm /opt/sealant/download-docker.sh",
+          ...dockerPackages,
           "ENV SEALANT_MICROVM_DOCKER_CAPABLE=1",
           "RUN mkdir -p /run/docker /var/lib/sealant/docker && chmod 0700 /run/docker /var/lib/sealant/docker",
         ];

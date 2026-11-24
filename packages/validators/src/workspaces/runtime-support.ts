@@ -92,10 +92,13 @@ const resourcesFor = (
     return no(
       "This install's Boat workspaces cannot reach project resources: its worker has no resource gateway. Create the workspace with runtime.resources: \"none\", or ask the install's operator to configure the gateway (SEALANT_BOAT_GATEWAY_HOST_ID).",
     );
-  if (
-    install.resourceHost === "docker" &&
-    (runtime === "docker" || runtime === "boat" || runtime === "host-vm")
-  )
+  // A host VM reaches resources only through its egress proxy, and the proxy does not join a
+  // worktree's reach network yet: answered as unsupported rather than linked and unreachable.
+  if (runtime === "host-vm")
+    return no(
+      "Host VM workspaces cannot reach a project's resources yet: their egress proxy does not join the worktree's resource network. Create the workspace with runtime.resources: \"none\", or use the Docker runtime for a workspace that needs them.",
+    );
+  if (install.resourceHost === "docker" && (runtime === "docker" || runtime === "boat"))
     return { supported: true, attach: "live" };
   if (install.resourceHost === "kubernetes")
     return no(
@@ -442,7 +445,12 @@ const askedOf = (
     case "dotfilesArchives":
       return request.runtime.dotfilesArchives.length > 0 ? support.dotfilesArchives : undefined;
     case "docker":
-      return request.tooling.services?.docker?.enabled === true ? support.docker : undefined;
+      if (request.tooling.services?.docker?.enabled !== true) return undefined;
+      // A host VM's guest engine is installed with its family's own packages: a custom base image
+      // has none to install it with.
+      return support.runtime === "host-vm" && request.target.os.family === "custom"
+        ? HOST_VM_DOCKER_NEEDS_MANAGED_IMAGE
+        : support.docker;
     case "vmIsolation":
     case "restrictedEgress":
     case "brokeredSecrets":
@@ -480,6 +488,10 @@ const askedOfPolicy = (
 };
 
 const UNREPORTED = no("This runtime does not report what it enforces of a network policy.");
+
+const HOST_VM_DOCKER_NEEDS_MANAGED_IMAGE = no(
+  "Docker inside a Host VM workspace needs a managed base image (Ubuntu, Fedora, Arch or Nix): the guest's engine is installed with the family's own packages. Choose a managed OS family, or turn Docker off.",
+);
 
 const codeOf = (runtime: RuntimeAdapterId, requirement: RuntimeRequirement): RuntimeRefusalCode => {
   if (requirement === "os") return "runtime-os-unsupported";
