@@ -1,7 +1,7 @@
 {
-  "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.208@sha256:7bf442077dfc2114adc6132def675a150c53f74b4faa586fe6761ad20c9f80f5",
-  "index": "7bf442077dfc2114adc6132def675a150c53f74b4faa586fe6761ad20c9f80f5",
-  "manifest": "deaabe4bceafe644ca9c61088acb08a7f2d59758e6a995abf965b762b9c386d5",
-  "sealantd": "a00c61a7aef86f5b5dab5231066a737cedea8bd5d8d949ca6e8d4d1bfcae4d08",
+  "source": "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.209@sha256:1e0bfcc2a9bee0cac7d735a5a44b9cae86d8839ad508616584137c52a24a0008",
+  "index": "1e0bfcc2a9bee0cac7d735a5a44b9cae86d8839ad508616584137c52a24a0008",
+  "manifest": "825d262db16292b10976960b01375ab9af1416058dd6f113c9559c0976c70dd8",
+  "sealantd": "6f13eaa5212cac335823c44f445c716b344a0c820aeaba7bdb21c1aea3d4f82d",
   "sealantctl": "6669453dfd6377cd5c65f06f1651c0c6c98acea6a4d72596a5623feb2059141f"
 }
