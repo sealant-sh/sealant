@@ -6,6 +6,8 @@ import {
   type InspectWorkspaceImageResponse,
   PROCESS_USER_UNSUPPORTED_CODE,
   type BindWorkspaceRequest,
+  type BrokeredSecret,
+  brokeredSecretValuesProblems,
   type FlushWorkspaceCaptureRequest,
   type GetWorkspaceCaptureStatusQuery,
   type ReplanWorkspaceCaptureRequest,
@@ -89,6 +91,7 @@ import {
   WorkspaceBuildJobRepo,
   WorkspaceCaptureDrainRepo,
   WorkspaceCreateReservationRepo,
+  WorkspaceEgressRepo,
   DatabaseTransaction,
   executorOriginFromStored,
   UserRepo,
@@ -136,6 +139,7 @@ import {
   storedCaptureStatus,
   bindRootMountPath,
   runtimeRestartsRetainedExecutors,
+  sealBrokeredValues,
   UnknownWorkspacePackageError,
   unknownWorkspacePackageIds,
   UnsupportedWorkspacePackageError,
@@ -514,6 +518,56 @@ const sealSecretEnv = (
     return sealed.sealed;
   });
 
+/**
+ * Check the values a request sends for its brokered secrets and seal them for storage: one value
+ * per `secretRef`, none unused (the shared `brokeredSecretValuesProblems`), sealed with the
+ * credential key, which must be configured when there is anything to seal. No secrets yields
+ * undefined. Refusals never echo a value.
+ */
+export const sealBrokeredSecretValues = (
+  brokeredSecrets: readonly BrokeredSecret[],
+  values: Readonly<Record<string, string>>,
+) =>
+  Effect.gen(function* () {
+    const problems = brokeredSecretValuesProblems(brokeredSecrets, values);
+    if (problems.length > 0) {
+      return yield* new WorkspaceBadRequestError({ message: problems.join("; ") });
+    }
+    if (brokeredSecrets.length === 0) return undefined;
+    if ((env.SEALANT_CREDENTIALS_KEY?.trim() ?? "") === "") {
+      return yield* new WorkspaceServiceUnavailableError({
+        message: "Brokered secrets require SEALANT_CREDENTIALS_KEY to be configured.",
+      });
+    }
+    const cipher = yield* CredentialCipher;
+    return yield* sealBrokeredValues(cipher, values).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceInternalServerError({
+            message: `Could not seal the brokered secret values: ${error.message}`,
+          }),
+      ),
+    );
+  });
+
+/**
+ * A brokered secret's variable that `secretEnv` sets too would be ambiguous in the workspace,
+ * whichever value won. The SDK refuses it with the same words.
+ */
+const brokeredSecretEnvCollision = (
+  brokeredSecrets: readonly BrokeredSecret[],
+  secretEnv: Readonly<Record<string, string>> | undefined,
+) => {
+  const problems = brokeredSecrets.flatMap((secret) =>
+    secretEnv !== undefined && Object.hasOwn(secretEnv, secret.name)
+      ? [`brokeredSecrets \`${secret.secretId}\`: ${secret.name} is also set in secretEnv`]
+      : [],
+  );
+  return problems.length === 0
+    ? Effect.void
+    : Effect.fail(new WorkspaceBadRequestError({ message: problems.join("; ") }));
+};
+
 const readIdempotencyKey = (headers: CreateWorkspaceHeaders): string | undefined => {
   return headers["idempotency-key"];
 };
@@ -724,7 +778,7 @@ const upsertDotfilesSourceInput = (
   return parseWorkspaceSpec(nextSpec);
 };
 
-const withInternalError = <A, E, R>(effect: Effect.Effect<A, E, R>, fallback: string) => {
+export const withInternalError = <A, E, R>(effect: Effect.Effect<A, E, R>, fallback: string) => {
   return effect.pipe(
     Effect.mapError(
       (error) =>
@@ -1630,6 +1684,14 @@ export const createWorkspace = (input: {
     );
     if (runtimeFamily === BOAT_RUNTIME_ID) yield* requireBoatConfigured;
     yield* requireBoatAccount(parsedSpec, runtimeFamily);
+    // The brokered secrets' values reach only the egress proxy: checked and sealed before
+    // anything is reserved, stored with the workspace below.
+    const brokeredSecrets = parsedSpec.brokeredSecrets ?? [];
+    yield* brokeredSecretEnvCollision(brokeredSecrets, body.secretEnv);
+    const brokeredValuesSealed = yield* sealBrokeredSecretValues(
+      brokeredSecrets,
+      body.brokeredSecretValues ?? {},
+    );
     if (idempotencyKey !== undefined) {
       const reservation = yield* withInternalError(
         reservations.reserve({
@@ -1778,6 +1840,7 @@ export const createWorkspace = (input: {
     const workspaces = yield* WorkspaceRepo;
     const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
     const workspaceAttempts = yield* WorkspaceAttemptRepo;
+    const egress = yield* WorkspaceEgressRepo;
     const transaction = yield* DatabaseTransaction;
 
     // Everything a create writes commits together, with its key's reservation: a create that
@@ -1807,6 +1870,18 @@ export const createWorkspace = (input: {
             ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
             ...(sshUser === undefined ? {} : { sshUser }),
           }));
+
+        // The pinned policy commits with the workspace, before its launch is published: the
+        // launch reads it. A resumed create writes it again (the same values, replaced).
+        if (resolvedSpec.networkPolicy !== undefined || brokeredSecrets.length > 0) {
+          yield* egress.putPolicy({
+            workspaceId: workspace.id,
+            networkPolicy: resolvedSpec.networkPolicy,
+            brokeredSecrets,
+            brokeredValuesSealed: brokeredValuesSealed?.sealed,
+            encryptionKeyId: brokeredValuesSealed?.keyId,
+          });
+        }
 
         const attempt = yield* workspaceAttempts.createQueuedAttempt({
           id: runId,
@@ -3353,7 +3428,7 @@ const withCaptureTarget = <A, R = never>(
 };
 
 /** The spec a workspace last launched from: the attempt snapshot, else the build job's request. */
-const loadRecordedSpec = (workspaceId: string, runId: string) => {
+export const loadRecordedSpec = (workspaceId: string, runId: string) => {
   return Effect.gen(function* () {
     const workspaceAttempts = yield* WorkspaceAttemptRepo;
     const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
@@ -3377,7 +3452,7 @@ const loadRecordedSpec = (workspaceId: string, runId: string) => {
 };
 
 /** Load an owner-scoped workspace with the uniform-404 idiom (existence is not leaked). */
-const requireOwnedWorkspace = (workspaceId: string, ownerUserId: string) => {
+export const requireOwnedWorkspace = (workspaceId: string, ownerUserId: string) => {
   return Effect.gen(function* () {
     const workspaces = yield* WorkspaceRepo;
     const workspace = yield* withInternalError(
