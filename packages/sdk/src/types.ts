@@ -30,6 +30,7 @@ import type {
   ForwardBinding,
   ForwardResetReason,
 } from "@sealant/api-contracts";
+import type { BrokeredSecret, NetworkPolicy } from "@sealant/api-contracts/network-policy";
 
 // ---------------------------------------------------------------------------------------------
 // Client construction
@@ -968,6 +969,46 @@ export interface CreateOptions {
   /** The workspace's network (see `WorkspaceNetworkOptions`). */
   readonly network?: WorkspaceNetworkOptions;
   /**
+   * What the workspace may reach on the network, kept for its life, restarts included.
+   * `standard` is the public internet without private, metadata and host addresses; `restricted`
+   * is only the hosts, mirrors and resources the policy lists. Change it later with
+   * `workspace.applyNetworkPolicy()`.
+   *
+   * A runtime that cannot enforce the policy refuses the create (`422`,
+   * `runtime-requirement-unsupported`); a workspace never runs with less than it asked for.
+   * `workspaces.runtimes()` says what each runtime enforces (`networkPolicy`). Docker runs a
+   * `restricted` workspace behind an egress proxy of its own. `restricted` together with
+   * `services.docker` needs `runtime: "host-vm"`, and `requireVmIsolation` needs a runtime that
+   * gives each workspace its own VM (`host-vm`, Boat, MicroVM).
+   *
+   * Checked here with the rules the control plane applies (`networkPolicyProblems`): a policy
+   * that breaks one rejects with code `invalid_network_policy` before any request is sent.
+   */
+  readonly networkPolicy?: NetworkPolicy;
+  /**
+   * Secrets the workspace uses without ever holding them. The workspace reads only the
+   * secret's `placeholder`, from the environment variable `name`; when it sends that placeholder
+   * in `headerName` over HTTPS to one of `bindHosts`, its egress proxy puts the real value in its
+   * place. Any other request carries the placeholder, which is worthless anywhere else.
+   *
+   * Each secret's value goes in `brokeredSecretValues` under its `secretRef`. A workspace with
+   * any brokered secret runs behind its own egress proxy, whatever its policy's mode; a runtime
+   * that cannot run one refuses the create. `name` may not also be set in `env`. Checked here with
+   * the control plane's rules (`brokeredSecretsProblems`): a framing or routing header (`Host`,
+   * `Content-Length`, `Proxy-Authorization`…), a wildcard or an address as a bind host, or a
+   * repeated id, name or placeholder rejects with code `invalid_network_policy` before any request
+   * is sent.
+   */
+  readonly brokeredSecrets?: readonly BrokeredSecret[];
+  /**
+   * The values of `brokeredSecrets`, keyed by each secret's `secretRef`: one for every secret,
+   * and none for a secret not listed. Each is sealed when the control plane receives it and handed
+   * only to the workspace's egress proxy, again after every restart. It is never written to the
+   * workspace's spec or environment, and no read returns it. A value is one HTTP header value:
+   * not empty, no line breaks, at most 16 KiB.
+   */
+  readonly brokeredSecretValues?: Readonly<Record<string, string>>;
+  /**
    * `"none"`: your promise that this workspace will never be linked to project resources
    * (`scope.workspaces.link()`), made at create and kept for the workspace's life, restarts
    * included. Set it for a workspace whose worktree binds no resource. Omitted, the workspace may
@@ -1294,6 +1335,34 @@ export interface Workspace {
    * create: a workspace's user is its owner's, set by `sshAsOwner`, never named by a caller.
    */
   sshAsRoot(): Promise<void>;
+  /**
+   * Replace the workspace's network policy and brokered secrets (see
+   * {@link CreateOptions.networkPolicy}). A running egress proxy takes the new policy at once and
+   * closes the streams it no longer allows; `enforcement` says whether it did (see
+   * {@link NetworkPolicyEnforcement}). Revocations still win: a secret id or host revoked earlier
+   * stays refused whatever the new policy lists.
+   *
+   * Send a value in `brokeredSecretValues` for every secret listed. Checked here with the control
+   * plane's rules first: a policy or secret that breaks one rejects with code
+   * `invalid_network_policy` and sends nothing. A runtime that cannot enforce the policy refuses it
+   * (`422`, `runtime-requirement-unsupported`) and the workspace keeps the policy it had.
+   */
+  applyNetworkPolicy(options: ApplyNetworkPolicyOptions): Promise<NetworkPolicyApplied>;
+  /**
+   * Take access away from the workspace: brokered secrets by `secretIds`, `hosts`, or `all` it
+   * was granted. A revocation is stored before anything else happens, holds for the workspace's
+   * life, restarts included, and wins over every policy applied later: a revoked secret id stays
+   * revoked, so to grant a secret again, list it under a new `secretId`. A running egress proxy
+   * closes every matching stream before this answers `enforced`. Name at least one of the three;
+   * an empty revocation rejects with code `invalid_revocation` and sends nothing.
+   */
+  revokeAccess(options: RevokeAccessOptions): Promise<AccessRevoked>;
+  /**
+   * The workspace's network policy as the control plane holds it now: the policy, its brokered
+   * secrets (never their values), every revocation, and what its running egress proxy last
+   * confirmed.
+   */
+  networkPolicy(): Promise<WorkspaceNetworkPolicy>;
   /**
    * Open a raw TCP byte pipe (or a UDP datagram pipe) INSIDE the workspace — the primitive for
    * reaching a dev server or database the workspace runs. Protocol-agnostic:
@@ -1754,6 +1823,86 @@ export interface WorkspaceRuntimes {
   readonly default: WorkspaceRuntimeKind;
   /** One entry per runtime this install launches; a runtime not listed is one it cannot. */
   readonly runtimes: readonly RuntimeSupport[];
+}
+
+/**
+ * What became of a policy change or a revocation on the running workspace:
+ *
+ * - `enforced`: the workspace's egress proxy confirmed it. For a revocation, every matching stream
+ *   was closed first.
+ * - `pending`: it is stored, and the proxy has not confirmed it yet because it could not be
+ *   reached. sealant keeps sending it; a proxy that misses a revocation is stopped, so nothing
+ *   revoked stays reachable.
+ * - `next-start`: it is stored, and no egress proxy runs for the workspace now (it is not running,
+ *   or runs without one). It applies when the workspace next starts.
+ */
+export type NetworkPolicyEnforcement = "enforced" | "pending" | "next-start";
+
+/** A new network policy for a workspace (see {@link Workspace.applyNetworkPolicy}). */
+export interface ApplyNetworkPolicyOptions {
+  readonly networkPolicy: NetworkPolicy;
+  /** The workspace's brokered secrets from now on (see {@link CreateOptions.brokeredSecrets}). */
+  readonly brokeredSecrets?: readonly BrokeredSecret[];
+  /** A value for every secret in `brokeredSecrets`, keyed by its `secretRef`. */
+  readonly brokeredSecretValues?: Readonly<Record<string, string>>;
+}
+
+/** What {@link Workspace.applyNetworkPolicy} answers. */
+export interface NetworkPolicyApplied {
+  /** The hash of the policy the workspace now holds. */
+  readonly policyHash: string;
+  /** The workspace's revocation watermark: every revocation up to it still holds. */
+  readonly revocationWatermark: number;
+  readonly enforcement: NetworkPolicyEnforcement;
+  /** Streams the proxy closed because the new policy no longer allows them (`enforced` only). */
+  readonly closed?: number;
+}
+
+/** What to revoke (see {@link Workspace.revokeAccess}). At least one of the three. */
+export interface RevokeAccessOptions {
+  /** Brokered secrets, by `secretId`. */
+  readonly secretIds?: readonly string[];
+  /** Hosts the workspace may no longer reach. */
+  readonly hosts?: readonly string[];
+  /** Every grant the workspace holds. */
+  readonly all?: boolean;
+}
+
+/** What {@link Workspace.revokeAccess} answers. */
+export interface AccessRevoked {
+  /** The watermark this revocation is stored under. */
+  readonly revocationWatermark: number;
+  readonly enforcement: NetworkPolicyEnforcement;
+  /** Streams the proxy closed (`enforced` only). */
+  readonly closed?: number;
+}
+
+/** One revocation a workspace holds. */
+export interface WorkspaceAccessRevocation {
+  readonly revocationWatermark: number;
+  readonly kind: "secret" | "host" | "all";
+  /** The secret id or host; absent for `all`. */
+  readonly target?: string;
+  /** ISO-8601 instant it was stored. */
+  readonly revokedAt: string;
+}
+
+/** A workspace's network policy as the control plane holds it (see {@link Workspace.networkPolicy}). */
+export interface WorkspaceNetworkPolicy {
+  /** Absent for a workspace created without one. */
+  readonly networkPolicy?: NetworkPolicy;
+  /** Never their values. */
+  readonly brokeredSecrets: readonly BrokeredSecret[];
+  readonly revocationWatermark: number;
+  readonly revocations: readonly WorkspaceAccessRevocation[];
+  /** The current run's egress proxy; absent when the workspace has none. */
+  readonly proxy?: {
+    readonly runId: string;
+    /** The policy hash the proxy last confirmed; absent before it confirmed one. */
+    readonly confirmedPolicyHash?: string;
+    /** The revocation watermark the proxy last confirmed; absent before it confirmed one. */
+    readonly confirmedRevocationWatermark?: number;
+  };
 }
 
 /** Where a launch writes its logins (see {@link CreateOptions.credentialsHome}). */

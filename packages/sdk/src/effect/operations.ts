@@ -6,6 +6,9 @@
  */
 import type {
   ApplyWorkspaceDotfilesRequest,
+  ApplyWorkspaceNetworkPolicyRequest,
+  GetWorkspaceNetworkPolicyQuery,
+  RevokeWorkspaceAccessRequest,
   BindWorkspaceRequest,
   CancelWorkspaceCreateRequest,
   FlushWorkspaceCaptureRequest,
@@ -216,6 +219,33 @@ export const expireWorkspaceOp = (workspaceId: string, payload: ExpireWorkspaceR
 export const clearWorkspaceSshUserOp = (workspaceId: string, query: ClearWorkspaceSshUserQuery) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.clearWorkspaceSshUser({ params: { workspaceId }, query }),
+  );
+
+/** Replace a workspace's network policy and brokered secrets; a running egress proxy takes them. */
+export const applyWorkspaceNetworkPolicyOp = (
+  workspaceId: string,
+  payload: ApplyWorkspaceNetworkPolicyRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.applyWorkspaceNetworkPolicy({ params: { workspaceId }, payload }),
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
+
+/** Revoke brokered secrets, hosts or every grant of a workspace, durably. */
+export const revokeWorkspaceAccessOp = (
+  workspaceId: string,
+  payload: RevokeWorkspaceAccessRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.revokeWorkspaceAccess({ params: { workspaceId }, payload }),
+  ).pipe(Effect.provideService(CurrentRequestPriority, "interactive"));
+
+/** A workspace's network policy, brokered secrets (no values), revocations and proxy state. */
+export const getWorkspaceNetworkPolicyOp = (
+  workspaceId: string,
+  query: GetWorkspaceNetworkPolicyQuery,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.getWorkspaceNetworkPolicy({ params: { workspaceId }, query }),
   );
 
 // ---- runs ----

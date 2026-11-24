@@ -50,7 +50,7 @@ export const runtimeAdapterIds = [
 ] as const;
 
 /** Policy and secret refusals name the field they are about; they never hold a secret's value. */
-const policyRefusalWords = refusalWords(/^(networkPolicy|brokeredSecrets|brokeredSecretValues)\b.*$/);
+const policyRefusalWords = refusalWords(/^(networkPolicy|brokeredSecrets|brokeredSecretValues|revocation)\b.*$/);
 
 const PortNumber = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
 
@@ -1769,7 +1769,7 @@ export const revokeWorkspaceAccessRequestSchema = Schema.Struct({
     }) =>
       (request.secretIds?.length ?? 0) > 0 || (request.hosts?.length ?? 0) > 0 || request.all === true
         ? undefined
-        : "brokeredSecrets: a revocation names secretIds, hosts or all",
+        : "revocation: name secretIds, hosts or all",
     policyRefusalWords,
   ),
 );

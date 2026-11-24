@@ -164,3 +164,18 @@ describe("policy endpoints' requests", () => {
     expect(revoke._tag).toBe("Success");
   });
 });
+
+describe("a brokered secret's variable", () => {
+  it("may look like a secret, since it is delivered as one", () => {
+    expect(brokeredSecretsProblems([secret({ name: "VERCEL_TOKEN" })])).toEqual([]);
+  });
+
+  it.each(["GITHUB_TOKEN", "HTTP_PROXY", "SEALANT_CAPTURE_TOKEN"])(
+    "may not take the reserved name %s",
+    (name) => {
+      expect(brokeredSecretsProblems([secret({ name })])).toEqual([
+        expect.stringContaining("is reserved"),
+      ]);
+    },
+  );
+});

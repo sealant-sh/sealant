@@ -12,6 +12,7 @@
  *
  * Deliberately dependency-free, like `workspace-environment.ts`: data plus pure functions.
  */
+import { findWorkspaceSecretEnvReservedRule } from "./workspace-environment.js";
 
 /** `standard`: public internet less the blocked ranges. `restricted`: only what the policy lists. */
 export type NetworkPolicyMode = "standard" | "restricted";
@@ -64,7 +65,11 @@ export interface NetworkPolicy {
  */
 export interface BrokeredSecret {
   readonly secretId: string;
-  /** The environment variable the workspace reads the placeholder from. */
+  /**
+   * The environment variable the workspace reads the placeholder from. Delivered like a
+   * `secretEnv` entry (so `VERCEL_TOKEN` arrives), and reserved like one: platform and
+   * connected-account names (`GITHUB_TOKEN`, `HTTP_PROXY`, `SEALANT_*`) are refused.
+   */
   readonly name: string;
   /** Opaque, at least 8 visible ASCII characters. */
   readonly placeholder: string;
@@ -249,6 +254,8 @@ export const brokeredSecretsProblems = (secrets: readonly BrokeredSecret[]): rea
     if (secret.secretId.trim().length === 0) problems.push("brokeredSecrets: secretId is required");
     if (!ENV_NAME.test(secret.name)) {
       problems.push(`${field}: name must match [A-Za-z_][A-Za-z0-9_]*`);
+    } else if (findWorkspaceSecretEnvReservedRule(secret.name) !== undefined) {
+      problems.push(`${field}: name ${secret.name} is reserved for the platform or an account`);
     }
     if (secret.placeholder.length < 8 || !/^[\x21-\x7e]+$/.test(secret.placeholder)) {
       problems.push(`${field}: placeholder must be at least 8 visible ASCII characters`);
