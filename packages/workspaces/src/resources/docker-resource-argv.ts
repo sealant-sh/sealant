@@ -80,17 +80,26 @@ export const parseImageVolumes = (stdout: string): ReadonlyArray<string> => {
   return typeof parsed === "object" && parsed !== null ? Object.keys(parsed).toSorted() : [];
 };
 
-/** A reach network is internal: it carries no route out, only the executor and its instances. */
+/**
+ * A reach (or caller) network is internal: it carries no route out, only the executor and its
+ * instances. `isolatedGateway` also gives its bridge no address on the host
+ * (`gateway_mode_ipv4=isolated`, Docker 28 or newer), so nothing on it reaches a service the host
+ * binds on all addresses through the gateway.
+ */
 export const networkCreateArgv = (
   name: string,
   kind: ResourceNetworkKind,
   subnet: string,
+  options: { readonly isolatedGateway?: boolean } = {},
 ): ReadonlyArray<string> => [
   "network",
   "create",
   "--driver",
   "bridge",
   ...(kind !== "egress" ? ["--internal"] : []),
+  ...(kind !== "egress" && options.isolatedGateway === true
+    ? ["--opt", "com.docker.network.bridge.gateway_mode_ipv4=isolated"]
+    : []),
   "--subnet",
   subnet,
   "--label",

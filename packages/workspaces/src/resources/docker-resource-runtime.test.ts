@@ -92,3 +92,58 @@ describe("DockerResourceRuntime.observe", () => {
     expect(observed.get(cache.id)).toEqual({ running: true, exitCode: null });
   });
 });
+
+/** A Docker with one executor and no networks, refusing isolated gateways when told to. */
+const reachDocker = (refuseIsolated: boolean) => {
+  const creates: Array<ReadonlyArray<string>> = [];
+  const networks = new Set<string>();
+  const run: DockerCommandRunner = async (_command, args) => {
+    if (args[0] === "container" && args[1] === "inspect") {
+      return { stdout: "true\t0\t\n", stderr: "" };
+    }
+    if (args[0] === "network" && args[1] === "inspect") {
+      if (args.includes("{{.Id}}")) {
+        if (networks.has(args.at(-1) ?? "")) return { stdout: "id\n", stderr: "" };
+        throw new Error(`Error response from daemon: network ${args.at(-1) ?? ""} not found`);
+      }
+      return { stdout: "", stderr: "" };
+    }
+    if (args[0] === "network" && args[1] === "create") {
+      creates.push(args);
+      if (refuseIsolated && args.some((arg) => arg.includes("gateway_mode_ipv4"))) {
+        throw new Error(
+          "Error response from daemon: failed to parse com.docker.network.bridge.gateway_mode_ipv4 value: isolated (unknown gateway mode isolated)",
+        );
+      }
+      networks.add(args.at(-1) ?? "");
+      return { stdout: "id\n", stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  };
+  const runtime = new DockerResourceRuntime({
+    subnets: {
+      allocate: ({ name }) =>
+        Promise.resolve(name.endsWith("-1-reach") ? "10.231.0.0/27" : "10.231.0.32/27"),
+      release: () => Promise.resolve(),
+    },
+    commandRunner: run,
+  });
+  return { runtime, creates };
+};
+
+describe("DockerResourceRuntime reach networks", () => {
+  it("makes a reach network with no host gateway, and a plain internal one where the engine refuses that", async () => {
+    const isolated = "com.docker.network.bridge.gateway_mode_ipv4=isolated";
+    const modern = reachDocker(false);
+    await modern.runtime.attachExecutor("sealant-run-1", []);
+    expect(modern.creates).toHaveLength(1);
+    expect(modern.creates[0]).toContain(isolated);
+
+    const older = reachDocker(true);
+    await older.runtime.attachExecutor("sealant-run-1", []);
+    await older.runtime.attachExecutor("sealant-run-2", []);
+    // Refused once, then a plain internal network; the next one is not asked with the option again.
+    expect(older.creates.map((args) => args.includes(isolated))).toEqual([true, false, false]);
+    expect(older.creates.every((args) => args.includes("--internal"))).toBe(true);
+  });
+});

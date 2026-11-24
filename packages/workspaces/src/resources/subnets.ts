@@ -1,6 +1,7 @@
 import { parseSubnetPool, type ResourceInstanceRepoService, type SubnetPool } from "@sealant/db";
 import { Effect } from "effect";
 
+import type { DockerWorkspaceSubnets } from "../runtime/docker-runtime-adapter.js";
 import type { ResourceSubnets } from "./docker-resource-runtime.js";
 
 /** A reach network holds an executor and its instances; an egress network one instance. */
@@ -33,6 +34,28 @@ export const repositorySubnets = (
     if (allocation.kind === "pool-exhausted") {
       throw new Error(
         `Every ${kind} subnet of SEALANT_RESOURCE_${kind.toUpperCase()}_SUBNETS is in use: widen the range.`,
+      );
+    }
+    return allocation.subnet;
+  },
+  release: (name) => Effect.runPromise(repo.releaseNetwork(name)),
+});
+
+/**
+ * The subnets of Docker workspaces' own egress networks (`SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS`),
+ * held in the same table as the resource networks, so no two of any kind overlap.
+ */
+export const workspaceEgressSubnets = (
+  repo: ResourceInstanceRepoService,
+  pool: SubnetPool,
+): DockerWorkspaceSubnets => ({
+  allocate: async ({ name, owner }) => {
+    const allocation = await Effect.runPromise(
+      repo.allocateNetwork({ name, kind: "workspace", owner, pool }),
+    );
+    if (allocation.kind === "pool-exhausted") {
+      throw new Error(
+        "Every workspace subnet of SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS is in use: widen the range.",
       );
     }
     return allocation.subnet;

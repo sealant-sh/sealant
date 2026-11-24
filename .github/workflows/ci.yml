@@ -306,6 +306,13 @@ jobs:
         run: >-
           pnpm --filter @sealant/workspaces test:e2e src/runtime/cloud-metadata.e2e.ts
 
+      # Per-workspace egress networks and the private-range guard: no workspace reaches another,
+      # private and metadata addresses refused at once, the operator's exception and the mirror
+      # reached, nothing left after a stop; and an isolated internal bridge proved on this engine.
+      - name: Workspaces on networks of their own, behind the private-range guard
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-egress.e2e.ts
+
       # Resource instances on this daemon: reach by name and never between workspaces, data kept
       # through stop and archive, streamed exec; then the worker's hooks and tick, in a database of
       # their own made from the migrated one.

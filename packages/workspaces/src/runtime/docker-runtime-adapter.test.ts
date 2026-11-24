@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { cidr, cidrContains } from "./cidr.js";
+import { parseDockerEgressPolicy } from "./docker-egress.js";
 import { DockerRuntimeAdapter, STOP_GRACE_LABEL } from "./docker-runtime-adapter.js";
 import { LaunchRetainedError } from "./launch-retention.js";
 import {
@@ -3089,5 +3091,681 @@ describe("DockerRuntimeAdapter runtime observation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+const egressPolicy = (operatorAllowedPrivateEgress?: string, hostPublicIps?: string) =>
+  parseDockerEgressPolicy({
+    workspaceSubnets: "10.233.0.0/16",
+    reachSubnets: "10.231.0.0/16",
+    resourceEgressSubnets: "10.232.0.0/16",
+    operatorAllowedPrivateEgress,
+    hostPublicIps,
+  });
+
+/** sealant's subnet table, in memory: allocations and releases, in order. */
+const subnetTable = () => {
+  const held = new Map<string, string>();
+  const events: string[] = [];
+  let next = 0;
+  return {
+    held,
+    events,
+    subnets: {
+      allocate: async ({ name, owner }: { name: string; owner: string }) => {
+        const subnet = held.get(name) ?? `10.233.0.${String(16 * next++)}/28`;
+        held.set(name, subnet);
+        events.push(`allocate ${name} ${owner} ${subnet}`);
+        return subnet;
+      },
+      release: async (name: string) => {
+        held.delete(name);
+        events.push(`release ${name}`);
+      },
+    },
+  };
+};
+
+/** The blocks a guard script prohibits. */
+const prohibited = (script: string | undefined) =>
+  [...(script ?? "").matchAll(/prohibit (\S+)/g)].map((match) => cidr(match[1] ?? ""));
+const refuses = (script: string | undefined, address: string) =>
+  prohibited(script).some((block) => cidrContains(block, cidr(address)));
+
+describe("DockerRuntimeAdapter with per-workspace egress", () => {
+  /**
+   * A Docker daemon for egress launches: networks by name, the guard's scripts, the DNS and host
+   * address readings, and every call in order.
+   */
+  const egressDocker = (
+    options: {
+      readonly networks?: Set<string>;
+      readonly resolvConf?: string;
+      readonly hostAddresses?: string;
+      readonly workspaceRun?: "fails";
+      readonly networkInspect?: "unknown";
+      readonly inspectNetworks?: string;
+      /** The network id a stopped container's egress endpoint names. */
+      readonly endpointNetworkId?: string;
+      /** The image is not on the host until it is pulled. */
+      readonly imageMissing?: boolean;
+      /** More endpoints of the workspace container (a reach network attached after launch). */
+      readonly extraEndpoints?: Record<string, object>;
+      readonly guardFails?: boolean;
+      /** The control socket never answers (readiness would wait out its whole timeout). */
+      readonly socketNeverReady?: boolean;
+    } = {},
+  ) => {
+    const networks = options.networks ?? new Set<string>();
+    const calls: Array<ReadonlyArray<string>> = [];
+    const scripts = new Map<string, string>();
+    let runs = 0;
+    let pulled = false;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      calls.push([...args]);
+      const target = args.at(-1) ?? "";
+      if (
+        args[0] === "network" &&
+        args[1] === "inspect" &&
+        args.some((arg) => arg.startsWith("{{range"))
+      ) {
+        return { stdout: "mend-npm-mirror\n", stderr: "" };
+      }
+      if (args[0] === "network" && args[1] === "inspect") {
+        if (options.networkInspect === "unknown")
+          throw new Error("Cannot connect to the Docker daemon");
+        if (networks.has(target)) return { stdout: `${target}-id\n`, stderr: "" };
+        throw new Error(`Error response from daemon: network ${target} not found`);
+      }
+      if (args[0] === "network" && args[1] === "create") {
+        networks.add(target);
+        return { stdout: `${target}-id\n`, stderr: "" };
+      }
+      if (args[0] === "network" && args[1] === "rm") {
+        networks.delete(target.replace(/-id$/, ""));
+        return { stdout: "", stderr: "" };
+      }
+      if (args[0] === "inspect" && args.includes("{{json .NetworkSettings.Networks}}")) {
+        return {
+          stdout:
+            options.inspectNetworks ??
+            JSON.stringify(
+              target === "docker-service-id"
+                ? {
+                    "sealant-run-1-network": {
+                      IPAddress: "172.18.0.2",
+                      IPPrefixLen: 16,
+                      Gateway: "172.18.0.1",
+                    },
+                  }
+                : {
+                    "sealant-run-1-network": {
+                      IPAddress: "172.18.0.3",
+                      IPPrefixLen: 16,
+                      Gateway: "172.18.0.1",
+                    },
+                    "sealant-run-1-egress": {
+                      NetworkID: options.endpointNetworkId ?? "sealant-run-1-egress-id",
+                      IPAddress: "10.233.0.2",
+                      IPPrefixLen: 28,
+                      Gateway: "10.233.0.1",
+                    },
+                    ...options.extraEndpoints,
+                  },
+            ),
+          stderr: "",
+        };
+      }
+      if (args[0] === "image" && args[1] === "inspect") {
+        if (options.imageMissing === true && !pulled) {
+          throw new Error(`Error response from daemon: No such image: ${target}`);
+        }
+        return { stdout: '["/usr/local/bin/sealantd","boot"]\tnull\n', stderr: "" };
+      }
+      if (args[0] === "pull") {
+        pulled = true;
+        return { stdout: "", stderr: "" };
+      }
+      if (args[0] === "run" && args.includes("NET_ADMIN")) {
+        if (options.guardFails === true)
+          throw new Error("RTNETLINK answers: Operation not permitted");
+        scripts.set(flag(args, "--network") ?? "", args.at(-1) ?? "");
+        return { stdout: "", stderr: "" };
+      }
+      if (args[0] === "inspect" && args.includes("{{json .State}}")) {
+        return {
+          stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+          stderr: "",
+        };
+      }
+      if (
+        args[0] === "exec" &&
+        options.socketNeverReady === true &&
+        !args.at(-1)?.includes("/dev/shm")
+      ) {
+        throw new Error("no control socket yet");
+      }
+      if (args[0] === "run" && flag(args, "--entrypoint") === "cat") {
+        return { stdout: options.resolvConf ?? "# ExtServers: [host(127.0.0.53)]\n", stderr: "" };
+      }
+      if (args[0] === "run" && flag(args, "--entrypoint") === "ip") {
+        return { stdout: options.hostAddresses ?? "", stderr: "" };
+      }
+      if (args[0] === "run") {
+        runs += 1;
+        if (args.includes("--privileged")) return { stdout: "docker-service-id\n", stderr: "" };
+        if (options.workspaceRun === "fails") throw new Error("docker run failed");
+        return { stdout: `workspace-id\n`, stderr: "" };
+      }
+      if (args[0] === "inspect" && args.at(-1)?.startsWith("sealant-run-1")) {
+        throw new Error(`Error: No such object: ${target}`);
+      }
+      return { stdout: "", stderr: "" };
+    });
+    return { commandRunner, calls, scripts, networks, runs: () => runs };
+  };
+
+  it("launches each workspace on its own network from the pool, with its mirrors, and guards it", async () => {
+    const table = subnetTable();
+    const docker = egressDocker({ resolvConf: "# ExtServers: [192.168.1.1]\n" });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: {
+        policy: egressPolicy("192.168.50.0/24"),
+        subnets: table.subnets,
+        mirrors: [{ container: "mend-npm-mirror", aliases: ["npm-mirror"] }],
+      },
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({
+        ...createLaunchInput({
+          tooling: { packages: [], services: { docker: { enabled: true } } },
+          // Opening the metadata address no longer skips the guard: private ranges stay refused.
+          runtime: { network: { outbound: true, cloudMetadata: true } },
+        }),
+        runId: "run-1",
+      }),
+    );
+
+    expect(table.events).toEqual(["allocate sealant-run-1-egress sealant-run-1 10.233.0.0/28"]);
+    const create = docker.calls.findIndex(
+      (args) =>
+        args[0] === "network" && args[1] === "create" && args.at(-1) === "sealant-run-1-egress",
+    );
+    expect(docker.calls[create]).toEqual([
+      "network",
+      "create",
+      "--driver",
+      "bridge",
+      "--ipv6=false",
+      "--subnet",
+      "10.233.0.0/28",
+      "--label",
+      "sealant.workspace-egress=sealant-run-1",
+      "sealant-run-1-egress",
+    ]);
+    const connect = docker.calls.findIndex(
+      (args) => args[0] === "network" && args[1] === "connect",
+    );
+    expect(docker.calls[connect]).toEqual([
+      "network",
+      "connect",
+      "--alias",
+      "npm-mirror",
+      "sealant-run-1-egress",
+      "mend-npm-mirror",
+    ]);
+    const workspaceRun = docker.calls.findIndex(
+      (args) => args[0] === "run" && flag(args, "--name") === "sealant-run-1",
+    );
+    expect(create).toBeLessThan(workspaceRun);
+    expect(connect).toBeLessThan(workspaceRun);
+    const workspaceArgs = docker.calls[workspaceRun] ?? [];
+    const attached = workspaceArgs.flatMap((arg, index) =>
+      workspaceArgs[index - 1] === "--network" ? [arg] : [],
+    );
+    expect(attached).toEqual(["sealant-run-1-network", "sealant-run-1-egress"]);
+    expect(flag(workspaceArgs, "--cap-drop")).toBe("NET_RAW");
+
+    const guard = docker.scripts.get("container:workspace-id");
+    // Its own networks, the operator's exception, the namespace resolver and the opened metadata
+    // address stay reachable; the rest of every private range does not.
+    for (const open of [
+      "10.233.0.5",
+      "172.18.0.2",
+      "192.168.50.9",
+      "192.168.1.1",
+      "169.254.169.254",
+    ]) {
+      expect(refuses(guard, open), open).toBe(false);
+    }
+    for (const closed of [
+      "10.233.0.17",
+      "10.0.0.1",
+      "172.17.0.1",
+      "192.168.1.2",
+      "100.64.0.1",
+      "169.254.1.1",
+    ]) {
+      expect(refuses(guard, closed), closed).toBe(true);
+    }
+    // Each network's gateway (the host's side of the bridge) is refused, the network itself not.
+    expect(refuses(guard, "10.233.0.1")).toBe(true);
+    expect(refuses(guard, "172.18.0.1")).toBe(true);
+    // The image's own command starts behind the gate, released only once the guard ran.
+    expect(flag(workspaceArgs, "--entrypoint")).toBe("/bin/sh");
+    const image = workspaceArgs.indexOf("127.0.0.1:5000/sealant/workspaces/demo@sha256:test");
+    expect(workspaceArgs.slice(image + 3)).toEqual([
+      "sealant-network-gate",
+      "/usr/local/bin/sealantd",
+      "boot",
+    ]);
+    const guardRun = docker.calls.findIndex(
+      (args) => flag(args, "--network") === "container:workspace-id",
+    );
+    const release = docker.calls.findIndex(
+      (args) => args[0] === "exec" && args[1] === "workspace-id",
+    );
+    expect(release).toBeGreaterThan(guardRun);
+    // The DNS servers were read on the workspace's network before it started.
+    const measured = docker.calls.findIndex((args) => flag(args, "--entrypoint") === "cat");
+    expect(flag(docker.calls[measured] ?? [], "--network")).toBe("sealant-run-1-egress");
+    expect(measured).toBeLessThan(workspaceRun);
+    // The Docker service's namespace gets the same guard: its containers egress through it.
+    const sidecar = docker.scripts.get("container:docker-service-id");
+    expect(refuses(sidecar, "10.0.0.1")).toBe(true);
+    expect(refuses(sidecar, "172.18.0.3")).toBe(false);
+  });
+
+  it("refuses private addresses even without a Docker service, and the metadata address by default", async () => {
+    const docker = egressDocker({
+      inspectNetworks: JSON.stringify({
+        "sealant-run-1-egress": { IPAddress: "10.233.0.2", IPPrefixLen: 28 },
+      }),
+      hostAddresses: "2: eth0    inet 203.0.113.7/24 scope global eth0\n",
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(undefined, "auto"), subnets: subnetTable().subnets },
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-1" }),
+    );
+
+    const guard = docker.scripts.get("container:workspace-id");
+    for (const closed of ["169.254.169.254", "168.63.129.16", "203.0.113.7", "172.16.0.1"]) {
+      expect(refuses(guard, closed), closed).toBe(true);
+    }
+    expect(guard).toContain("ip -6 route replace prohibit fd00:ec2::254/128");
+  });
+
+  it("fails the launch, and removes its network, when the guard cannot read the container's networks", async () => {
+    const table = subnetTable();
+    const docker = egressDocker({ inspectNetworks: "{}" });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: table.subnets },
+    });
+
+    await expect(
+      adapter.launch(parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-1" })),
+    ).rejects.toThrow(/Could not refuse private addresses in 'sealant-run-1'/);
+    expect(docker.scripts.size).toBe(0);
+    expect(docker.networks.has("sealant-run-1-egress")).toBe(false);
+    expect(table.events.at(-1)).toBe("release sealant-run-1-egress");
+  });
+
+  it("removes the network and releases its subnet when the workspace never ran", async () => {
+    const table = subnetTable();
+    const docker = egressDocker({ workspaceRun: "fails" });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: table.subnets },
+    });
+
+    await expect(
+      adapter.launch(parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-1" })),
+    ).rejects.toThrow("docker run failed");
+    expect(docker.networks.has("sealant-run-1-egress")).toBe(false);
+    expect(table.held.size).toBe(0);
+  });
+
+  it("removes the network after the container, disconnecting its mirrors, then releases the subnet", async () => {
+    const table = subnetTable();
+    table.held.set("sealant-run-1-egress", "10.233.0.0/28");
+    const docker = egressDocker({ networks: new Set(["sealant-run-1-egress"]) });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      egress: { policy: egressPolicy(), subnets: table.subnets },
+    });
+
+    await adapter.stop({ resourceId: "workspace-id", reference: "sealant-run-1", fence: true });
+
+    const order = docker.calls
+      .filter((args) => args[0] === "rm" || (args[0] === "network" && args[1] !== "inspect"))
+      .map((args) => args.join(" "));
+    expect(order).toEqual([
+      "rm -f -v workspace-id",
+      "network disconnect --force sealant-run-1-egress-id mend-npm-mirror",
+      "network rm sealant-run-1-egress-id",
+    ]);
+    expect(table.events).toEqual(["release sealant-run-1-egress"]);
+  });
+
+  it("keeps the subnet held when whether the network remains cannot be told", async () => {
+    const table = subnetTable();
+    table.held.set("sealant-run-1-egress", "10.233.0.0/28");
+    const docker = egressDocker({ networkInspect: "unknown" });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      egress: { policy: egressPolicy(), subnets: table.subnets },
+    });
+
+    await expect(
+      adapter.stop({ resourceId: "workspace-id", reference: "sealant-run-1", fence: true }),
+    ).rejects.toThrow(/could not be told/);
+    expect(table.events).toEqual([]);
+  });
+
+  it("gives a recovered container its network back on the same subnet when it was removed", async () => {
+    const table = subnetTable();
+    table.held.set("sealant-run-1-egress", "10.233.0.32/28");
+    const docker = egressDocker();
+    docker.commandRunner.mockImplementationOnce(async () => ({
+      stdout: '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}\n',
+      stderr: "",
+    }));
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: table.subnets },
+    });
+
+    await expect(
+      adapter.recover({ resourceId: "kept-id", reference: "sealant-run-1" }),
+    ).resolves.toEqual({ outcome: "restarted" });
+
+    const steps = docker.calls
+      .filter((args) => args[0] === "start" || (args[0] === "network" && args[1] !== "inspect"))
+      .map((args) => args.join(" "));
+    expect(steps).toEqual([
+      "network create --driver bridge --ipv6=false --subnet 10.233.0.32/28 --label sealant.workspace-egress=sealant-run-1 sealant-run-1-egress",
+      "network disconnect --force sealant-run-1-egress kept-id",
+      "network connect sealant-run-1-egress kept-id",
+      "start kept-id",
+    ]);
+    // Its start waits at the gate again: released only after its guard ran.
+    const guard = docker.calls.findIndex((args) => args.includes("NET_ADMIN"));
+    const release = docker.calls.findIndex((args) => args[0] === "exec" && args[1] === "kept-id");
+    expect(guard).toBeGreaterThan(-1);
+    expect(release).toBeGreaterThan(guard);
+    expect(docker.calls[release]?.at(-1)).toBe(": > /dev/shm/.sealant-network-guarded");
+  });
+
+  it("refuses to launch, with nothing started, when Docker's DNS forwards to a metadata address", async () => {
+    for (const server of ["168.63.129.16", "169.254.169.254"]) {
+      const table = subnetTable();
+      const docker = egressDocker({ resolvConf: `# ExtServers: [${server}]\n` });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner: docker.commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+        verifyRunning: false,
+        egress: { policy: egressPolicy(), subnets: table.subnets },
+      });
+
+      await expect(
+        adapter.launch(parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-1" })),
+      ).rejects.toThrow(new RegExp(`${server.replaceAll(".", "\\.")}.*daemon\\.json`));
+      expect(docker.runs()).toBe(0);
+      expect(docker.networks.has("sealant-run-1-egress")).toBe(false);
+      expect(table.held.size).toBe(0);
+    }
+  });
+
+  it("fails closed when Docker writes no ExtServers line to tell its DNS servers by", async () => {
+    const docker = egressDocker({ resolvConf: "nameserver 127.0.0.11\n" });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: subnetTable().subnets },
+    });
+
+    await expect(
+      adapter.launch(parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-1" })),
+    ).rejects.toThrow(/ExtServers/);
+    expect(docker.runs()).toBe(0);
+  });
+
+  it("keeps a capture workspace, still held at its gate, when its guard fails", async () => {
+    const docker = egressDocker();
+    docker.commandRunner.mockImplementation(
+      ((original) => async (command: string, args: Array<string>) => {
+        if (args.includes("NET_ADMIN"))
+          throw new Error("RTNETLINK answers: Operation not permitted");
+        return original(command, args);
+      })(
+        docker.commandRunner.getMockImplementation() ?? (async () => ({ stdout: "", stderr: "" })),
+      ),
+    );
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: subnetTable().subnets },
+    });
+
+    const failure = await adapter
+      .launch(
+        parseRuntimeAdapterLaunchInput({
+          ...createLaunchInput({
+            sources: {
+              workspace: {
+                kind: "capture",
+                endpoint: "https://mend.example.com/session/s1",
+                worktreeId: "wt_1",
+              },
+            },
+          }),
+          runId: "run-1",
+        }),
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(docker.calls.some((args) => args[0] === "rm")).toBe(false);
+    expect(docker.calls.some((args) => args[0] === "exec")).toBe(false);
+  });
+
+  it("reattaches a recovered container whose network was replaced under the same name", async () => {
+    const table = subnetTable();
+    table.held.set("sealant-run-1-egress", "10.233.0.32/28");
+    const docker = egressDocker({
+      networks: new Set(["sealant-run-1-egress"]),
+      endpointNetworkId: "removed-network-id",
+    });
+    docker.commandRunner.mockImplementationOnce(async () => ({
+      stdout: '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}\n',
+      stderr: "",
+    }));
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: table.subnets },
+    });
+
+    await adapter.recover({ resourceId: "kept-id", reference: "sealant-run-1" });
+
+    const steps = docker.calls
+      .filter((args) => args[0] === "start" || (args[0] === "network" && args[1] !== "inspect"))
+      .map((args) => args.join(" "));
+    expect(steps).toEqual([
+      "network disconnect --force sealant-run-1-egress kept-id",
+      "network connect sealant-run-1-egress kept-id",
+      "start kept-id",
+    ]);
+  });
+
+  it("pulls an image the host does not have before reading its command for the gate", async () => {
+    const docker = egressDocker({ imageMissing: true });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: subnetTable().subnets },
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-1" }),
+    );
+
+    const verbs = docker.calls
+      .filter((args) => args[0] === "pull" || (args[0] === "image" && args[1] === "inspect"))
+      .map((args) => args.slice(0, 2).join(" "));
+    expect(verbs).toEqual(["image inspect", "pull -q", "image inspect"]);
+    const run = docker.calls.find(
+      (args) => args[0] === "run" && flag(args, "--name") === "sealant-run-1",
+    );
+    expect(run?.slice(-3)).toEqual(["sealant-network-gate", "/usr/local/bin/sealantd", "boot"]);
+  });
+
+  it("guards a resource-linked workspace after its reach network joins, refusing that gateway too", async () => {
+    const extraEndpoints: Record<string, object> = {};
+    const docker = egressDocker({ extraEndpoints });
+    const order: string[] = [];
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: subnetTable().subnets },
+      executorNetworks: {
+        launched: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          extraEndpoints["sealant-run-1-reach"] = {
+            IPAddress: "10.231.0.2",
+            IPPrefixLen: 27,
+            Gateway: "10.231.0.1",
+          };
+          order.push("reach attached");
+        },
+        removed: async () => undefined,
+      },
+    });
+    docker.commandRunner.mockImplementation(
+      ((original) => async (command: string, args: Array<string>) => {
+        if (args.includes("NET_ADMIN")) order.push(`guard ${flag(args, "--network") ?? ""}`);
+        return original(command, args);
+      })(
+        docker.commandRunner.getMockImplementation() ?? (async () => ({ stdout: "", stderr: "" })),
+      ),
+    );
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-1" }),
+    );
+
+    expect(order).toEqual(["reach attached", "guard container:workspace-id"]);
+    const guard = docker.scripts.get("container:workspace-id");
+    expect(refuses(guard, "10.231.0.1")).toBe(true);
+    expect(refuses(guard, "10.231.0.2")).toBe(false);
+  });
+
+  it("fails a launch at once with the guard's own error, not after the readiness timeout", async () => {
+    const docker = egressDocker({ guardFails: true, socketNeverReady: true });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      readinessTimeoutMs: 60_000,
+      egress: { policy: egressPolicy(), subnets: subnetTable().subnets },
+    });
+
+    const started = Date.now();
+    await expect(
+      adapter.launch(parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-1" })),
+    ).rejects.toThrow(
+      /Could not refuse private addresses in 'sealant-run-1'.*Operation not permitted/,
+    );
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(docker.calls.some((args) => args.at(-1)?.includes("/dev/shm") === true)).toBe(false);
+  });
+
+  it("fails a recovery closed when its guard fails: the gate stays shut and the container is halted", async () => {
+    const table = subnetTable();
+    table.held.set("sealant-run-1-egress", "10.233.0.0/28");
+    const docker = egressDocker({ networks: new Set(["sealant-run-1-egress"]), guardFails: true });
+    let started = false;
+    docker.commandRunner.mockImplementation(
+      ((original) => async (command: string, args: Array<string>) => {
+        if (
+          args[0] === "inspect" &&
+          args.includes("{{json .State}}") &&
+          args.at(-1) === "kept-id"
+        ) {
+          return {
+            stdout: started
+              ? '{"Status":"exited","Running":false,"ExitCode":137,"Error":""}\n'
+              : '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}\n',
+            stderr: "",
+          };
+        }
+        if (args[0] === "start") started = true;
+        return original(command, args);
+      })(
+        docker.commandRunner.getMockImplementation() ?? (async () => ({ stdout: "", stderr: "" })),
+      ),
+    );
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: docker.commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+      egress: { policy: egressPolicy(), subnets: table.subnets },
+    });
+
+    await expect(
+      adapter.recover({ resourceId: "kept-id", reference: "sealant-run-1" }),
+    ).rejects.toThrow(/Could not refuse private addresses/);
+    expect(docker.calls.some((args) => args[0] === "exec" && args[1] === "kept-id")).toBe(false);
+    expect(docker.calls).toContainEqual(["kill", "kept-id"]);
+  });
+
+  it("refuses a shared workspace network beside it, and gVisor", () => {
+    expect(
+      () =>
+        new DockerRuntimeAdapter({
+          runtimeCatalogLoader: createRuntimeCatalogLoader(),
+          workspaceNetwork: "mend_default",
+          egress: { policy: egressPolicy(), subnets: subnetTable().subnets },
+        }),
+    ).toThrow(/cannot both be set/);
+    const adapter = new DockerRuntimeAdapter({
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      egress: { policy: egressPolicy(), subnets: subnetTable().subnets },
+    });
+    expect(
+      adapter.supports({
+        blueprint: createBlueprint({
+          runtime: { ociRuntime: "runsc", network: { outbound: true, cloudMetadata: true } },
+        }),
+      }),
+    ).toMatchObject({ supported: false, reason: "unsupported-runtime-requirement" });
   });
 });

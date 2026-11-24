@@ -35,6 +35,9 @@ import {
   makeResourceReconciler,
   repositorySubnets,
   resourceSubnetPools,
+  workspaceEgressSubnets,
+  parseDockerEgressPolicy,
+  parseWorkspaceMirrorContainers,
   consumeBoatResourceLinkJobs,
   consumeRunExecJobs,
   sweepRunExecJobRows,
@@ -337,6 +340,44 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ? undefined
       : parseDockerRegistryMirrors(env.SEALANT_DOCKER_REGISTRY_MIRRORS);
   const dockerMemory = parseDockerMemoryPolicy(env);
+  // Per-workspace egress (Deliverable 0 of the workspace isolation plan): each Docker workspace on
+  // its own network from sealant's subnet pool, behind the private-range guard. A malformed value
+  // throws here, so the worker refuses to start rather than run without a protection.
+  const egressSubnets = env.DOCKER_RUNTIME_ENABLED
+    ? env.SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS
+    : undefined;
+  const dockerEgress =
+    egressSubnets === undefined
+      ? undefined
+      : await (async () => {
+          const policy = parseDockerEgressPolicy({
+            workspaceSubnets: egressSubnets,
+            reachSubnets: env.SEALANT_RESOURCE_REACH_SUBNETS,
+            resourceEgressSubnets: env.SEALANT_RESOURCE_EGRESS_SUBNETS,
+            operatorAllowedPrivateEgress: env.SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS,
+            hostPublicIps: env.SEALANT_HOST_PUBLIC_IPS,
+          });
+          const repo = await Effect.runPromise(
+            Effect.gen(function* () {
+              return yield* ResourceInstanceRepo;
+            }).pipe(
+              Effect.provide(
+                ResourceInstanceRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
+              ),
+            ),
+          );
+          return {
+            policy,
+            subnets: workspaceEgressSubnets(repo, policy.pool),
+            ...(env.SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS === undefined
+              ? {}
+              : {
+                  mirrors: parseWorkspaceMirrorContainers(
+                    env.SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS,
+                  ),
+                }),
+          };
+        })();
   // Resource instances (Mend ADR 0019) run on this Docker host: the adapter tells their reach
   // about every executor it launches and removes, and a tick below keeps them at their rows.
   let boatResourceReach: (() => Promise<readonly ResourceWorkspaceLink[]>) | undefined;
@@ -488,6 +529,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           captureStopGraceSeconds: env.SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS,
           containerStopTimeoutSeconds: env.SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS,
           memory: dockerMemory,
+          ...(dockerEgress === undefined ? {} : { egress: dockerEgress }),
           ...(resourceReconciler === undefined
             ? {}
             : { executorNetworks: resourceReconciler.hooks }),

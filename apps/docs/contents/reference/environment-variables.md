@@ -56,23 +56,27 @@ install command.
 The default `compose.selfhost.yaml` reads these variables when present, but `install.sh` does not
 write them for you.
 
-| Variable                                   | Default                                | Meaning                                                                                                                                                                   |
-| ------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SEALANT_IMAGE_NS`                         | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too.                                           |
-| `SEALANT_SSH_HOST`                         | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                                                             |
-| `SEALANT_WEB_URL`                          | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                                                                |
-| `SEALANT_WEB_TRUSTED_ORIGINS`              | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                                                                        |
-| `SEALANT_CORS_ALLOWED_ORIGINS`             | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                                                            |
-| `DOCKER_SOCKET_PATH`                       | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                                                               |
-| `SEALANT_MOUNT_ALLOWED_STORE_ROOTS`        | unset                                  | Colon-delimited absolute deployment roots authorized as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset.                         |
-| `SEALANT_CAPTURE_ALLOWED_ENDPOINTS`        | unset                                  | API only. Comma-separated origins (`https://mend.example`) a capture session token may be sent to. Unset, any http(s) origin the transport rules admit; set, only these.  |
-| `SEALANT_CAPTURE_REFUSE_PLAINTEXT`         | `false`                                | API only. Refuse plain-HTTP capture channels whatever a launcher states. Set it when executors do not share a private network with the channel.                           |
-| `SEALANT_DOCKER_VOLUME_MAPPINGS`           | unset                                  | Strict JSON array of `{ "logicalRoot": "/path", "volumeName": "actual-volume" }`. When set, every Docker source mount uses a named-volume subpath with no bind fallback.  |
-| `SEALANT_DOCKER_WORKSPACE_NETWORK`         | unset                                  | Name of an existing Docker network every workspace container joins, so sibling Compose services resolve by name from inside a workspace. Never created by the worker.     |
-| `SEALANT_DOCKER_REGISTRY_MIRRORS`          | unset                                  | Comma-separated `http(s)://host[:port]` origins every workspace Docker daemon asks first for a Docker Hub image; it falls back to Docker Hub when one fails. Worker only. |
-| `SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER` | unset                                  | Container on this Docker host serving those mirrors: joined to each workspace's Docker service network under the mirrors' host names. Worker only.                        |
-| `SEALANT_DOCKER_NETWORK_GUARD_IMAGE`       | pinned `busybox:1.37`                  | Image the worker runs for a moment in each workspace's network namespace to refuse the cloud metadata address. Needs a shell and `ip`. Worker only.                       |
-| `SEALANT_CREDENTIALS_KEY`                  | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                    |
+| Variable                                     | Default                                | Meaning                                                                                                                                                                       |
+| -------------------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_IMAGE_NS`                           | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too.                                               |
+| `SEALANT_SSH_HOST`                           | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                                                                 |
+| `SEALANT_WEB_URL`                            | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                                                                    |
+| `SEALANT_WEB_TRUSTED_ORIGINS`                | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                                                                            |
+| `SEALANT_CORS_ALLOWED_ORIGINS`               | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                                                                |
+| `DOCKER_SOCKET_PATH`                         | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                                                                   |
+| `SEALANT_MOUNT_ALLOWED_STORE_ROOTS`          | unset                                  | Colon-delimited absolute deployment roots authorized as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset.                             |
+| `SEALANT_CAPTURE_ALLOWED_ENDPOINTS`          | unset                                  | API only. Comma-separated origins (`https://mend.example`) a capture session token may be sent to. Unset, any http(s) origin the transport rules admit; set, only these.      |
+| `SEALANT_CAPTURE_REFUSE_PLAINTEXT`           | `false`                                | API only. Refuse plain-HTTP capture channels whatever a launcher states. Set it when executors do not share a private network with the channel.                               |
+| `SEALANT_DOCKER_VOLUME_MAPPINGS`             | unset                                  | Strict JSON array of `{ "logicalRoot": "/path", "volumeName": "actual-volume" }`. When set, every Docker source mount uses a named-volume subpath with no bind fallback.      |
+| `SEALANT_DOCKER_WORKSPACE_NETWORK`           | unset                                  | Name of an existing Docker network every workspace container joins, so sibling Compose services resolve by name from inside a workspace. Never created by the worker.         |
+| `SEALANT_DOCKER_REGISTRY_MIRRORS`            | unset                                  | Comma-separated `http(s)://host[:port]` origins every workspace Docker daemon asks first for a Docker Hub image; it falls back to Docker Hub when one fails. Worker only.     |
+| `SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER`   | unset                                  | Container on this Docker host serving those mirrors: joined to each workspace's Docker service network under the mirrors' host names. Worker only.                            |
+| `SEALANT_DOCKER_NETWORK_GUARD_IMAGE`         | pinned `busybox:1.37`                  | Image the worker runs for a moment in each workspace's network namespace to refuse the cloud metadata address. Needs a shell and `ip`. Worker only.                           |
+| `SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS`    | unset                                  | IPv4 range each Docker workspace's own network is carved from (a `/28` each), behind the private-range guard. Exclusive with `SEALANT_DOCKER_WORKSPACE_NETWORK`. Worker only. |
+| `SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS`    | unset                                  | Comma-separated private addresses and blocks (IPv4 or IPv6) workspaces may still reach behind that guard. Worker only.                                                        |
+| `SEALANT_HOST_PUBLIC_IPS`                    | `auto` with egress networks            | Comma-separated public addresses of the Docker host the guard refuses, and/or `auto` for every public address on its interfaces; `none` reads none. Worker only.              |
+| `SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS` | unset                                  | Comma-separated `container[:alias...]` joined to each workspace's own network, such as `mend-npm-mirror:npm-mirror`. Worker only.                                             |
+| `SEALANT_CREDENTIALS_KEY`                    | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                        |
 
 For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
 absolute path to `~/.config/sealant/.env` and reconcile the stack:
@@ -248,6 +252,90 @@ Not covered:
 - Workspaces already running when the worker is upgraded: they keep the address until they stop.
 - Kubernetes and MicroVM workspaces, which do not read the setting: on those runtimes the cluster's
   egress policy or the VM's network decides.
+
+### Workspaces on networks of their own
+
+With `SEALANT_DOCKER_WORKSPACE_NETWORK`, every workspace shares one network with the services beside
+the control plane and with every other workspace. A workspace can then reach the database, the
+object store's admin port and its neighbours. `SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS` gives each
+workspace a bridge network of its own instead, carved from a range sealant holds in its own table
+(the same table as the resource networks, so no two of them overlap and none draws on Docker's
+default address pools):
+
+```env
+SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS=10.233.0.0/16
+SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS=mend-npm-mirror:npm-mirror,mend-docker-mirror:docker-mirror
+SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS=192.168.10.0/24,100.101.102.103
+SEALANT_HOST_PUBLIC_IPS=auto,203.0.113.7
+```
+
+It needs Docker Engine 25 or newer.
+
+Each workspace gets a `/28` network named `<container>-egress` and joins nothing else (its Docker
+service keeps a network of its own, as before). The network and its subnet are released when the
+workspace is removed; a kept workspace keeps both, and a recovery puts the network back on the same
+subnet if something removed it. Each container in `SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS` joins
+every workspace network under the aliases after its name, before the workspace starts, and leaves it
+before the network is removed. Joining is best effort, as for the registry mirror container.
+
+The workspace and its Docker service also get a wider guard than the metadata one. It adds a
+`prohibit` route for each of these, so a connection to any of them fails at once:
+
+- the private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`);
+- Tailscale's `100.64.0.0/10`;
+- link-local (`169.254.0.0/16`, `fe80::/10`);
+- NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`);
+- the metadata addresses (169.254.169.254, fd00:ec2::254) and Azure's wireserver (168.63.129.16);
+- the host's public addresses;
+- the gateway of each of the workspace's networks. That address is the host, where every service it
+  binds on all addresses answers. Only packets addressed to the gateway are refused; traffic routed
+  through it to the internet is not.
+
+These stay reachable:
+
+- the rest of the workspace's own networks, and the mirrors on them;
+- its resource reach networks. Its guard waits for the ones the launch attaches. On Docker 28 or
+  newer, sealant creates every reach network with no host gateway at all
+  (`gateway_mode_ipv4=isolated`), so the host stays out of reach through those networks too;
+- `SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS`, such as a company registry, a database in the same VPC
+  or a tailnet model gateway (opt in to the host with its address here);
+- the resolvers Docker's DNS forwards to from inside the workspace. Docker does that whenever the
+  host's resolver is not a loopback address, as with a LAN router or the AWS VPC resolver. The
+  worker reads them from a fresh container's `resolv.conf` before the workspace starts, since
+  without them no name would resolve.
+
+The metadata addresses open only for a workspace that set `runtime.network.cloudMetadata`: never
+through the allowlist, and never because the host's resolver is one of them. On a host whose
+resolver is a metadata address (Azure's default 168.63.129.16, or GCE's 169.254.169.254), a launch
+fails with that address in its error. A route cannot open a resolver's port 53 alone, so set a
+resolver that is not a metadata address in Docker's own configuration (`"dns"` in
+`/etc/docker/daemon.json`) and restart Docker. Every other address stays refused for a workspace
+that opened the metadata ones. `NET_RAW` is always dropped.
+
+`SEALANT_HOST_PUBLIC_IPS` defaults to `auto`, which reads the public addresses on the Docker host's
+own interfaces. A cloud host's public address behind 1:1 NAT (AWS, GCP) is on no interface, so list
+it beside `auto`. `none` turns detection off.
+
+No code of the workspace runs before its routes are in. It starts behind a small gate (`/bin/sh` as
+its entrypoint, so the image needs one): the gate waits until the worker has run the guard, then
+hands over to the image's own entrypoint and command, which become PID 1. Every start of a recovery
+waits at the gate again. A recovery whose guard fails stops the container rather than letting it run
+unguarded, and keeps its disk for the next attempt. A gate never released ends the container after
+five minutes. A capture workspace whose guard fails is kept, still at its gate, for recovery.
+
+Every value is checked when the worker starts: an entry that is not an address or a block, a block
+with host bits set, or an exception that overlaps the workspace, resource reach or resource egress
+range stops the worker with the variable's name. So does setting `SEALANT_DOCKER_WORKSPACE_NETWORK`
+beside it, or an exception, host address or mirror without it. gVisor (`runsc`) workspaces are
+refused, because its netstack ignores the routes. Turn the setting on or off only while no workspace
+runs: a network made under one setting is not removed under the other.
+
+Not covered:
+
+- On Docker before 28, a reach network joined after launch (a link added to a running workspace)
+  keeps a host gateway that the workspace can reach until its next start.
+- UDP and ICMP to an opened address, and any port on it: a route opens an address, not a port.
+- Image builds, which run on the Docker host without the guard.
 
 ## GitHub App variables
 
