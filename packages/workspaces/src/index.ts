@@ -16,6 +16,8 @@ export * from "./worker/claude-credentials-sync-back.js";
 export * from "./worker/codex-auth-sync-back.js";
 export * from "./worker/connected-account-resolver.js";
 export * from "./worker/credential-push.js";
+export * from "./worker/egress-proxy-launch.js";
+export * from "./worker/egress-proxy-sweep.js";
 export * from "./worker/harness-credentials-sync-back.js";
 export * from "./worker/home-placements.js";
 export * from "./worker/placement-login.js";

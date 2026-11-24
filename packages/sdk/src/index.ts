@@ -91,3 +91,20 @@ export type {
   WorkspaceEnvParseResult,
   WorkspaceEnvReservedRule,
 } from "@sealant/api-contracts/workspace-environment";
+// The network policy and brokered-secret rules (`CreateOptions.networkPolicy`,
+// `CreateOptions.brokeredSecrets`) are public API for the same reason: the control plane's own.
+export {
+  brokeredSecretsProblems,
+  brokeredSecretValuesProblems,
+  FORBIDDEN_BROKERED_HEADER_NAMES,
+  needsEgressProxy,
+  networkPolicyProblems,
+} from "@sealant/api-contracts/network-policy";
+export type {
+  BrokeredSecret,
+  NetworkPolicy,
+  NetworkPolicyAllowHost,
+  NetworkPolicyMirror,
+  NetworkPolicyMode,
+  NetworkPolicyResource,
+} from "@sealant/api-contracts/network-policy";

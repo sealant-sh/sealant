@@ -14,7 +14,11 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { toOciRepositoryComponent, type CreateWorkspaceRequest } from "@sealant/api-contracts";
+import {
+  runtimeAdapterIds,
+  toOciRepositoryComponent,
+  type CreateWorkspaceRequest,
+} from "@sealant/api-contracts";
 import { captureOwnerMapProblems } from "@sealant/api-contracts/capture-owner-map";
 import {
   formatWorkspaceEnvIssue,
@@ -29,6 +33,7 @@ import type { SealantInternalConfig } from "./config.js";
 import { mapWorkspaceCredentials } from "./credentials.js";
 import { parseTtlSeconds } from "./duration.js";
 import { discoverLinkedWorktreeMetadataMount } from "./linked-worktree.js";
+import { requireValidNetworkPolicy } from "./network-policy.js";
 
 /** The image repository is an OCI name: the control plane refuses one outside the grammar. */
 const sanitizeRepoSlug = (value: string): string => toOciRepositoryComponent(value, "repo");
@@ -46,7 +51,7 @@ export const buildCreateWorkspaceRequest = (
 ) => {
   if (
     options.runtime !== undefined &&
-    !["docker", "k8s", "k3s", "cloudflare", "microvm", "boat"].includes(options.runtime)
+    !runtimeAdapterIds.some((runtime) => runtime === options.runtime)
   ) {
     throw new SealantError("workspaces.create runtime must name a supported runtime family.", {
       code: "invalid_create_options",
@@ -187,6 +192,13 @@ export const buildCreateWorkspaceRequest = (
     );
   }
   const userEnv = envResult === undefined ? undefined : envResult.env;
+  requireValidNetworkPolicy("workspaces.create", {
+    networkPolicy: options.networkPolicy,
+    brokeredSecrets: options.brokeredSecrets,
+    brokeredSecretValues: options.brokeredSecretValues,
+    envNames: userEnv === undefined ? [] : Object.keys(userEnv),
+    secretEnvNames: options.secretEnv === undefined ? [] : Object.keys(options.secretEnv),
+  });
   const secretEnvResult =
     options.secretEnv === undefined ? undefined : parseWorkspaceSecretEnv(options.secretEnv);
   if (secretEnvResult !== undefined && !secretEnvResult.ok) {
@@ -343,6 +355,11 @@ export const buildCreateWorkspaceRequest = (
     },
     ...(tooling === undefined ? {} : { tooling }),
     ...(credentials === undefined ? {} : { credentials }),
+    // The policy and the secrets' descriptions are the spec's; their values never are.
+    ...(options.networkPolicy === undefined ? {} : { networkPolicy: options.networkPolicy }),
+    ...(options.brokeredSecrets === undefined || options.brokeredSecrets.length === 0
+      ? {}
+      : { brokeredSecrets: options.brokeredSecrets }),
   };
 
   return {
@@ -362,6 +379,11 @@ export const buildCreateWorkspaceRequest = (
       // The capture credential is the one secret outside `secretEnv`: sealed and delivered the
       // same way by the control plane, under its platform-owned name.
       ...(options.source?.kind === "capture" ? { captureToken: options.source.token } : {}),
+      // Sealed by the control plane and handed only to the workspace's egress proxy.
+      ...(options.brokeredSecretValues === undefined ||
+      Object.keys(options.brokeredSecretValues).length === 0
+        ? {}
+        : { brokeredSecretValues: options.brokeredSecretValues }),
     } satisfies CreateWorkspaceRequest,
   };
 };

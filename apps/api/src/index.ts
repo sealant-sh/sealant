@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { credentialCipherLayer } from "@sealant/credentials";
-import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
+import { ControlPlaneDataAccessLive, SealantDBLive, workspaceEgressRepoLayer } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import {
   InlineByteaArtifactStoreLive,
@@ -91,9 +91,12 @@ const databaseClientLayer = SealantDBLive.pipe(
  * `ControlPlaneDataAccessLive` is a ready-made composition exported by `@sealant/db`.
  * It merges all repository services needed across control-plane route domains.
  *
- * This is the "sane default" composition point so app code stays minimal.
+ * This is the "sane default" composition point so app code stays minimal. The workspace egress
+ * store (network policies, revocations, per-run proxies) is merged beside it.
  */
-const databaseLayer = ControlPlaneDataAccessLive.pipe(Layer.provide(databaseClientLayer));
+const databaseLayer = Layer.merge(ControlPlaneDataAccessLive, workspaceEgressRepoLayer).pipe(
+  Layer.provide(databaseClientLayer),
+);
 
 /**
  * Source integration layer:

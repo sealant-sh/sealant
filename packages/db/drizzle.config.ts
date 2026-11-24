@@ -14,6 +14,7 @@ export default defineConfig({
     "./src/schema/boat-accounts.ts",
     "./src/schema/boat-runs.ts",
     "./src/schema/boat-tunnels.ts",
+    "./src/schema/workspace-egress.ts",
     "./src/schema/telemetry.ts",
   ],
   out: "./drizzle",

@@ -7,11 +7,13 @@ import {
   type WorkspacePublication,
   type OciPublication,
   type MicrovmPublication,
+  networkPolicyRefusal,
   newWorkspaceSchema,
   runtimeAdapterIdSchema,
 } from "@sealant/validators";
 import { z } from "zod";
 
+import type { EgressProxyLaunch } from "./egress-proxy-types.js";
 import type { RuntimeAdapterLaunchHooks, RuntimeLaunchIdentity } from "./launch-retention.js";
 
 export const runtimeAdapterBlueprintSchema = newWorkspaceSchema;
@@ -143,6 +145,21 @@ const runtimeLaunchFields = {
   principalId: z.string().trim().min(1).optional(),
   /** Hot-pool skeletons may get a different PriorityClass. */
   pool: z.enum(["hot"]).optional(),
+  /**
+   * For a workspace behind its own egress proxy (a restricted policy, or any brokered secret):
+   * how the worker records the run's proxy and builds its first policy. The CA's key and the
+   * secrets' values stay behind its functions, never in the parsed input. A runtime that runs no proxy refuses such a workspace before launch.
+   */
+  egressProxy: z
+    .custom<EgressProxyLaunch>(
+      (value) =>
+        typeof value === "object" &&
+        value !== null &&
+        "prepare" in value &&
+        typeof value.prepare === "function",
+      { message: "egressProxy must carry prepare" },
+    )
+    .optional(),
 };
 
 /** Parse an OCI launch at the container adapter boundary. */
@@ -619,6 +636,18 @@ export const selectRuntimeAdapter = <A extends RuntimeAdapterLifecycle>(
     const adapter = input.adapters.find((candidate) => candidate.id === adapterId);
 
     if (adapter === undefined) {
+      continue;
+    }
+
+    // Fail closed before the adapter is asked (§8.3): a runtime that cannot enforce the
+    // workspace's network policy never launches it, whatever its adapter knows of policies.
+    const policyRefusal = networkPolicyRefusal(adapterId, supportInput.blueprint);
+    if (policyRefusal !== undefined) {
+      firstSupportFailure ??= {
+        supported: false,
+        reason: "runtime-requirement-unsupported",
+        message: policyRefusal.message,
+      };
       continue;
     }
 

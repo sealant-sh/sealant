@@ -264,8 +264,9 @@ export class Sealant {
       const answered = await this.#runtime.run(listWorkspaceRuntimesOp());
       return {
         default: answered.default,
-        runtimes: answered.runtimes.map((support) => ({
+        runtimes: answered.runtimes.map(({ networkPolicy, ...support }) => ({
           ...support,
+          ...(networkPolicy === undefined ? {} : { networkPolicy }),
           screen: support.screen.supported
             ? { supported: true, architectures: [...support.screen.architectures] }
             : support.screen,

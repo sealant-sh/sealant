@@ -348,3 +348,73 @@ export {
   type BoatTunnelCredentials,
   type BoatTunnelCredentialsService,
 } from "./boat/tunnel-credentials.js";
+export {
+  EXECUTOR_CA_ENV,
+  EXECUTOR_CA_VALIDITY_MS,
+  executorCaMatches,
+  generateExecutorCa,
+  type ExecutorCa,
+} from "./executor-ca.js";
+export {
+  createProxyAdminClient,
+  PROXY_ADMIN_TIMEOUT_MS,
+  ProxyAdminRefusedError,
+  ProxyAdminUnreachableError,
+  type ProxyAdminClient,
+  type ProxyAllowHost,
+  type ProxyBrokeredSecret,
+  type ProxyHealth,
+  type ProxyHeartbeat,
+  type ProxyPolicyApplied,
+  type ProxyPolicyDocument,
+  type ProxyRevoked,
+  type ProxyRevokeRequest,
+} from "./proxy-admin-client.js";
+export {
+  BrokeredSecretValueMissingError,
+  brokeredPlaceholderEnv,
+  buildProxyPolicyDocument,
+  egressPolicyHash,
+  grantsOf,
+  proxyRevokeRequest,
+  type EgressProxyHostFacts,
+  type EgressProxyPolicyInput,
+  type EgressTombstones,
+} from "./egress-proxy-policy.js";
+export {
+  DEFAULT_EGRESS_PROXY_IMAGE,
+  EGRESS_PROXY_ADMIN_SOCKET,
+  EGRESS_PROXY_LABEL,
+  EGRESS_PROXY_PORTS,
+  EGRESS_PROXY_UID,
+  EgressProxyOrchestrator,
+  dockerBridgeCidrs,
+  egressProxyCreateArgv,
+  egressProxyName,
+  isolatedNetworkName,
+  proxyAddressOf,
+  proxyEgressNetworkName,
+  type EgressProxyLaunch,
+  type EgressProxyNetworks,
+  type EgressProxyOrchestratorOptions,
+  type EgressProxySubnets,
+  type EgressRevocationOutcome,
+  type LaunchedEgressProxy,
+} from "./egress-proxy-orchestrator.js";
+export {
+  EGRESS_CA_BUNDLE,
+  EGRESS_CA_CERT,
+  EGRESS_PROXY_BACKED_LABEL,
+  EGRESS_PROXY_GATE_SCRIPT,
+  egressProxyGateArgs,
+  proxiedWorkspaceArgs,
+} from "./docker-egress-proxy.js";
+export {
+  EgressProxyStoreError,
+  openBrokeredValues,
+  pushToProxy,
+  revokeOnProxy,
+  sealBrokeredValues,
+  storedProxyPolicyDocument,
+  type EgressPushOutcome,
+} from "./egress-proxy-store.js";

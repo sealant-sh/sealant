@@ -153,6 +153,9 @@ services:
       SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS: ${SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS:-}
       SEALANT_HOST_PUBLIC_IPS: ${SEALANT_HOST_PUBLIC_IPS:-}
       SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS: ${SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS:-}
+      # Optional image of the egress proxy a workspace with restricted egress or a brokered secret
+      # runs behind (see "Workspaces behind their own egress proxy" in the docs).
+      SEALANT_EGRESS_PROXY_IMAGE: ${SEALANT_EGRESS_PROXY_IMAGE:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

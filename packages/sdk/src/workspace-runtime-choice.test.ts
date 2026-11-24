@@ -61,7 +61,7 @@ const options: CreateOptions = {
 };
 
 describe("explicit workspace runtime", () => {
-  it.each(["docker", "boat", "k8s", "k3s", "cloudflare", "microvm"] as const)(
+  it.each(["docker", "boat", "k8s", "k3s", "cloudflare", "microvm", "host-vm"] as const)(
     "requires %s over real HTTP",
     async (runtime) => {
       const f = await serve();

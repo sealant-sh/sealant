@@ -47,9 +47,10 @@ await run.record.replay();
 ## Choose a runtime
 
 `workspaces.create({ repository, harness, runtime: "docker" })` requires Docker. The same option
-accepts `boat`, `k8s`, `k3s`, `cloudflare` or `microvm`. An unavailable or unsupported choice is
-refused rather than replaced with another runtime. Omit `runtime` to keep the deployment's default.
-The choice applies to this new workspace; it does not move an existing workspace.
+accepts `boat`, `k8s`, `k3s`, `cloudflare`, `microvm` or `host-vm` (each workspace in its own VM on
+the deployment's Linux KVM host). An unavailable or unsupported choice is refused rather than
+replaced with another runtime. Omit `runtime` to keep the deployment's default. The choice applies
+to this new workspace; it does not move an existing workspace.
 
 Boat still requires the operator's admission settings, a supported image and a capture source.
 Selecting it through the SDK grants no admission. The SDK returns the control plane's refusal in
@@ -307,6 +308,73 @@ What the platform guarantees for `secretEnv`, and how it differs from `env`:
 Not covered, and worth saying plainly: a process that _deliberately_ writes a secret to a file in
 the repository or to a mount is producing ordinary workspace state, and the redactor masks captured
 I/O, not files.
+
+## Network policy and brokered secrets
+
+A network policy says what a workspace may reach. `standard` is the public internet without private,
+metadata and host addresses; `restricted` is only the hosts, mirrors and resources it lists. A
+brokered secret is one the workspace uses without ever holding it:
+
+```ts
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/billing-service",
+  harness: codex(),
+  networkPolicy: {
+    mode: "restricted",
+    policyHash: "sha256:…", // your hash of this policy
+    allowHosts: [{ host: "api.github.com" }, { host: "registry.npmjs.org" }],
+  },
+  brokeredSecrets: [
+    {
+      secretId: "sec_github_1",
+      name: "GITHUB_AUTH",
+      placeholder: "sealant-github-placeholder",
+      secretRef: "github",
+      headerName: "Authorization",
+      bindHosts: ["api.github.com"],
+    },
+  ],
+  brokeredSecretValues: { github: "Bearer ghp_…" },
+});
+```
+
+- **The workspace only sees the placeholder.** It reads `sealant-github-placeholder` from
+  `GITHUB_AUTH`. When it sends the placeholder in `Authorization` over HTTPS to `api.github.com`,
+  the workspace's egress proxy puts the real value in its place. Sent anywhere else, the placeholder
+  is worthless.
+- **Values are sealed, never shown.** `brokeredSecretValues` (keyed by `secretRef`) is sealed when
+  the control plane receives it and handed only to the egress proxy, again after every restart. It
+  is never in the spec, the workspace's environment or any read.
+- **Never less than asked.** A runtime that cannot enforce the policy refuses the create (`422`,
+  `runtime-requirement-unsupported`); `workspaces.runtimes()` says what each runtime enforces under
+  `networkPolicy`. Docker runs a `restricted` workspace, or one with any brokered secret, behind an
+  egress proxy of its own. `restricted` together with Docker inside the workspace needs
+  `runtime: "host-vm"`, and so does `requireVmIsolation` (Boat and MicroVM also give each workspace
+  its own VM).
+- **Checked before anything is sent**, with the control plane's rules and words (exported as
+  `networkPolicyProblems`, `brokeredSecretsProblems` and `brokeredSecretValuesProblems`): exact host
+  names only, never a wildcard; one header name per secret, never one that frames or routes the
+  request (`Host`, `Content-Length`, `Proxy-Authorization`…); a value for every secret. A refusal
+  has code `invalid_network_policy` and never quotes a value.
+
+Change the policy on a live workspace, take access away, and read what holds now:
+
+```ts
+const applied = await workspace.applyNetworkPolicy({
+  networkPolicy,
+  brokeredSecrets,
+  brokeredSecretValues,
+});
+await workspace.revokeAccess({ secretIds: ["sec_github_1"] });
+const current = await workspace.networkPolicy(); // policy, secrets (no values), revocations, proxy
+```
+
+Each change answers its `enforcement`: `enforced` (the proxy confirmed it; for a revocation, after
+closing every matching stream), `pending` (stored, the proxy not reached yet; sealant keeps sending
+it, and stops a proxy that misses a revocation), or `next-start` (stored; no proxy runs now, so it
+applies when the workspace next starts). A revocation is durable and always wins: it survives
+restarts and every later policy, so a revoked secret id stays revoked. To grant a secret again, list
+it under a new `secretId`.
 
 ## Capture-sourced workspaces
 

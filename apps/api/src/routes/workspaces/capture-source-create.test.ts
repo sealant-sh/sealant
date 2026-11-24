@@ -35,6 +35,7 @@ import {
   type WorkspaceRepoService,
   type WorkspaceRuntimeInstance,
   WorkspaceCaptureDrainRepo,
+  WorkspaceEgressRepo,
   UserRepo,
   type PersonBinding,
 } from "@sealant/db";
@@ -439,6 +440,8 @@ const makeRecordingLayer = (
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
     // No capture drain is recorded: nothing is retained.
     Layer.mock(WorkspaceCaptureDrainRepo, { getByRunId: () => Effect.succeed(undefined) }),
+    // No spec here has a network policy or brokered secrets: nothing is stored for egress.
+    Layer.mock(WorkspaceEgressRepo, {}),
     Layer.mock(WorkspaceRuntimeInstanceRepo, {
       getRuntimeInstanceByRunId: () => Effect.succeed(state.runtime),
     }),

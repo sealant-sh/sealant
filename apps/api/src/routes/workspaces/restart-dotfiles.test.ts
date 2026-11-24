@@ -7,7 +7,10 @@
  * them (and its image plan loses the managers they need). These tests drive `createWorkspace` and
  * then `restartWorkspace` against one in-memory store, the way the API runs them.
  */
-import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
+import {
+  WorkspaceRuntimeRequirementUnsupportedError,
+  type CreateWorkspaceRequest,
+} from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import {
   BoatAccountRepo,
@@ -30,8 +33,12 @@ import {
   type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
   WorkspaceCaptureDrainRepo,
+  WorkspaceEgressRepo,
   UserRepo,
+  tombstonesOf,
   type PersonBinding,
+  type WorkspaceEgressPolicy,
+  type WorkspaceEgressRevocation,
 } from "@sealant/db";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
 import type { NewWorkspace } from "@sealant/validators";
@@ -99,6 +106,9 @@ interface Store {
   readonly jobs: Map<string, WorkspaceBuildJob>;
   scopeAllowed?: boolean;
   readonly stops: string[];
+  /** The workspace's pinned network policy ("Apply updated policy"), and its revocations. */
+  egressPolicy?: WorkspaceEgressPolicy;
+  readonly revocations: WorkspaceEgressRevocation[];
 }
 
 const newStore = (): Store => ({
@@ -106,6 +116,7 @@ const newStore = (): Store => ({
   snapshots: new Map(),
   jobs: new Map(),
   stops: [],
+  revocations: [],
 });
 
 const makeLayer = (store: Store) => {
@@ -308,6 +319,14 @@ const makeLayer = (store: Store) => {
     }),
     // No capture drain is recorded: nothing is retained.
     Layer.mock(WorkspaceCaptureDrainRepo, { getByRunId: () => Effect.succeed(undefined) }),
+    // No create here has a network policy or brokered secrets: a restart reads what a test pins.
+    Layer.mock(WorkspaceEgressRepo, {
+      getPolicy: () => Effect.succeed(store.egressPolicy),
+      tombstones: () =>
+        Effect.succeed(
+          tombstonesOf(store.egressPolicy?.revocationWatermark ?? 0, store.revocations),
+        ),
+    }),
     Layer.mock(WorkspaceRuntimeInstanceRepo, {}),
     // No idempotency key in these creates: no reservation; the transaction passes through.
     Layer.mock(WorkspaceCreateReservationRepo, {}),
@@ -539,5 +558,155 @@ describe("restartWorkspace dotfiles", () => {
         expect(store.stops).toEqual([]);
       }).pipe(Effect.provide(makeLayer(store))),
     );
+  });
+});
+
+describe("restartWorkspace · the workspace's pinned network policy", () => {
+  const pinnedPolicy = (
+    networkPolicy: WorkspaceEgressPolicy["networkPolicy"],
+    revocationWatermark = 0,
+  ): WorkspaceEgressPolicy => ({
+    workspaceId: "",
+    networkPolicy,
+    brokeredSecrets: [],
+    brokeredValuesSealed: null,
+    encryptionKeyId: null,
+    revocationWatermark,
+    policyRevision: 1,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  /** Create, settle, apply `prepare`, then restart: what came of it, and what the restart spent. */
+  const restartAfter = (owner: string, prepare: (store: Store, runId: string) => void) => {
+    const store = newStore();
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const created = yield* createWorkspace({ payload: resourcesPayload(owner), headers: {} });
+        const runId = store.workspace?.latestRunId ?? "";
+        settle(store, runId);
+        prepare(store, runId);
+        const jobs = store.jobs.size;
+        const result = yield* Effect.result(
+          restartWorkspace({ workspaceId: created.workspaceId, payload: { ownerUserId: owner } }),
+        );
+        return { result, stops: store.stops, newJobs: store.jobs.size - jobs };
+      }).pipe(Effect.provide(makeLayer(store))),
+    );
+  };
+
+  it("judges the pinned policy, not the one created with, before stopping the old run", async () => {
+    // A Docker workspace whose updated policy asks for its own VM: the worker would refuse it.
+    const { result, stops, newJobs } = await restartAfter("usr_pinned_vm", (store) => {
+      store.egressPolicy = pinnedPolicy({
+        mode: "standard",
+        policyHash: "ph_vm",
+        requireVmIsolation: true,
+        allowHosts: [],
+      });
+    });
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+      WorkspaceRuntimeRequirementUnsupportedError,
+    );
+    expect(stops).toEqual([]);
+    expect(newJobs).toBe(0);
+  });
+
+  it("refuses a workspace holding revoked hosts on a runtime that runs no egress proxy", async () => {
+    const { result, stops, newJobs } = await restartAfter("usr_revoked_k8s", (store, runId) => {
+      const spec = store.snapshots.get(runId);
+      if (spec === undefined) throw new Error("the create recorded no snapshot");
+      store.snapshots.set(runId, {
+        ...spec,
+        target: { ...spec.target, runtime: { ...spec.target.runtime, family: "k8s" } },
+      });
+      store.egressPolicy = pinnedPolicy(null, 1);
+      store.revocations.push({
+        id: 1,
+        workspaceId: store.workspace?.id ?? "",
+        revocationWatermark: 1,
+        kind: "host",
+        target: "api.vercel.com",
+        createdAt: now,
+      });
+    });
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+      WorkspaceRuntimeRequirementUnsupportedError,
+    );
+    if (Result.isFailure(result)) expect(result.failure.message).toContain("api.vercel.com");
+    expect(stops).toEqual([]);
+    expect(newJobs).toBe(0);
+  });
+
+  it("restarts a Docker workspace holding revoked hosts: its proxy refuses them", async () => {
+    const { result, stops, newJobs } = await restartAfter("usr_revoked_docker", (store) => {
+      store.egressPolicy = pinnedPolicy(null, 1);
+      store.revocations.push({
+        id: 1,
+        workspaceId: store.workspace?.id ?? "",
+        revocationWatermark: 1,
+        kind: "host",
+        target: "api.vercel.com",
+        createdAt: now,
+      });
+    });
+    expect(Result.isSuccess(result)).toBe(true);
+    expect(stops).toHaveLength(1);
+    expect(newJobs).toBe(1);
+  });
+
+  it("refuses a Docker workspace holding revoked hosts that runs Docker inside, past its proxy", async () => {
+    const { result, stops, newJobs } = await restartAfter("usr_revoked_dind", (store, runId) => {
+      const spec = store.snapshots.get(runId);
+      if (spec === undefined) throw new Error("the create recorded no snapshot");
+      store.snapshots.set(runId, {
+        ...spec,
+        tooling: { ...spec.tooling, services: { docker: { enabled: true } } },
+      });
+      store.egressPolicy = pinnedPolicy(null, 1);
+      store.revocations.push({
+        id: 1,
+        workspaceId: store.workspace?.id ?? "",
+        revocationWatermark: 1,
+        kind: "host",
+        target: "api.vercel.com",
+        createdAt: now,
+      });
+    });
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+      WorkspaceRuntimeRequirementUnsupportedError,
+    );
+    expect(stops).toEqual([]);
+    expect(newJobs).toBe(0);
+  });
+
+  it("restarts a Docker workspace with Docker inside after a revocation of all: no host was stored", async () => {
+    const { result, stops, newJobs } = await restartAfter(
+      "usr_revoked_all_dind",
+      (store, runId) => {
+        const spec = store.snapshots.get(runId);
+        if (spec === undefined) throw new Error("the create recorded no snapshot");
+        store.snapshots.set(runId, {
+          ...spec,
+          tooling: { ...spec.tooling, services: { docker: { enabled: true } } },
+        });
+        store.egressPolicy = pinnedPolicy(null, 1);
+        const workspaceId = store.workspace?.id ?? "";
+        store.revocations.push(
+          {
+            id: 1,
+            workspaceId,
+            revocationWatermark: 1,
+            kind: "secret",
+            target: "sec_vercel",
+            createdAt: now,
+          },
+          { id: 2, workspaceId, revocationWatermark: 1, kind: "all", target: null, createdAt: now },
+        );
+      },
+    );
+    expect(Result.isSuccess(result)).toBe(true);
+    expect(stops).toHaveLength(1);
+    expect(newJobs).toBe(1);
   });
 });

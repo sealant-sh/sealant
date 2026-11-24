@@ -7,6 +7,8 @@ import { join as joinPath } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
+import { needsEgressProxy } from "@sealant/api-contracts/network-policy";
+
 import { getHarnessIntegration } from "../harness/integrations.js";
 import {
   CAPTURE_HARNESS_HOME_ENV,
@@ -16,6 +18,11 @@ import {
 } from "./capture-source.js";
 import { formatCidr, type Cidr } from "./cidr.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
+import {
+  EGRESS_PROXY_BACKED_LABEL,
+  egressProxyGateArgs,
+  proxiedWorkspaceArgs,
+} from "./docker-egress-proxy.js";
 import {
   attachedNetworks,
   imageCommand,
@@ -32,6 +39,7 @@ import {
   type DockerEgressPolicy,
   type WorkspaceMirrorContainer,
 } from "./docker-egress.js";
+import { probeIsolatedGatewaySupport } from "./docker-isolated-network.js";
 import {
   dockerMemoryArgs,
   dockerMemoryPolicyNeedsHost,
@@ -51,6 +59,7 @@ import {
   type DockerVolumeMapping,
   type ResolvedDockerVolumeMount,
 } from "./docker-volume-mounts.js";
+import { EgressProxyOrchestrator, isolatedNetworkName } from "./egress-proxy-orchestrator.js";
 import {
   completeReadyLaunch,
   failLaunch,
@@ -434,6 +443,18 @@ export interface DockerRuntimeAdapterOptions {
    * network (or the daemon's default bridge) and the metadata-only guard, as before.
    */
   readonly egress?: DockerWorkspaceEgressOptions;
+  /**
+   * Run a workspace whose policy is restricted, or that has a brokered secret, behind its own
+   * egress proxy (`<name>-proxy`, `egress-proxy-orchestrator.ts`). Needs `egress` (the subnet pool
+   * and the guard) and `controlSocketHostDir` (the proxy's admin socket lives there). Unset: such
+   * a workspace is refused before launch, never run without its proxy.
+   */
+  readonly egressProxy?: {
+    /** `SEALANT_EGRESS_PROXY_IMAGE`; defaults to `DEFAULT_EGRESS_PROXY_IMAGE`. */
+    readonly image?: string;
+    /** See `EgressProxyOrchestratorOptions.ownControlDirectory` (tests that do not run as root). */
+    readonly ownControlDirectory?: (directory: string) => Promise<void>;
+  };
 }
 
 /** `docker stop -t` for a planned stop: long enough for sealantd's SIGTERM flush to ship. */
@@ -961,6 +982,7 @@ const extraMountArgs = (
 const supportForInput = (
   input: RuntimeAdapterSupportInput,
   egress: boolean,
+  proxy: boolean,
 ): RuntimeAdapterSupport => {
   const targetRuntime = input.blueprint.target.runtime.family;
 
@@ -1009,6 +1031,33 @@ const supportForInput = (
       reason: "unsupported-runtime-requirement",
       message:
         "The Docker runtime adapter cannot refuse the cloud metadata address inside a gVisor (runsc) workspace. Use runc, or set runtime.network.cloudMetadata to launch it with the address reachable.",
+    });
+  }
+
+  // Fail closed (§8.3): a policy this runtime cannot enforce is refused, never downgraded.
+  const policy = input.blueprint.networkPolicy;
+  if (policy?.requireVmIsolation === true) {
+    return parseRuntimeAdapterSupport({
+      supported: false,
+      reason: "runtime-requirement-unsupported",
+      message:
+        "This workspace's policy requires its own VM, and a Docker workspace is a container on a shared kernel. Switch the runtime to Host VM (host-vm).",
+    });
+  }
+  if (policy?.mode === "restricted" && input.blueprint.tooling.services?.docker?.enabled === true) {
+    return parseRuntimeAdapterSupport({
+      supported: false,
+      reason: "runtime-requirement-unsupported",
+      message:
+        "Restricted egress cannot be enforced on Docker inside a Docker workspace: its Docker service reaches the network on its own, past the egress proxy. Turn Docker off for this workspace, or switch the runtime to Host VM (host-vm).",
+    });
+  }
+  if (needsEgressProxy(input.blueprint) && !proxy) {
+    return parseRuntimeAdapterSupport({
+      supported: false,
+      reason: "runtime-requirement-unsupported",
+      message:
+        "This workspace needs its own egress proxy (restricted egress or a brokered secret), and this deployment's Docker workers run none. Ask the operator to configure per-workspace egress networks (SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS) with the egress proxy.",
     });
   }
 
@@ -1074,6 +1123,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private readonly executorNetworks: DockerExecutorNetworkHooks | undefined;
   private readonly memoryPolicy: DockerMemoryPolicy | undefined;
   private readonly egress: DockerWorkspaceEgressOptions | undefined;
+  private readonly proxies: EgressProxyOrchestrator | undefined;
+  /** Whether the engine makes isolated internal bridges, once proved (`probeIsolatedGatewaySupport`). */
+  private isolatedGatewayProved = false;
   /** Docker's namespace DNS servers and the host's detected public addresses, read lately. */
   private dnsServersRead:
     | { readonly at: number; readonly servers: ReadonlyArray<Cidr> }
@@ -1118,6 +1170,44 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       );
     }
     this.egress = options.egress;
+    if (options.egressProxy !== undefined) {
+      const controlDir = options.controlSocketHostDir;
+      const egress = options.egress;
+      if (egress === undefined || controlDir === undefined) {
+        throw new Error(
+          "The egress proxy needs per-workspace egress (SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS) and the control socket directory (WORKSPACE_CONTROL_SOCKET_HOST_DIR).",
+        );
+      }
+      const volumeMappings = options.volumeMappings;
+      this.proxies = new EgressProxyOrchestrator({
+        run: this.commandRunner,
+        subnets: egress.subnets,
+        ...(options.egressProxy.image === undefined ? {} : { image: options.egressProxy.image }),
+        ...(options.egressProxy.ownControlDirectory === undefined
+          ? {}
+          : { ownControlDirectory: options.egressProxy.ownControlDirectory }),
+        controlDir,
+        controlMountArgs: (proxyName) =>
+          volumeMappings === undefined
+            ? ["-v", `${joinPath(controlDir, proxyName)}:/run/sealant`]
+            : [
+                ...dockerVolumeMountArgs(
+                  resolveDockerVolumeMount(
+                    {
+                      sourcePath: joinPath(controlDir, proxyName),
+                      mountPath: "/run/sealant",
+                      readOnly: false,
+                      purpose: "launch-material",
+                    },
+                    volumeMappings,
+                  ),
+                ),
+              ],
+        ...(egress.mirrors === undefined ? {} : { mirrors: egress.mirrors }),
+      });
+    } else {
+      this.proxies = undefined;
+    }
     this.registryMirrors = options.registryMirrors ?? [];
     this.registryMirrorContainer =
       options.registryMirrorContainer === undefined
@@ -1498,10 +1588,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     acquisition: DockerContainerAcquisition | undefined,
     dockerService: DockerServiceProvision | undefined,
     egressNetwork: string | undefined,
+    proxyLaunched = false,
   ): Promise<void> {
     if (
       acquisition?.adopted === true ||
-      (acquisition === undefined && dockerService === undefined && egressNetwork === undefined)
+      (acquisition === undefined &&
+        dockerService === undefined &&
+        egressNetwork === undefined &&
+        !proxyLaunched)
     ) {
       return;
     }
@@ -1523,9 +1617,37 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
     // The run's own network, once no container of the run is on it: what a launch failing after
     // `ensureEgressNetwork` left. Best effort, like the sidecar; the stop of the run removes it too.
-    if (egressNetwork !== undefined && this.egress !== undefined) {
+    if (proxyLaunched) {
+      // The proxy and its networks, which hold this run's subnets.
+      await this.proxies?.remove(containerName).catch(() => undefined);
+    } else if (egressNetwork !== undefined && this.egress !== undefined) {
       await this.removeEgressNetwork(this.egress, containerName).catch(() => undefined);
     }
+  }
+
+  /**
+   * The egress proxy topology rests on internal bridges with no host-side gateway address. Proved
+   * once per worker (`probeIsolatedGatewaySupport`), never assumed: an engine that cannot make one
+   * fails the launch, since the workspace would otherwise reach the host past its proxy.
+   */
+  private async assertIsolatedGatewaySupport(): Promise<void> {
+    if (this.isolatedGatewayProved) return;
+    const verdict = await probeIsolatedGatewaySupport({
+      run: this.commandRunner,
+      image: this.networkGuardImage,
+    });
+    if (!verdict.supported) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `This Docker host cannot isolate a workspace behind an egress proxy: ${verdict.reason}`,
+      );
+    }
+    this.isolatedGatewayProved = true;
+  }
+
+  /** The egress proxies this adapter runs, for the worker's lease and revocation sweep. */
+  public get egressProxies(): EgressProxyOrchestrator | undefined {
+    return this.proxies;
   }
 
   /** Wait until the Docker sidecar's daemon answers `docker info`, within the readiness timeout. */
@@ -1842,7 +1964,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * The command `image` runs, put behind the network gate (`networkGateArgs`): the launch's
    * `--entrypoint` and the arguments after the image.
    */
-  private async gatedCommand(image: string): Promise<ReturnType<typeof networkGateArgs>> {
+  private async gatedCommand(
+    image: string,
+    gateArgs: typeof networkGateArgs = networkGateArgs,
+  ): Promise<ReturnType<typeof networkGateArgs>> {
     const inspect = () =>
       this.commandRunner("docker", [
         "image",
@@ -1862,7 +1987,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         await this.commandRunner("docker", ["pull", "-q", image]);
         inspected = await inspect();
       }
-      return networkGateArgs(imageCommand(inspected.stdout));
+      return gateArgs(imageCommand(inspected.stdout));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw createAdapterError(
@@ -2001,6 +2126,55 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       await this.ensureEgressNetwork(egress, reference);
     }
     // The stopped container names another network's id: drop that endpoint, join anew.
+    await this.commandRunner("docker", [
+      "network",
+      "disconnect",
+      "--force",
+      name,
+      containerId,
+    ]).catch(() => undefined);
+    await this.commandRunner("docker", ["network", "connect", name, containerId]);
+  }
+
+  /** Whether a container was launched behind its own egress proxy (`EGRESS_PROXY_BACKED_LABEL`). */
+  private async isProxyBacked(containerId: string): Promise<boolean> {
+    const result = await this.commandRunner("docker", [
+      "inspect",
+      "--format",
+      `{{index .Config.Labels "${EGRESS_PROXY_BACKED_LABEL}"}}`,
+      containerId,
+    ]);
+    return result.stdout.trim() === "true";
+  }
+
+  /**
+   * Before a retained proxy-backed container starts again: its isolated network back when
+   * something removed it, and the container on it (not on one of the same name since removed).
+   */
+  private async restoreIsolatedNetwork(reference: string, containerId: string): Promise<void> {
+    const proxies = this.proxies;
+    if (proxies === undefined) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Workspace container '${reference}' runs behind an egress proxy, and this worker runs none.`,
+      );
+    }
+    const name = isolatedNetworkName(reference);
+    await proxies.prepareNetworks(reference);
+    const found = await this.lookupNetwork(name);
+    if (found === "unknown" || found === "absent") {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `The isolated network '${name}' of '${reference}' could not be found after it was prepared.`,
+      );
+    }
+    const inspected = await this.commandRunner("docker", [
+      "inspect",
+      "--format",
+      "{{json .NetworkSettings.Networks}}",
+      containerId,
+    ]);
+    if (attachedNetworks(inspected.stdout).ids[name] === found.id) return;
     await this.commandRunner("docker", [
       "network",
       "disconnect",
@@ -2423,7 +2597,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // SSH access needs no key material here: the gateway reaches the workspace over the daemon
     // control socket (gateway-spec §2), and client keys are authorized against the control plane.
     const parsed = parseRuntimeAdapterSupportInput(input);
-    return supportForInput(parsed, this.egress !== undefined);
+    return supportForInput(parsed, this.egress !== undefined, this.proxies !== undefined);
   }
 
   /**
@@ -2483,7 +2657,13 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // completes. A recovery that fails to start parks it again (the next attempt unparks it).
     const reference = input.reference ?? (await this.containerName(input.resourceId));
     if (this.egress !== undefined && reference !== undefined) {
-      await this.restoreEgressNetwork(this.egress, reference, input.resourceId);
+      if (await this.isProxyBacked(input.resourceId)) {
+        // Back on its isolated network, with its proxy left parked: nothing of a recovery needs
+        // the network, and nothing it runs reaches out.
+        await this.restoreIsolatedNetwork(reference, input.resourceId);
+      } else {
+        await this.restoreEgressNetwork(this.egress, reference, input.resourceId);
+      }
     }
     const unparked = reference === undefined ? false : await this.unparkDockerService(reference);
     try {
@@ -2551,12 +2731,18 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     if (reference === undefined) {
       return { stopped: [] };
     }
+    const stopped: string[] = [];
     const service = await this.inspectContainerByName(`${reference}-docker`);
-    if (service === undefined || !service.running) {
-      return { stopped: [] };
+    if (service !== undefined && service.running) {
+      await this.commandRunner("docker", ["stop", "-t", "10", service.id]);
+      stopped.push(`${reference}-docker`);
     }
-    await this.commandRunner("docker", ["stop", "-t", "10", service.id]);
-    return { stopped: [`${reference}-docker`] };
+    // Its egress proxy too: a recovery runs without it (the workspace's work ships over the
+    // control directory's sockets, not the network), and its container and networks are kept.
+    if (this.proxies !== undefined && (await this.proxies.park(reference))) {
+      stopped.push(`${reference}-proxy`);
+    }
+    return { stopped };
   }
 
   /**
@@ -2825,6 +3011,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     if (this.egress !== undefined && parsed.reference !== undefined) {
       await this.removeEgressNetwork(this.egress, parsed.reference);
     }
+    // The workspace's egress proxy and its two networks, when it had them (a no-op otherwise).
+    if (this.proxies !== undefined && parsed.reference !== undefined) {
+      await this.proxies.remove(parsed.reference);
+    }
     // Retain the control directory: a concurrent launch can reuse it immediately after removal.
 
     return parseRuntimeAdapterStopResult({
@@ -2918,6 +3108,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     let acquisition: DockerContainerAcquisition | undefined;
     let dockerService: DockerServiceProvision | undefined;
     let egressNetworkName: string | undefined;
+    let proxyLaunched = false;
     // The executor this launch created, adopted or found ended: from the moment it exists a
     // capture-sourced launch that fails keeps it (`launch-retention.ts`).
     let executor: { readonly identity: RuntimeLaunchIdentity; readonly ended: boolean } | undefined;
@@ -2940,7 +3131,44 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // nothing started), and the image's command put behind the network gate, which holds it until
       // the guard's routes are in.
       let gate: ReturnType<typeof networkGateArgs> | undefined;
-      if (this.egress !== undefined) {
+      // A workspace behind its own egress proxy: the proxy comes up on the workspace's isolated
+      // network and takes its first policy before anything of the workspace exists, so the
+      // workspace never runs a moment without it (§7.1). Its gate also writes the trust bundle.
+      let proxied: { readonly proxyIp: string; readonly caCertPem: string } | undefined;
+      // The worker hands a proxy launch for a workspace whose stored state needs one beyond its
+      // spec (a host revocation): behind its proxy either way.
+      if (needsEgressProxy(parsed.blueprint) || parsed.egressProxy !== undefined) {
+        const proxies = this.proxies;
+        const egress = this.egress;
+        const launch = parsed.egressProxy;
+        if (proxies === undefined || egress === undefined) {
+          throw createAdapterError(
+            "adapter-unavailable",
+            "This workspace needs its own egress proxy, and this Docker worker runs none.",
+          );
+        }
+        if (launch === undefined) {
+          throw createAdapterError(
+            "adapter-unavailable",
+            "This workspace needs its own egress proxy, and its launch carries no executor CA or policy for it.",
+          );
+        }
+        await this.assertIsolatedGatewaySupport();
+        proxyLaunched = true;
+        const hostPublic = egress.policy.hostPublic.detect
+          ? await this.detectedHostAddresses()
+          : [];
+        const proxy = await proxies.launchProxy({
+          workspaceContainer: containerName,
+          launch,
+          operatorAllowedPrivateCidrs: egress.policy.allowed.map(formatCidr),
+          hostPublicIps: [...egress.policy.hostPublic.listed, ...hostPublic].map(formatCidr),
+        });
+        egressNetworkName = proxy.networks.isolated.name;
+        proxied = { proxyIp: proxy.networks.proxyIp, caCertPem: proxy.caCertPem };
+        await this.prepareEgressFacts(egress, egressNetworkName, cloudMetadataReachable);
+        gate = await this.gatedCommand(imageReference, egressProxyGateArgs);
+      } else if (this.egress !== undefined) {
         egressNetworkName = await this.ensureEgressNetwork(this.egress, containerName);
         await this.prepareEgressFacts(this.egress, egressNetworkName, cloudMetadataReachable);
         gate = await this.gatedCommand(imageReference);
@@ -2950,7 +3178,29 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             this.guardNetwork(id, name, cloudMetadataReachable),
           )
         : undefined;
-      const dockerNetworkName = dockerService?.networkName;
+      // Behind a proxy the workspace stays on its isolated network alone: its Docker service joins
+      // that network under the `docker` alias instead of the workspace joining the service's
+      // routed bridge, which would give it a way out past the proxy.
+      if (proxied !== undefined && dockerService !== undefined && egressNetworkName !== undefined) {
+        await this.commandRunner("docker", [
+          "network",
+          "connect",
+          "--alias",
+          "docker",
+          egressNetworkName,
+          dockerService.acquisition.containerId,
+        ]).catch((error: unknown) => {
+          if (
+            !/already exists|already attached/i.test(
+              error instanceof Error ? error.message : String(error),
+            )
+          ) {
+            throw error;
+          }
+        });
+      }
+      const dockerServiceAlias = dockerService === undefined ? undefined : "docker";
+      const dockerNetworkName = proxied === undefined ? dockerService?.networkName : undefined;
       // Every route the guard adds is one a packet socket could skip: with the guard on, root has
       // no NET_RAW (and `sudo` cannot get it back from the bounding set).
       const guardsRoutes = this.egress !== undefined || !cloudMetadataReachable;
@@ -3050,9 +3300,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ...(egressNetworkName === undefined ? [] : ["--network", egressNetworkName]),
         // The host itself stays reachable by name on every engine: a Linux daemon has no
         // `host.docker.internal` of its own, and `host-gateway` resolves to the bridge gateway.
-        "--add-host",
-        "host.docker.internal:host-gateway",
-        ...(dockerNetworkName === undefined
+        // Not behind a proxy: the isolated network has no gateway on the host to resolve to.
+        ...(proxied === undefined ? ["--add-host", "host.docker.internal:host-gateway"] : []),
+        ...(proxied === undefined
+          ? []
+          : proxiedWorkspaceArgs({ ...proxied, dockerService: dockerServiceAlias !== undefined })),
+        ...(dockerServiceAlias === undefined
           ? []
           : ["-e", "DOCKER_HOST=tcp://docker:2375", "-e", "DOCKER_TLS_CERTDIR="]),
         "-w",
@@ -3189,7 +3442,13 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         runtime: executor?.ended === true ? "exited" : "running",
         error,
         cleanup: () =>
-          this.cleanupFailedLaunch(containerName, acquisition, dockerService, egressNetworkName),
+          this.cleanupFailedLaunch(
+            containerName,
+            acquisition,
+            dockerService,
+            egressNetworkName,
+            proxyLaunched,
+          ),
       });
     }
   }

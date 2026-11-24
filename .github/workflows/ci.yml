@@ -211,14 +211,21 @@ jobs:
       # before. dockerd restarts rather than reloads: on Docker 28 a SIGHUP reload loses the
       # host-gateway address that workspaces' host.docker.internal needs. The restart stops the
       # postgres service, so it starts again here.
-      - name: Serve anonymous Docker Hub pulls from Google's mirror
+      #
+      # The daemon also gets public resolvers: GitHub-hosted runners run on Azure, whose default DNS
+      # is the WireServer (168.63.129.16), a cloud metadata address. The per-workspace egress guard
+      # rightly refuses a host whose Docker DNS forwards lookups there (`prepareEgressFacts`), so
+      # the egress e2e would fail on the runner's setup rather than on anything it tests.
+      - name: Serve anonymous Docker Hub pulls from Google's mirror, and resolve through public DNS
         if: runner.environment == 'github-hosted'
         env:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           config=/etc/docker/daemon.json
           current=$(sudo cat "$config" 2>/dev/null || echo '{}')
-          echo "$current" | jq '."registry-mirrors" = ["https://mirror.gcr.io"]' | sudo tee "$config"
+          echo "$current" \
+            | jq '."registry-mirrors" = ["https://mirror.gcr.io"] | ."dns" = ["1.1.1.1", "8.8.8.8"]' \
+            | sudo tee "$config"
           sudo systemctl restart docker
           docker info --format 'registry mirrors: {{json .RegistryConfig.Mirrors}}'
           docker start "$POSTGRES_CONTAINER"

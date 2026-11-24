@@ -10,6 +10,11 @@ import {
 } from "./workspace-credentials.js";
 import { applyWorkspaceDotfiles } from "./workspace-dotfiles.js";
 import {
+  applyWorkspaceNetworkPolicy,
+  getWorkspaceNetworkPolicy,
+  revokeWorkspaceAccess,
+} from "./workspace-network-policy.js";
+import {
   inspectWorkspaceImage,
   bindWorkspace,
   cancelWorkspaceCreate,
@@ -118,6 +123,15 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
           workspaceId: params.workspaceId,
           payload,
         }),
+      )
+      .handle("applyWorkspaceNetworkPolicy", ({ params, payload }) =>
+        applyWorkspaceNetworkPolicy({ workspaceId: params.workspaceId, payload }),
+      )
+      .handle("revokeWorkspaceAccess", ({ params, payload }) =>
+        revokeWorkspaceAccess({ workspaceId: params.workspaceId, payload }),
+      )
+      .handle("getWorkspaceNetworkPolicy", ({ params, query }) =>
+        getWorkspaceNetworkPolicy({ workspaceId: params.workspaceId, query }),
       )
       .handle("inspectWorkspaceImage", ({ payload }) => inspectWorkspaceImage({ payload }))
       .handle("listWorkspaceRuntimes", () => listWorkspaceRuntimes)

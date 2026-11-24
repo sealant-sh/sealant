@@ -59,6 +59,7 @@ export {
   WorkspaceForbiddenError,
   WorkspaceInternalServerError,
   WorkspaceNotFoundError,
+  WorkspaceRuntimeRequirementUnsupportedError,
   WorkspaceServiceUnavailableError,
   WorkspaceUnauthorizedError,
 } from "@sealant/api-contracts";

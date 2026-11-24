@@ -19,7 +19,10 @@ import { sessionArgvIssue, WORKSPACE_GATEWAY_UNAVAILABLE_CODE } from "@sealant/a
 import { applyDotfiles } from "../effect/apply-dotfiles.js";
 import { execWorkspace } from "../effect/exec-workspace.js";
 import {
+  applyWorkspaceNetworkPolicyOp,
   bindWorkspaceOp,
+  getWorkspaceNetworkPolicyOp,
+  revokeWorkspaceAccessOp,
   flushWorkspaceCaptureOp,
   getWorkspaceCaptureStatusOp,
   createSessionAsUserOp,
@@ -50,6 +53,7 @@ import { elapsed } from "../internal/clock.js";
 import { mapAccountRef } from "../internal/credentials.js";
 import { parseTtlSeconds } from "../internal/duration.js";
 import { requireCredentialPlacements } from "../internal/features.js";
+import { requireValidNetworkPolicy } from "../internal/network-policy.js";
 import { requireProcessUser } from "../internal/process-user.js";
 import type {
   CredentialPlacementLogin,
@@ -1164,6 +1168,83 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       await ctx.runtime.run(
         clearWorkspaceSshUserOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
       );
+    },
+
+    applyNetworkPolicy: async (options) => {
+      requireValidNetworkPolicy("workspace.applyNetworkPolicy", options);
+      const answered = await ctx.runtime.run(
+        applyWorkspaceNetworkPolicyOp(init.id, {
+          ownerUserId: ctx.config.hostLocal.ownerUserId,
+          networkPolicy: options.networkPolicy,
+          ...(options.brokeredSecrets === undefined
+            ? {}
+            : { brokeredSecrets: options.brokeredSecrets }),
+          ...(options.brokeredSecretValues === undefined
+            ? {}
+            : { brokeredSecretValues: options.brokeredSecretValues }),
+        }),
+      );
+      return {
+        policyHash: answered.policyHash,
+        revocationWatermark: answered.revocationWatermark,
+        enforcement: answered.enforcement,
+        ...(answered.closed === undefined ? {} : { closed: answered.closed }),
+      };
+    },
+
+    revokeAccess: async (options) => {
+      const secretIds = options.secretIds ?? [];
+      const hosts = options.hosts ?? [];
+      if (secretIds.length === 0 && hosts.length === 0 && options.all !== true) {
+        // The control plane's words for the same refusal.
+        throw new SealantError(
+          "workspace.revokeAccess was rejected: revocation: name secretIds, hosts or all",
+          { code: "invalid_revocation" },
+        );
+      }
+      const answered = await ctx.runtime.run(
+        revokeWorkspaceAccessOp(init.id, {
+          ownerUserId: ctx.config.hostLocal.ownerUserId,
+          ...(secretIds.length === 0 ? {} : { secretIds }),
+          ...(hosts.length === 0 ? {} : { hosts }),
+          ...(options.all === true ? { all: true } : {}),
+        }),
+      );
+      return {
+        revocationWatermark: answered.revocationWatermark,
+        enforcement: answered.enforcement,
+        ...(answered.closed === undefined ? {} : { closed: answered.closed }),
+      };
+    },
+
+    networkPolicy: async () => {
+      const answered = await ctx.runtime.run(
+        getWorkspaceNetworkPolicyOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+      );
+      return {
+        ...(answered.networkPolicy === undefined ? {} : { networkPolicy: answered.networkPolicy }),
+        brokeredSecrets: answered.brokeredSecrets,
+        revocationWatermark: answered.revocationWatermark,
+        revocations: answered.revocations.map((revocation) => ({
+          revocationWatermark: revocation.revocationWatermark,
+          kind: revocation.kind,
+          ...(revocation.target === undefined ? {} : { target: revocation.target }),
+          revokedAt: revocation.revokedAt,
+        })),
+        ...(answered.proxy === undefined
+          ? {}
+          : {
+              proxy: {
+                runId: answered.proxy.runId,
+                ...(answered.proxy.confirmedPolicyHash === undefined
+                  ? {}
+                  : { confirmedPolicyHash: answered.proxy.confirmedPolicyHash }),
+                ...(answered.proxy.confirmedRevocationWatermark === undefined
+                  ? {}
+                  : { confirmedRevocationWatermark: answered.proxy.confirmedRevocationWatermark }),
+              },
+            }),
+      };
     },
 
     forward,

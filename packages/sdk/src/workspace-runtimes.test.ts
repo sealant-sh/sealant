@@ -78,6 +78,8 @@ const runtimeLabel = (runtime: WorkspaceRuntimeKind): string => {
       return "MicroVM";
     case "boat":
       return "Boat";
+    case "host-vm":
+      return "Host VM";
   }
 };
 
