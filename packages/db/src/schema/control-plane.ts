@@ -722,6 +722,13 @@ export const workspaceAttempts = pgTable(
      * that names a launch must name this one. Null when the create named none.
      */
     launchId: text("launch_id"),
+    /**
+     * The control scope the create named for this attempt's executor: the subdirectory of the
+     * control root it mounts at `/run/sealant`, where the caller binds `capture.sock` and
+     * `session.sock`. Unique for all time, so no two executors ever share one. Null when the
+     * create named none (the executor's scope is then its container name).
+     */
+    controlScope: text("control_scope"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -731,6 +738,7 @@ export const workspaceAttempts = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
+    uniqueIndex("workspace_attempts_control_scope_idx").on(table.controlScope),
     index("workspace_attempts_owner_user_id_status_created_at_idx").on(
       table.ownerUserId,
       table.status,

@@ -20,9 +20,18 @@ import {
   type ProxyAdminClient,
 } from "./proxy-admin-client.js";
 
-/** Docker's answer about something it does not have. */
-const noSuch = (what: string) =>
-  Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
+/** Docker's answer about something it does not have, as the CLI and engines before 29 word it. */
+const noSuchCli = (what: "container" | "network", name: string) =>
+  Object.assign(new Error("failed"), { stderr: `Error: No such ${what}: ${name}` });
+
+/** The same answers from Docker Engine 29.9.1, as its daemon words them. */
+const noSuchEngine29 = (what: "container" | "network", name: string) =>
+  Object.assign(new Error("exit status 1"), {
+    stderr:
+      what === "network"
+        ? `Error response from daemon: network ${name} not found`
+        : `Error response from daemon: No such container: ${name}`,
+  });
 
 /** A Docker host in memory: containers and networks, and every command it was given. */
 const fakeDocker = (
@@ -31,8 +40,12 @@ const fakeDocker = (
     readonly bridges?:
       | ReadonlyArray<{ readonly Subnet: string; readonly Gateway?: string }>
       | "unreadable";
+    /** How this engine says it has no such container or network. */
+    readonly noSuch?: typeof noSuchCli;
   } = {},
 ) => {
+  const noSuch = (what: "container" | "network", name: string) =>
+    (options.noSuch ?? noSuchCli)(what, name);
   const calls: string[][] = [];
   const containers = new Map<string, { running: boolean; killResists?: boolean }>();
   const networks = new Map<string, Set<string>>();
@@ -53,7 +66,7 @@ const fakeDocker = (
     }
     if (verb === "network" && sub === "inspect") {
       const members = networks.get(last);
-      if (members === undefined) throw noSuch("network");
+      if (members === undefined) throw noSuch("network", last);
       return {
         stdout: args.includes("{{.Id}}") ? `id-${last}\n` : [...members].join("\n"),
         stderr: "",
@@ -78,7 +91,7 @@ const fakeDocker = (
     }
     if (verb === "inspect") {
       const container = containers.get(last);
-      if (container === undefined) throw noSuch("container");
+      if (container === undefined) throw noSuch("container", last);
       return { stdout: `cid-${last}\t${String(container.running)}\n`, stderr: "" };
     }
     if (verb === "create") {
@@ -89,13 +102,13 @@ const fakeDocker = (
     }
     if (verb === "start") {
       const container = containers.get(last);
-      if (container === undefined) throw noSuch("container");
+      if (container === undefined) throw noSuch("container", last);
       container.running = true;
       return { stdout: "", stderr: "" };
     }
     if (verb === "stop" || verb === "kill") {
       const container = containers.get(last);
-      if (container === undefined) throw noSuch("container");
+      if (container === undefined) throw noSuch("container", last);
       if (!(verb === "kill" && container.killResists === true)) container.running = false;
       return { stdout: "", stderr: "" };
     }
@@ -462,6 +475,22 @@ describe("EgressProxyOrchestrator", () => {
     expect(docker.containers.get("sealant-run1-proxy")).toEqual({ running: false });
     expect(docker.networks.has("sealant-run1-isolated")).toBe(true);
     expect(await proxies.park("sealant-run1")).toBe(false);
+  });
+
+  it("makes and removes a proxy's networks on Docker Engine 29, which says a missing network is not found", async () => {
+    const docker = fakeDocker({ noSuch: noSuchEngine29 });
+    const { orchestrator: proxies, subnets } = orchestrator(docker);
+    // A first launch asks whether each network exists, and makes it when the engine says no.
+    const networks = await proxies.prepareNetworks("sealant-run1");
+    expect(docker.networks.has(networks.isolated.name)).toBe(true);
+    expect(docker.networks.has(networks.outbound.name)).toBe(true);
+    await proxies.startProxy({ workspaceContainer: "sealant-run1", networks });
+    await proxies.remove("sealant-run1");
+    expect(docker.networks.size).toBe(0);
+    expect(subnets.held.size).toBe(0);
+    // Everything already gone reads as gone, not as a failure.
+    await proxies.remove("sealant-run1");
+    expect(await proxies.state("sealant-run1")).toBeUndefined();
   });
 
   it("removes the proxy and both networks, mirrors disconnected first, and frees the subnets", async () => {

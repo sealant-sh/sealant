@@ -47,10 +47,19 @@ export const DEFAULT_HOST_VM_IDLE_STOP_FLOOR_BYTES = 3 * GiB;
  * The converter's tools: e2fsprogs 1.47.x with libarchive, which `mke2fs -d -` loads to read a
  * tar on its stdin. Built on the Docker host on first use, tagged by this recipe's hash, unless the
  * deployment names its own image (`HostVmStorageOptions.toolsImage`).
+ *
+ * Debian's glibc build, not Alpine's: musl's libarchive refuses a tar entry whose name or link
+ * target is non-ASCII UTF-8 ("Linkpath can't be converted from UTF-8 to current locale") whatever
+ * the locale, and every Ubuntu image with `ca-certificates` has one
+ * (`/etc/ssl/certs/NetLock_Arany_=Class_Gold=_Főtanúsítvány.pem`). The UTF-8 locale keeps names
+ * byte for byte.
  */
 const TOOLS_DOCKERFILE = [
-  "FROM alpine:3.22",
-  "RUN apk add --no-cache e2fsprogs e2fsprogs-extra libarchive",
+  "FROM debian:trixie-slim",
+  "RUN apt-get update \\",
+  " && apt-get install -y --no-install-recommends e2fsprogs libarchive13t64 \\",
+  " && rm -rf /var/lib/apt/lists/*",
+  "ENV LANG=C.UTF-8 LC_ALL=C.UTF-8",
   "",
 ].join("\n");
 
@@ -62,7 +71,10 @@ export const HOST_VM_TOOLS_IMAGE_TAG = `sealant-vm-disk-tools:${createHash("sha2
 
 /** A digest a base disk is named by: `sha256:` and 64 lowercase hex digits. */
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
-/** A runner container's name, as the adapter makes it (`buildContainerName`). */
+/**
+ * A runner container's name, as the adapter makes it (`buildContainerName`), and the shape of a
+ * control scope (`CONTROL_SCOPE_PATTERN`): one path segment.
+ */
 const CONTAINER_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,127}$/;
 
 /** The file name stem of a digest's base disk and config: `sha256-<hex>`. Throws on a non-digest. */
@@ -290,12 +302,16 @@ const CONVERT_SCRIPT = [
 
 /**
  * Make one runner container's directories. `$1` its name, `$2` the data disk's size in bytes, `$3`
- * the base image digest, `$4` the control directory's group. The data disk is formatted only when
- * there is none: an existing one holds the workspace's work.
+ * the base image digest, `$4` the control directory's group, `$5` its control scope (the name,
+ * unless the launch named one). The data disk is formatted only when there is none: an existing
+ * one holds the workspace's work. The control scope may already exist, made by the caller with
+ * its `capture.sock` and `session.sock` bound in it: nothing in it is removed, and a link is
+ * refused rather than followed.
  */
 const PREPARE_SCRIPT = [
   "set -eu",
-  'd="/data/$1"; c="/control/$1"',
+  'd="/data/$1"; c="/control/$5"',
+  'if [ -L "$c" ]; then echo "the control scope $5 is a link" >&2; exit 1; fi',
   'mkdir -p "$d" "$c"',
   'if [ ! -e "$d/data.img" ]; then',
   '  truncate -s "$2" "$d/data.img.tmp"',
@@ -307,6 +323,9 @@ const PREPARE_SCRIPT = [
   // Says so on stdout: only a launch that made the disk may remove it when it fails.
   "  echo created",
   "fi",
+  // Which control scope the runner mounts, beside its disk: a recovery or a removal, whichever
+  // worker runs it, finds it there.
+  'printf "%s\\n" "$5" > "$d/control-scope"',
   `chown ${String(HOST_VM_RUNNER_UID)}:${String(HOST_VM_RUNNER_UID)} "$d"`,
   'chmod 0755 "$d"',
   // The runner binds control.sock here as 65532; the setgid bit gives the socket the directory's
@@ -315,8 +334,23 @@ const PREPARE_SCRIPT = [
   'chmod 2770 "$c"',
 ].join("\n");
 
-/** The runner's data directory and its control directory (staged files, sockets). */
-const REMOVE_SCRIPT = ["set -eu", 'rm -rf "/data/$1" "/control/$1"'].join("\n");
+/**
+ * The runner's data directory (`$1`, its name) and its control scope (`$2`). `$3` `keep`: the
+ * caller's `capture.sock` and `session.sock` stay (a failed launch, whose next attempt finds them
+ * bound), everything sealant staged goes, and the scope with it once it is empty. Otherwise the
+ * whole scope goes (the executor is removed for good).
+ */
+const REMOVE_SCRIPT = [
+  "set -eu",
+  'd="/data/$1"; c="/control/$2"',
+  'rm -rf "$d"',
+  'if [ "$3" = keep ] && [ -d "$c" ] && [ ! -L "$c" ]; then',
+  '  find "$c" -mindepth 1 -maxdepth 1 ! -name capture.sock ! -name session.sock -exec rm -rf {} +',
+  '  rmdir "$c" 2>/dev/null || true',
+  "else",
+  '  rm -rf "$c"',
+  "fi",
+].join("\n");
 
 /** Bounds on the containers that read untrusted input (an image's tar) or write as root. */
 const UNTRUSTED_CONTAINER_LIMITS = [
@@ -431,9 +465,28 @@ export class HostVmStorage {
     return joinPath(this.#options.dataDir.path, assertContainerName(containerName), "data.img");
   }
 
-  /** Where a runner container's control directory is, as the worker sees it. */
-  public controlPath(containerName: string): string {
-    return joinPath(this.#options.controlDir.path, assertContainerName(containerName));
+  /** Where a control scope (a runner's name, or the one its launch named) is, as the worker sees it. */
+  public controlPath(scope: string): string {
+    return joinPath(this.#options.controlDir.path, assertContainerName(scope));
+  }
+
+  /**
+   * The control scope a runner's data disk was prepared with (the marker beside it), or undefined
+   * when there is none (a disk made before the marker): the runner's name, then.
+   */
+  public async markedControlScope(containerName: string): Promise<string | undefined> {
+    const marker = joinPath(
+      this.#options.dataDir.path,
+      assertContainerName(containerName),
+      "control-scope",
+    );
+    try {
+      const scope = (await readFile(marker, "utf8")).trim();
+      return CONTAINER_NAME_PATTERN.test(scope) ? scope : undefined;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+      throw error;
+    }
   }
 
   /**
@@ -601,14 +654,18 @@ export class HostVmStorage {
 
   /**
    * Make a runner container's data disk (once; an existing one is kept as it is), the marker of
-   * the base image it was made for, and its control directory. Answers the data disk's path and
-   * whether this call made it.
+   * the base image it was made for, and its control scope, owned by the runner's uid and the
+   * control group (2770): whoever serves the caller's sockets there must be root or in that group.
+   * Answers the data disk's path and whether this call made it.
    */
   public async prepareExecutor(input: {
     readonly containerName: string;
     readonly baseImageDigest: string;
+    /** The control scope the runner mounts; defaults to its name. */
+    readonly controlScope?: string;
   }): Promise<{ readonly dataDiskPath: string; readonly created: boolean }> {
     const name = assertContainerName(input.containerName);
+    const scope = assertContainerName(input.controlScope ?? name);
     hostVmBaseImageKey(input.baseImageDigest);
     await mkdir(this.#options.dataDir.path, { recursive: true });
     await mkdir(this.#options.controlDir.path, { recursive: true });
@@ -618,6 +675,7 @@ export class HostVmStorage {
       String(this.#options.dataDiskBytes ?? DEFAULT_HOST_VM_DATA_DISK_BYTES),
       input.baseImageDigest,
       String(group),
+      scope,
     ]);
     return {
       dataDiskPath: this.dataDiskPath(name),
@@ -625,9 +683,21 @@ export class HostVmStorage {
     };
   }
 
-  /** Delete a runner container's data disk and its control directory. Idempotent. */
-  public async removeExecutor(containerName: string): Promise<void> {
-    await this.#runTools(REMOVE_SCRIPT, [assertContainerName(containerName)]);
+  /**
+   * Delete a runner container's data disk and its control scope (`controlScope`, its name by
+   * default). `keepCallerSockets`: the caller's `capture.sock` and `session.sock` there stay, for
+   * the next launch of the same executor. Idempotent.
+   */
+  public async removeExecutor(
+    containerName: string,
+    options: { readonly controlScope?: string; readonly keepCallerSockets?: boolean } = {},
+  ): Promise<void> {
+    const name = assertContainerName(containerName);
+    await this.#runTools(REMOVE_SCRIPT, [
+      name,
+      assertContainerName(options.controlScope ?? name),
+      options.keepCallerSockets === true ? "keep" : "all",
+    ]);
   }
 
   async #runTools(script: string, args: readonly string[]): Promise<string> {

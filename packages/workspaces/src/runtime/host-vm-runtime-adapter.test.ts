@@ -592,3 +592,101 @@ describe("HostVmRuntimeAdapter · admission (review R2)", () => {
     });
   });
 });
+
+/** What the caller's two sockets in a scope hold now (stand-ins: files with known contents). */
+const callerSocketsIn = async (scope: string) => ({
+  capture: await readFile(joinPath(scope, "capture.sock"), "utf8").catch(() => undefined),
+  session: await readFile(joinPath(scope, "session.sock"), "utf8").catch(() => undefined),
+});
+
+describe("HostVmRuntimeAdapter · a control scope the caller named (SLNT-1332)", () => {
+  const SCOPE = "mend-exec-1";
+  /** The caller binds its two sockets in the scope before it creates the workspace. */
+  const bindCallerSockets = async (h: HostVmHarness) => {
+    const scope = joinPath(h.controlDir, SCOPE);
+    await mkdir(scope, { recursive: true });
+    await writeFile(joinPath(scope, "capture.sock"), "caller's capture relay");
+    await writeFile(joinPath(scope, "session.sock"), "caller's session channel");
+    return scope;
+  };
+  const bound = {
+    capture: "caller's capture relay",
+    session: "caller's session channel",
+  };
+  const mountOf = (run: readonly string[]) =>
+    valuesOf(run, "--mount").find((mount) => mount.includes("target=/run/sealant"));
+
+  it("boots the runner in that scope and leaves the caller's sockets bound there", async () => {
+    const h = await make();
+    const scope = await bindCallerSockets(h);
+    const result = await h.adapter.launch({ ...onHostVm(cases.capture), controlScope: SCOPE });
+    const name = "sealant-vm-run-golden-4";
+
+    expect(result).toMatchObject({
+      resourceId: name,
+      controlScope: SCOPE,
+      endpoint: `unix://${joinPath(scope, "control.sock")}`,
+    });
+    expect(mountOf(runnerRun(h))).toContain(`source=${scope},`);
+    // The runner read its launch from the scope, and nothing was staged under its name.
+    expect(h.stagedAtRun[0]).toMatchObject({ mode: "normal", launch: { mode: "normal" } });
+    expect(await exists(joinPath(h.controlDir, name))).toBe(false);
+    expect(await callerSocketsIn(scope)).toEqual(bound);
+  });
+
+  it("reports its container name as the scope when the launch names none", async () => {
+    const h = await make();
+    const result = await h.adapter.launch(onHostVm(cases.gitSource));
+    expect(result.controlScope).toBe("sealant-vm-run-golden-1");
+  });
+
+  it("keeps the caller's sockets when a launch fails and removes what it staged", async () => {
+    const h = await make();
+    const scope = await bindCallerSockets(h);
+    h.runFails = true;
+    await expect(
+      h.adapter.launch({ ...onHostVm(cases.gitSource), controlScope: SCOPE }),
+    ).rejects.toThrow(/failed to create/);
+    expect(await exists(joinPath(h.dataDir, "sealant-vm-run-golden-1"))).toBe(false);
+    expect(await callerSocketsIn(scope)).toEqual(bound);
+    expect(await exists(joinPath(scope, "recovery-env.json"))).toBe(false);
+    expect(await exists(joinPath(scope, `${HOST_VM_KEY}.config.json`))).toBe(false);
+  });
+
+  it("recovers a pruned runner in the scope it was launched in, its sockets untouched", async () => {
+    const h = await make();
+    const scope = await bindCallerSockets(h);
+    await h.adapter.launch({ ...onHostVm(cases.capture), controlScope: SCOPE });
+    const name = "sealant-vm-run-golden-4";
+    await h.adapter.stop({ resourceId: name, phase: "end" });
+    h.containers.delete(name);
+    h.stagedAtRun.length = 0;
+
+    // A recovery names no scope: the runner's own disk says which.
+    const outcome = await h.adapter.recover({
+      resourceId: name,
+      runId: "run-golden-4",
+      secretEnv: { SEALANT_CAPTURE_TOKEN: "capture-only" },
+    });
+    expect(outcome).toEqual({ outcome: "restarted" });
+    const run = h.calls.filter((args) => args[0] === "run" && args.includes("--name")).at(-1) ?? [];
+    expect(mountOf(run)).toContain(`source=${scope},`);
+    expect(h.stagedAtRun[0]).toMatchObject({
+      mode: "recover",
+      launch: { secretEnv: { SEALANT_CAPTURE_TOKEN: "capture-only" } },
+    });
+    expect(await callerSocketsIn(scope)).toEqual(bound);
+    expect(await h.adapter.locate({ runId: "run-golden-4" })).toMatchObject({
+      controlScope: SCOPE,
+      endpoint: `unix://${joinPath(scope, "control.sock")}`,
+    });
+  });
+
+  it("takes the whole scope when the executor is removed for good", async () => {
+    const h = await make();
+    const scope = await bindCallerSockets(h);
+    await h.adapter.launch({ ...onHostVm(cases.gitSource), controlScope: SCOPE });
+    await h.adapter.stop({ resourceId: "sealant-vm-run-golden-1" });
+    expect(await exists(scope)).toBe(false);
+  });
+});

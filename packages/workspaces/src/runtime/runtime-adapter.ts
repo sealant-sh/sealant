@@ -1,3 +1,4 @@
+import { CONTROL_SCOPE_PROBLEMS, controlScopeProblem } from "@sealant/api-contracts/control-scope";
 import {
   workspaceBindSchema,
   ociPublicationSchema,
@@ -10,6 +11,7 @@ import {
   networkPolicyRefusal,
   newWorkspaceSchema,
   runtimeAdapterIdSchema,
+  wantsExecutorSockets,
 } from "@sealant/validators";
 import { z } from "zod";
 
@@ -130,6 +132,18 @@ const runtimeLaunchFields = {
    */
   launchId: z.string().trim().min(1).optional(),
   /**
+   * The control scope the create named for this executor (`controlScope`): the subdirectory of
+   * the control root it mounts at `/run/sealant`, where the caller has bound (or will bind)
+   * `capture.sock` and `session.sock`. Absent: the executor's container name. Only a runtime that
+   * `hasControlScopes` is handed one (`selectRuntimeAdapter`).
+   */
+  controlScope: z
+    .string()
+    .refine((scope) => controlScopeProblem(scope) === undefined, {
+      message: CONTROL_SCOPE_PROBLEMS.shape,
+    })
+    .optional(),
+  /**
    * Unsealed, policy-validated secret env for runtimes that cannot take a host directory
    * (Kubernetes projects it as the boot secret file). Docker ignores it and uses `secretEnvDir`.
    */
@@ -191,6 +205,8 @@ export const runtimeAdapterLaunchResultSchema = z.strictObject({
    * work can drain before it.
    */
   deadline: z.string().datetime({ offset: true }).optional(),
+  /** The control scope the executor mounted at `/run/sealant` (`RuntimeLaunchIdentity`). */
+  controlScope: z.string().trim().min(1).optional(),
 });
 
 // Workspaces are ephemeral (built fresh from a published image), so stop = remove: there is no
@@ -493,6 +509,13 @@ export interface RuntimeAdapter<P extends WorkspacePublication = OciPublication>
    */
   readonly keepsRemains?: boolean;
   /**
+   * Optional: each executor of this runtime mounts its own control scope, a subdirectory of the
+   * deployment's control root, at `/run/sealant` (Docker with `WORKSPACE_CONTROL_SOCKET_HOST_DIR`,
+   * host-vm): a launch may name the scope (`controlScope`) and ask for the caller's channels in it
+   * (`runtime.executorSockets`). Absent: neither, and a launch asking is never handed it.
+   */
+  readonly hasControlScopes?: boolean;
+  /**
    * Optional: a stop of this runtime's executor is recorded on its runtime row (`stopReason`)
    * BEFORE its capture drain, as soon as the stop holds the run's drain claim, where every other
    * runtime records it only when the removal starts. For a runtime whose own launch and link
@@ -615,12 +638,51 @@ export interface SelectRuntimeAdapterInput<A extends RuntimeAdapterLifecycle> {
   readonly blueprint: RuntimeAdapterBlueprint;
   readonly adapters: readonly A[];
   readonly defaultAdapterId: RuntimeAdapterId;
+  /** The control scope the launch names (`RuntimeAdapterLaunchInput.controlScope`). */
+  readonly controlScope?: string;
 }
 
 export interface RuntimeAdapterSelection<A extends RuntimeAdapterLifecycle> {
   readonly adapter: A;
   readonly adapterId: RuntimeAdapterId;
+  /**
+   * The blueprint to build and launch with: the one given, or, when a preferred runtime fell back
+   * to another, the same blueprint targeting the runtime that took it. An adapter accepts only its
+   * own family (or `auto`), so a fallback launched with the preferred family would be refused.
+   */
+  readonly blueprint: RuntimeAdapterBlueprint;
 }
+
+/** `blueprint` aimed at `adapterId` when it names another runtime family; `auto` stays `auto`. */
+const targetingAdapter = (
+  blueprint: RuntimeAdapterBlueprint,
+  adapterId: RuntimeAdapterId,
+): RuntimeAdapterBlueprint => {
+  const family = blueprint.target.runtime.family;
+  if (family === "auto" || family === adapterId) return blueprint;
+  return {
+    ...blueprint,
+    target: { ...blueprint.target, runtime: { ...blueprint.target.runtime, family: adapterId } },
+  };
+};
+
+const controlScopeRefusal = (
+  adapter: RuntimeAdapterLifecycle,
+  blueprint: RuntimeAdapterBlueprint,
+  controlScope: string | undefined,
+): RuntimeAdapterSupport | undefined => {
+  if (adapter.hasControlScopes === true) return undefined;
+  const asked = [
+    ...(controlScope === undefined ? [] : ["controlScope"]),
+    ...(wantsExecutorSockets(blueprint.runtime.executorSockets) ? ["runtime.executorSockets"] : []),
+  ];
+  if (asked.length === 0) return undefined;
+  return {
+    supported: false,
+    reason: "runtime-requirement-unsupported",
+    message: `The ${adapter.id} runtime gives its executors no control scope at /run/sealant, so it cannot take ${asked.join(" or ")}. Use the docker runtime with WORKSPACE_CONTROL_SOCKET_HOST_DIR set, or host-vm.`,
+  };
+};
 
 export const selectRuntimeAdapter = <A extends RuntimeAdapterLifecycle>(
   input: SelectRuntimeAdapterInput<A>,
@@ -650,12 +712,22 @@ export const selectRuntimeAdapter = <A extends RuntimeAdapterLifecycle>(
       };
       continue;
     }
+    // Likewise a launch that names a control scope, or asks for the caller's channels in it: on a
+    // runtime with none, the caller's sockets would never be reached.
+    const scopeRefusal = controlScopeRefusal(adapter, supportInput.blueprint, input.controlScope);
+    if (scopeRefusal !== undefined) {
+      firstSupportFailure ??= scopeRefusal;
+      continue;
+    }
 
-    const support = adapter.supports(supportInput);
+    // A fallback is asked, and launched, as its own runtime family.
+    const blueprint = targetingAdapter(supportInput.blueprint, adapterId);
+    const support = adapter.supports({ ...supportInput, blueprint });
     if (support.supported) {
       return {
         adapter,
         adapterId,
+        blueprint,
       };
     }
 

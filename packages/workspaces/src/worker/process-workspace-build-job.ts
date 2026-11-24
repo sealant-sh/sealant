@@ -729,6 +729,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             resourceId: retained.resourceId,
             reference: retained.reference,
             ...(retained.endpoint === undefined ? {} : { endpoint: retained.endpoint }),
+            ...(retained.controlScope === undefined ? {} : { controlScope: retained.controlScope }),
             ...(retained.deadline === undefined
               ? {}
               : { runtimeDeadlineAt: new Date(retained.deadline) }),
@@ -874,17 +875,34 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     // The workspace's pinned network policy ("Apply updated policy" replaces it), so runtime
     // selection and the launch both see the policy the workspace runs under now. A pinned policy
     // that cannot be read fails the launch: it never runs under an older one.
-    const spec = withPinnedEgressPolicy(createdSpec, yield* pinnedEgressPolicy(job.runId));
+    const pinnedSpec = withPinnedEgressPolicy(createdSpec, yield* pinnedEgressPolicy(job.runId));
+    // The control scope the create named for this run's executor: only a runtime that gives its
+    // executors one takes the launch, and the executor mounts that scope, where its caller may
+    // already serve capture.sock and session.sock. Read strictly: a launch that lost it would
+    // mount another scope, whose sockets nobody serves.
+    const controlScope =
+      job.runId === null
+        ? undefined
+        : ((yield* attempts
+            .getAttemptById(job.runId)
+            .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError)))?.controlScope ?? undefined);
 
-    const selectedAdapterId = yield* Effect.try({
+    const selection = yield* Effect.try({
       try: () =>
         selectRuntimeAdapter({
-          blueprint: spec,
+          blueprint: pinnedSpec,
           adapters: options.runtimes.map((runtime) => runtime.adapter),
           defaultAdapterId: options.defaultRuntimeAdapterId,
-        }).adapterId,
+          ...(controlScope === undefined ? {} : { controlScope }),
+        }),
       catch: toWorkspaceBuildJobProcessingError,
     });
+    const selectedAdapterId = selection.adapterId;
+    // Built and launched as the runtime that took it (a preferred runtime's fallback included).
+    const spec = selection.blueprint;
+    // Every way this phase ends with a publication (a native snapshot, a reused plan, a fresh
+    // build) hands the launch the attempt's control scope through here, so none can drop it.
+    const withControlScope = <A extends object>(fields: A) => ({ ...fields, controlScope });
     const runtime = options.runtimes.find(
       (candidate) => candidate.adapter.id === selectedAdapterId,
     );
@@ -954,13 +972,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       };
       if (!(yield* markSucceeded({ builderId: "boat-native", resultPayload, publication })))
         return null;
-      return {
+      return withControlScope({
         prepared: preparedPublication(runtime.adapter, publication),
         spec,
         planned: null,
         scope,
         imageProbe: publication.evidence.imageProbe,
-      };
+      });
     }
     const imageBuilder = runtime.imageBuilder;
     const prepare = (image: PublishedImage, resultPayload: WorkspaceBuild): PreparedPublication => {
@@ -1016,13 +1034,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         `Workspace image plan unchanged (hash ${reuse.planHash}); skipped build and publish, reusing ${reuse.publishedImage.digestReference}.`,
       );
 
-      return {
+      return withControlScope({
         prepared: prepare(reuse.publishedImage, reuse.resultPayload),
         spec,
         planned,
         scope,
         imageProbe: reuse.resultPayload.metadata?.imageProbe,
-      };
+      });
     }
 
     // Publish under plan-keyed coordinates — one repository per OS family, one tag per plan hash —
@@ -1157,13 +1175,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       return null;
     }
 
-    return {
+    return withControlScope({
       prepared: prepare(publishedImage, compileResult),
       spec,
       planned,
       scope,
       imageProbe: compileResult.metadata?.imageProbe,
-    };
+    });
   });
 
   const built = yield* buildAndPublish.pipe(Effect.tapError(buildFailureCleanup));
@@ -1175,7 +1193,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     );
     return null;
   }
-  const { prepared, spec, planned, scope, imageProbe } = built;
+  const { prepared, spec, planned, scope, imageProbe, controlScope } = built;
   const publication = prepared.publication;
 
   // Phase B: launch the runtime instance and record its state.
@@ -1448,6 +1466,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
               resourceId: identity.resourceId,
               reference: identity.reference,
               ...(identity.endpoint === undefined ? {} : { endpoint: identity.endpoint }),
+              ...(identity.controlScope === undefined
+                ? {}
+                : { controlScope: identity.controlScope }),
               ...(identity.deadline === undefined
                 ? {}
                 : { runtimeDeadlineAt: new Date(identity.deadline) }),
@@ -1493,6 +1514,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             ...(attemptIdentity?.launchId === null || attemptIdentity?.launchId === undefined
               ? {}
               : { launchId: attemptIdentity.launchId }),
+            ...(controlScope === undefined ? {} : { controlScope }),
             ...(labelWorkspaceId === undefined ? {} : { workspaceId: labelWorkspaceId }),
             ...(binds.length === 0 ? {} : { binds: [...binds] }),
             ...(egressProxy === undefined ? {} : { egressProxy }),
@@ -1555,6 +1577,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(runtimeLaunchResult.endpoint === undefined
             ? {}
             : { endpoint: runtimeLaunchResult.endpoint }),
+          ...(runtimeLaunchResult.controlScope === undefined
+            ? {}
+            : { controlScope: runtimeLaunchResult.controlScope }),
           launchCredentialInjections: resolvedCredentials.launchCredentialInjections,
           launchedAt: new Date(),
           // The terminal launch write: only while the launch is still this worker's.
@@ -1579,6 +1604,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
                       ...(runtimeLaunchResult.endpoint === undefined
                         ? {}
                         : { endpoint: runtimeLaunchResult.endpoint }),
+                      ...(runtimeLaunchResult.controlScope === undefined
+                        ? {}
+                        : { controlScope: runtimeLaunchResult.controlScope }),
                       ...(runtimeLaunchResult.deadline === undefined
                         ? {}
                         : { deadline: runtimeLaunchResult.deadline }),

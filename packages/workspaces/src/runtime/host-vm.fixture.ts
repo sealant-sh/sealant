@@ -5,7 +5,7 @@
  * `health` only while the runner container runs. Tests drive it through the adapter and read back
  * what a Docker host would hold.
  */
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 
@@ -29,6 +29,8 @@ const GiB = 1024 ** 3;
 export interface FakeContainer {
   readonly name: string;
   readonly args: readonly string[];
+  /** The control scope its `/run/sealant` mount names. */
+  readonly scope: string;
   running: boolean;
   exitCode: number;
   /** Created and never started (`docker run` failed at start). */
@@ -76,6 +78,15 @@ const ok = (stdout = "") => ({ stdout, stderr: "" });
 
 /** The workspace container a proxy (`<name>-proxy`) belongs to. */
 const workspaceOf = (proxyName: string) => proxyName.replace(/-proxy$/, "");
+
+/** The control scope a runner's `docker run` mounts at `/run/sealant` (a bind of `<control>/<scope>`). */
+const scopeOfRun = (argv: readonly string[], controlDir: string): string | undefined => {
+  const mount = argv.find((arg) => arg.includes("target=/run/sealant"));
+  const source = /source=([^,]+)/.exec(mount ?? "")?.[1];
+  return source?.startsWith(`${controlDir}/`) === true
+    ? source.slice(controlDir.length + 1)
+    : undefined;
+};
 
 export const EXECUTOR_CA_PEM =
   "-----BEGIN CERTIFICATE-----\nMIIBfixture\n-----END CERTIFICATE-----\n";
@@ -284,8 +295,11 @@ export const createHostVmHarness = async (
       const positional = args.slice(args.indexOf("-c") + 3);
       const [name = "", , digest = ""] = positional;
       if (script.includes("mkfs.ext4")) {
+        // `$5`: the control scope; nothing already in it is touched.
+        const scope = positional[4] ?? name;
         await mkdir(joinPath(dataDir, name), { recursive: true });
-        await mkdir(joinPath(controlDir, name), { recursive: true });
+        await mkdir(joinPath(controlDir, scope), { recursive: true });
+        await writeFile(joinPath(dataDir, name, "control-scope"), `${scope}\n`);
         const disk = joinPath(dataDir, name, "data.img");
         const exists = await access(disk).then(
           () => true,
@@ -297,8 +311,19 @@ export const createHostVmHarness = async (
           return ok("created\n");
         }
       } else if (script.includes("rm -rf")) {
+        // `$2`: the control scope; `$3` `keep`: the caller's two sockets stay.
+        const scope = joinPath(controlDir, positional[1] ?? name);
         await rm(joinPath(dataDir, name), { recursive: true, force: true });
-        await rm(joinPath(controlDir, name), { recursive: true, force: true });
+        if (positional[2] === "keep") {
+          const entries = await readdir(scope).catch(() => [] as string[]);
+          for (const entry of entries) {
+            if (entry === "capture.sock" || entry === "session.sock") continue;
+            await rm(joinPath(scope, entry), { recursive: true, force: true });
+          }
+          await rmdir(scope).catch(() => undefined);
+        } else {
+          await rm(scope, { recursive: true, force: true });
+        }
       }
       return ok();
     }
@@ -308,10 +333,12 @@ export const createHostVmHarness = async (
         harness.runFails = false;
         throw new Error("docker: Error response from daemon: failed to create task");
       }
+      const scope = scopeOfRun(args, controlDir) ?? name;
       if (harness.runFailsAtStart) {
         harness.runFailsAtStart = false;
         containers.set(name, {
           name,
+          scope,
           args: [...args],
           running: false,
           exitCode: 128,
@@ -326,12 +353,12 @@ export const createHostVmHarness = async (
       events.push(`run:${name}`);
       const mode = args[args.indexOf("--mode") + 1] ?? "";
       const launchFile = mode === "recover" ? "recovery-env.json" : "boot-env.json";
-      const launch = await readFile(joinPath(controlDir, name, launchFile), "utf8").then(
+      const launch = await readFile(joinPath(controlDir, scope, launchFile), "utf8").then(
         (text): unknown => JSON.parse(text),
         () => undefined,
       );
       stagedAtRun.push({ mode, launch });
-      containers.set(name, { name, args: [...args], running: true, exitCode: 0 });
+      containers.set(name, { name, scope, args: [...args], running: true, exitCode: 0 });
       return ok(`${name}-id\n`);
     }
     return ok();
@@ -356,8 +383,9 @@ export const createHostVmHarness = async (
   const controlChannel: ControlChannel = {
     health: async (target) => {
       if (target.kind !== "unix-socket") throw new Error("not a socket target");
-      const name = target.socketPath.split("/").at(-2) ?? "";
-      const container = containers.get(name);
+      // The socket is in the runner's control scope, which need not be its name.
+      const scope = target.socketPath.split("/").at(-2) ?? "";
+      const container = [...containers.values()].find((candidate) => candidate.scope === scope);
       if (container !== undefined && container.running && harness.exitOnBoot !== undefined) {
         container.running = false;
         container.exitCode = harness.exitOnBoot;

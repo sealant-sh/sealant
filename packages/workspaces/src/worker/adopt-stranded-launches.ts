@@ -111,6 +111,7 @@ const identifyUnrecordedExecutors = (
             resourceId: found.resourceId,
             reference: found.reference,
             ...(found.endpoint === undefined ? {} : { endpoint: found.endpoint }),
+            ...(found.controlScope === undefined ? {} : { controlScope: found.controlScope }),
             unownedGraceMs,
           });
           if (identified !== undefined) {

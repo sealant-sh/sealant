@@ -19,6 +19,7 @@ import {
   GitHubInstallationRepositoryCacheRepo,
   ProfileRepo,
   WorkspaceAttemptRepo,
+  WorkspaceControlScopeTakenError,
   WorkspaceBuildJobRepo,
   WorkspaceRepo,
   WorkspaceRepoUnexpectedError,
@@ -137,8 +138,10 @@ interface RecordingState {
   existingJobStatus?: "queued" | "running" | "succeeded" | "failed";
   /** The create reservations, by `owner/key`. */
   reservations?: Map<string, WorkspaceCreateReservation>;
-  /** Attempts written (with their launch ids). */
-  attempts?: Array<{ id: string; launchId: string | undefined }>;
+  /** Attempts written (with their launch ids and control scopes). */
+  attempts?: Array<{ id: string; launchId: string | undefined; controlScope?: string | undefined }>;
+  /** Control scopes another executor already holds. */
+  takenControlScopes?: ReadonlySet<string>;
   /** Workspace statuses set. */
   statuses?: Array<{ id: string; status: string }>;
   /** Runs as the launch job is written (to interleave a cancel with a create). */
@@ -282,32 +285,47 @@ const makeRecordingLayer = (
 
   const attemptRepo: WorkspaceAttemptRepoService = {
     createQueuedAttempt: (input) =>
-      Effect.sync(() => {
-        (state.attempts ??= []).push({ id: input.id, launchId: input.launchId });
-      }).pipe(
-        Effect.andThen(
-          Effect.succeed<WorkspaceAttempt>({
-            id: input.id,
-            ownerUserId: input.ownerUserId,
-            repositoryId: input.repositoryId ?? null,
-            repositoryProfileRevisionId: input.repositoryProfileRevisionId ?? null,
-            profileRevisionId: input.profileRevisionId ?? null,
-            status: "queued",
-            triggerType: input.triggerType ?? "manual",
-            triggerRef: input.triggerRef ?? null,
-            requestedByUserId: input.requestedByUserId ?? null,
-            retryOfRunId: input.retryOfRunId ?? null,
-            cancelReason: null,
-            queuedAt: input.queuedAt ?? now,
-            startedAt: null,
-            finishedAt: null,
-            durationMs: null,
-            launchId: input.launchId ?? null,
-            createdAt: now,
-            updatedAt: now,
-          }),
+      (input.controlScope !== undefined &&
+      state.takenControlScopes?.has(input.controlScope) === true
+        ? Effect.fail(new WorkspaceControlScopeTakenError({ controlScope: input.controlScope }))
+        : Effect.void
+      )
+        .pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              (state.attempts ??= []).push({
+                id: input.id,
+                launchId: input.launchId,
+                controlScope: input.controlScope,
+              });
+            }),
+          ),
+        )
+        .pipe(
+          Effect.andThen(
+            Effect.succeed<WorkspaceAttempt>({
+              id: input.id,
+              ownerUserId: input.ownerUserId,
+              repositoryId: input.repositoryId ?? null,
+              repositoryProfileRevisionId: input.repositoryProfileRevisionId ?? null,
+              profileRevisionId: input.profileRevisionId ?? null,
+              status: "queued",
+              triggerType: input.triggerType ?? "manual",
+              triggerRef: input.triggerRef ?? null,
+              requestedByUserId: input.requestedByUserId ?? null,
+              retryOfRunId: input.retryOfRunId ?? null,
+              cancelReason: null,
+              queuedAt: input.queuedAt ?? now,
+              startedAt: null,
+              finishedAt: null,
+              durationMs: null,
+              launchId: input.launchId ?? null,
+              controlScope: input.controlScope ?? null,
+              createdAt: now,
+              updatedAt: now,
+            }),
+          ),
         ),
-      ),
     getAttemptById: () => Effect.succeed(undefined),
     getAttemptSnapshotByRunId: () => Effect.die("unused"),
     setAttemptSnapshot: (input) => {
@@ -755,6 +773,7 @@ describe("createWorkspace · idempotency key", () => {
     hostVmBaseImageDigest: null,
     captureClaimedAt: null,
     hostVmRunnerEgress: null,
+    controlScope: null,
     removedAt: null,
     sourceKind: "capture",
     createdAt: now,
@@ -1023,6 +1042,42 @@ describe("createWorkspace · the launch identity (decision 5)", () => {
     );
     expect(answer.launchId).toBe("launch_7");
     expect(state.attempts).toEqual([{ id: answer.runId, launchId: "launch_7" }]);
+  });
+});
+
+describe("createWorkspace · the executor's control scope (SLNT-1332)", () => {
+  it("records the scope the create names on its attempt and answers with it", async () => {
+    const state: RecordingState = {};
+    const answer = await Effect.runPromise(
+      createWorkspace({
+        payload: { ...capturePayload("/workspace/harness-home"), controlScope: "mend-exec-1" },
+        headers: {},
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+    expect(answer.controlScope).toBe("mend-exec-1");
+    expect(state.attempts).toEqual([
+      { id: answer.runId, launchId: undefined, controlScope: "mend-exec-1" },
+    ]);
+  });
+
+  it("refuses a scope another executor holds, and launches nothing", async () => {
+    const state: RecordingState = { takenControlScopes: new Set(["mend-exec-1"]) };
+    const result = await Effect.runPromise(
+      Effect.result(
+        createWorkspace({
+          payload: { ...capturePayload("/workspace/harness-home"), controlScope: "mend-exec-1" },
+          headers: {},
+        }).pipe(Effect.provide(makeRecordingLayer(state))),
+      ),
+    );
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure).toMatchObject({
+        _tag: "WorkspaceConflictError",
+        code: "control-scope-taken",
+      });
+    }
+    expect(state.publishedJobId).toBeUndefined();
   });
 });
 

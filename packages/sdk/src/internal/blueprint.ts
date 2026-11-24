@@ -20,6 +20,7 @@ import {
   type CreateWorkspaceRequest,
 } from "@sealant/api-contracts";
 import { captureOwnerMapProblems } from "@sealant/api-contracts/capture-owner-map";
+import { controlScopeProblem } from "@sealant/api-contracts/control-scope";
 import {
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
@@ -62,6 +63,14 @@ export const buildCreateWorkspaceRequest = (
       'workspaces.create `resources` is "none" (the workspace is never linked to project resources) or omitted.',
       { code: "invalid_create_options" },
     );
+  }
+  if (options.controlScope !== undefined) {
+    const problem = controlScopeProblem(options.controlScope);
+    if (problem !== undefined) {
+      throw new SealantError(`workspaces.create \`controlScope\` ${problem}.`, {
+        code: "invalid_create_options",
+      });
+    }
   }
   if (
     options.boatAccountId !== undefined &&
@@ -242,6 +251,15 @@ export const buildCreateWorkspaceRequest = (
     // Sent only when asked: absent is the control plane's default (the workspace may be linked).
     ...(options.resources === undefined ? {} : { resources: options.resources }),
     ...(options.boatAccountId === undefined ? {} : { boatAccountId: options.boatAccountId }),
+    // Sent only when it asks for a channel: absent is the control plane's default (none).
+    ...(options.executorSockets?.capture === true || options.executorSockets?.session === true
+      ? {
+          executorSockets: {
+            capture: options.executorSockets.capture === true,
+            session: options.executorSockets.session === true,
+          },
+        }
+      : {}),
     ...(options.credentialsHome === undefined
       ? {}
       : {
@@ -373,6 +391,7 @@ export const buildCreateWorkspaceRequest = (
       ...(options.ttl === undefined ? {} : { ttlSeconds: parseTtlSeconds(options.ttl) }),
       ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
       ...(options.launchId === undefined ? {} : { launchId: options.launchId }),
+      ...(options.controlScope === undefined ? {} : { controlScope: options.controlScope }),
       ...(options.sshAsOwner === true ? { sshAsOwner: true } : {}),
       spec,
       ...(secretEnv === undefined ? {} : { secretEnv }),
