@@ -2,9 +2,7 @@
   "version": "8",
   "dialect": "postgres",
   "id": "240bb6a5-ceb9-4662-b0df-c98a4ca7aa7a",
-  "prevIds": [
-    "ab9bc649-d5f9-4d00-9d01-6cd87fed06b2"
-  ],
+  "prevIds": ["ab9bc649-d5f9-4d00-9d01-6cd87fed06b2"],
   "ddl": [
     {
       "isRlsEnabled": false,
@@ -13150,14 +13148,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "user_id"
-      ],
+      "columns": ["user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "account_user_id_user_id_fkey",
@@ -13167,14 +13161,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "user_id"
-      ],
+      "columns": ["user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "session_user_id_user_id_fkey",
@@ -13184,14 +13174,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "user_id"
-      ],
+      "columns": ["user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "user_person_binding_user_id_user_id_fkey",
@@ -13201,14 +13187,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "access_tokens_owner_user_id_user_id_fkey",
@@ -13218,14 +13200,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "schemaTo": "public",
       "tableTo": "workspaces",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "access_tokens_workspace_id_workspaces_id_fkey",
@@ -13235,14 +13213,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "connected_account_defaults_owner_user_id_user_id_fkey",
@@ -13252,18 +13226,10 @@
     },
     {
       "nameExplicit": true,
-      "columns": [
-        "connected_account_id",
-        "owner_user_id",
-        "provider"
-      ],
+      "columns": ["connected_account_id", "owner_user_id", "provider"],
       "schemaTo": "public",
       "tableTo": "connected_accounts",
-      "columnsTo": [
-        "id",
-        "owner_user_id",
-        "provider"
-      ],
+      "columnsTo": ["id", "owner_user_id", "provider"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "connected_account_defaults_account_fkey",
@@ -13273,14 +13239,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "connected_accounts_owner_user_id_user_id_fkey",
@@ -13290,14 +13252,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "installation_id"
-      ],
+      "columns": ["installation_id"],
       "schemaTo": "public",
       "tableTo": "github_app_installations",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "github_installation_repositories_EczgruDGqXK4_fkey",
@@ -13307,14 +13265,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "repository_id"
-      ],
+      "columns": ["repository_id"],
       "schemaTo": "public",
       "tableTo": "repositories",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "github_installation_repositories_T7EYEqoYhULZ_fkey",
@@ -13324,14 +13278,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "installation_id"
-      ],
+      "columns": ["installation_id"],
       "schemaTo": "public",
       "tableTo": "github_app_installations",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "github_installation_user_grants_4P7GtWFXLOXD_fkey",
@@ -13341,14 +13291,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "user_id"
-      ],
+      "columns": ["user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "github_installation_user_grants_user_id_user_id_fkey",
@@ -13358,14 +13304,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "granted_by_user_id"
-      ],
+      "columns": ["granted_by_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "github_installation_user_grants_granted_by_user_id_user_id_fkey",
@@ -13375,14 +13317,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "inference_usage_owner_user_id_user_id_fkey",
@@ -13392,14 +13330,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_id"
-      ],
+      "columns": ["profile_id"],
       "schemaTo": "public",
       "tableTo": "profiles",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "profile_connected_accounts_profile_id_profiles_id_fkey",
@@ -13409,14 +13343,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "connected_account_id"
-      ],
+      "columns": ["connected_account_id"],
       "schemaTo": "public",
       "tableTo": "connected_accounts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "profile_connected_accounts_b1BOWlnHbk5x_fkey",
@@ -13426,14 +13356,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_revision_id"
-      ],
+      "columns": ["profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "profile_env_vars_profile_revision_id_profile_revisions_id_fkey",
@@ -13443,14 +13369,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_id"
-      ],
+      "columns": ["profile_id"],
       "schemaTo": "public",
       "tableTo": "profiles",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "profile_revisions_profile_id_profiles_id_fkey",
@@ -13460,14 +13382,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "created_by_user_id"
-      ],
+      "columns": ["created_by_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "profile_revisions_created_by_user_id_user_id_fkey",
@@ -13477,14 +13395,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_revision_id"
-      ],
+      "columns": ["profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "profile_secret_bindings_0D5nVEwOMuDq_fkey",
@@ -13494,14 +13408,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "secret_id"
-      ],
+      "columns": ["secret_id"],
       "schemaTo": "public",
       "tableTo": "secrets",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "profile_secret_bindings_secret_id_secrets_id_fkey",
@@ -13511,14 +13421,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "secret_version_id"
-      ],
+      "columns": ["secret_version_id"],
       "schemaTo": "public",
       "tableTo": "secret_versions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "profile_secret_bindings_Iz65b4piLqry_fkey",
@@ -13528,14 +13434,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_revision_id"
-      ],
+      "columns": ["profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "profile_ssh_key_bindings_4xyaNv6gLvLu_fkey",
@@ -13545,14 +13447,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "ssh_key_id"
-      ],
+      "columns": ["ssh_key_id"],
       "schemaTo": "public",
       "tableTo": "ssh_keys",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "profile_ssh_key_bindings_ssh_key_id_ssh_keys_id_fkey",
@@ -13562,14 +13460,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_revision_id"
-      ],
+      "columns": ["profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "profile_ssh_settings_a1y2A7BNnJiD_fkey",
@@ -13579,14 +13473,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "profiles_owner_user_id_user_id_fkey",
@@ -13596,14 +13486,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "repository_profile_revision_id"
-      ],
+      "columns": ["repository_profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "repository_profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "repository_profile_profile_links_HkCIt3vMg6Ld_fkey",
@@ -13613,14 +13499,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_revision_id"
-      ],
+      "columns": ["profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "repository_profile_profile_links_2IcWgHsDrtxj_fkey",
@@ -13630,14 +13512,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "repository_profile_id"
-      ],
+      "columns": ["repository_profile_id"],
       "schemaTo": "public",
       "tableTo": "repository_profiles",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "repository_profile_revisions_GXtbJiENUwkc_fkey",
@@ -13647,14 +13525,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "created_by_user_id"
-      ],
+      "columns": ["created_by_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "repository_profile_revisions_created_by_user_id_user_id_fkey",
@@ -13664,14 +13538,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "repository_id"
-      ],
+      "columns": ["repository_id"],
       "schemaTo": "public",
       "tableTo": "repositories",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "repository_profiles_repository_id_repositories_id_fkey",
@@ -13681,14 +13551,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "schemaTo": "public",
       "tableTo": "workspaces",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "runs_workspace_id_workspaces_id_fkey",
@@ -13698,14 +13564,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "attempt_id"
-      ],
+      "columns": ["attempt_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "runs_attempt_id_workspace_attempts_id_fkey",
@@ -13715,14 +13577,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "runs_owner_user_id_user_id_fkey",
@@ -13732,14 +13590,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "secret_id"
-      ],
+      "columns": ["secret_id"],
       "schemaTo": "public",
       "tableTo": "secrets",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "secret_versions_secret_id_secrets_id_fkey",
@@ -13749,14 +13603,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "created_by_user_id"
-      ],
+      "columns": ["created_by_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "secret_versions_created_by_user_id_user_id_fkey",
@@ -13766,14 +13616,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "secrets_owner_user_id_user_id_fkey",
@@ -13783,14 +13629,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "ssh_keys_owner_user_id_user_id_fkey",
@@ -13800,14 +13642,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "private_key_secret_id"
-      ],
+      "columns": ["private_key_secret_id"],
       "schemaTo": "public",
       "tableTo": "secrets",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "ssh_keys_private_key_secret_id_secrets_id_fkey",
@@ -13817,14 +13655,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "passphrase_secret_id"
-      ],
+      "columns": ["passphrase_secret_id"],
       "schemaTo": "public",
       "tableTo": "secrets",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "ssh_keys_passphrase_secret_id_secrets_id_fkey",
@@ -13834,14 +13668,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_attempt_snapshots_run_id_workspace_attempts_id_fkey",
@@ -13851,14 +13681,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_attempts_owner_user_id_user_id_fkey",
@@ -13868,14 +13694,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "repository_id"
-      ],
+      "columns": ["repository_id"],
       "schemaTo": "public",
       "tableTo": "repositories",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspace_attempts_repository_id_repositories_id_fkey",
@@ -13885,14 +13707,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "repository_profile_revision_id"
-      ],
+      "columns": ["repository_profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "repository_profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspace_attempts_vSM9mCbOUfBx_fkey",
@@ -13902,14 +13720,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_revision_id"
-      ],
+      "columns": ["profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspace_attempts_profile_revision_id_profile_revisions_id_fkey",
@@ -13919,14 +13733,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "requested_by_user_id"
-      ],
+      "columns": ["requested_by_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspace_attempts_requested_by_user_id_user_id_fkey",
@@ -13936,14 +13746,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_create_reservations_owner_user_id_user_id_fkey",
@@ -13953,14 +13759,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "schemaTo": "public",
       "tableTo": "workspaces",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_run_links_workspace_id_workspaces_id_fkey",
@@ -13970,14 +13772,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_run_links_run_id_workspace_attempts_id_fkey",
@@ -13987,14 +13785,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "schemaTo": "public",
       "tableTo": "workspaces",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_sessions_workspace_id_workspaces_id_fkey",
@@ -14004,14 +13798,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "runs",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_sessions_run_id_runs_id_fkey",
@@ -14021,14 +13811,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_sessions_owner_user_id_user_id_fkey",
@@ -14038,14 +13824,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "owner_user_id"
-      ],
+      "columns": ["owner_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspaces_owner_user_id_user_id_fkey",
@@ -14055,14 +13837,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "repository_id"
-      ],
+      "columns": ["repository_id"],
       "schemaTo": "public",
       "tableTo": "repositories",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspaces_repository_id_repositories_id_fkey",
@@ -14072,14 +13850,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "repository_profile_revision_id"
-      ],
+      "columns": ["repository_profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "repository_profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspaces_u64S3twqB0DQ_fkey",
@@ -14089,14 +13863,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "profile_revision_id"
-      ],
+      "columns": ["profile_revision_id"],
       "schemaTo": "public",
       "tableTo": "profile_revisions",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspaces_profile_revision_id_profile_revisions_id_fkey",
@@ -14106,14 +13876,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "requested_by_user_id"
-      ],
+      "columns": ["requested_by_user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspaces_requested_by_user_id_user_id_fkey",
@@ -14123,14 +13889,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "latest_run_id"
-      ],
+      "columns": ["latest_run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "workspaces_latest_run_id_workspace_attempts_id_fkey",
@@ -14140,14 +13902,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "oci_image_build_jobs_run_id_workspace_attempts_id_fkey",
@@ -14157,14 +13915,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_capture_drains_run_id_workspace_attempts_id_fkey",
@@ -14174,14 +13928,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_runtime_instances",
-      "columnsTo": [
-        "run_id"
-      ],
+      "columnsTo": ["run_id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_credential_homes_fLgyZlcnAX4O_fkey",
@@ -14191,16 +13941,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id",
-        "home"
-      ],
+      "columns": ["run_id", "home"],
       "schemaTo": "public",
       "tableTo": "workspace_credential_homes",
-      "columnsTo": [
-        "run_id",
-        "home"
-      ],
+      "columnsTo": ["run_id", "home"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_credential_placements_xuFtZjPIdlix_fkey",
@@ -14210,14 +13954,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_runtime_instances_run_id_workspace_attempts_id_fkey",
@@ -14227,14 +13967,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "resource_domain_id"
-      ],
+      "columns": ["resource_domain_id"],
       "schemaTo": "public",
       "tableTo": "resource_domains",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "resource_domain_allocations_PD3IlmOmL1M0_fkey",
@@ -14244,14 +13980,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "source_allocation_id"
-      ],
+      "columns": ["source_allocation_id"],
       "schemaTo": "public",
       "tableTo": "resource_domain_allocations",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "resource_domain_allocations_VizBo7HHIYPu_fkey",
@@ -14261,14 +13993,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "resource_domain_id"
-      ],
+      "columns": ["resource_domain_id"],
       "schemaTo": "public",
       "tableTo": "resource_domains",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "resource_domain_members_B6mAYApnPqrQ_fkey",
@@ -14278,14 +14006,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "user_id"
-      ],
+      "columns": ["user_id"],
       "schemaTo": "public",
       "tableTo": "user",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "resource_domain_members_user_id_user_id_fkey",
@@ -14295,14 +14019,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "resource_domain_id"
-      ],
+      "columns": ["resource_domain_id"],
       "schemaTo": "public",
       "tableTo": "resource_domains",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "resource_instances_resource_domain_id_resource_domains_id_fkey",
@@ -14312,14 +14032,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "schemaTo": "public",
       "tableTo": "workspaces",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "resource_workspace_links_workspace_id_workspaces_id_fkey",
@@ -14329,14 +14045,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "resource_domain_id"
-      ],
+      "columns": ["resource_domain_id"],
       "schemaTo": "public",
       "tableTo": "resource_domains",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "resource_workspace_links_yC3NlJmsi54T_fkey",
@@ -14346,14 +14058,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "native_publication_consumers_run_id_workspace_attempts_id_fkey",
@@ -14363,14 +14071,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "publication_id"
-      ],
+      "columns": ["publication_id"],
       "schemaTo": "public",
       "tableTo": "native_publications",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "native_publication_consumers_FGHITjgPWFcL_fkey",
@@ -14380,14 +14084,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "replaces_publication_id"
-      ],
+      "columns": ["replaces_publication_id"],
       "schemaTo": "public",
       "tableTo": "native_publications",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "native_publications_njIRpdgESEEC_fkey",
@@ -14397,14 +14097,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "boat_runs_run_id_workspace_attempts_id_fkey",
@@ -14414,14 +14110,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "account_id"
-      ],
+      "columns": ["account_id"],
       "schemaTo": "public",
       "tableTo": "boat_accounts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "boat_runs_account_id_boat_accounts_id_fkey",
@@ -14431,14 +14123,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "publication_id"
-      ],
+      "columns": ["publication_id"],
       "schemaTo": "public",
       "tableTo": "native_publications",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "boat_runs_publication_id_native_publications_id_fkey",
@@ -14448,14 +14136,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "runtime_instance_id"
-      ],
+      "columns": ["runtime_instance_id"],
       "schemaTo": "public",
       "tableTo": "boat_runs",
-      "columnsTo": [
-        "run_id"
-      ],
+      "columnsTo": ["run_id"],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "boat_tunnels_runtime_instance_id_boat_runs_run_id_fkey",
@@ -14465,14 +14149,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "schemaTo": "public",
       "tableTo": "workspaces",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_egress_policies_workspace_id_workspaces_id_fkey",
@@ -14482,14 +14162,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "workspace_attempts",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_egress_proxies_run_id_workspace_attempts_id_fkey",
@@ -14499,14 +14175,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "schemaTo": "public",
       "tableTo": "workspaces",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_egress_proxies_workspace_id_workspaces_id_fkey",
@@ -14516,14 +14188,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "schemaTo": "public",
       "tableTo": "workspaces",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "workspace_egress_revocations_workspace_id_workspaces_id_fkey",
@@ -14533,14 +14201,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "runs",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "telemetry_artifacts_run_id_runs_id_fkey",
@@ -14550,14 +14214,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "runs",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "telemetry_events_run_id_runs_id_fkey",
@@ -14567,14 +14227,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "runs",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "telemetry_loss_spans_run_id_runs_id_fkey",
@@ -14584,14 +14240,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "runs",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "telemetry_run_epochs_run_id_runs_id_fkey",
@@ -14601,14 +14253,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "runs",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "telemetry_scrollback_run_id_runs_id_fkey",
@@ -14618,14 +14266,10 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "schemaTo": "public",
       "tableTo": "runs",
-      "columnsTo": [
-        "id"
-      ],
+      "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "telemetry_timeline_run_id_runs_id_fkey",
@@ -14634,10 +14278,7 @@
       "table": "telemetry_timeline"
     },
     {
-      "columns": [
-        "owner_user_id",
-        "provider"
-      ],
+      "columns": ["owner_user_id", "provider"],
       "nameExplicit": false,
       "name": "connected_account_defaults_pkey",
       "entityType": "pks",
@@ -14645,10 +14286,7 @@
       "table": "connected_account_defaults"
     },
     {
-      "columns": [
-        "installation_id",
-        "user_id"
-      ],
+      "columns": ["installation_id", "user_id"],
       "nameExplicit": false,
       "name": "github_installation_user_grants_pkey",
       "entityType": "pks",
@@ -14656,10 +14294,7 @@
       "table": "github_installation_user_grants"
     },
     {
-      "columns": [
-        "owner_user_id",
-        "day"
-      ],
+      "columns": ["owner_user_id", "day"],
       "nameExplicit": false,
       "name": "inference_usage_pkey",
       "entityType": "pks",
@@ -14667,10 +14302,7 @@
       "table": "inference_usage"
     },
     {
-      "columns": [
-        "profile_id",
-        "provider"
-      ],
+      "columns": ["profile_id", "provider"],
       "nameExplicit": false,
       "name": "profile_connected_accounts_pkey",
       "entityType": "pks",
@@ -14678,11 +14310,7 @@
       "table": "profile_connected_accounts"
     },
     {
-      "columns": [
-        "profile_revision_id",
-        "ssh_key_id",
-        "purpose"
-      ],
+      "columns": ["profile_revision_id", "ssh_key_id", "purpose"],
       "nameExplicit": false,
       "name": "profile_ssh_key_bindings_pkey",
       "entityType": "pks",
@@ -14690,10 +14318,7 @@
       "table": "profile_ssh_key_bindings"
     },
     {
-      "columns": [
-        "owner_user_id",
-        "idempotency_key"
-      ],
+      "columns": ["owner_user_id", "idempotency_key"],
       "nameExplicit": false,
       "name": "workspace_create_reservations_pkey",
       "entityType": "pks",
@@ -14701,10 +14326,7 @@
       "table": "workspace_create_reservations"
     },
     {
-      "columns": [
-        "workspace_id",
-        "run_id"
-      ],
+      "columns": ["workspace_id", "run_id"],
       "nameExplicit": false,
       "name": "workspace_run_links_pkey",
       "entityType": "pks",
@@ -14712,10 +14334,7 @@
       "table": "workspace_run_links"
     },
     {
-      "columns": [
-        "run_id",
-        "home"
-      ],
+      "columns": ["run_id", "home"],
       "nameExplicit": false,
       "name": "workspace_credential_homes_pkey",
       "entityType": "pks",
@@ -14723,10 +14342,7 @@
       "table": "workspace_credential_homes"
     },
     {
-      "columns": [
-        "resource_domain_id",
-        "user_id"
-      ],
+      "columns": ["resource_domain_id", "user_id"],
       "nameExplicit": false,
       "name": "resource_domain_members_pkey",
       "entityType": "pks",
@@ -14734,10 +14350,7 @@
       "table": "resource_domain_members"
     },
     {
-      "columns": [
-        "run_id",
-        "runtime_instance_id"
-      ],
+      "columns": ["run_id", "runtime_instance_id"],
       "nameExplicit": false,
       "name": "native_publication_consumers_pkey",
       "entityType": "pks",
@@ -14745,9 +14358,7 @@
       "table": "native_publication_consumers"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "account_pkey",
       "schema": "public",
@@ -14755,9 +14366,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "session_pkey",
       "schema": "public",
@@ -14765,9 +14374,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "user_pkey",
       "schema": "public",
@@ -14775,9 +14382,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "user_id"
-      ],
+      "columns": ["user_id"],
       "nameExplicit": false,
       "name": "user_person_binding_pkey",
       "schema": "public",
@@ -14785,9 +14390,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "verification_pkey",
       "schema": "public",
@@ -14795,9 +14398,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "access_tokens_pkey",
       "schema": "public",
@@ -14805,9 +14406,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "connected_accounts_pkey",
       "schema": "public",
@@ -14815,9 +14414,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "github_app_installations_pkey",
       "schema": "public",
@@ -14825,9 +14422,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "github_installation_repositories_pkey",
       "schema": "public",
@@ -14835,9 +14430,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "github_webhook_deliveries_pkey",
       "schema": "public",
@@ -14845,9 +14438,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "query"
-      ],
+      "columns": ["query"],
       "nameExplicit": false,
       "name": "package_resolution_cache_entries_pkey",
       "schema": "public",
@@ -14855,9 +14446,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "profile_env_vars_pkey",
       "schema": "public",
@@ -14865,9 +14454,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "profile_revisions_pkey",
       "schema": "public",
@@ -14875,9 +14462,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "profile_secret_bindings_pkey",
       "schema": "public",
@@ -14885,9 +14470,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "profile_revision_id"
-      ],
+      "columns": ["profile_revision_id"],
       "nameExplicit": false,
       "name": "profile_ssh_settings_pkey",
       "schema": "public",
@@ -14895,9 +14478,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "profiles_pkey",
       "schema": "public",
@@ -14905,9 +14486,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "repositories_pkey",
       "schema": "public",
@@ -14915,9 +14494,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "repository_profile_profile_links_pkey",
       "schema": "public",
@@ -14925,9 +14502,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "repository_profile_revisions_pkey",
       "schema": "public",
@@ -14935,9 +14510,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "repository_profiles_pkey",
       "schema": "public",
@@ -14945,9 +14518,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "runs_pkey",
       "schema": "public",
@@ -14955,9 +14526,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "secret_versions_pkey",
       "schema": "public",
@@ -14965,9 +14534,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "secrets_pkey",
       "schema": "public",
@@ -14975,9 +14542,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "ssh_keys_pkey",
       "schema": "public",
@@ -14985,9 +14550,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "nameExplicit": false,
       "name": "workspace_attempt_snapshots_pkey",
       "schema": "public",
@@ -14995,9 +14558,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "workspace_attempts_pkey",
       "schema": "public",
@@ -15005,9 +14566,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "workspace_sessions_pkey",
       "schema": "public",
@@ -15015,9 +14574,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "workspaces_pkey",
       "schema": "public",
@@ -15025,9 +14582,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "oci_image_build_jobs_pkey",
       "schema": "public",
@@ -15035,9 +14590,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "nameExplicit": false,
       "name": "workspace_capture_drains_pkey",
       "schema": "public",
@@ -15045,9 +14598,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "workspace_credential_placements_pkey",
       "schema": "public",
@@ -15055,9 +14606,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "nameExplicit": false,
       "name": "workspace_runtime_instances_pkey",
       "schema": "public",
@@ -15065,9 +14614,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "resource_domain_allocations_pkey",
       "schema": "public",
@@ -15075,9 +14622,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "resource_domains_pkey",
       "schema": "public",
@@ -15085,9 +14630,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "resource_instances_pkey",
       "schema": "public",
@@ -15095,9 +14638,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "name"
-      ],
+      "columns": ["name"],
       "nameExplicit": false,
       "name": "resource_networks_pkey",
       "schema": "public",
@@ -15105,9 +14646,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "nameExplicit": false,
       "name": "resource_workspace_links_pkey",
       "schema": "public",
@@ -15115,9 +14654,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "native_publications_pkey",
       "schema": "public",
@@ -15125,9 +14662,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "boat_accounts_pkey",
       "schema": "public",
@@ -15135,9 +14670,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "boat_install_pkey",
       "schema": "public",
@@ -15145,9 +14678,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "boat_key_proofs_pkey",
       "schema": "public",
@@ -15155,9 +14686,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "account"
-      ],
+      "columns": ["account"],
       "nameExplicit": false,
       "name": "boat_key_reports_pkey",
       "schema": "public",
@@ -15165,9 +14694,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "worker"
-      ],
+      "columns": ["worker"],
       "nameExplicit": false,
       "name": "boat_launch_reports_pkey",
       "schema": "public",
@@ -15175,9 +14702,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "nameExplicit": false,
       "name": "boat_runs_pkey",
       "schema": "public",
@@ -15185,9 +14710,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "runtime_instance_id"
-      ],
+      "columns": ["runtime_instance_id"],
       "nameExplicit": false,
       "name": "boat_tunnels_pkey",
       "schema": "public",
@@ -15195,9 +14718,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "workspace_id"
-      ],
+      "columns": ["workspace_id"],
       "nameExplicit": false,
       "name": "workspace_egress_policies_pkey",
       "schema": "public",
@@ -15205,9 +14726,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "run_id"
-      ],
+      "columns": ["run_id"],
       "nameExplicit": false,
       "name": "workspace_egress_proxies_pkey",
       "schema": "public",
@@ -15215,9 +14734,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "workspace_egress_revocations_pkey",
       "schema": "public",
@@ -15225,9 +14742,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "telemetry_artifacts_pkey",
       "schema": "public",
@@ -15235,9 +14750,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "event_id"
-      ],
+      "columns": ["event_id"],
       "nameExplicit": false,
       "name": "telemetry_events_pkey",
       "schema": "public",
@@ -15245,9 +14758,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "telemetry_loss_spans_pkey",
       "schema": "public",
@@ -15255,9 +14766,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "nameExplicit": false,
       "name": "telemetry_run_epochs_pkey",
       "schema": "public",
@@ -15265,9 +14774,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "event_id"
-      ],
+      "columns": ["event_id"],
       "nameExplicit": false,
       "name": "telemetry_scrollback_pkey",
       "schema": "public",
@@ -15275,9 +14782,7 @@
       "entityType": "pks"
     },
     {
-      "columns": [
-        "event_id"
-      ],
+      "columns": ["event_id"],
       "nameExplicit": false,
       "name": "telemetry_timeline_pkey",
       "schema": "public",
@@ -15286,11 +14791,7 @@
     },
     {
       "nameExplicit": true,
-      "columns": [
-        "id",
-        "owner_user_id",
-        "provider"
-      ],
+      "columns": ["id", "owner_user_id", "provider"],
       "nullsNotDistinct": false,
       "name": "connected_accounts_id_owner_provider_key",
       "entityType": "uniques",
@@ -15299,9 +14800,7 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "token_hash"
-      ],
+      "columns": ["token_hash"],
       "nullsNotDistinct": false,
       "name": "access_tokens_token_hash_key",
       "schema": "public",
@@ -15310,9 +14809,7 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "build_id"
-      ],
+      "columns": ["build_id"],
       "nullsNotDistinct": false,
       "name": "native_publications_build_id_key",
       "schema": "public",
@@ -15321,9 +14818,7 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "replaces_publication_id"
-      ],
+      "columns": ["replaces_publication_id"],
       "nullsNotDistinct": false,
       "name": "native_publications_replaces_publication_id_key",
       "schema": "public",
@@ -15332,9 +14827,7 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "deployment_id"
-      ],
+      "columns": ["deployment_id"],
       "nullsNotDistinct": false,
       "name": "boat_accounts_deployment_id_key",
       "schema": "public",
@@ -15343,9 +14836,7 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "builder_owner"
-      ],
+      "columns": ["builder_owner"],
       "nullsNotDistinct": false,
       "name": "boat_accounts_builder_owner_key",
       "schema": "public",
@@ -15354,9 +14845,7 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "idempotency_key"
-      ],
+      "columns": ["idempotency_key"],
       "nullsNotDistinct": false,
       "name": "boat_runs_idempotency_key_key",
       "schema": "public",
@@ -15365,9 +14854,7 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "disk_lineage"
-      ],
+      "columns": ["disk_lineage"],
       "nullsNotDistinct": false,
       "name": "boat_runs_disk_lineage_key",
       "schema": "public",
@@ -15376,9 +14863,7 @@
     },
     {
       "nameExplicit": false,
-      "columns": [
-        "reservation_id"
-      ],
+      "columns": ["reservation_id"],
       "nullsNotDistinct": false,
       "name": "boat_tunnels_reservation_id_key",
       "schema": "public",
