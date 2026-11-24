@@ -147,19 +147,17 @@ const runtimeLaunchFields = {
   pool: z.enum(["hot"]).optional(),
   /**
    * For a workspace behind its own egress proxy (a restricted policy, or any brokered secret):
-   * the run's CA certificate and how to build the proxy's first policy. Its secrets stay behind
-   * its functions. A runtime that runs no proxy refuses such a workspace before launch.
+   * how the worker records the run's proxy and builds its first policy. The CA's key and the
+   * secrets' values stay behind its functions, never in the parsed input. A runtime that runs no proxy refuses such a workspace before launch.
    */
   egressProxy: z
     .custom<EgressProxyLaunch>(
       (value) =>
         typeof value === "object" &&
         value !== null &&
-        "caCertPem" in value &&
-        typeof value.caCertPem === "string" &&
-        "policyFor" in value &&
-        typeof value.policyFor === "function",
-      { message: "egressProxy must carry caCertPem and policyFor" },
+        "prepare" in value &&
+        typeof value.prepare === "function",
+      { message: "egressProxy must carry prepare" },
     )
     .optional(),
 };

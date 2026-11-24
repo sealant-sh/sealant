@@ -3156,7 +3156,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           hostPublicIps: [...egress.policy.hostPublic.listed, ...hostPublic].map(formatCidr),
         });
         egressNetworkName = proxy.networks.isolated.name;
-        proxied = { proxyIp: proxy.networks.proxyIp, caCertPem: launch.caCertPem };
+        proxied = { proxyIp: proxy.networks.proxyIp, caCertPem: proxy.caCertPem };
         await this.prepareEgressFacts(egress, egressNetworkName, cloudMetadataReachable);
         gate = await this.gatedCommand(imageReference, egressProxyGateArgs);
       } else if (this.egress !== undefined) {

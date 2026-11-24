@@ -27,6 +27,8 @@ import {
   recordLaunchHome,
   WorkspaceCredentialHomeRepo,
   WorkspaceCredentialHomeRepoLive,
+  WorkspaceEgressRepo,
+  workspaceEgressRepoLayer,
   WorkspaceRepo,
   WorkspaceRepoLive,
   WorkspaceRuntimeInstanceRepo,
@@ -96,6 +98,12 @@ import {
 } from "../runtime/launch-material.js";
 import type { RuntimeLaunch } from "../runtime/runtime-adapter.js";
 import { resolveCredentialInjections } from "./connected-account-resolver.js";
+import {
+  egressProxyLaunch,
+  needsEgressProxy,
+  withBrokeredPlaceholders,
+  withPinnedEgressPolicy,
+} from "./egress-proxy-launch.js";
 import {
   WorkspaceBuildJobProcessingError,
   swallowingFailure as sharedSwallowingFailure,
@@ -859,10 +867,14 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         .pipe(swallowingFailure("mark-attempt-running update"));
     }
 
-    const spec = yield* Effect.try({
+    const createdSpec = yield* Effect.try({
       try: () => newWorkspaceSchema.parse(job.requestPayload),
       catch: toWorkspaceBuildJobProcessingError,
     });
+    // The workspace's pinned network policy ("Apply updated policy" replaces it), so runtime
+    // selection and the launch both see the policy the workspace runs under now. A pinned policy
+    // that cannot be read fails the launch: it never runs under an older one.
+    const spec = withPinnedEgressPolicy(createdSpec, yield* pinnedEgressPolicy(job.runId));
 
     const selectedAdapterId = yield* Effect.try({
       try: () =>
@@ -1386,6 +1398,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         ),
       );
     }
+    // A brokered secret's placeholder rides the secret channel under its name; its value never
+    // reaches the workspace (it goes to the egress proxy alone, through `egressProxy` below).
+    const bootSecretEnv = withBrokeredPlaceholders(secretEnv, spec.brokeredSecrets);
     const {
       dotfilesArchiveDir,
       secretEnvDir,
@@ -1395,10 +1410,17 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         stager.stage({
           spec,
           runId: job.runId,
-          ...(secretEnv === undefined ? {} : { secretEnv }),
+          ...(bootSecretEnv === undefined ? {} : { secretEnv: bootSecretEnv }),
         }),
       catch: toWorkspaceBuildJobProcessingError,
     });
+    const egressProxy = needsEgressProxy(spec)
+      ? yield* egressProxyLaunchFor({
+          runId: job.runId,
+          workspaceId: labelWorkspaceId,
+          cipher: options.credentialCipher,
+        })
+      : undefined;
 
     const recordReadyIdentity =
       (runId: string) =>
@@ -1463,6 +1485,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
               : { launchId: attemptIdentity.launchId }),
             ...(labelWorkspaceId === undefined ? {} : { workspaceId: labelWorkspaceId }),
             ...(binds.length === 0 ? {} : { binds: [...binds] }),
+            ...(egressProxy === undefined ? {} : { egressProxy }),
             ...(attemptIdentity?.ownerUserId === undefined
               ? {}
               : { principalId: attemptIdentity.ownerUserId }),
@@ -1614,6 +1637,53 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   return publication;
 });
 
+/** The workspace's pinned network policy, when the run belongs to one that has a stored row. */
+const pinnedEgressPolicy = (runId: string | null) =>
+  Effect.gen(function* () {
+    const egress = yield* Effect.serviceOption(WorkspaceEgressRepo);
+    const workspaces = yield* Effect.serviceOption(WorkspaceRepo);
+    if (runId === null || Option.isNone(egress) || Option.isNone(workspaces)) return undefined;
+    const workspace = yield* workspaces.value
+      .getWorkspaceByAttemptId(runId)
+      .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+    if (workspace === undefined || workspace === null) return undefined;
+    return yield* egress.value
+      .getPolicy(workspace.id)
+      .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+  });
+
+/**
+ * The launch's egress proxy hook. A workspace that needs a proxy and cannot have one here (no
+ * run, workspace, credential key or egress store) fails before anything starts: it never launches
+ * without its proxy.
+ */
+const egressProxyLaunchFor = (input: {
+  readonly runId: string | null;
+  readonly workspaceId: string | undefined;
+  readonly cipher: CredentialCipherService | undefined;
+}) =>
+  Effect.gen(function* () {
+    const egress = yield* Effect.serviceOption(WorkspaceEgressRepo);
+    if (
+      input.runId === null ||
+      input.workspaceId === undefined ||
+      input.cipher === undefined ||
+      Option.isNone(egress)
+    ) {
+      return yield* toWorkspaceBuildJobProcessingError(
+        new Error(
+          "This workspace runs behind its own egress proxy, and this worker cannot give it one (it needs the run's workspace, SEALANT_CREDENTIALS_KEY and the egress store).",
+        ),
+      );
+    }
+    return egressProxyLaunch({
+      runId: input.runId,
+      workspaceId: input.workspaceId,
+      repo: egress.value,
+      cipher: input.cipher,
+    });
+  });
+
 /**
  * Process a single workspace build job.
  *
@@ -1633,6 +1703,7 @@ export const processWorkspaceBuildJob = (
     WorkspaceAttemptRepoLive,
     // The sealed capture token a retained executor's recovery stages again.
     WorkspaceCaptureDrainRepoLive,
+    workspaceEgressRepoLayer,
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
     ConnectedAccountRepoLive,

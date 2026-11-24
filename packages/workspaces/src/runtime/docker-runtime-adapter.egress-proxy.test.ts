@@ -227,9 +227,9 @@ describe("a Docker workspace behind its own egress proxy", () => {
       publication,
       runId: "run-1",
       egressProxy: {
-        caCertPem: ca.certPem,
-        policyFor: async ({ host }: { host: Parameters<typeof buildProxyPolicyDocument>[0]["host"] }) =>
-          buildProxyPolicyDocument({
+        prepare: async ({ host }: { host: Parameters<typeof buildProxyPolicyDocument>[0]["host"] }) => ({
+          caCertPem: ca.certPem,
+          document: buildProxyPolicyDocument({
             networkPolicy: { mode: "restricted", policyHash: "sha256:policy" },
             brokeredSecrets: [BROKERED],
             brokeredValues: Redacted.make({ "ref-vercel": SECRET_VALUE }),
@@ -237,6 +237,7 @@ describe("a Docker workspace behind its own egress proxy", () => {
             tombstones: { revocationWatermark: 0, revokedHosts: [], revokedSecretIds: [] },
             host,
           }),
+        }),
       },
     });
 

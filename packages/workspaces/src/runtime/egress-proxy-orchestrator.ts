@@ -168,17 +168,18 @@ export type EgressRevocationOutcome =
  * launch has measured the host, so neither ever sits in the parsed launch input.
  */
 export interface EgressProxyLaunch {
-  /** The run's executor CA certificate: the public part, which the workspace trusts. */
-  readonly caCertPem: string;
   /**
-   * The proxy's first `PUT /v1/policy`, from the workspace's stored policy, revocations and
-   * secret values and the facts measured here (the worker keeps them with the run's proxy, so
-   * every later push rebuilds the same document).
+   * Called once the launch has measured the host, before the proxy takes any policy: the worker
+   * records the run's proxy (its name, socket and these facts, so every later push rebuilds the
+   * same document), mints the run's executor CA or finds the one a first delivery of this launch
+   * minted, and answers the CA's public certificate with the proxy's first `PUT /v1/policy`.
    */
-  readonly policyFor: (input: {
+  readonly prepare: (input: {
+    readonly proxyContainer: string;
+    readonly adminSocketPath: string;
     readonly proxyIp: string;
     readonly host: EgressProxyHostFacts;
-  }) => Promise<ProxyPolicyDocument>;
+  }) => Promise<{ readonly caCertPem: string; readonly document: ProxyPolicyDocument }>;
   /** What the proxy confirmed taking. */
   readonly confirmed?: (applied: ProxyPolicyApplied) => Promise<void>;
 }
@@ -187,6 +188,8 @@ export interface EgressProxyLaunch {
 export interface LaunchedEgressProxy {
   readonly networks: EgressProxyNetworks;
   readonly applied: ProxyPolicyApplied;
+  /** The run's executor CA certificate, for the workspace to trust. */
+  readonly caCertPem: string;
 }
 
 export interface EgressProxyOrchestratorOptions {
@@ -397,7 +400,9 @@ export class EgressProxyOrchestrator {
       ...(input.reachNetworks === undefined ? {} : { reachNetworks: input.reachNetworks }),
     });
     const outbound = cidr(networks.outbound.subnet);
-    const document = await input.launch.policyFor({
+    const { caCertPem, document } = await input.launch.prepare({
+      proxyContainer: egressProxyName(input.workspaceContainer),
+      adminSocketPath: this.adminSocketPath(input.workspaceContainer),
       proxyIp: networks.proxyIp,
       host: {
         operatorAllowedPrivateCidrs: [...input.operatorAllowedPrivateCidrs],
@@ -411,7 +416,7 @@ export class EgressProxyOrchestrator {
     });
     const applied = await this.pushPolicy(input.workspaceContainer, document);
     await input.launch.confirmed?.(applied);
-    return { networks, applied };
+    return { networks, applied, caCertPem };
   }
 
   /** Poll `GET /v1/health` until the proxy answers, failing early when its container ended. */
