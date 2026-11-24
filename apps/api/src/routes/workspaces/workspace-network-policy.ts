@@ -40,7 +40,7 @@ import { env } from "../../runtime-env.js";
 import {
   loadRecordedSpec,
   requireOwnedWorkspace,
-  runsEgressProxy,
+  hostRevocationRefusal,
   sealBrokeredSecretValues,
   withInternalError,
 } from "./workspaces.module.js";
@@ -279,10 +279,11 @@ export const revokeWorkspaceAccess = (input: {
     // never be enforced, so it is refused before anything is stored. A secret revocation stays
     // allowed everywhere (with no proxy it holds from the next start).
     if (revocation.hosts.length > 0) {
-      const { runtime } = yield* workspaceRuntimeOf(workspace.id, workspace.latestRunId);
-      if (!runsEgressProxy(runtime)) {
+      const { runtime, spec } = yield* workspaceRuntimeOf(workspace.id, workspace.latestRunId);
+      const refusal = hostRevocationRefusal(runtime, spec);
+      if (refusal !== undefined) {
         return yield* new WorkspaceRuntimeRequirementUnsupportedError({
-          message: `The ${runtime} runtime runs no egress proxy, so it cannot refuse a host: revoke brokered secrets by id instead, or move the workspace to Docker or Host VM (host-vm).`,
+          message: refusal,
           code: "runtime-requirement-unsupported",
         });
       }

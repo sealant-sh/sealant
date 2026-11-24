@@ -73,8 +73,9 @@ export interface WorkspaceEgressRepoService {
   ) => Effect.Effect<WorkspaceEgressPolicy | undefined, WorkspaceEgressRepoError>;
   /**
    * Pin `networkPolicy` and `brokeredSecrets` for the workspace, replacing what it had (its
-   * revocations and watermark stay). `brokeredValuesSealed` replaces the sealed values too: null
-   * when there are no brokered secrets.
+   * revocations stay). `brokeredValuesSealed` replaces the sealed values too: null when there are
+   * no brokered secrets. The watermark stays, except past a revocation of every grant at it,
+   * which the policy moves past so its own grants are not cleared with the old ones.
    */
   readonly putPolicy: (input: {
     readonly workspaceId: string;
@@ -181,32 +182,56 @@ const make: Effect.Effect<WorkspaceEgressRepoService, never, SealantDB> = Effect
     putPolicy: (input) =>
       withRepoError(
         "putPolicy",
-        db
-          .insert(workspaceEgressPolicies)
-          .values({
-            workspaceId: input.workspaceId,
-            networkPolicy: input.networkPolicy ?? null,
-            brokeredSecrets: input.brokeredSecrets,
-            brokeredValuesSealed: input.brokeredValuesSealed ?? null,
-            encryptionKeyId: input.encryptionKeyId ?? null,
-          })
-          .onConflictDoUpdate({
-            target: workspaceEgressPolicies.workspaceId,
-            set: {
-              networkPolicy: input.networkPolicy ?? null,
-              brokeredSecrets: input.brokeredSecrets,
-              brokeredValuesSealed: input.brokeredValuesSealed ?? null,
-              encryptionKeyId: input.encryptionKeyId ?? null,
-              policyRevision: sql`${workspaceEgressPolicies.policyRevision} + 1`,
-              updatedAt: new Date(),
-            },
-          })
-          .returning()
-          .pipe(
-            Effect.flatMap(([row]) =>
-              row === undefined ? Effect.fail(new Error("no row written")) : Effect.succeed(row),
-            ),
-          ),
+        db.transaction(() =>
+          Effect.gen(function* () {
+            const [row] = yield* db
+              .insert(workspaceEgressPolicies)
+              .values({
+                workspaceId: input.workspaceId,
+                networkPolicy: input.networkPolicy ?? null,
+                brokeredSecrets: input.brokeredSecrets,
+                brokeredValuesSealed: input.brokeredValuesSealed ?? null,
+                encryptionKeyId: input.encryptionKeyId ?? null,
+              })
+              .onConflictDoUpdate({
+                target: workspaceEgressPolicies.workspaceId,
+                set: {
+                  networkPolicy: input.networkPolicy ?? null,
+                  brokeredSecrets: input.brokeredSecrets,
+                  brokeredValuesSealed: input.brokeredValuesSealed ?? null,
+                  encryptionKeyId: input.encryptionKeyId ?? null,
+                  policyRevision: sql`${workspaceEgressPolicies.policyRevision} + 1`,
+                  updatedAt: new Date(),
+                },
+              })
+              .returning();
+            if (row === undefined) return yield* Effect.fail(new Error("no row written"));
+            // A revocation of every grant at the current watermark would clear this policy's new
+            // grants too: the proxy keeps `revokeAll` for as long as its watermark stays. So the
+            // policy moves past it, to the next watermark; every host and secret revoked by name
+            // (`all` stored each grant it found by name) stays revoked there.
+            const [allAtWatermark] = yield* db
+              .select({ id: workspaceEgressRevocations.id })
+              .from(workspaceEgressRevocations)
+              .where(
+                and(
+                  eq(workspaceEgressRevocations.workspaceId, input.workspaceId),
+                  eq(workspaceEgressRevocations.revocationWatermark, row.revocationWatermark),
+                  eq(workspaceEgressRevocations.kind, "all"),
+                ),
+              )
+              .limit(1);
+            if (allAtWatermark === undefined) return row;
+            const [advanced] = yield* db
+              .update(workspaceEgressPolicies)
+              .set({
+                revocationWatermark: sql`${workspaceEgressPolicies.revocationWatermark} + 1`,
+              })
+              .where(eq(workspaceEgressPolicies.workspaceId, input.workspaceId))
+              .returning();
+            return advanced ?? row;
+          }),
+        ),
       ),
     revoke: (input) =>
       withRepoError(

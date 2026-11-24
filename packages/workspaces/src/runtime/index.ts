@@ -388,6 +388,7 @@ export {
   EGRESS_PROXY_PORTS,
   EGRESS_PROXY_UID,
   EgressProxyOrchestrator,
+  dockerBridgeCidrs,
   egressProxyCreateArgv,
   egressProxyName,
   isolatedNetworkName,

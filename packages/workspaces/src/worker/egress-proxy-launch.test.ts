@@ -159,6 +159,34 @@ describe("the worker's half of a proxy-backed launch", () => {
     expect(proxies.get("run-1")?.confirmedPolicyRevision).toBe(3);
   });
 
+  it("carries the operator's mirror into the first policy, and keeps it with the run for later pushes", async () => {
+    const withMirror: WorkspaceEgressPolicy = {
+      ...storedPolicy(),
+      networkPolicy: {
+        mode: "restricted",
+        policyHash: "sha256:pinned",
+        allowMirrors: [{ name: "npm", host: "npm-mirror", port: 4873 }],
+      },
+    };
+    const { repo, proxies } = memoryRepo(withMirror);
+    const prepared = await egressProxyLaunch({
+      runId: "run-1",
+      workspaceId: "ws_1",
+      repo,
+      cipher,
+    }).prepare({
+      ...measured,
+      host: { ...measured.host, mirrorHosts: ["npm-mirror"], resourceHosts: ["sealres-db"] },
+    });
+    expect(prepared.document.allowMirrors).toEqual([
+      { name: "npm", host: "npm-mirror", port: 4873 },
+    ]);
+    expect(proxies.get("run-1")?.network).toMatchObject({
+      mirrorHosts: ["npm-mirror"],
+      resourceHosts: ["sealres-db"],
+    });
+  });
+
   it("refuses to load a proxy for a workspace with no stored policy", async () => {
     const { repo } = memoryRepo(undefined);
     await expect(

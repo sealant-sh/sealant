@@ -197,3 +197,44 @@ describe("a revocation's hosts", () => {
     expect(needsEgressProxy({ revokedHosts: ["api.example.com"] })).toBe(true);
   });
 });
+
+describe("IP literals in a policy", () => {
+  it.each([
+    "db:5432",
+    "10.0.0.5:8080",
+    "[::1]:443",
+    "::ffff::1",
+    "1:2:3:4:5:6:7:8:9",
+    "fe80::1%eth0",
+  ])("refuses %s as a host, at revoke admission and in allowHosts", (host) => {
+    expect(canonicalRevocationHost(host)).toBeUndefined();
+    expect(
+      networkPolicyProblems({ mode: "restricted", policyHash: "h", allowHosts: [{ host }] }),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    "10.0.0.5",
+    "203.0.113.7",
+    "::1",
+    "fd00:ec2::254",
+    "2001:db8::1",
+    "::ffff:10.0.0.1",
+    "[::1]",
+  ])("takes the IP literal %s", (host) => {
+    expect(canonicalRevocationHost(host)).toBe(host);
+    expect(
+      networkPolicyProblems({ mode: "restricted", policyHash: "h", allowHosts: [{ host }] }),
+    ).toEqual([]);
+  });
+});
+
+describe("revoke admission", () => {
+  it.each(["db:5432", "10.0.0.5:8080"])("refuses to store a tombstone for %s", (host) => {
+    const decoded = Schema.decodeUnknownExit(revokeWorkspaceAccessRequestSchema)({
+      ownerUserId: "user_1",
+      hosts: [host],
+    });
+    expect(Exit.isFailure(decoded)).toBe(true);
+  });
+});

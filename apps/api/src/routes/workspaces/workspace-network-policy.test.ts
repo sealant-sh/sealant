@@ -311,12 +311,17 @@ const launchedLayer = (
   options: {
     readonly runtime?: RuntimeAdapterId;
     readonly status?: WorkspaceRuntimeInstance["status"];
+    /** The workspace runs Docker inside (`tooling.services.docker`). */
+    readonly dockerInside?: boolean;
   } = {},
 ) => {
   const spec = newWorkspaceSchema.parse({
     sources: { workspace: { kind: "git", url: "https://github.com/example/repo.git" } },
     harness: { id: "opencode" },
     target: { runtime: { family: options.runtime ?? "docker", mode: "require" } },
+    ...(options.dockerInside === true
+      ? { tooling: { services: { docker: { enabled: true } } } }
+      : {}),
   });
   return Layer.mergeAll(
     Layer.succeed(
@@ -590,6 +595,22 @@ describe("revokeWorkspaceAccess", () => {
         .pipe(Effect.provide(launchedLayer(egress, { runtime: "k8s" }))),
     );
     expect(allowed.enforcement).toBe("next-start");
+  });
+
+  it("refuses a host revocation on a Docker workspace with Docker inside, which reaches out past the proxy", async () => {
+    const egress = memoryEgress();
+    const result = await Effect.runPromise(
+      routes
+        .revokeWorkspaceAccess({
+          workspaceId: "ws_1",
+          payload: { ownerUserId: OWNER, hosts: ["api.vercel.com"] },
+        })
+        .pipe(Effect.result, Effect.provide(launchedLayer(egress, { dockerInside: true }))),
+    );
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+      WorkspaceRuntimeRequirementUnsupportedError,
+    );
+    expect(egress.revocations).toEqual([]);
   });
 
   it("refuses another owner's workspace as not found, storing nothing", async () => {

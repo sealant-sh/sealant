@@ -114,17 +114,57 @@ export const FORBIDDEN_BROKERED_HEADER_NAMES: readonly string[] = [
 const HEADER_TOKEN = /^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const LABEL = /^[a-z0-9_-]{1,63}$/;
-const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+/** One IPv4 octet as Rust's `Ipv4Addr` reads it: 0-255, no sign and no leading zero. */
+const OCTET = /^(0|[1-9]\d{0,2})$/;
 
+/** The four octets of a strict dotted-quad IPv4 address, or `undefined`. */
 const ipv4Octets = (value: string): readonly number[] | undefined => {
-  const match = IPV4.exec(value);
-  if (match === null) return undefined;
-  const octets = match.slice(1).map(Number);
+  const parts = value.split(".");
+  if (parts.length !== 4 || !parts.every((part) => OCTET.test(part))) return undefined;
+  const octets = parts.map(Number);
   return octets.every((octet) => octet <= 255) ? octets : undefined;
 };
 
-const isIpLiteral = (value: string): boolean =>
-  ipv4Octets(value) !== undefined || (value.includes(":") && /^[0-9a-fA-F:.]+$/.test(value));
+const HEX_GROUP = /^[0-9a-fA-F]{1,4}$/;
+
+/**
+ * Whether `value` is an IPv6 address as Rust's `Ipv6Addr` reads it: eight hex groups of one to
+ * four digits, at most one `::` standing for one or more zero groups, and an IPv4 dotted quad as
+ * the last 32 bits. No zone, no port, no brackets.
+ */
+const isIpv6 = (value: string): boolean => {
+  if (value.length === 0 || value.includes(":::")) return false;
+  const halves = value.split("::");
+  if (halves.length > 2) return false;
+  const head = (halves[0] ?? "").length === 0 ? [] : (halves[0] ?? "").split(":");
+  const tail =
+    halves.length === 2 && (halves[1] ?? "").length > 0 ? (halves[1] ?? "").split(":") : [];
+  const groups = [...head, ...tail];
+  let width = 0;
+  for (const [index, group] of groups.entries()) {
+    const last = index === groups.length - 1;
+    if (last && group.includes(".")) {
+      if (ipv4Octets(group) === undefined) return false;
+      width += 2;
+    } else if (HEX_GROUP.test(group)) {
+      width += 1;
+    } else {
+      return false;
+    }
+  }
+  return halves.length === 2 ? width < 8 : width === 8;
+};
+
+/**
+ * Whether `value` is an IP literal a policy may name: a strict IPv4 or IPv6 address, an IPv6 one
+ * in brackets too. `db:5432` and `10.0.0.5:8080` are not: a port is never part of a host.
+ */
+const isIpLiteral = (value: string): boolean => {
+  const unbracketed = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+  return unbracketed === value
+    ? ipv4Octets(value) !== undefined || isIpv6(value)
+    : isIpv6(unbracketed);
+};
 
 /** Whether `name` is one HTTP header name (an RFC 9110 token). */
 export const isHttpHeaderName = (name: string): boolean => HEADER_TOKEN.test(name);

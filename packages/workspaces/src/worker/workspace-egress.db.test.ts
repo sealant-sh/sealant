@@ -249,4 +249,53 @@ describe.skipIf(DATABASE_URL === undefined)("the workspace egress store (Postgre
     expect(result.rotated.policyRevision).toBeGreaterThan(result.first.policyRevision);
     expect(result.proxy?.confirmedPolicyRevision).toBe(result.rotated.policyRevision);
   });
+
+  it("moves a policy applied after a revocation of everything past it, keeping what was revoked by name", async () => {
+    const { workspaceId } = await workspaceWithRun();
+    const result = await run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceEgressRepo;
+        yield* repo.putPolicy({
+          workspaceId,
+          networkPolicy: {
+            mode: "restricted",
+            policyHash: "h1",
+            allowHosts: [{ host: "old.example.com" }],
+          },
+          brokeredSecrets: [],
+          brokeredValuesSealed: undefined,
+          encryptionKeyId: undefined,
+        });
+        const revoked = yield* repo.revoke({
+          workspaceId,
+          secretIds: [],
+          hosts: ["old.example.com"],
+          all: true,
+        });
+        const applied = yield* repo.putPolicy({
+          workspaceId,
+          networkPolicy: {
+            mode: "restricted",
+            policyHash: "h2",
+            allowHosts: [{ host: "new.example.com" }],
+          },
+          brokeredSecrets: [],
+          brokeredValuesSealed: undefined,
+          encryptionKeyId: undefined,
+        });
+        const again = yield* repo.putPolicy({
+          workspaceId,
+          networkPolicy: { mode: "restricted", policyHash: "h3" },
+          brokeredSecrets: [],
+          brokeredValuesSealed: undefined,
+          encryptionKeyId: undefined,
+        });
+        return { revoked, applied, again, tombstones: yield* repo.tombstones(workspaceId) };
+      }),
+    );
+    expect(result.applied.revocationWatermark).toBe(result.revoked.revocationWatermark + 1);
+    // Past the revocation of everything once: a later write leaves the watermark where it is.
+    expect(result.again.revocationWatermark).toBe(result.applied.revocationWatermark);
+    expect(result.tombstones.revokedHosts).toEqual(["old.example.com"]);
+  });
 });

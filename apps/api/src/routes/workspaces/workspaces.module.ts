@@ -1585,6 +1585,35 @@ export const runsEgressProxy = (runtime: string): boolean =>
   runtime === "docker" || runtime === "host-vm";
 
 /**
+ * Why a host revocation cannot be enforced on `runtime` for a workspace with `spec`, or undefined
+ * when it can: a runtime that runs no proxy, or a Docker workspace with Docker inside, whose Docker
+ * service reaches the network on its own, past the proxy (the reason restricted egress refuses it
+ * too). Reporting such a revocation `enforced` would mislead.
+ */
+export const hostRevocationRefusal = (
+  runtime: string,
+  spec:
+    | {
+        readonly tooling?:
+          | {
+              readonly services?:
+                | { readonly docker?: { readonly enabled?: boolean } | undefined }
+                | undefined;
+            }
+          | undefined;
+      }
+    | undefined,
+): string | undefined => {
+  if (!runsEgressProxy(runtime)) {
+    return `The ${runtime} runtime runs no egress proxy, so it cannot refuse a host: revoke brokered secrets by id instead, or move the workspace to Docker or Host VM (host-vm).`;
+  }
+  if (runtime === "docker" && spec?.tooling?.services?.docker?.enabled === true) {
+    return "This Docker workspace runs Docker inside, whose service reaches the network on its own, past the egress proxy, so a host revocation cannot be enforced. Turn Docker off for this workspace, or switch the runtime to Host VM (host-vm).";
+  }
+  return undefined;
+};
+
+/**
  * A create's (and a restart's) runtime refusals, from the table `GET /v1/workspaces/runtimes`
  * answers with: what the request asks of its runtime that the runtime does not support is refused
  * here, before anything is reserved, with the sentence the report gives for it. The adapters keep
@@ -3947,9 +3976,13 @@ export const restartWorkspace = (input: {
       egress.tombstones(workspace.id),
       "Failed to load the workspace's revocations.",
     );
-    if (tombstones.revokedHosts.length > 0 && !runsEgressProxy(runtimeFamily)) {
+    const hostRefusal =
+      tombstones.revokedHosts.length > 0
+        ? hostRevocationRefusal(runtimeFamily, launchedSpec)
+        : undefined;
+    if (hostRefusal !== undefined) {
       return yield* new WorkspaceRuntimeRequirementUnsupportedError({
-        message: `Workspace ${input.workspaceId} holds revoked hosts (${tombstones.revokedHosts.join(", ")}), and only an egress proxy refuses a host; the ${runtimeFamily} runtime runs none.`,
+        message: `Workspace ${input.workspaceId} holds revoked hosts (${tombstones.revokedHosts.join(", ")}). ${hostRefusal}`,
         code: "runtime-requirement-unsupported",
       });
     }

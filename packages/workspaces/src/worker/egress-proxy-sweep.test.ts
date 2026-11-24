@@ -187,6 +187,8 @@ describe("the egress proxy sweep", () => {
     readonly proxy?: WorkspaceEgressProxy;
     readonly watermark?: number;
     readonly policyRevision?: number;
+    /** No stored policy row at all (a standard host-vm run). */
+    readonly unstored?: boolean;
   }) => {
     const { repo, confirmed, networks } = repoRecording();
     const pool = { allocate: async () => "10.233.0.0/28", release: async () => undefined };
@@ -203,7 +205,10 @@ describe("the egress proxy sweep", () => {
       sweepEgressProxy({
         live: {
           proxy: input.proxy ?? proxyRow(),
-          policy: policy(input.watermark ?? 2, input.policyRevision ?? 1),
+          policy:
+            input.unstored === true
+              ? undefined
+              : policy(input.watermark ?? 2, input.policyRevision ?? 1),
         },
         repo,
         cipher,
@@ -344,5 +349,25 @@ describe("the egress proxy sweep", () => {
     const { outcome } = await sweep({ docker, client, watermark: 3 });
     expect(outcome).toBe("restarted");
     expect(docker.calls.map((call) => call[0])).toContain("kill");
+  });
+
+  it("pushes a run with no stored policy once, then only renews it", async () => {
+    const { client, pushed } = clientWith({});
+    const first = await sweep({
+      docker: dockerWithProxy(true),
+      client,
+      unstored: true,
+      proxy: proxyRow({ confirmedPolicyRevision: null, confirmedRevocationWatermark: 0 }),
+    });
+    expect(first.outcome).toBe("pushed");
+    expect(first.confirmed[0]?.policyRevision).toBe(0);
+    const next = await sweep({
+      docker: dockerWithProxy(true),
+      client,
+      unstored: true,
+      proxy: proxyRow({ confirmedPolicyRevision: 0, confirmedRevocationWatermark: 0 }),
+    });
+    expect(next.outcome).toBe("renewed");
+    expect(pushed).toHaveLength(1);
   });
 });

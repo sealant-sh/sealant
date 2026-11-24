@@ -654,4 +654,29 @@ describe("restartWorkspace · the workspace's pinned network policy", () => {
     expect(stops).toHaveLength(1);
     expect(newJobs).toBe(1);
   });
+
+  it("refuses a Docker workspace holding revoked hosts that runs Docker inside, past its proxy", async () => {
+    const { result, stops, newJobs } = await restartAfter("usr_revoked_dind", (store, runId) => {
+      const spec = store.snapshots.get(runId);
+      if (spec === undefined) throw new Error("the create recorded no snapshot");
+      store.snapshots.set(runId, {
+        ...spec,
+        tooling: { ...spec.tooling, services: { docker: { enabled: true } } },
+      });
+      store.egressPolicy = pinnedPolicy(null, 1);
+      store.revocations.push({
+        id: 1,
+        workspaceId: store.workspace?.id ?? "",
+        revocationWatermark: 1,
+        kind: "host",
+        target: "api.vercel.com",
+        createdAt: now,
+      });
+    });
+    expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
+      WorkspaceRuntimeRequirementUnsupportedError,
+    );
+    expect(stops).toEqual([]);
+    expect(newJobs).toBe(0);
+  });
 });

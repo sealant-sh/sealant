@@ -92,7 +92,9 @@ export const sweepEgressProxy = (input: {
       runId: proxy.runId,
       policyHash: applied.policyHash,
       revocationWatermark: applied.revocationWatermark,
-      ...(policy === undefined ? {} : { policyRevision: policy.policyRevision }),
+      // A workspace with no stored policy (a standard host-vm run) is at revision 0: confirming
+      // it keeps the next tick from pushing the same policy again.
+      policyRevision: policy?.policyRevision ?? 0,
     });
   });
 

@@ -102,6 +102,10 @@ export const egressProxyLaunch = (input: {
             operatorAllowedPrivateCidrs: [...measured.host.operatorAllowedPrivateCidrs],
             hostPublicIps: [...measured.host.hostPublicIps],
             blockedCidrs: [...measured.host.blockedCidrs],
+            // Kept with the run, so every later push (the sweep's, the API's) grants the same
+            // operator mirrors and authorized resources the first one did.
+            mirrorHosts: [...(measured.host.mirrorHosts ?? [])],
+            resourceHosts: [...(measured.host.resourceHosts ?? [])],
           };
           yield* repo.recordProxyNetwork(runId, network);
           // The proxy's policy comes from storage only: without the stored row (its secrets'
@@ -133,7 +137,8 @@ export const egressProxyLaunch = (input: {
           runId,
           policyHash: applied.policyHash,
           revocationWatermark: applied.revocationWatermark,
-          ...(preparedRevision === undefined ? {} : { policyRevision: preparedRevision }),
+          // No stored policy (a standard host-vm run) is revision 0, as the sweep reads it.
+          policyRevision: preparedRevision ?? 0,
         }),
       ),
   };
