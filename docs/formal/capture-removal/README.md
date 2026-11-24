@@ -7,11 +7,10 @@ result and keep it in step with the code. This file is the record: what is verif
 bounds and assumptions, and what the check found.
 
 Confirmed against the code at `8c2cbd88` (main, 2026-11-15), and against SLNT-978's change to a
-drain's `save` (2026-11-21). Read again at `7c239dd9` (SLNT-1318, 2026-11-24): the recovery sweep
-keeps a host VM whose recovery boot said "nothing to save" unless sealant's records show a warm
-standby nobody claimed, a retry before the removal the model already has, with no ledger write of
-its own; no model change. Run with tlx at the commit `docs/formal/tlx.sh` pins ("The checker"
-below).
+drain's `save` (2026-11-21). Read again at `66a93649` (SLNT-1318, 2026-11-24): the recovery sweep
+keeps a host VM whose recovery boot said "nothing to save" unless sealant's records show a standby
+launch nobody claimed, a retry before the removal the model already has, with no ledger write of its
+own; no model change. Run with tlx at the commit `docs/formal/tlx.sh` pins ("The checker" below).
 
 ## The promise
 
