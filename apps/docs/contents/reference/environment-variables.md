@@ -76,6 +76,7 @@ write them for you.
 | `SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS`    | unset                                  | Comma-separated private addresses and blocks (IPv4 or IPv6) workspaces may still reach behind that guard. Worker only.                                                        |
 | `SEALANT_HOST_PUBLIC_IPS`                    | `auto` with egress networks            | Comma-separated public addresses of the Docker host the guard refuses, and/or `auto` for every public address on its interfaces; `none` reads none. Worker only.              |
 | `SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS` | unset                                  | Comma-separated `container[:alias...]` joined to each workspace's own network, such as `mend-npm-mirror:npm-mirror`. Worker only.                                             |
+| `SEALANT_EGRESS_PROXY_IMAGE` | pinned egress proxy | Image of the egress proxy a Docker workspace with restricted egress or a brokered secret runs behind. Used only with egress networks and `WORKSPACE_CONTROL_SOCKET_HOST_DIR`. Worker only. |
 | `SEALANT_CREDENTIALS_KEY`                    | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                        |
 
 For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
@@ -580,3 +581,20 @@ Identity is an `ownerUserId` asserted by a service principal, never a browser. S
 Related: [Ports and data](/docs/reference/ports-and-data) ·
 [Installer and compose](/docs/reference/installer-and-compose) ·
 [SSH access](/docs/guides/ssh-access)
+
+### Workspaces behind their own egress proxy
+
+A workspace whose network policy is `restricted`, or that has a brokered secret, runs behind an
+egress proxy of its own, `<container>-proxy`. It needs `SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS`,
+`WORKSPACE_CONTROL_SOCKET_HOST_DIR`, `SEALANT_CREDENTIALS_KEY`, and Docker Engine 28 or newer. On a
+worker without them, such a workspace is refused before anything starts. It never runs without its
+proxy.
+
+The workspace is put on `<container>-isolated`, an `--internal` network whose gateway has no address
+on the host. Its proxy is the only other container there. The proxy reaches out through
+`<container>-proxy-egress`, a network of its own that the mirror containers join. The workspace's
+HTTP(S) proxy and DNS point at the proxy. Its trust bundle adds the run's own CA. It holds only each
+brokered secret's placeholder: the proxy alone gets the real values, and only for the hosts each
+secret is bound to. The proxy runs read-only, as a non-root user, with every capability dropped.
+`SEALANT_EGRESS_PROXY_IMAGE` replaces its image.
+
