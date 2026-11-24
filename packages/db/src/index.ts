@@ -597,3 +597,10 @@ export {
   type WorkspaceEgressRepoService,
   type WorkspaceEgressTombstones,
 } from "./repositories/workspace-egress.js";
+export {
+  type WorkspaceEgressPolicy,
+  type WorkspaceEgressProxy,
+  type WorkspaceEgressProxyNetwork,
+  type WorkspaceEgressRevocation,
+  type WorkspaceEgressRevocationKind,
+} from "./schema.js";
