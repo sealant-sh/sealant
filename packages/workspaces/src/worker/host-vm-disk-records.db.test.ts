@@ -63,8 +63,17 @@ describe.skipIf(DATABASE_URL === undefined)("host VM disk records (Postgres)", (
     const dataDiskPath = `/var/lib/mend/vm-data/sealant-vm-${runId}/data.img`;
     expect(await records.load(runId)).toBeUndefined();
 
-    await records.record({ runId, dataDiskPath, baseImageDigest: DIGEST });
+    await records.record({
+      runId,
+      dataDiskPath,
+      baseImageDigest: DIGEST,
+      runnerEgress: { mode: "restricted", allowTcpPorts: [5432] },
+    });
     expect(await records.load(runId)).toEqual({ dataDiskPath, baseImageDigest: DIGEST });
+    // The runner's firewall, for a policy applied while it runs.
+    expect(
+      (await repo((instances) => instances.getRuntimeInstanceByRunId(runId)))?.hostVmRunnerEgress,
+    ).toEqual({ mode: "restricted", allowTcpPorts: [5432] });
 
     const mine = () =>
       repo((instances) => instances.listHostVmBaseImages()).then((rows) =>

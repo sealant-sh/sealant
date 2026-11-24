@@ -7,7 +7,9 @@ import { cases, publishedImage } from "./docker-runtime-adapter.golden-fixture.j
 import {
   hostVmEgressFlags,
   hostVmMemory,
+  hostVmRunnerWidens,
   HostVmRuntimeAdapter,
+  underRecoveredRoot,
 } from "./host-vm-runtime-adapter.js";
 import {
   createHostVmHarness,
@@ -177,6 +179,8 @@ describe("HostVmRuntimeAdapter.launch", () => {
     expect(h.records.get("run-golden-1")).toEqual({
       dataDiskPath: joinPath(h.dataDir, "sealant-vm-run-golden-1", "data.img"),
       baseImageDigest: HOST_VM_DIGEST,
+      // What the runner's own firewall lets out, for a policy applied while it runs.
+      runnerEgress: { mode: "standard", allowTcpPorts: [] },
     });
   });
 
@@ -495,11 +499,96 @@ describe("HostVmRuntimeAdapter · its egress proxy", () => {
     expect(
       hostVmEgressFlags({
         mode: "restricted",
-        policyHash: "sha256:p",
         allowHosts: [{ host: "db.example.com", ports: [5432, 443] }, { host: "git.example.com" }],
-        allowMirrors: [{ name: "npm", host: "npm-mirror", port: 4873 }],
+        allowMirrors: [{ name: "npm", port: 4873 }],
       }),
     ).toEqual({ egress: "restricted", allowTcpPorts: [4873, 5432] });
     expect(hostVmEgressFlags(undefined)).toEqual({ egress: "standard", allowTcpPorts: [] });
+  });
+});
+
+/** A restricted policy that lets one host out on `ports`. */
+const restrictedOn = (ports: number[]) => ({
+  mode: "restricted" as const,
+  allowHosts: [{ host: "git.example.com", ports }],
+});
+
+describe("HostVmRuntimeAdapter · a policy applied while the VM runs (review R2)", () => {
+  it("holds a wider policy for the next start, a narrower one now", () => {
+    const launched = { mode: "restricted" as const, allowTcpPorts: [5432] };
+    // A port the runner drops, or no restriction at all: wider than its firewall.
+    expect(hostVmRunnerWidens(launched, restrictedOn([22]))).toBe(true);
+    expect(hostVmRunnerWidens(launched, { mode: "standard" })).toBe(true);
+    expect(hostVmRunnerWidens(launched, undefined)).toBe(true);
+    // The same ports or fewer, 80 and 443 always: the proxy refuses the rest now.
+    expect(hostVmRunnerWidens(launched, restrictedOn([5432, 443]))).toBe(false);
+    expect(hostVmRunnerWidens(launched, restrictedOn([]))).toBe(false);
+    // A standard runner forwards every port to the proxy: anything holds now.
+    expect(hostVmRunnerWidens({ mode: "standard", allowTcpPorts: [] }, restrictedOn([22]))).toBe(
+      false,
+    );
+    // Nothing recorded of the runner: unknown, so the next start.
+    expect(hostVmRunnerWidens(null, restrictedOn([]))).toBe(true);
+  });
+});
+
+describe("HostVmRuntimeAdapter · admission (review R2)", () => {
+  it("refuses a capture workspace whose paths a recovery boot would not keep", async () => {
+    const h = await make();
+    const support = (runtime: Record<string, unknown>, harnessHome?: string) =>
+      h.adapter.supports({
+        blueprint: {
+          ...onHostVm(cases.capture).blueprint,
+          runtime: { ...onHostVm(cases.capture).blueprint.runtime, ...runtime },
+          sources: {
+            ...cases.capture.blueprint.sources,
+            workspace: {
+              ...cases.capture.blueprint.sources.workspace,
+              ...(harnessHome === undefined ? {} : { harnessHome }),
+            },
+          },
+        },
+      });
+    expect(support({})).toEqual({ supported: true });
+    expect(support({ workingDirectory: "/srv/repo", workspaceRoot: "/srv" })).toMatchObject({
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+      message: expect.stringContaining("runtime.workingDirectory is /srv/repo"),
+    });
+    expect(support({}, "/opt/harness")).toMatchObject({
+      supported: false,
+      message: expect.stringContaining("sources.workspace.harnessHome is /opt/harness"),
+    });
+    expect(underRecoveredRoot("/home/dev/.claude")).toBe(true);
+    expect(underRecoveredRoot("/workspace")).toBe(true);
+    expect(underRecoveredRoot("/workspace/../etc")).toBe(false);
+    expect(underRecoveredRoot("/workspacex")).toBe(false);
+  });
+
+  it("refuses Docker inside the VM on a custom base image", async () => {
+    const h = await make();
+    const blueprint = onHostVm(cases.dind).blueprint;
+    expect(
+      h.adapter.supports({
+        blueprint: {
+          ...blueprint,
+          target: {
+            ...blueprint.target,
+            os: { family: "custom", mode: "require", baseImage: "registry.example/img:1" },
+          },
+        },
+      }),
+    ).toMatchObject({ supported: false, message: expect.stringContaining("managed base image") });
+  });
+
+  it("removes a runner its docker run created and could not start", async () => {
+    const h = await make();
+    h.runFailsAtStart = true;
+    await expect(h.adapter.launch(onHostVm(cases.capture))).rejects.toThrow(/\/dev\/kvm/);
+    // Not left "ended" for the next delivery to keep: it never ran.
+    expect(h.containers.has("sealant-vm-run-golden-4")).toBe(false);
+    await expect(h.adapter.launch(onHostVm(cases.capture))).resolves.toMatchObject({
+      status: "ready",
+    });
   });
 });

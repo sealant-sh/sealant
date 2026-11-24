@@ -411,6 +411,11 @@ export interface HostVmDiskRecord {
   readonly runId: string;
   readonly dataDiskPath: string;
   readonly baseImageDigest: string;
+  /** What its runner's firewall lets out, recorded with a normal launch (see the column). */
+  readonly runnerEgress?: {
+    readonly mode: "standard" | "restricted";
+    readonly allowTcpPorts: readonly number[];
+  };
 }
 
 /** A row naming a `host-vm` base image (`listHostVmBaseImages`). */
@@ -1053,6 +1058,9 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               .set({
                 hostVmDataDiskPath: input.dataDiskPath,
                 hostVmBaseImageDigest: input.baseImageDigest,
+                ...(input.runnerEgress === undefined
+                  ? {}
+                  : { hostVmRunnerEgress: input.runnerEgress }),
               })
               .where(eq(workspaceRuntimeInstances.runId, input.runId))
               .returning({ runId: workspaceRuntimeInstances.runId });

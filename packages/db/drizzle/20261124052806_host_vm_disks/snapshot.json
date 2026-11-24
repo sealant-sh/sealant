@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "240bb6a5-ceb9-4662-b0df-c98a4ca7aa7a",
+  "id": "c2882005-e651-4e4c-bb8d-ac98413e6982",
   "prevIds": ["ab9bc649-d5f9-4d00-9d01-6cd87fed06b2"],
   "ddl": [
     {
@@ -6234,6 +6234,19 @@
       "generated": null,
       "identity": null,
       "name": "host_vm_base_image_digest",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workspace_runtime_instances"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "host_vm_runner_egress",
       "entityType": "columns",
       "schema": "public",
       "table": "workspace_runtime_instances"

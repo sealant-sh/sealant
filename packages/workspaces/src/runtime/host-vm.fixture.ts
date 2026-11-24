@@ -31,6 +31,8 @@ export interface FakeContainer {
   readonly args: readonly string[];
   running: boolean;
   exitCode: number;
+  /** Created and never started (`docker run` failed at start). */
+  created?: boolean;
 }
 
 export interface HostVmHarness {
@@ -61,6 +63,8 @@ export interface HostVmHarness {
   inspectFails: boolean;
   /** The next runner's `docker run` fails, creating nothing. */
   runFails: boolean;
+  /** The next runner's `docker run` creates the container and fails to start it. */
+  runFailsAtStart: boolean;
   /** Images `docker image inspect` does not know until they are pulled. */
   readonly absentImages: Set<string>;
   /** The staged launch file each `docker run` of a runner found, by mode. */
@@ -154,6 +158,7 @@ export const createHostVmHarness = async (
     exitOnBoot: undefined as number | undefined,
     inspectFails: false,
     runFails: false,
+    runFailsAtStart: false,
     absentImages,
     stagedAtRun,
   };
@@ -250,7 +255,7 @@ export const createHostVmHarness = async (
       if (container === undefined) throw noSuch(`container: ${args.at(-1) ?? ""}`);
       return ok(
         JSON.stringify({
-          Status: container.running ? "running" : "exited",
+          Status: container.running ? "running" : container.created === true ? "created" : "exited",
           Running: container.running,
           ExitCode: container.exitCode,
           Error: "",
@@ -302,6 +307,19 @@ export const createHostVmHarness = async (
       if (harness.runFails) {
         harness.runFails = false;
         throw new Error("docker: Error response from daemon: failed to create task");
+      }
+      if (harness.runFailsAtStart) {
+        harness.runFailsAtStart = false;
+        containers.set(name, {
+          name,
+          args: [...args],
+          running: false,
+          exitCode: 128,
+          created: true,
+        });
+        throw new Error(
+          'docker: Error response from daemon: error gathering device information while adding custom device "/dev/kvm": no such file or directory',
+        );
       }
       if (containers.has(name))
         throw new Error(`Conflict. The container name "/${name}" is already in use`);

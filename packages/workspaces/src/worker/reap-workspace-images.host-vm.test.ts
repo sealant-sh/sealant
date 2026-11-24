@@ -142,3 +142,21 @@ describe("host VM base disk retention", () => {
     expect(await remaining(h)).toHaveLength(2);
   });
 });
+
+describe("host VM base disk retention · its data directory", () => {
+  it("deletes nothing when the data directory itself is gone", async () => {
+    const h = await host();
+    await baseDisk(h, 1);
+    await rm(h.dataDir, { recursive: true });
+    await expect(sweep(h)).rejects.toThrow(/ENOENT/);
+    expect(await remaining(h)).toHaveLength(2);
+  });
+
+  it("passes over a stray file beside the runners' directories", async () => {
+    const h = await host();
+    await baseDisk(h, 1);
+    await writeFile(joinPath(h.dataDir, "README"), "not a runner");
+    await dataDisk(h, "sealant-vm-a", digest(1));
+    expect(await sweep(h)).toEqual({ kept: 1, deleted: 0, failed: 0 });
+  });
+});

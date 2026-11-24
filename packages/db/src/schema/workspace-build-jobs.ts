@@ -282,6 +282,16 @@ export const workspaceRuntimeInstances = pgTable(
     hostVmDataDiskPath: text("host_vm_data_disk_path"),
     hostVmBaseImageDigest: text("host_vm_base_image_digest"),
     /**
+     * What a `host-vm` runner's own firewall lets out, fixed at `docker run` (`--egress`,
+     * `--allow-tcp-port`): a policy applied later that widens it (to `standard`, or a port it does
+     * not list) holds from the next start, whatever the proxy takes now. Null on every other
+     * runtime, and on a run launched before it was recorded (treated as unknown: next start).
+     */
+    hostVmRunnerEgress: jsonb("host_vm_runner_egress").$type<{
+      readonly mode: "standard" | "restricted";
+      readonly allowTcpPorts: readonly number[];
+    }>(),
+    /**
      * When a claim of this executor was first asked for (`capture.replan`, a standby being bound to
      * a worktree), written before the claim is sent: once set, sealant treats the executor as
      * claimed, whether or not the claim went through. A host VM's "nothing to save" (exit 76, the

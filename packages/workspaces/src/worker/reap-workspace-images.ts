@@ -357,12 +357,16 @@ export const reapHostVmBaseImagesEffect = (options: HostVmBaseImageReapOptions) 
     for (const row of yield* runtimeInstances.listHostVmBaseImages()) {
       if (!row.removed || (yield* pathExists(row.dataDiskPath))) keep.add(row.baseImageDigest);
     }
-    // Markers beside data disks.
+    // Markers beside data disks. A data directory that is not there (an unmounted volume) fails
+    // the tick: nothing can be said of the disks it holds.
     const dataEntries = yield* Effect.tryPromise({
-      try: () => readdir(options.dataDir),
+      try: () => readdir(options.dataDir, { withFileTypes: true }),
       catch: (error) => error,
-    }).pipe(Effect.catchIf(isMissing, () => Effect.succeed([] as string[])));
-    for (const container of dataEntries) {
+    });
+    for (const entry of dataEntries) {
+      // A stray file beside the runners' directories is no disk.
+      if (!entry.isDirectory()) continue;
+      const container = entry.name;
       const marker = yield* Effect.tryPromise({
         try: () => readFile(joinPath(options.dataDir, container, "base-image-digest"), "utf8"),
         catch: (error) => error,

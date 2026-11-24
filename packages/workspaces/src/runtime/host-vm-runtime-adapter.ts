@@ -37,7 +37,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join as joinPath } from "node:path";
+import { join as joinPath, posix } from "node:path";
 
 import { z } from "zod";
 
@@ -180,10 +180,21 @@ export interface HostVmDiskRecord {
   readonly baseImageDigest: string;
 }
 
+/** What a runner's own firewall lets out, fixed at `docker run` (`hostVmEgressFlags`). */
+export interface HostVmRunnerEgress {
+  readonly mode: "standard" | "restricted";
+  readonly allowTcpPorts: readonly number[];
+}
+
 /** Where the adapter keeps each executor's disks, durably: the run's runtime row in Postgres. */
 export interface HostVmDiskRecords {
   /** Written before the runner container is created; a failure fails the launch. */
-  readonly record: (input: HostVmDiskRecord & { readonly runId: string }) => Promise<void>;
+  readonly record: (
+    input: HostVmDiskRecord & {
+      readonly runId: string;
+      readonly runnerEgress?: HostVmRunnerEgress;
+    },
+  ) => Promise<void>;
   readonly load: (runId: string) => Promise<HostVmDiskRecord | undefined>;
 }
 
@@ -219,12 +230,43 @@ interface HostVmEgressAttachment {
   readonly allowTcpPorts: readonly number[];
 }
 
+/** What of a network policy (a spec's, or one applied later) decides a runner's firewall. */
+export interface HostVmPolicyPorts {
+  readonly mode: "standard" | "restricted";
+  readonly allowHosts?:
+    | ReadonlyArray<{ readonly host: string; readonly ports?: ReadonlyArray<number> | undefined }>
+    | undefined;
+  readonly allowMirrors?:
+    | ReadonlyArray<{ readonly name: string; readonly port: number }>
+    | undefined;
+}
+
+/**
+ * Whether `policy`, applied to a running host VM, lets out something its runner's firewall does
+ * not: the runner takes its mode and ports once, at `docker run`, so its proxy can take a wider
+ * policy at once while the VM's packets for the new ports are still dropped before they reach
+ * it. Such a policy holds from the next start. A narrower one holds now: the proxy refuses what
+ * the runner still forwards. Nothing recorded (`launched` absent) is unknown, and treated as
+ * wider.
+ */
+export const hostVmRunnerWidens = (
+  launched: HostVmRunnerEgress | null | undefined,
+  policy: HostVmPolicyPorts | undefined,
+): boolean => {
+  if (launched === null || launched === undefined) return true;
+  if (launched.mode === "standard") return false;
+  const next = hostVmEgressFlags(policy);
+  if (next.egress === "standard") return true;
+  const allowed = new Set(launched.allowTcpPorts);
+  return next.allowTcpPorts.some((port) => !allowed.has(port));
+};
+
 /**
  * The runner's egress flags from the workspace's policy: `restricted` lets through 80, 443 and
  * the TCP ports its allowed hosts and mirrors name; anything else is `standard`.
  */
 export const hostVmEgressFlags = (
-  policy: RuntimeAdapterLaunchInput["blueprint"]["networkPolicy"],
+  policy: HostVmPolicyPorts | undefined,
 ): Pick<HostVmEgressAttachment, "egress" | "allowTcpPorts"> => {
   if (policy?.mode !== "restricted") return { egress: "standard", allowTcpPorts: [] };
   const ports = new Set<number>();
@@ -364,7 +406,43 @@ const supportFor = (input: RuntimeAdapterSupportInput, proxied: boolean): Runtim
       "Cluster env references (runtime.envFrom, kubernetes.serviceAccountName) resolve only on Kubernetes runtimes.",
     );
   }
+  if (
+    blueprint.tooling.services?.docker?.enabled === true &&
+    blueprint.target.os.family === "custom"
+  ) {
+    return no(
+      "unsupported-runtime-requirement",
+      "Docker inside a host VM workspace needs a managed base image (Ubuntu, Fedora, Arch or Nix): the guest's engine is installed with the family's own packages. Choose a managed OS family, or turn Docker off.",
+    );
+  }
+  if (source.kind === "capture") {
+    const outside = [
+      ["runtime.workspaceRoot", blueprint.runtime.workspaceRoot],
+      ["runtime.workingDirectory", blueprint.runtime.workingDirectory],
+      ...(source.harnessHome === undefined
+        ? []
+        : [["sources.workspace.harnessHome", source.harnessHome] as const]),
+    ].filter(([, path]) => !underRecoveredRoot(path));
+    if (outside.length > 0) {
+      return no(
+        "unsupported-runtime-requirement",
+        `A host VM's recovery boot keeps only /workspace and /home of its data disk, so a capture workspace's paths must lie under one of them; ${outside.map(([field, path]) => `${field} is ${path}`).join(", ")}.`,
+      );
+    }
+  }
   return parseRuntimeAdapterSupport({ supported: true });
+};
+
+/** The data-disk directories a recovery boot binds back in (sealantd `vm/layout.rs` `recovery`). */
+const RECOVERED_ROOTS = ["/workspace", "/home"] as const;
+
+/** Whether `path` is a recovered root or below one, with no `.` or `..` segment to escape it. */
+export const underRecoveredRoot = (path: string): boolean => {
+  if (!path.startsWith("/") || path.split("/").some((part) => part === "." || part === "..")) {
+    return false;
+  }
+  const normalized = posix.normalize(path).replace(/\/+$/, "");
+  return RECOVERED_ROOTS.some((root) => normalized === root || normalized.startsWith(`${root}/`));
 };
 
 /** The container state `docker inspect` reports, or `absent`. */
@@ -734,10 +812,12 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         });
         owned.disk = prepared.created;
         // On record before the container exists: from here a prune cannot lose the disk's owner.
+        const flags = hostVmEgressFlags(parsed.blueprint.networkPolicy);
         await this.#records.record({
           runId,
           dataDiskPath: prepared.dataDiskPath,
           baseImageDigest: digest,
+          runnerEgress: { mode: flags.egress, allowTcpPorts: flags.allowTcpPorts },
         });
         // The proxy comes up on the workspace's isolated network and takes its first policy
         // before the runner exists, so the VM never has a moment without it (§7.1).
@@ -760,7 +840,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         const egress: HostVmEgressAttachment = {
           network: proxy.networks.isolated.name,
           proxyIp: proxy.networks.proxyIp,
-          ...hostVmEgressFlags(parsed.blueprint.networkPolicy),
+          ...flags,
         };
         const dockerService = parsed.blueprint.tooling.services?.docker?.enabled === true;
         const launchFiles = await this.#launchFiles(parsed, dockerService);
@@ -789,6 +869,9 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
           // A concurrent launch of the same run created it first: adopt it when it runs. Its
           // proxy is that launch's too.
           const raced = await this.#containerState(name).catch(() => undefined);
+          // Created and never started (no /dev/kvm, a refused device): this launch's own, and
+          // removed with its failure, or every redelivery would find an "ended" runner to keep.
+          if (raced?.kind === "present" && raced.status === "created") owned.container = true;
           if (raced?.kind !== "present" || !raced.running) throw error;
           owned.proxy = false;
           owned.disk = false;

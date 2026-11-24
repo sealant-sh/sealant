@@ -416,6 +416,7 @@ export const fakeWorkspaceRepos = (
     hostVmDataDiskPath: null,
     hostVmBaseImageDigest: null,
     captureClaimedAt: null,
+    hostVmRunnerEgress: null,
     createdAt: new Date(0),
     updatedAt: new Date(0),
   };

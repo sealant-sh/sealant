@@ -15,7 +15,12 @@ import {
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import { fakeService } from "@sealant/db/testing/fake-service";
-import { attemptSnapshotRow, captureDrainRow, runtimeInstanceRow } from "@sealant/db/testing/rows";
+import {
+  attemptRow,
+  attemptSnapshotRow,
+  captureDrainRow,
+  runtimeInstanceRow,
+} from "@sealant/db/testing/rows";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -65,6 +70,7 @@ const instance = (overrides: Partial<WorkspaceRuntimeInstance> = {}): WorkspaceR
   hostVmDataDiskPath: null,
   hostVmBaseImageDigest: null,
   captureClaimedAt: null,
+  hostVmRunnerEgress: null,
   removedAt: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60_000),
@@ -89,6 +95,8 @@ const harness = (input: {
   readonly recoverAnswersUnstarted?: boolean;
   /** A capture status sealant recorded from the executor (`last_status`). */
   readonly lastStatus?: Readonly<Record<string, unknown>>;
+  /** The launch id its create named (`standby:<id>` for a standby); default none. */
+  readonly launchId?: string | null;
   /** The launch's stored blueprint; absent, the sweep has no attempt repository at all. */
   readonly blueprintPayload?: ReturnType<typeof attemptSnapshotRow>["blueprintPayload"];
 }) => {
@@ -174,6 +182,7 @@ const harness = (input: {
   };
   const daemon = input.daemon ?? fakeCaptureDaemon(["unreachable"]);
   const blueprintPayload = input.blueprintPayload;
+  const launchId = input.launchId ?? null;
   const run = () =>
     Effect.runPromise(
       recoverRetainedExecutorsEffect({
@@ -206,6 +215,7 @@ const harness = (input: {
                   fakeService<WorkspaceAttemptRepoService>({
                     getAttemptSnapshotByRunId: () =>
                       Effect.succeed(attemptSnapshotRow({ blueprintPayload })),
+                    getAttemptById: () => Effect.succeed(attemptRow({ launchId })),
                   }),
                 ),
           ),
@@ -829,27 +839,44 @@ describe("recoverRetainedExecutorsEffect · a host VM whose recovery boot says n
       ...overrides,
     });
 
-  it("releases the disk of a warm standby that reached readiness and was never claimed", async () => {
-    const h = hostVm({ blueprintPayload: standby });
+  it("releases the disk of a standby nobody ever claimed", async () => {
+    const h = hostVm({ blueprintPayload: standby, launchId: "standby:wt-pool-3" });
     expect((await h.run()).get("run_1")).toBe("released");
     expect(h.stop).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     [
-      "a session that named no worktree failed before it reached readiness",
-      { blueprintPayload: standby, instance: { launchedAt: null } },
-      "never reached readiness",
+      "an ordinary session named no worktree (the channel names it at boot)",
+      { blueprintPayload: standby, launchId: "launch_7f3", instance: { launchedAt: null } },
+      "a session's, not a standby's",
     ],
-    ["its launch named a worktree", { blueprintPayload: forWorktree }, "named a worktree"],
+    [
+      "a session named no launch at all",
+      { blueprintPayload: standby, launchId: null },
+      "a session's, not a standby's",
+    ],
+    [
+      "its launch named a worktree",
+      { blueprintPayload: forWorktree, launchId: "standby:wt-pool-3" },
+      "named a worktree",
+    ],
     [
       "a claim of it was asked for",
-      { blueprintPayload: standby, instance: { captureClaimedAt: new Date(NOW - 5_000) } },
+      {
+        blueprintPayload: standby,
+        launchId: "standby:wt-pool-3",
+        instance: { captureClaimedAt: new Date(NOW - 5_000) },
+      },
       "a claim of it was asked for",
     ],
     [
       "sealant recorded a status naming its work",
-      { blueprintPayload: standby, lastStatus: { epoch: 2, worktreeId: "wt_7", headN: 3 } },
+      {
+        blueprintPayload: standby,
+        launchId: "standby:wt-pool-3",
+        lastStatus: { epoch: 2, worktreeId: "wt_7", headN: 3 },
+      },
       "naming its work",
     ],
     ["its launch cannot be read", {}, "cannot read"],

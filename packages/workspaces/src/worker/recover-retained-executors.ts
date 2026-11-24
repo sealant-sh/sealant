@@ -65,6 +65,7 @@ import { z } from "zod";
 
 import {
   executorClaimEvidence,
+  isStandbyLaunch,
   runtimeChecksClaimBeforeNothingToSave,
   storedStatusNamesWork,
   runtimeRecoveryTakesSecretEnv,
@@ -636,19 +637,22 @@ const recoverOne = (
         // A runtime whose 76 is the guest's own word (a host VM) is believed only for an
         // executor no worktree ever claimed, by sealant's own records (§6.2).
         if (runtimeChecksClaimBeforeNothingToSave(adapter.id)) {
-          const snapshot = yield* Effect.serviceOption(WorkspaceAttemptRepo).pipe(
+          const launch = yield* Effect.serviceOption(WorkspaceAttemptRepo).pipe(
             Effect.flatMap((repo) =>
               Option.isSome(repo)
-                ? repo.value.getAttemptSnapshotByRunId(runId).pipe(
-                    Effect.map((found) => found?.blueprintPayload),
-                    Effect.catchCause(() => Effect.succeed(undefined)),
-                  )
+                ? Effect.all({
+                    blueprint: repo.value
+                      .getAttemptSnapshotByRunId(runId)
+                      .pipe(Effect.map((found) => found?.blueprintPayload)),
+                    attempt: repo.value.getAttemptById(runId),
+                  }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
                 : Effect.succeed(undefined),
             ),
           );
           const claimed = executorClaimEvidence({
-            launchNamedWorktree: blueprintNamesWorktree(snapshot),
-            reachedReady: instance.launchedAt !== null,
+            standbyLaunch:
+              launch?.attempt === undefined ? undefined : isStandbyLaunch(launch.attempt.launchId),
+            launchNamedWorktree: blueprintNamesWorktree(launch?.blueprint),
             claimRecorded: instance.captureClaimedAt !== null,
             recordedStatusNamesWork:
               storedStatusNamesWork(row.lastStatus) ||

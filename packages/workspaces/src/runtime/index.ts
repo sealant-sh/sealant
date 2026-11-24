@@ -64,6 +64,9 @@ export {
   type HostVmDiskRecord,
   type HostVmDiskRecords,
   hostVmEgressFlags,
+  hostVmRunnerWidens,
+  underRecoveredRoot,
+  type HostVmRunnerEgress,
   type HostVmEgressProxyOptions,
   type HostVmRuntimeAdapterOptions,
 } from "./host-vm-runtime-adapter.js";
@@ -226,6 +229,7 @@ export {
   decideExecutorDeletion,
   observedCaptureFromStored,
   executorClaimEvidence,
+  isStandbyLaunch,
   runtimeChecksClaimBeforeNothingToSave,
   runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
