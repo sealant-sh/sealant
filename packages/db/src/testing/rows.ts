@@ -108,6 +108,8 @@ export const runtimeInstanceRow = (
   launchLeaseExpiresAt: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
+  hostVmDataDiskPath: null,
+  hostVmBaseImageDigest: null,
   createdAt: new Date(0),
   updatedAt: new Date(0),
   ...overrides,

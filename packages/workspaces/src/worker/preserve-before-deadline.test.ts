@@ -61,6 +61,8 @@ const instance = (deadlineInMs: number): WorkspaceRuntimeInstance => ({
   runtimeDeadlineAt: new Date(NOW + deadlineInMs),
   launchOwner: null,
   launchLeaseExpiresAt: null,
+  hostVmDataDiskPath: null,
+  hostVmBaseImageDigest: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
   removedAt: null,

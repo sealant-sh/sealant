@@ -51,6 +51,8 @@ import type { CredentialCipherService } from "@sealant/credentials";
  */
 import {
   SealantDB,
+  WorkspaceAttemptRepo,
+  WorkspaceAttemptRepoLive,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepo,
@@ -58,10 +60,12 @@ import {
   type DB,
   type WorkspaceCaptureDrain,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { z } from "zod";
 
 import {
+  executorClaimEvidence,
+  runtimeChecksClaimBeforeNothingToSave,
   runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
   decideExecutorDeletion,
@@ -309,6 +313,15 @@ const recoveryAttempt = (options: RecoverRetainedExecutorsOptions, row: Workspac
       Effect.ensuring(ledger.releaseRecovery(row.runId, claim)),
     );
   });
+
+/** A stored blueprint names a worktree (`sources.workspace.worktreeId`); undefined: unreadable. */
+const blueprintWorktreeSchema = z.object({
+  sources: z.object({ workspace: z.object({ worktreeId: z.string().optional() }) }),
+});
+const blueprintNamesWorktree = (payload: unknown): boolean | undefined => {
+  const parsed = blueprintWorktreeSchema.safeParse(payload);
+  return parsed.success ? parsed.data.sources.workspace.worktreeId !== undefined : undefined;
+};
 
 /** A runtime call of a recovery attempt, bounded (review 9 #8): past it, it failed. */
 const boundedCall = <A>(
@@ -619,6 +632,35 @@ const recoverOne = (
           );
     switch (recovered.outcome) {
       case "nothing-to-save": {
+        // A runtime whose 76 is the guest's own word (a host VM) is believed only for an
+        // executor no worktree ever claimed, by sealant's own records (§6.2).
+        if (runtimeChecksClaimBeforeNothingToSave(adapter.id)) {
+          const snapshot = yield* Effect.serviceOption(WorkspaceAttemptRepo).pipe(
+            Effect.flatMap((repo) =>
+              Option.isSome(repo)
+                ? repo.value.getAttemptSnapshotByRunId(runId).pipe(
+                    Effect.map((found) => found?.blueprintPayload),
+                    Effect.catchCause(() => Effect.succeed(undefined)),
+                  )
+                : Effect.succeed(undefined),
+            ),
+          );
+          const claimed = executorClaimEvidence({
+            launchNamedWorktree: blueprintNamesWorktree(snapshot),
+            reachedReady: instance.launchedAt !== null,
+            recordedCaptureStatus: row.lastStatus !== null || row.unsavedStatuses.length > 0,
+          });
+          if (claimed.claimed) {
+            if (restaged) {
+              yield* Effect.tryPromise(() => stager.removeSecretEnv(runId)).pipe(
+                Effect.catchCause(() => Effect.void),
+              );
+            }
+            const why = `its recovery boot said there is nothing to save, but ${claimed.why}; its disk is kept until a final capture is verified or its owner discards it`;
+            yield* Effect.logError(`${prefix}: not saved · retained · ${why}.`);
+            return yield* retry(why);
+          }
+        }
         // sealantd's recovery boot exited 76: the executor never materialized a capture (its
         // worktree is absent or holds only the boot lock), and capture starts before any user
         // code, so nothing ran on it and nothing is lost by removing it. Recorded with the
@@ -743,6 +785,7 @@ export const recoverRetainedExecutors = (
   const dataAccessLayer = Layer.mergeAll(
     WorkspaceRuntimeInstanceRepoLive,
     WorkspaceCaptureDrainRepoLive,
+    WorkspaceAttemptRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
   return Effect.runPromise(
     recoverRetainedExecutorsEffect(effectOptions).pipe(

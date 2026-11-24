@@ -11,6 +11,8 @@
  *   - `KubernetesWorkspaceImageBuilder` (`./kubernetes/`) runs one rootless BuildKit Job per build
  *     that pushes straight to the registry.
  */
+import { createHash } from "node:crypto";
+
 import type {
   NewWorkspace,
   WorkspaceBuild,
@@ -30,11 +32,13 @@ import {
   runBuildkitCommand,
   type BuildkitCommandRunner,
   type BuildkitCompilerOptions,
+  type ContainerfileExtender,
   type ImageBuildProgress,
   type PlannedWorkspaceImageBuild,
 } from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
 import type { PublishedImage } from "../runtime/runtime-adapter.js";
+import { guestDockerLayer, microvmDockerServiceFamilies } from "./microvm/recipe.js";
 
 export interface BuildAndPublishInput {
   readonly spec: NewWorkspace;
@@ -120,7 +124,36 @@ export interface DockerWorkspaceImageBuilderOptions {
   readonly cacheDirectory?: string;
   /** Test seam: runs `docker` for the image probe of an image found in the Engine. */
   readonly commandRunner?: BuildkitCommandRunner;
+  /**
+   * The workspace's Docker runs inside its VM (the host VM runtime): an image whose blueprint turns
+   * Docker on carries the engine itself (`guestDockerLayer`), installed by this
+   * `download-docker.sh`. Absent (the Docker and Kubernetes runtimes): the engine runs beside the
+   * workspace, and the image carries none.
+   */
+  readonly guestDocker?: { readonly downloadScript: Uint8Array };
 }
+
+/**
+ * The extension that gives a VM's image its own Docker engine when its blueprint turns Docker on.
+ * The script's digest is a line of the Containerfile, so a release that changes it plans a new
+ * image instead of reusing one built with the old engine.
+ */
+export const guestDockerExtender = (downloadScript: Uint8Array): ContainerfileExtender => {
+  const digest = createHash("sha256").update(downloadScript).digest("hex");
+  return (osFamily, blueprint) => {
+    if (blueprint.tooling.services?.docker?.enabled !== true) return undefined;
+    const layer = guestDockerLayer(osFamily);
+    if (layer === undefined) {
+      throw new Error(
+        `Docker inside a host VM workspace needs one of the ${microvmDockerServiceFamilies().join(", ")} OS families; this blueprint resolves to ${osFamily}.`,
+      );
+    }
+    return {
+      lines: [`# download-docker.sh sha256:${digest}`, ...layer],
+      files: [{ name: "download-docker.sh", content: downloadScript }],
+    };
+  };
+};
 
 const isPublishableOciImageArtifact = (
   artifact: WorkspaceBuild["artifacts"][number],
@@ -152,6 +185,10 @@ export const createDockerWorkspaceImageBuilder = (
   options: DockerWorkspaceImageBuilderOptions,
 ): WorkspaceImageBuilder => {
   const engineTransport = options.registryClient.imageTransport === "engine";
+  const extend =
+    options.guestDocker === undefined
+      ? undefined
+      : guestDockerExtender(options.guestDocker.downloadScript);
   const compile = (
     spec: NewWorkspace,
     input: Pick<BuildAndPublishInput, "onProgress" | "signal">,
@@ -169,6 +206,7 @@ export const createDockerWorkspaceImageBuilder = (
       blueprint: spec,
       platform: options.platform,
       options: compilerOptions,
+      ...(extend === undefined ? {} : { extend }),
     });
   };
   // A custom compiler without a matching planner disables the short-circuit: the planner's hash
@@ -177,7 +215,11 @@ export const createDockerWorkspaceImageBuilder = (
     options.planWorkspaceSpec ??
     (options.compileWorkspaceSpec === undefined
       ? (spec: NewWorkspace): PlannedWorkspaceImageBuild =>
-          planWorkspaceImageBuild({ blueprint: spec, platform: options.platform })
+          planWorkspaceImageBuild({
+            blueprint: spec,
+            platform: options.platform,
+            ...(extend === undefined ? {} : { extend }),
+          })
       : undefined);
 
   const publish = async (input: BuildAndPublishInput, build: WorkspaceBuild) => {

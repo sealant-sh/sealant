@@ -321,15 +321,62 @@ export const attestationCoversObservations = (
  * MicroVM can while the VM runs on after its daemon ended (the agent starts sealantd again in
  * recovery mode on the VM's disk); a TERMINATED VM's disk is gone, which `recover` reports as
  * `missing`. Boat can the same way: a Boat VM runs on after its daemon ended, and its agent starts
- * sealantd again in recovery mode on the VM's disk. Kubernetes cannot restart an ended Pod.
+ * sealantd again in recovery mode on the VM's disk. A host VM can: its data disk outlives its
+ * runner container, and a fresh runner boots it in recovery mode even after the container was
+ * pruned. Kubernetes cannot restart an ended Pod.
  */
 export const runtimeRestartsRetainedExecutors = (adapterId: string | null | undefined): boolean =>
-  adapterId === "docker" || adapterId === "microvm" || adapterId === "boat";
+  adapterId === "docker" ||
+  adapterId === "microvm" ||
+  adapterId === "boat" ||
+  adapterId === "host-vm";
 
 /**
  * Whether the runtime hands the recovery boot its capture token itself (`recover({ secretEnv })`:
- * the MicroVM and Boat agents write it on the VM) rather than reading a secret env file the worker
- * stages on its host again (Docker).
+ * the MicroVM and Boat agents write it on the VM, the host VM adapter stages it in the recovery
+ * runner's `recovery-env.json`) rather than reading a secret env file the worker stages on its
+ * host again (Docker).
  */
 export const runtimeRecoveryTakesSecretEnv = (adapterId: string | null | undefined): boolean =>
-  adapterId === "microvm" || adapterId === "boat";
+  adapterId === "microvm" || adapterId === "boat" || adapterId === "host-vm";
+
+/**
+ * Whether a runtime's "nothing to save" (exit 76) is honoured only once sealant's own records say
+ * no worktree ever claimed the executor (`executorClaimEvidence`). On a host VM the exit status is
+ * the guest's own frame, and code that ran as root in the guest could forge it to have its disk
+ * deleted; so an executor sealant knows was claimed keeps its disk until a verified final capture
+ * or its owner's discard. Every other runtime reads 76 from a process the workspace never owned.
+ */
+export const runtimeChecksClaimBeforeNothingToSave = (
+  adapterId: string | null | undefined,
+): boolean => adapterId === "host-vm";
+
+/**
+ * What sealant itself knows of whether a worktree claimed an executor (§6.2): its launch named a
+ * worktree (a standby names none until it is bound), it reached readiness (a capture-sourced
+ * daemon answers only after it has materialized its worktree), or its daemon answered a capture
+ * status that sealant recorded. Unknown counts as claimed (fail closed).
+ */
+export const executorClaimEvidence = (input: {
+  /** The launch named a worktree; `undefined` when its blueprint could not be read. */
+  readonly launchNamedWorktree: boolean | undefined;
+  readonly reachedReady: boolean;
+  readonly recordedCaptureStatus: boolean;
+}): { readonly claimed: false } | { readonly claimed: true; readonly why: string } => {
+  if (input.launchNamedWorktree === undefined) {
+    return { claimed: true, why: "sealant cannot read which worktree its launch named" };
+  }
+  if (input.launchNamedWorktree) {
+    return { claimed: true, why: "its launch named a worktree, which its daemon claims at boot" };
+  }
+  if (input.reachedReady) {
+    return {
+      claimed: true,
+      why: "it reached readiness, so its daemon had materialized a worktree",
+    };
+  }
+  if (input.recordedCaptureStatus) {
+    return { claimed: true, why: "sealant recorded a capture status from its daemon" };
+  }
+  return { claimed: false };
+};

@@ -32,6 +32,7 @@ import { bridgeLaunchRequestSchema } from "./cloudflare/bridge-contract.js";
 import { cloudflareRuntimeConfigSchema } from "./cloudflare/config.js";
 import { cases, publishedImage } from "./docker-runtime-adapter.golden-fixture.js";
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
+import { createHostVmHarness, HOST_VM_DIGEST, HOST_VM_REFERENCE } from "./host-vm.fixture.js";
 import { KubernetesRuntimeAdapter } from "./kubernetes/adapter.js";
 import { kubernetesRuntimeConfigSchema } from "./kubernetes/config.js";
 import { fakeCluster } from "./kubernetes/fake-cluster.fixture.js";
@@ -150,13 +151,33 @@ const microvmBuilder = (): MicrovmWorkspaceImageBuilder => {
   });
 };
 
-/**
- * The families this suite launches: every one with an adapter here. Boat and host-vm have their
- * own suites (host-vm's adapter lands beside its runner).
- */
-type ConformanceFamily = Exclude<RuntimeAdapterId, "boat" | "host-vm">;
-const hasConformanceCase = (id: RuntimeAdapterId): id is ConformanceFamily =>
-  id !== "boat" && id !== "host-vm";
+/** The families this suite launches: every one with an adapter here. Boat has its own suite. */
+type ConformanceFamily = Exclude<RuntimeAdapterId, "boat">;
+const hasConformanceCase = (id: RuntimeAdapterId): id is ConformanceFamily => id !== "boat";
+
+/** A launch on a host VM, of the build's digest; the harness's directories go afterwards. */
+const hostVmLaunch = async (
+  input: typeof launchInput,
+): Promise<{ readonly harness: Awaited<ReturnType<typeof createHostVmHarness>> }> => {
+  const harness = await createHostVmHarness();
+  try {
+    await harness.adapter.launch({
+      ...input,
+      publication: {
+        ...input.publication,
+        image: {
+          ...input.publication.image,
+          digest: HOST_VM_DIGEST,
+          digestReference: HOST_VM_REFERENCE,
+        },
+      },
+    });
+  } catch (error) {
+    await harness.cleanup();
+    throw error;
+  }
+  return { harness };
+};
 
 interface BuiltAndBooted {
   /** What the runtime's build published for the blueprint. */
@@ -186,6 +207,17 @@ const bootedImage: Record<ConformanceFamily, () => Promise<BuiltAndBooted>> = {
       published: publishedImage.digestReference,
       booted: run.find((arg) => arg === publishedImage.digestReference) ?? run.join(" "),
     };
+  },
+  "host-vm": async () => {
+    const { harness } = await hostVmLaunch(launchInput);
+    try {
+      // A host VM boots the base disk made from the image: `docker create` of that image is
+      // what its export is streamed from.
+      const created = harness.calls.find((args) => args[0] === "create") ?? [];
+      return { published: HOST_VM_REFERENCE, booted: created.at(-1) ?? "" };
+    } finally {
+      await harness.cleanup();
+    }
   },
   k8s: async () => ({
     published: publishedImage.digestReference,
@@ -491,6 +523,40 @@ const carriedDotfiles: Record<ConformanceFamily, () => Promise<CarriedDotfiles>>
       ?.slice("SEALANT_DOTFILES_ARCHIVE_DIR=".length);
     return { archiveDir, ...(await readStagedDir(dir)) };
   },
+  "host-vm": async () => {
+    const dir = await stageOnHost();
+    const { harness } = await hostVmLaunch({
+      ...launchInput,
+      blueprint: dotfilesBlueprint,
+      runId: DOTFILES_RUN_ID,
+      dotfilesArchiveDir: dir,
+    });
+    try {
+      // The archives ride the runner's boot frame inline (`dotfilesArchive.files`); sealantd
+      // --vm writes them out and points SEALANT_DOTFILES_ARCHIVE_DIR at them itself.
+      const staged = harness.stagedAtRun[0]?.launch;
+      const files: Record<string, string> =
+        Predicate.isObject(staged) &&
+        Predicate.isObject(staged["dotfilesArchive"]) &&
+        Predicate.isObject(staged["dotfilesArchive"]["files"])
+          ? Object.fromEntries(
+              Object.entries(staged["dotfilesArchive"]["files"]).flatMap(([name, value]) =>
+                typeof value === "string" ? [[name, value]] : [],
+              ),
+            )
+          : {};
+      const manifest: { archives: Array<{ file: string }> } = JSON.parse(
+        Buffer.from(files["manifest.json"] ?? "", "base64").toString("utf8"),
+      );
+      return {
+        archiveDir: undefined,
+        manifest,
+        archives: manifest.archives.map((entry) => Buffer.from(files[entry.file] ?? "", "base64")),
+      };
+    } finally {
+      await harness.cleanup();
+    }
+  },
   k8s: () => kubernetesCarriedDotfiles("k8s"),
   k3s: () => kubernetesCarriedDotfiles("k3s"),
   cloudflare: async () => {
@@ -601,6 +667,8 @@ const expectedArchiveDir: Record<ConformanceFamily, string | undefined> = {
   k3s: `${LAUNCH_MOUNT_PATH}/dotfiles`,
   cloudflare: undefined,
   microvm: "/run/sealant/dotfiles",
+  // sealantd --vm writes the inline archives and names their directory itself.
+  "host-vm": undefined,
 };
 
 describe("runtime adapter conformance: a blueprint's dotfiles", () => {

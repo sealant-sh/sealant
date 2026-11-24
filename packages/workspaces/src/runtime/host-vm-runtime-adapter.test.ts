@@ -1,0 +1,352 @@
+import { access, readFile, writeFile, mkdir } from "node:fs/promises";
+import { join as joinPath } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { cases, publishedImage } from "./docker-runtime-adapter.golden-fixture.js";
+import { hostVmMemory, HostVmRuntimeAdapter } from "./host-vm-runtime-adapter.js";
+import {
+  createHostVmHarness,
+  HOST_VM_DIGEST,
+  HOST_VM_KEY,
+  HOST_VM_REFERENCE,
+  type HostVmHarness,
+} from "./host-vm.fixture.js";
+import { LaunchRetainedError } from "./launch-retention.js";
+import type { RuntimeAdapterLaunchInput } from "./runtime-adapter.js";
+
+const MiB = 1024 * 1024;
+const GiB = 1024 * MiB;
+
+/** A golden launch on a host VM: the publication names a real digest, as every build does. */
+const onHostVm = (input: RuntimeAdapterLaunchInput): RuntimeAdapterLaunchInput => ({
+  ...input,
+  blueprint: {
+    ...input.blueprint,
+    target: { ...input.blueprint.target, runtime: { family: "host-vm", mode: "require" } },
+  },
+  publication: {
+    ...input.publication,
+    image: { ...publishedImage, digest: HOST_VM_DIGEST, digestReference: HOST_VM_REFERENCE },
+  },
+});
+
+const exists = (path: string) =>
+  access(path).then(
+    () => true,
+    () => false,
+  );
+
+/** The values that follow each occurrence of `flag` in an argv. */
+const valuesOf = (args: readonly string[], flag: string): string[] =>
+  args.flatMap((arg, index) => (arg === flag ? [args[index + 1] ?? ""] : []));
+
+const runnerRun = (harness: HostVmHarness): string[] =>
+  harness.calls.find((args) => args[0] === "run" && args.includes("--name")) ?? [];
+
+let harness: HostVmHarness | undefined;
+const make = async (...args: Parameters<typeof createHostVmHarness>) => {
+  harness = await createHostVmHarness(...args);
+  return harness;
+};
+afterEach(async () => {
+  await harness?.cleanup();
+  harness = undefined;
+});
+
+describe("HostVmRuntimeAdapter.launch", () => {
+  it("runs the runner in exactly the jail sealant-vm-runner expects", async () => {
+    const h = await make();
+    const result = await h.adapter.launch(onHostVm(cases.gitSource));
+    const run = runnerRun(h);
+    const name = "sealant-vm-run-golden-1";
+
+    expect(result).toMatchObject({
+      adapter: "host-vm",
+      resourceId: name,
+      reference: name,
+      status: "ready",
+      endpoint: `unix://${joinPath(h.controlDir, name, "control.sock")}`,
+    });
+    // Exactly four capabilities, after dropping all of them.
+    expect(valuesOf(run, "--cap-drop")).toEqual(["ALL"]);
+    expect(valuesOf(run, "--cap-add").toSorted()).toEqual([
+      "NET_ADMIN",
+      "SETGID",
+      "SETPCAP",
+      "SETUID",
+    ]);
+    expect(valuesOf(run, "--security-opt")).toEqual(["no-new-privileges:true"]);
+    expect(valuesOf(run, "--device")).toEqual(["/dev/kvm:/dev/kvm", "/dev/net/tun:/dev/net/tun"]);
+    expect(run).toContain("--read-only");
+    expect(valuesOf(run, "--tmpfs")).toEqual([
+      "/tmp:rw,nosuid,nodev,noexec,uid=65532,gid=65532",
+      "/run/vm:rw,nosuid,nodev,noexec,uid=65532,gid=65532",
+    ]);
+    // Never privileged, never the Docker socket, never Mend's own network.
+    expect(run.join(" ")).not.toMatch(/--privileged|docker\.sock|mend_default/);
+    expect(valuesOf(run, "--network")).toEqual([`mend-egress-${name}`]);
+    // Only this executor's base disk, read-only; its own data and control directories.
+    expect(valuesOf(run, "--mount")).toEqual([
+      `type=bind,source=${joinPath(h.imagesDir, `${HOST_VM_KEY}.img`)},target=/var/lib/sealant/images/${HOST_VM_KEY}.img,readonly`,
+      `type=bind,source=${joinPath(h.dataDir, name)},target=/var/lib/sealant/data`,
+      `type=bind,source=${joinPath(h.controlDir, name)},target=/run/sealant`,
+    ]);
+    // The runner's own flags, after its image.
+    const runnerArgs = run.slice(run.indexOf("ghcr.io/sealant-sh/vm-runner:test") + 1);
+    expect(runnerArgs).toEqual([
+      "--mode",
+      "normal",
+      "--image-digest",
+      HOST_VM_KEY,
+      "--vcpus",
+      "2",
+      "--memory-mib",
+      String((8 * GiB) / MiB),
+      "--shutdown-grace-secs",
+      "20",
+      "--proxy-ip",
+      "172.30.0.3",
+      "--egress",
+      "standard",
+    ]);
+  });
+
+  it("gives the container the guest's memory plus 512 MiB, and the guest dockerd's share", async () => {
+    const h = await make({
+      memory: {
+        workspace: { kind: "bytes", bytes: 4 * GiB },
+        service: { kind: "bytes", bytes: 2 * GiB },
+      },
+    });
+    await h.adapter.launch(onHostVm(cases.dind));
+    const run = runnerRun(h);
+    expect(valuesOf(run, "--memory-mib")).toEqual(["6144"]);
+    expect(valuesOf(run, "--memory")).toEqual([String(6 * GiB + 512 * MiB)]);
+    expect(valuesOf(run, "--memory-swap")).toEqual([String(6 * GiB + 512 * MiB)]);
+    expect(hostVmMemory({ workspace: 4 * GiB, service: 2 * GiB }, false)).toEqual({
+      guestMib: 4096,
+      containerBytes: 4 * GiB + 512 * MiB,
+    });
+  });
+
+  it("stops the runner with a timeout longer than the guest's shutdown grace", async () => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.gitSource));
+    expect(valuesOf(runnerRun(h), "--stop-timeout")).toEqual(["35"]);
+    await h.adapter.stop({ resourceId: "sealant-vm-run-golden-1", phase: "end" });
+    expect(h.calls.find((args) => args[0] === "stop")).toEqual([
+      "stop",
+      "-t",
+      "35",
+      "sealant-vm-run-golden-1",
+    ]);
+    expect(
+      () =>
+        new HostVmRuntimeAdapter({
+          storage: h.storage,
+          diskRecords: { record: async () => undefined, load: async () => undefined },
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          runnerImage: "vm-runner",
+          shutdownGraceSeconds: 20,
+          stopTimeoutSeconds: 20,
+        }),
+    ).toThrow(/must be longer than the runner's shutdown grace/);
+  });
+
+  it("records the data disk and base image on the run's row before the runner exists", async () => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.gitSource));
+    expect(h.events).toEqual(["record:run-golden-1", "run:sealant-vm-run-golden-1"]);
+    expect(h.records.get("run-golden-1")).toEqual({
+      dataDiskPath: joinPath(h.dataDir, "sealant-vm-run-golden-1", "data.img"),
+      baseImageDigest: HOST_VM_DIGEST,
+    });
+  });
+
+  it("stages boot-env.json in sealant-vm-runner's wire format and removes it once ready", async () => {
+    const h = await make();
+    const dotfiles = joinPath(h.root, "dotfiles");
+    await mkdir(dotfiles);
+    await writeFile(joinPath(dotfiles, "manifest.json"), "{}");
+    await h.adapter.launch({ ...onHostVm(cases.capture), dotfilesArchiveDir: dotfiles });
+    const name = "sealant-vm-run-golden-4";
+    const staged = h.stagedAtRun[0];
+    expect(staged?.mode).toBe("normal");
+    // protocol.rs StagedLaunch: camelCase, the mode it is for, the secrets beside the boot env.
+    expect(staged?.launch).toMatchObject({
+      mode: "normal",
+      secretEnv: { MEND_SESSION_TOKEN: "mst_secret", SEALANT_CAPTURE_TOKEN: "mst_secret" },
+      dockerd: false,
+      dotfilesArchive: { files: { "manifest.json": Buffer.from("{}").toString("base64") } },
+    });
+    expect(Object.keys(staged?.launch ?? {}).toSorted()).toEqual(
+      ["bootEnv", "dockerd", "dotfilesArchive", "mode", "secretEnv"].toSorted(),
+    );
+    // The image config the guest applies, staged under the runner's --image-digest.
+    const config = JSON.parse(
+      await readFile(joinPath(h.controlDir, name, `${HOST_VM_KEY}.config.json`), "utf8"),
+    );
+    expect(config).toEqual({
+      Env: ["PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8"],
+      WorkingDir: "/workspace/repo",
+      Entrypoint: ["/usr/local/bin/sealantd", "boot"],
+      Labels: { "sh.sealant.plan-hash": "abc" },
+    });
+    // The secrets do not outlive the boot that read them.
+    expect(await exists(joinPath(h.controlDir, name, "boot-env.json"))).toBe(false);
+  });
+
+  it("keeps clone auth, platform and credential env out of the recovery template", async () => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.gitSource));
+    const template = JSON.parse(
+      await readFile(
+        joinPath(h.controlDir, "sealant-vm-run-golden-1", "recovery-env.json"),
+        "utf8",
+      ),
+    );
+    expect(template).toMatchObject({ mode: "recover", secretEnv: {}, dockerd: false });
+    const text = JSON.stringify(template);
+    for (const secret of ["ghs_secret", "dot_secret", "gh_secret", "cc_secret"]) {
+      expect(text).not.toContain(secret);
+    }
+    expect(template.bootEnv.SEALANT_WORKSPACE_REPO_URL).toBe("https://github.com/example/repo.git");
+  });
+
+  it("refuses a launch below the data filesystem's headroom floor, before anything is made", async () => {
+    const h = await make();
+    h.freeBytes = 9 * GiB;
+    await expect(h.adapter.launch(onHostVm(cases.gitSource))).rejects.toThrow(
+      /Only 9\.0 GiB is free .*needs at least 10\.0 GiB/,
+    );
+    expect(runnerRun(h)).toEqual([]);
+    expect(h.pipes).toEqual([]);
+    h.freeBytes = 2 * GiB;
+    expect(await h.storage.headroom()).toEqual({
+      freeBytes: 2 * GiB,
+      admitsLaunch: false,
+      low: true,
+    });
+  });
+
+  it("keeps a capture launch's data disk when its earlier runner was pruned", async () => {
+    const h = await make();
+    const name = "sealant-vm-run-golden-4";
+    await mkdir(joinPath(h.dataDir, name), { recursive: true });
+    await writeFile(joinPath(h.dataDir, name, "data.img"), "work");
+    await expect(h.adapter.launch(onHostVm(cases.capture))).rejects.toBeInstanceOf(
+      LaunchRetainedError,
+    );
+    expect(await readFile(joinPath(h.dataDir, name, "data.img"), "utf8")).toBe("work");
+    expect(runnerRun(h)).toEqual([]);
+  });
+
+  it("is unavailable without an egress proxy, since a normal boot needs one", async () => {
+    const h = await make({ withoutProxy: true });
+    expect(h.adapter.supports({ blueprint: onHostVm(cases.gitSource).blueprint })).toMatchObject({
+      supported: false,
+      reason: "adapter-unavailable",
+    });
+  });
+});
+
+describe("HostVmRuntimeAdapter recovery", () => {
+  const retained = async (options: { readonly prune: boolean }) => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.capture));
+    const name = "sealant-vm-run-golden-4";
+    await h.adapter.stop({ resourceId: name, phase: "end" });
+    if (options.prune) h.containers.delete(name);
+    h.stagedAtRun.length = 0;
+    h.proxy.started.length = 0;
+    return { h, name };
+  };
+
+  it("recreates a recovery runner on the kept disks after its container was pruned", async () => {
+    const { h, name } = await retained({ prune: true });
+    expect(await h.adapter.inspect({ resourceId: name })).toMatchObject({
+      state: "exited",
+      platformEnded: false,
+    });
+    const outcome = await h.adapter.recover({
+      resourceId: name,
+      runId: "run-golden-4",
+      secretEnv: { SEALANT_CAPTURE_TOKEN: "capture-only" },
+    });
+    expect(outcome).toEqual({ outcome: "restarted" });
+    const run = h.calls.filter((args) => args[0] === "run" && args.includes("--name")).at(-1) ?? [];
+    expect(valuesOf(run, "--network")).toEqual(["none"]);
+    expect(run).not.toContain("--proxy-ip");
+    expect(
+      run.slice(
+        run.indexOf("ghcr.io/sealant-sh/vm-runner:test") + 1,
+        run.indexOf("ghcr.io/sealant-sh/vm-runner:test") + 5,
+      ),
+    ).toEqual(["--mode", "recover", "--image-digest", HOST_VM_KEY]);
+    expect(valuesOf(run, "--mount")[0]).toContain(`${HOST_VM_KEY}.img,readonly`);
+    // No proxy, and the token only in the recovery launch file, for the boot that reads it.
+    expect(h.proxy.started).toEqual([]);
+    expect(h.proxy.parked).toContain(name);
+    expect(h.stagedAtRun[0]).toMatchObject({
+      mode: "recover",
+      launch: {
+        mode: "recover",
+        secretEnv: { SEALANT_CAPTURE_TOKEN: "capture-only" },
+        dockerd: false,
+      },
+    });
+    const after = await readFile(joinPath(h.controlDir, name, "recovery-env.json"), "utf8");
+    expect(after).not.toContain("capture-only");
+  });
+
+  it("replaces a stopped normal runner, whose boot mode is fixed, with a recovery runner", async () => {
+    const { h, name } = await retained({ prune: false });
+    expect(await h.adapter.recover({ resourceId: name, runId: "run-golden-4" })).toEqual({
+      outcome: "restarted",
+    });
+    expect(h.calls).toContainEqual(["rm", "-f", name]);
+    expect(h.containers.get(name)?.args).toContain("recover");
+  });
+
+  it("answers nothing-to-save on the runner's 76, and fails on any other exit", async () => {
+    const { h, name } = await retained({ prune: true });
+    h.exitOnBoot = 76;
+    expect(await h.adapter.recover({ resourceId: name, runId: "run-golden-4" })).toMatchObject({
+      outcome: "nothing-to-save",
+    });
+    h.containers.delete(name);
+    h.exitOnBoot = 75;
+    await expect(h.adapter.recover({ resourceId: name, runId: "run-golden-4" })).rejects.toThrow(
+      /exited with 75/,
+    );
+  });
+
+  it("finds the base image from the disk's marker when no run is named", async () => {
+    const { h, name } = await retained({ prune: true });
+    h.records.clear();
+    expect(await h.adapter.recover({ resourceId: name })).toEqual({ outcome: "restarted" });
+  });
+
+  it("reports missing only once both the container and the data disk are gone", async () => {
+    const { h, name } = await retained({ prune: true });
+    await h.adapter.stop({ resourceId: name, phase: "remove" });
+    expect(await exists(joinPath(h.dataDir, name, "data.img"))).toBe(false);
+    expect(h.proxy.removed).toContain(name);
+    expect(await h.adapter.inspect({ resourceId: name })).toEqual({ state: "missing" });
+    expect(await h.adapter.recover({ resourceId: name })).toEqual({ outcome: "missing" });
+  });
+
+  it("parks the proxy of an ended runner and leaves a running one alone", async () => {
+    const h = await make();
+    await h.adapter.launch(onHostVm(cases.capture));
+    const name = "sealant-vm-run-golden-4";
+    expect(await h.adapter.parkRetained({ resourceId: name })).toEqual({ stopped: [] });
+    await h.adapter.stop({ resourceId: name, phase: "end" });
+    expect(await h.adapter.parkRetained({ resourceId: name })).toEqual({
+      stopped: [`${name}-proxy`],
+    });
+    // The disk stays for the recovery.
+    expect(await exists(joinPath(h.dataDir, name, "data.img"))).toBe(true);
+  });
+});

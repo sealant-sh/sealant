@@ -271,6 +271,16 @@ export const workspaceRuntimeInstances = pgTable(
      * unknown is not recoverable in place (kept, reported).
      */
     daemonRecoveryBoot: boolean("daemon_recovery_boot"),
+    /**
+     * A `host-vm` executor's writable data disk (`<vm data dir>/<runner container>/data.img`, as the
+     * worker sees the path) and the digest of the image its read-only root disk was made from
+     * (`<vm images dir>/<digest>.img`). Written before the runner container is created, and never
+     * cleared. The disk outlives the container (`docker container prune` takes only the container),
+     * so a recovery recreates a runner on the two, and base-image GC keeps every base image a row
+     * whose executor was not removed still names. Null on every other runtime.
+     */
+    hostVmDataDiskPath: text("host_vm_data_disk_path"),
+    hostVmBaseImageDigest: text("host_vm_base_image_digest"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),

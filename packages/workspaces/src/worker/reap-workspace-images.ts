@@ -1,3 +1,6 @@
+import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { join as joinPath } from "node:path";
+
 import {
   SealantDB,
   WorkspaceBuildJobRepo,
@@ -11,10 +14,13 @@ import {
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
+import { hostVmDigestOfKey } from "../images/host-vm-disk.js";
 import type { MicrovmImageApi } from "../images/microvm/image-api.js";
 import { isMicrovmImageNameOf } from "../images/microvm/recipe.js";
 import { parsePublishedReference } from "../images/plan-coordinates.js";
 import type { RegistryClient } from "../registry/client.js";
+import type { DockerCommandRunner } from "../runtime/docker-runtime-adapter.js";
+import { HOST_VM_BASE_IMAGE_LABEL } from "../runtime/host-vm-runtime-adapter.js";
 
 export interface ReapWorkspaceImagesOptions {
   readonly db: DB;
@@ -264,3 +270,156 @@ const deleteMicrovmImage = (api: Pick<MicrovmImageApi, "deleteImage">, name: str
       ),
     ),
   );
+
+export interface HostVmBaseImageReapOptions {
+  /** Where base disks and data disks live (`HostVmStorage`'s directories). */
+  readonly imagesDir: string;
+  readonly dataDir: string;
+  readonly commandRunner: DockerCommandRunner;
+  /**
+   * A base disk younger than this is kept whatever names it: one a launch just built is named by
+   * its run's row a moment later, before its runner exists. Defaults to an hour.
+   */
+  readonly minAgeMs?: number;
+  readonly now?: number;
+}
+
+export interface HostVmBaseImageReapSummary {
+  readonly kept: number;
+  readonly deleted: number;
+  readonly failed: number;
+}
+
+const DEFAULT_HOST_VM_BASE_IMAGE_MIN_AGE_MS = 60 * 60 * 1000;
+
+const isMissing = (error: unknown): boolean =>
+  error instanceof Error && "code" in error && error.code === "ENOENT";
+
+const pathExists = (path: string): Effect.Effect<boolean, unknown> =>
+  Effect.tryPromise({ try: () => stat(path), catch: (error) => error }).pipe(
+    Effect.as(true),
+    Effect.catchIf(isMissing, () => Effect.succeed(false)),
+  );
+
+/**
+ * Host VM base disk retention (§5.2): the sweep that deletes `<digest>.img` and its
+ * `<digest>.config.json` once nothing can boot from them again. A base disk is kept while ANY of
+ * these names its digest:
+ *
+ *  - a runner container, running or stopped (the `sealant.host-vm.base-image` label);
+ *  - a run's row whose executor's removal was not confirmed, or whose data disk is still on disk
+ *    (`host_vm_base_image_digest`): a retained executor whose stopped container was pruned
+ *    (`docker container prune`) still needs its base disk for the recovery that recreates it;
+ *  - the marker beside a data disk (`<data dir>/<container>/base-image-digest`), for a disk whose
+ *    row is gone;
+ *  - its own age: younger than `minAgeMs`.
+ *
+ * Anything this sweep cannot read (the container list, the rows, a data directory) keeps every
+ * base disk this tick: a disk deleted wrongly is a workspace that cannot be recovered.
+ */
+export const reapHostVmBaseImagesEffect = (options: HostVmBaseImageReapOptions) =>
+  Effect.gen(function* () {
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const now = options.now ?? Date.now();
+    const minAgeMs = options.minAgeMs ?? DEFAULT_HOST_VM_BASE_IMAGE_MIN_AGE_MS;
+
+    const entries = yield* Effect.tryPromise({
+      try: () => readdir(options.imagesDir),
+      catch: (error) => error,
+    }).pipe(Effect.catchIf(isMissing, () => Effect.succeed([] as string[])));
+    const files = new Map<string, string[]>();
+    for (const entry of entries) {
+      const match = /^(sha256-[a-f0-9]{64})\.(img|config\.json)$/.exec(entry);
+      if (match === null) continue;
+      const key = match[1] ?? "";
+      files.set(key, [...(files.get(key) ?? []), entry]);
+    }
+    if (files.size === 0) return { kept: 0, deleted: 0, failed: 0 };
+
+    const keep = new Set<string>();
+    // Containers, running or stopped.
+    const listed = yield* Effect.tryPromise({
+      try: () =>
+        options.commandRunner("docker", [
+          "ps",
+          "-a",
+          "--filter",
+          `label=${HOST_VM_BASE_IMAGE_LABEL}`,
+          "--format",
+          `{{.Label "${HOST_VM_BASE_IMAGE_LABEL}"}}`,
+        ]),
+      catch: (error) => error,
+    });
+    for (const digest of listed.stdout.split("\n")) {
+      if (digest.trim().length > 0) keep.add(digest.trim());
+    }
+    // Rows: an executor not removed, or a data disk still there.
+    for (const row of yield* runtimeInstances.listHostVmBaseImages()) {
+      if (!row.removed || (yield* pathExists(row.dataDiskPath))) keep.add(row.baseImageDigest);
+    }
+    // Markers beside data disks.
+    const dataEntries = yield* Effect.tryPromise({
+      try: () => readdir(options.dataDir),
+      catch: (error) => error,
+    }).pipe(Effect.catchIf(isMissing, () => Effect.succeed([] as string[])));
+    for (const container of dataEntries) {
+      const marker = yield* Effect.tryPromise({
+        try: () => readFile(joinPath(options.dataDir, container, "base-image-digest"), "utf8"),
+        catch: (error) => error,
+      }).pipe(Effect.catchIf(isMissing, () => Effect.succeed("")));
+      if (marker.trim().length > 0) keep.add(marker.trim());
+    }
+
+    let deleted = 0;
+    let failed = 0;
+    let kept = 0;
+    for (const [key, names] of files) {
+      const digest = hostVmDigestOfKey(key);
+      if (digest === undefined || keep.has(digest)) {
+        kept += 1;
+        continue;
+      }
+      const youngest = yield* Effect.forEach(names, (name) =>
+        Effect.tryPromise({
+          try: () => stat(joinPath(options.imagesDir, name)),
+          catch: (error) => error,
+        }).pipe(
+          Effect.map((stats) => stats.mtimeMs),
+          Effect.catchIf(isMissing, () => Effect.succeed(0)),
+        ),
+      );
+      if (youngest.some((mtime) => now - mtime < minAgeMs)) {
+        kept += 1;
+        continue;
+      }
+      // The disk first: once it is gone the pair is incomplete, and a launch builds it again.
+      const removed = yield* Effect.forEach(
+        names.toSorted((a, b) => (a.endsWith(".img") ? -1 : b.endsWith(".img") ? 1 : 0)),
+        (name) => Effect.tryPromise(() => rm(joinPath(options.imagesDir, name), { force: true })),
+      ).pipe(
+        Effect.as(true),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(`Host VM base disk retention: deleting ${key} failed.`, cause).pipe(
+            Effect.as(false),
+          ),
+        ),
+      );
+      if (removed) deleted += 1;
+      else failed += 1;
+    }
+    return { kept, deleted, failed } satisfies HostVmBaseImageReapSummary;
+  });
+
+/** `reapHostVmBaseImagesEffect` against the database. */
+export const reapHostVmBaseImages = (
+  options: HostVmBaseImageReapOptions & { readonly db: DB },
+): Promise<HostVmBaseImageReapSummary> => {
+  const { db, ...rest } = options;
+  return Effect.runPromise(
+    reapHostVmBaseImagesEffect(rest).pipe(
+      Effect.provide(
+        WorkspaceRuntimeInstanceRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, db))),
+      ),
+    ),
+  );
+};

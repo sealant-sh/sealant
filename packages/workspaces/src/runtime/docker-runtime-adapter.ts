@@ -542,7 +542,10 @@ export const createDockerCommandRunner = (dockerSocketPath: string): DockerComma
   };
 };
 
-const createDefaultEventStreamOpener = (dockerSocketPath: string): DockerEventStreamOpener => {
+/** The live `docker events` stream against `dockerSocketPath`, reconnected by its caller. */
+export const createDefaultEventStreamOpener = (
+  dockerSocketPath: string,
+): DockerEventStreamOpener => {
   return ({ args, onLine, onEnd }) => {
     const child = spawn("docker", [...args], {
       env: {
@@ -709,7 +712,7 @@ const createAdapterError = (code: string, message: string): Error & { code: stri
 // message and `.stderr`. That is the one failure `stop` treats as success — the container is
 // already gone. `stop` double-checks structurally (a follow-up inspect) before failing, so this
 // prose match is a fast path, not the load-bearing mechanism.
-const isNoSuchContainerError = (error: unknown): boolean => {
+export const isNoSuchContainerError = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -746,7 +749,7 @@ const isNoSuchNetworkError = (error: unknown): boolean => {
  * waits for that removal instead.
  */
 /** The Docker CLI relayed the daemon's own error answer (the request was answered, not lost). */
-const isDaemonErrorResponse = (error: unknown): boolean => {
+export const isDaemonErrorResponse = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -768,7 +771,8 @@ const isRemovalInProgressError = (error: unknown): boolean => {
 const CONCURRENT_REMOVAL_WAIT_MS = 30_000;
 const CONCURRENT_REMOVAL_POLL_MS = 250;
 
-const normalizeContainerToken = (value: string): string => {
+/** A run id as a container name token: lowercase, `[a-z0-9_.-]`, at most 48 characters. */
+export const normalizeContainerToken = (value: string): string => {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9_.-]+/g, "-")

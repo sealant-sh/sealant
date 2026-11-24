@@ -3,6 +3,7 @@
  * tarball artifact, then `publishOciImage` with that artifact. Pinned here so the refactor
  * behind `WorkspaceImageBuilder` cannot alter what a Docker worker does.
  */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -362,3 +363,46 @@ describe("createDockerWorkspaceImageBuilder.findPublished", () => {
     ).toBeUndefined();
   });
 });
+
+describe("createDockerWorkspaceImageBuilder · a host VM's guest Docker", () => {
+  const registryClient = fakeService<RegistryClient>({});
+  const downloadScript = new TextEncoder().encode("#!/usr/bin/env bash\necho pinned engine\n");
+  const hostVm = createDockerWorkspaceImageBuilder({
+    platform: "linux/amd64",
+    registryClient,
+    guestDocker: { downloadScript },
+  });
+  const ubuntu = {
+    ...cases.dind.blueprint.target,
+    os: { family: "ubuntu", mode: "require" },
+  } as const;
+
+  it("puts the engine in the image, before its entrypoint, when the blueprint turns Docker on", () => {
+    const planned = hostVm.plan?.({ ...cases.dind.blueprint, target: ubuntu });
+    const lines = planned?.containerfile.split("\n") ?? [];
+    const install = lines.findIndex((line) => line.includes("/opt/sealant/download-docker.sh &&"));
+    expect(install).toBeGreaterThan(0);
+    expect(lines.findIndex((line) => line.startsWith("ENTRYPOINT"))).toBeGreaterThan(install);
+    expect(lines).toContain(`# download-docker.sh sha256:${createHashHex(downloadScript)}`);
+    expect(planned?.contextFiles).toEqual([
+      { name: "download-docker.sh", content: downloadScript },
+    ]);
+    // A plan of its own: never the Docker runtime's engine-less image.
+    expect(planned?.planHash).not.toBe(
+      planWorkspaceImageBuild({
+        blueprint: { ...cases.dind.blueprint, target: ubuntu },
+        platform: "linux/amd64",
+      }).planHash,
+    );
+  });
+
+  it("plans exactly the Docker runtime's image when the blueprint leaves Docker off", () => {
+    const blueprint = { ...cases.gitSource.blueprint, target: ubuntu };
+    expect(hostVm.plan?.(blueprint)).toEqual(
+      planWorkspaceImageBuild({ blueprint, platform: "linux/amd64" }),
+    );
+  });
+});
+
+const createHashHex = (bytes: Uint8Array): string =>
+  createHash("sha256").update(bytes).digest("hex");

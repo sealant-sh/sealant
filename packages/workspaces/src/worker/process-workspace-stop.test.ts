@@ -59,6 +59,8 @@ const runtimeInstance = (
   launchLeaseExpiresAt: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
+  hostVmDataDiskPath: null,
+  hostVmBaseImageDigest: null,
   removedAt: null,
   // Null = a row that predates the column: the stop path reads the attempt snapshot.
   sourceKind: null,
@@ -173,6 +175,8 @@ const makeHarness = (input: {
     preemptLaunch: () => Effect.succeed(undefined),
     listUnsettledCaptureExecutors: () => Effect.succeed([]),
     listStoppedWithRemains: () => Effect.succeed([]),
+    recordHostVmDisk: () => Effect.die("unused"),
+    listHostVmBaseImages: () => Effect.succeed([]),
     markStopRequested,
     markRemoved,
   });
