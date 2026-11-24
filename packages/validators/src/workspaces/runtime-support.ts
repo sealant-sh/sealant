@@ -64,6 +64,7 @@ const NAMES: Readonly<Record<RuntimeAdapterId, string>> = {
   cloudflare: "Cloudflare",
   microvm: "MicroVM",
   boat: "Boat",
+  "host-vm": "Host VM",
 };
 
 const allOs = (): RuntimeSupport["os"] => ({
@@ -91,7 +92,10 @@ const resourcesFor = (
     return no(
       "This install's Boat workspaces cannot reach project resources: its worker has no resource gateway. Create the workspace with runtime.resources: \"none\", or ask the install's operator to configure the gateway (SEALANT_BOAT_GATEWAY_HOST_ID).",
     );
-  if (install.resourceHost === "docker" && (runtime === "docker" || runtime === "boat"))
+  if (
+    install.resourceHost === "docker" &&
+    (runtime === "docker" || runtime === "boat" || runtime === "host-vm")
+  )
     return { supported: true, attach: "live" };
   if (install.resourceHost === "kubernetes")
     return no(
@@ -107,11 +111,74 @@ const containerScreen = (install: RuntimeInstall): RuntimeSupport["screen"] => (
   architectures: [install.containerArchitecture],
 });
 
+const VM_ISOLATION_NEEDS_VM = (runtime: RuntimeAdapterId) =>
+  no(
+    `This workspace's policy requires its own VM, and a ${NAMES[runtime]} workspace is a container on a shared kernel. Switch the runtime to Host VM (host-vm).`,
+  );
+const NO_EGRESS_PROXY = (runtime: RuntimeAdapterId) => ({
+  restricted: no(
+    `${NAMES[runtime]} workspaces run with standard network access only: restricted egress needs a per-workspace egress proxy, which this runtime does not run. Use the Docker or Host VM runtime.`,
+  ),
+  brokered: no(
+    `${NAMES[runtime]} workspaces cannot broker secrets: no egress proxy runs beside them, so the workspace would have to hold the real value. Use the Docker or Host VM runtime, or deliver the secret directly.`,
+  ),
+});
+
+/** What `runtime` enforces of a network policy. */
+const networkPolicyFor = (runtime: RuntimeAdapterId): NonNullable<RuntimeSupport["networkPolicy"]> => {
+  switch (runtime) {
+    case "host-vm":
+      return {
+        vmIsolation: SUPPORTED,
+        restricted: SUPPORTED,
+        restrictedWithDocker: SUPPORTED,
+        brokeredSecrets: SUPPORTED,
+      };
+    case "docker":
+      return {
+        vmIsolation: VM_ISOLATION_NEEDS_VM(runtime),
+        restricted: SUPPORTED,
+        restrictedWithDocker: no(
+          "Restricted egress cannot be enforced on Docker inside a Docker workspace: its Docker service reaches the network on its own, past the egress proxy. Turn Docker off for this workspace, or switch the runtime to Host VM (host-vm).",
+        ),
+        brokeredSecrets: SUPPORTED,
+      };
+    case "boat":
+    case "microvm": {
+      const proxy = NO_EGRESS_PROXY(runtime);
+      return {
+        vmIsolation: SUPPORTED,
+        restricted: proxy.restricted,
+        restrictedWithDocker: proxy.restricted,
+        brokeredSecrets: proxy.brokered,
+      };
+    }
+    case "k8s":
+    case "k3s":
+    case "cloudflare": {
+      const proxy = NO_EGRESS_PROXY(runtime);
+      return {
+        vmIsolation: VM_ISOLATION_NEEDS_VM(runtime),
+        restricted: proxy.restricted,
+        restrictedWithDocker: proxy.restricted,
+        brokeredSecrets: proxy.brokered,
+      };
+    }
+  }
+};
+
 /** The whole table: what `runtime` supports on `install`. */
 export const runtimeSupport = (
   runtime: RuntimeAdapterId,
   install: RuntimeInstall,
 ): RuntimeSupport => {
+  return { ...supportOf(runtime, install), networkPolicy: networkPolicyFor(runtime) };
+};
+
+const supportOf = (
+  runtime: RuntimeAdapterId,
+  install: RuntimeInstall,
+): Omit<RuntimeSupport, "networkPolicy"> => {
   const resources = resourcesFor(runtime, install);
   switch (runtime) {
     case "docker":
@@ -203,6 +270,31 @@ export const runtimeSupport = (
           message: "Cloudflare bills a sandbox for as long as it runs, idle or not.",
         },
       };
+    case "host-vm":
+      return {
+        runtime,
+        os: allOs(),
+        customImage: SUPPORTED,
+        hostDirectories: no(
+          "A Host VM workspace cannot bind directories from this deployment's servers: its disks are its own. Start the workspace from a capture or a repository instead.",
+        ),
+        // The VM runs its own dockerd: no sidecar on the host.
+        docker: SUPPORTED,
+        gvisor: no(
+          "A Host VM workspace cannot run under gVisor (runsc): its own VM isolates the workspace.",
+        ),
+        clusterEnv: clusterEnvOnlyOnKubernetes(runtime),
+        gitSource: SUPPORTED,
+        dotfilesArchives: SUPPORTED,
+        screen: containerScreen(install),
+        reservedPorts: [],
+        resources,
+        idleCost: {
+          charged: false,
+          message:
+            "A Host VM workspace runs on this deployment's own servers: sitting idle costs nothing beyond them.",
+        },
+      };
     case "boat": {
       const os = (family: string) => no(`Boat supports Ubuntu and Nix; ${family} is unsupported.`);
       return {
@@ -250,6 +342,10 @@ export interface RuntimeRequest {
   readonly tooling: {
     readonly services?: { readonly docker?: { readonly enabled: boolean } | undefined } | undefined;
   };
+  readonly networkPolicy?:
+    | { readonly mode: string; readonly requireVmIsolation?: boolean | undefined }
+    | undefined;
+  readonly brokeredSecrets?: readonly unknown[] | undefined;
 }
 
 /** The refusal codes released SDKs match on; each maps to its own HTTP error. */
@@ -275,7 +371,10 @@ export type RuntimeRequirement =
   | "clusterEnv"
   | "gitSource"
   | "dotfilesArchives"
-  | "docker";
+  | "docker"
+  | "vmIsolation"
+  | "restrictedEgress"
+  | "brokeredSecrets";
 
 const REQUIREMENTS: readonly RuntimeRequirement[] = [
   "os",
@@ -286,6 +385,9 @@ const REQUIREMENTS: readonly RuntimeRequirement[] = [
   "gitSource",
   "dotfilesArchives",
   "docker",
+  "vmIsolation",
+  "restrictedEgress",
+  "brokeredSecrets",
 ];
 
 const DETAILS: Readonly<Record<RuntimeRequirement, string>> = {
@@ -297,6 +399,9 @@ const DETAILS: Readonly<Record<RuntimeRequirement, string>> = {
   gitSource: "native-capture-source-required",
   dotfilesArchives: "native-dotfiles-archives-unsupported",
   docker: "workspace-docker-unsupported",
+  vmIsolation: "network-policy-vm-isolation-unsupported",
+  restrictedEgress: "network-policy-restricted-unsupported",
+  brokeredSecrets: "network-policy-brokered-secrets-unsupported",
 };
 
 const isManagedFamily = (family: string): family is RuntimeOsFamily =>
@@ -336,8 +441,25 @@ const askedOf = (
       return request.runtime.dotfilesArchives.length > 0 ? support.dotfilesArchives : undefined;
     case "docker":
       return request.tooling.services?.docker?.enabled === true ? support.docker : undefined;
+    // A control plane that predates network policies reports none: a policy it cannot enforce
+    // is refused, never run without.
+    case "vmIsolation":
+      return request.networkPolicy?.requireVmIsolation === true
+        ? (support.networkPolicy?.vmIsolation ?? UNREPORTED)
+        : undefined;
+    case "restrictedEgress":
+      if (request.networkPolicy?.mode !== "restricted") return undefined;
+      return request.tooling.services?.docker?.enabled === true
+        ? (support.networkPolicy?.restrictedWithDocker ?? UNREPORTED)
+        : (support.networkPolicy?.restricted ?? UNREPORTED);
+    case "brokeredSecrets":
+      return (request.brokeredSecrets?.length ?? 0) > 0
+        ? (support.networkPolicy?.brokeredSecrets ?? UNREPORTED)
+        : undefined;
   }
 };
+
+const UNREPORTED = no("This runtime does not report what it enforces of a network policy.");
 
 const codeOf = (runtime: RuntimeAdapterId, requirement: RuntimeRequirement): RuntimeRefusalCode => {
   if (requirement === "os") return "runtime-os-unsupported";

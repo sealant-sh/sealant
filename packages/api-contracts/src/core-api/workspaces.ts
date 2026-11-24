@@ -1,11 +1,19 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api";
 
+import {
+  brokeredSecretsProblems,
+  brokeredSecretValuesProblems,
+  networkPolicyProblems,
+  type BrokeredSecret,
+  type NetworkPolicy,
+} from "../network-policy.js";
 import { boatFailureSchema } from "./boat-failures.js";
 import { BudgetExceededError } from "./budgets.js";
 import { connectedAccountProviderSchema } from "./connected-accounts.js";
 import { EndpointUrl } from "./endpoint-url.js";
 import { PersonId } from "./person-id.js";
+import { refusalWords } from "./refusal-words.js";
 import { runCommandSchema, runSchema } from "./runs.js";
 import { workspaceProcessUserSchema } from "./sessions.js";
 
@@ -31,7 +39,103 @@ export const workspaceStatusSchema = Schema.Literals([
 export type WorkspaceStatus = typeof workspaceStatusSchema.Type;
 
 /** Request families. A deployment registers only the adapters it can actually launch. */
-export const runtimeAdapterIds = ["docker", "k8s", "k3s", "cloudflare", "microvm", "boat"] as const;
+export const runtimeAdapterIds = [
+  "docker",
+  "k8s",
+  "k3s",
+  "cloudflare",
+  "microvm",
+  "boat",
+  "host-vm",
+] as const;
+
+/** Policy and secret refusals name the field they are about; they never hold a secret's value. */
+const policyRefusalWords = refusalWords(/^(networkPolicy|brokeredSecrets|brokeredSecretValues)\b.*$/);
+
+const PortNumber = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
+
+const networkPolicyStructSchema = Schema.Struct({
+  mode: Schema.Literals(["standard", "restricted"]),
+  policyHash: NonEmptyString,
+  sourcePolicyId: Schema.optional(NonEmptyString),
+  sourcePolicyRevision: Schema.optional(Schema.Int),
+  requireVmIsolation: Schema.optional(Schema.Boolean),
+  allowHosts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        host: NonEmptyString,
+        ports: Schema.optional(Schema.Array(PortNumber)),
+        inspectTls: Schema.optional(Schema.Boolean),
+        methods: Schema.optional(Schema.Array(NonEmptyString)),
+        pathPrefixes: Schema.optional(Schema.Array(NonEmptyString)),
+      }),
+    ),
+  ),
+  allowMirrors: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.Literals(["npm", "docker"]),
+        host: NonEmptyString,
+        port: PortNumber,
+      }),
+    ),
+  ),
+  allowResources: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: NonEmptyString,
+        host: NonEmptyString,
+        port: PortNumber,
+        guestIp: NonEmptyString,
+      }),
+    ),
+  ),
+});
+
+/**
+ * A workspace's network policy (`spec.networkPolicy`, workspace isolation architecture §8.4).
+ * `standard`: public internet less private, metadata and host addresses. `restricted`: only the
+ * hosts, mirrors and resources it lists. A Docker workspace with a `restricted` policy, or with
+ * any brokered secret, runs behind its own egress proxy. The rules are `networkPolicyProblems`'.
+ */
+export const networkPolicySchema = networkPolicyStructSchema.check(
+  Schema.makeFilter(
+    (policy: NetworkPolicy) => [...networkPolicyProblems(policy)],
+    policyRefusalWords,
+  ),
+);
+export type NetworkPolicySpec = typeof networkPolicySchema.Type;
+
+/**
+ * Project secrets the workspace never holds (`spec.brokeredSecrets`): it reads `placeholder` from
+ * `name`, and its egress proxy swaps in the real value, only inside `headerName` and only on
+ * HTTPS to one of `bindHosts`. The rules are `brokeredSecretsProblems`'.
+ */
+export const brokeredSecretsSchema = Schema.Array(
+  Schema.Struct({
+    secretId: NonEmptyString,
+    name: NonEmptyString,
+    placeholder: NonEmptyString,
+    secretRef: NonEmptyString,
+    headerName: NonEmptyString,
+    bindHosts: Schema.Array(NonEmptyString),
+    methods: Schema.optional(Schema.Array(NonEmptyString)),
+    pathPrefixes: Schema.optional(Schema.Array(NonEmptyString)),
+  }),
+).check(
+  Schema.makeFilter(
+    (secrets: readonly BrokeredSecret[]) => [...brokeredSecretsProblems(secrets)],
+    policyRefusalWords,
+  ),
+);
+export type BrokeredSecretsSpec = typeof brokeredSecretsSchema.Type;
+
+/**
+ * The values of a request's brokered secrets, keyed by each secret's `secretRef`. Sealed with the
+ * credential key at rest, handed only to the workspace's egress proxy, and never part of the spec,
+ * the workspace's environment or any read response.
+ */
+export const brokeredSecretValuesSchema = Schema.Record(Schema.String, Schema.String);
 
 export const workspaceRuntimeSchema = Schema.Struct({
   adapter: Schema.Literals(runtimeAdapterIds),
@@ -272,6 +376,13 @@ export const createWorkspaceRequestSchema = Schema.Struct({
   // reaching the daemon's boot secret file as `SEALANT_CAPTURE_TOKEN`; never the spec, the attempt
   // snapshot, or any read response. Not retained: a capture workspace cannot be restarted in place.
   captureToken: Schema.optional(NonEmptyString),
+  /**
+   * The values of the spec's `brokeredSecrets`, keyed by `secretRef`: required for each one, and
+   * refused without them. Sealed like `secretEnv`, but never delivered to the workspace: only its
+   * egress proxy receives them. Kept sealed for the workspace's life, so a restart and a restarted
+   * proxy get them again.
+   */
+  brokeredSecretValues: Schema.optional(brokeredSecretValuesSchema),
   // Per-create TTL override in seconds; when omitted the server default TTL (if configured)
   // applies. The reaper stops the workspace once the TTL elapses.
   ttlSeconds: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
@@ -924,6 +1035,23 @@ export const runtimeSupportSchema = Schema.Struct({
   ]),
   /** Whether a workspace that sits idle costs money, and the sentence that says so. */
   idleCost: Schema.Struct({ charged: Schema.Boolean, message: NonEmptyString }),
+  /**
+   * What the runtime enforces of a network policy (`spec.networkPolicy`, `spec.brokeredSecrets`). A
+   * create that asks for an unsupported item is refused, never run with less. Absent from control
+   * planes that predate network policies.
+   */
+  networkPolicy: Schema.optional(
+    Schema.Struct({
+      /** The workspace in its own VM (`networkPolicy.requireVmIsolation`). */
+      vmIsolation: runtimeCapabilitySchema,
+      /** `networkPolicy.mode: "restricted"`. */
+      restricted: runtimeCapabilitySchema,
+      /** `restricted` together with Docker inside the workspace. */
+      restrictedWithDocker: runtimeCapabilitySchema,
+      /** Any `brokeredSecrets`, whatever the mode. */
+      brokeredSecrets: runtimeCapabilitySchema,
+    }),
+  ),
 });
 export type RuntimeSupport = typeof runtimeSupportSchema.Type;
 
@@ -1562,6 +1690,140 @@ export const workspaceGatewayHeadersSchema = Schema.Struct({
 });
 export type WorkspaceGatewayHeaders = typeof workspaceGatewayHeadersSchema.Type;
 
+/**
+ * Apply an updated network policy to a workspace ("Apply updated policy", §7.3): its pinned policy
+ * and brokered secrets are replaced, and a running egress proxy takes them at once. Revocations
+ * always win: a secret id or host revoked earlier stays refused whatever this policy lists, so a
+ * secret is granted again only under a new `secretId`. `brokeredSecretValues` carries a value for
+ * every `secretRef` the new secrets name (values already held are not sent again only when no
+ * secret is listed).
+ */
+export const applyWorkspaceNetworkPolicyRequestSchema = Schema.Struct({
+  ownerUserId: PersonId,
+  networkPolicy: networkPolicySchema,
+  brokeredSecrets: Schema.optional(brokeredSecretsSchema),
+  brokeredSecretValues: Schema.optional(brokeredSecretValuesSchema),
+}).check(
+  Schema.makeFilter(
+    (request: {
+      readonly brokeredSecrets?: readonly BrokeredSecret[] | undefined;
+      readonly brokeredSecretValues?: Readonly<Record<string, string>> | undefined;
+    }) => [
+      ...brokeredSecretValuesProblems(
+        request.brokeredSecrets ?? [],
+        request.brokeredSecretValues ?? {},
+      ),
+    ],
+    policyRefusalWords,
+  ),
+);
+export type ApplyWorkspaceNetworkPolicyRequest =
+  typeof applyWorkspaceNetworkPolicyRequestSchema.Type;
+
+/**
+ * What became of a policy update or a revocation on the workspace's running executor:
+ *
+ * - `enforced`: its egress proxy confirmed it (a revocation: after closing every matching stream).
+ * - `pending`: it is stored, and the proxy has not confirmed it yet (it could not be reached). The
+ *   worker keeps pushing it; a revocation's unreachable proxy is killed, so nothing it revoked
+ *   stays reachable.
+ * - `next-start`: it is stored, and no egress proxy runs for the workspace now (not running, or
+ *   running without one): it applies when the workspace next starts.
+ */
+export const workspaceNetworkPolicyEnforcementSchema = Schema.Literals([
+  "enforced",
+  "pending",
+  "next-start",
+]);
+export type WorkspaceNetworkPolicyEnforcement = typeof workspaceNetworkPolicyEnforcementSchema.Type;
+
+export const applyWorkspaceNetworkPolicyResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  policyHash: NonEmptyString,
+  /** The workspace's revocation watermark: every revocation up to it holds. */
+  revocationWatermark: Schema.Int,
+  enforcement: workspaceNetworkPolicyEnforcementSchema,
+  /** Streams the proxy closed because the new policy no longer allows them (`enforced` only). */
+  closed: Schema.optional(Schema.Int),
+});
+export type ApplyWorkspaceNetworkPolicyResponse =
+  typeof applyWorkspaceNetworkPolicyResponseSchema.Type;
+
+/**
+ * Revoke access on a workspace, durably: brokered secrets by id, hosts, or `all` grants. The
+ * revocation is stored first, under a new revocation watermark, and holds for the workspace's life,
+ * restarts included; a running egress proxy drops it and closes every matching stream before this
+ * answers `enforced`. At least one of `secretIds`, `hosts` and `all`.
+ */
+export const revokeWorkspaceAccessRequestSchema = Schema.Struct({
+  ownerUserId: PersonId,
+  secretIds: Schema.optional(Schema.Array(NonEmptyString)),
+  hosts: Schema.optional(Schema.Array(NonEmptyString)),
+  all: Schema.optional(Schema.Boolean),
+}).check(
+  Schema.makeFilter(
+    (request: {
+      readonly secretIds?: readonly string[] | undefined;
+      readonly hosts?: readonly string[] | undefined;
+      readonly all?: boolean | undefined;
+    }) =>
+      (request.secretIds?.length ?? 0) > 0 || (request.hosts?.length ?? 0) > 0 || request.all === true
+        ? undefined
+        : "brokeredSecrets: a revocation names secretIds, hosts or all",
+    policyRefusalWords,
+  ),
+);
+export type RevokeWorkspaceAccessRequest = typeof revokeWorkspaceAccessRequestSchema.Type;
+
+export const revokeWorkspaceAccessResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  /** The watermark this revocation is stored under. */
+  revocationWatermark: Schema.Int,
+  enforcement: workspaceNetworkPolicyEnforcementSchema,
+  /** Streams the proxy closed (`enforced` only). */
+  closed: Schema.optional(Schema.Int),
+});
+export type RevokeWorkspaceAccessResponse = typeof revokeWorkspaceAccessResponseSchema.Type;
+
+export const getWorkspaceNetworkPolicyQuerySchema = Schema.Struct({
+  ownerUserId: PersonId,
+});
+export type GetWorkspaceNetworkPolicyQuery = typeof getWorkspaceNetworkPolicyQuerySchema.Type;
+
+/** One stored revocation. */
+export const workspaceAccessRevocationSchema = Schema.Struct({
+  revocationWatermark: Schema.Int,
+  kind: Schema.Literals(["secret", "host", "all"]),
+  /** The secret id or host; absent for `all`. */
+  target: Schema.optional(NonEmptyString),
+  revokedAt: NonEmptyString,
+});
+export type WorkspaceAccessRevocation = typeof workspaceAccessRevocationSchema.Type;
+
+/**
+ * A workspace's pinned network policy, its brokered secrets (never their values), every revocation
+ * it holds, and what its running egress proxy last confirmed. `networkPolicy` is absent for a
+ * workspace created without one.
+ */
+export const workspaceNetworkPolicySchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  networkPolicy: Schema.optional(networkPolicySchema),
+  brokeredSecrets: brokeredSecretsSchema,
+  revocationWatermark: Schema.Int,
+  revocations: Schema.Array(workspaceAccessRevocationSchema),
+  /** The current run's egress proxy; absent when the workspace has none. */
+  proxy: Schema.optional(
+    Schema.Struct({
+      runId: NonEmptyString,
+      /** The policy hash and watermark the proxy last confirmed; absent before its first. */
+      confirmedPolicyHash: Schema.optional(NonEmptyString),
+      confirmedRevocationWatermark: Schema.optional(Schema.Int),
+    }),
+  ),
+});
+export type WorkspaceNetworkPolicy = typeof workspaceNetworkPolicySchema.Type;
+
+
 export class WorkspaceBadRequestError extends Schema.TaggedError<WorkspaceBadRequestError>()(
   "WorkspaceBadRequestError",
   {
@@ -1931,6 +2193,46 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceDockerServiceUnsupportedError,
         WorkspaceInternalServerError,
       ],
+    }),
+  )
+  .add(
+    // Synchronous: stored, then pushed to the running egress proxy before this answers.
+    HttpApiEndpoint.put("applyWorkspaceNetworkPolicy", "/:workspaceId/network-policy", {
+      params: workspaceIdParams,
+      payload: applyWorkspaceNetworkPolicyRequestSchema,
+      success: applyWorkspaceNetworkPolicyResponseSchema,
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // The runtime the workspace runs on cannot enforce the policy (a brokered secret where no
+        // proxy runs, VM isolation on a container runtime).
+        WorkspaceRuntimeRequirementUnsupportedError,
+        // SEALANT_CREDENTIALS_KEY is not configured, so brokered values cannot be sealed.
+        WorkspaceServiceUnavailableError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Synchronous: the revocation is stored first, then the proxy closes matching streams.
+    HttpApiEndpoint.post("revokeWorkspaceAccess", "/:workspaceId/network-policy/revocations", {
+      params: workspaceIdParams,
+      payload: revokeWorkspaceAccessRequestSchema,
+      success: revokeWorkspaceAccessResponseSchema,
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        WorkspaceServiceUnavailableError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("getWorkspaceNetworkPolicy", "/:workspaceId/network-policy", {
+      params: workspaceIdParams,
+      query: getWorkspaceNetworkPolicyQuerySchema,
+      success: workspaceNetworkPolicySchema,
+      error: [WorkspaceNotFoundError, WorkspaceInternalServerError],
     }),
   )
   .add(

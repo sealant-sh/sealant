@@ -27,6 +27,7 @@ export * from "./core-api/boat-failures.js";
 export * from "./workspace-environment.js";
 export * from "./capture-owner-map.js";
 export * from "./connected-account-selector.js";
+export * from "./network-policy.js";
 
 export {
   resourceDomainOwnerKindSchema,

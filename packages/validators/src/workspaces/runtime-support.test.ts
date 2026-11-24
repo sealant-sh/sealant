@@ -35,6 +35,20 @@ const withSpec = (spec: Record<string, unknown>): RuntimeRequest =>
     },
   });
 
+const BROKERED = {
+  secretId: "psec_1",
+  name: "VERCEL_TOKEN",
+  placeholder: "mend_sec_0123456789abcdef",
+  secretRef: "ref-1",
+  headerName: "Authorization",
+  bindHosts: ["api.vercel.com"],
+};
+
+const policyOf = (support: RuntimeSupport) => {
+  if (support.networkPolicy === undefined) throw new Error("the table reports no network policy");
+  return support.networkPolicy;
+};
+
 /**
  * Every way a request asks for one item of the table: the item it asks and the request. A
  * request asks for nothing else (a capture source, the default family, runc, no Docker).
@@ -110,6 +124,26 @@ const ASKS: ReadonlyArray<{
     item: (support) => support.docker,
     requirement: "docker",
     request: withSpec({ tooling: { services: { docker: { enabled: true } } } }),
+  },
+  {
+    name: "VM isolation",
+    item: (support) => policyOf(support).vmIsolation,
+    requirement: "vmIsolation",
+    request: withSpec({
+      networkPolicy: { mode: "standard", policyHash: "h", requireVmIsolation: true },
+    }),
+  },
+  {
+    name: "restricted egress",
+    item: (support) => policyOf(support).restricted,
+    requirement: "restrictedEgress",
+    request: withSpec({ networkPolicy: { mode: "restricted", policyHash: "h" } }),
+  },
+  {
+    name: "a brokered secret under standard egress",
+    item: (support) => policyOf(support).brokeredSecrets,
+    requirement: "brokeredSecrets",
+    request: withSpec({ brokeredSecrets: [BROKERED] }),
   },
 ];
 
@@ -232,6 +266,7 @@ describe("the runtime table", () => {
       "gvisor",
       "clusterEnv",
     ]);
+    expect(unsupported("host-vm")).toEqual(["hostDirectories", "gvisor", "clusterEnv"]);
     expect(unsupported("boat")).toEqual([
       "os.arch",
       "os.fedora",
@@ -294,6 +329,72 @@ describe("the runtime table", () => {
     expect(runtimeSupport("microvm", install({ resourceHost: "none" })).resources.supported).toBe(
       false,
     );
+  });
+});
+
+describe("network policy admission (fail closed, never downgraded)", () => {
+  const enforced = (runtime: RuntimeAdapterId) =>
+    Object.entries(policyOf(runtimeSupport(runtime, install())))
+      .filter(([, value]) => value.supported)
+      .map(([key]) => key);
+
+  it("pins what each runtime enforces of a policy", () => {
+    expect(enforced("host-vm")).toEqual([
+      "vmIsolation",
+      "restricted",
+      "restrictedWithDocker",
+      "brokeredSecrets",
+    ]);
+    expect(enforced("docker")).toEqual(["restricted", "brokeredSecrets"]);
+    expect(enforced("boat")).toEqual(["vmIsolation"]);
+    expect(enforced("microvm")).toEqual(["vmIsolation"]);
+    for (const runtime of ["k8s", "k3s", "cloudflare"] as const) expect(enforced(runtime)).toEqual([]);
+  });
+
+  it("refuses restricted egress with Docker inside a Docker workspace, and tells the owner what to switch to", () => {
+    const refusal = runtimeRefusal(
+      runtimeSupport("docker", install()),
+      withSpec({
+        networkPolicy: { mode: "restricted", policyHash: "h" },
+        tooling: { services: { docker: { enabled: true } } },
+      }),
+    );
+    expect(refusal?.code).toBe("runtime-requirement-unsupported");
+    expect(refusal?.detail).toBe("network-policy-restricted-unsupported");
+    expect(refusal?.message).toContain("host-vm");
+    expect(
+      runtimeRefusal(
+        runtimeSupport("host-vm", install()),
+        withSpec({
+          networkPolicy: { mode: "restricted", policyHash: "h" },
+          tooling: { services: { docker: { enabled: true } } },
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("tells a Docker owner to switch the runtime to host-vm for VM isolation", () => {
+    const refusal = runtimeRefusal(
+      runtimeSupport("docker", install()),
+      withSpec({ networkPolicy: { mode: "standard", policyHash: "h", requireVmIsolation: true } }),
+    );
+    expect(refusal?.message).toContain("Switch the runtime to Host VM (host-vm)");
+  });
+
+  it("refuses a policy on a runtime whose control plane reported none", () => {
+    const { networkPolicy: _omitted, ...older } = runtimeSupport("docker", install());
+    expect(runtimeRefusal(older, withSpec({ brokeredSecrets: [BROKERED] }))?.detail).toBe(
+      "network-policy-brokered-secrets-unsupported",
+    );
+  });
+
+  it("refuses a brokered secret whose variable the spec also sets", () => {
+    expect(() =>
+      withSpec({
+        brokeredSecrets: [BROKERED],
+        runtime: { userEnv: { VERCEL_TOKEN: "x" } },
+      }),
+    ).toThrow(/also set in runtime.env or runtime.userEnv/);
   });
 });
 

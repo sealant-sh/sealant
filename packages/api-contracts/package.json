@@ -16,7 +16,8 @@
     ".": "./src/index.ts",
     "./workspace-environment": "./src/workspace-environment.ts",
     "./capture-owner-map": "./src/capture-owner-map.ts",
-    "./connected-account-selector": "./src/connected-account-selector.ts"
+    "./connected-account-selector": "./src/connected-account-selector.ts",
+    "./network-policy": "./src/network-policy.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -36,6 +37,10 @@
       "./connected-account-selector": {
         "types": "./dist/connected-account-selector.d.ts",
         "import": "./dist/connected-account-selector.js"
+      },
+      "./network-policy": {
+        "types": "./dist/network-policy.d.ts",
+        "import": "./dist/network-policy.js"
       }
     }
   },

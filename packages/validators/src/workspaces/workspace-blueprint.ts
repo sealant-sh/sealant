@@ -1,5 +1,9 @@
 import { captureOwnerMapProblems } from "@sealant/api-contracts/capture-owner-map";
 import {
+  brokeredSecretsProblems,
+  networkPolicyProblems,
+} from "@sealant/api-contracts/network-policy";
+import {
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
   WORKSPACE_ENV_NAME_PATTERN,
@@ -567,6 +571,85 @@ export const workspaceTargetSchema = z
   })
   .prefault({});
 
+const portSchema = z.number().int().min(1).max(65_535);
+
+/**
+ * The workspace's network policy (workspace isolation architecture §8.4): `standard` (public
+ * internet less private, metadata and host addresses) or `restricted` (only what it lists). Its
+ * rules are the shared `networkPolicyProblems`', checked on every parse.
+ */
+export const workspaceNetworkPolicySchema = z
+  .strictObject({
+    mode: z.enum(["standard", "restricted"]),
+    policyHash: nonEmptyStringSchema,
+    sourcePolicyId: nonEmptyStringSchema.optional(),
+    sourcePolicyRevision: z.number().int().min(0).optional(),
+    requireVmIsolation: z.boolean().optional(),
+    allowHosts: z
+      .array(
+        z.strictObject({
+          host: nonEmptyStringSchema,
+          ports: z.array(portSchema).optional(),
+          inspectTls: z.boolean().optional(),
+          methods: z.array(nonEmptyStringSchema).optional(),
+          pathPrefixes: z.array(nonEmptyStringSchema).optional(),
+        }),
+      )
+      .optional(),
+    allowMirrors: z
+      .array(
+        z.strictObject({
+          name: z.enum(["npm", "docker"]),
+          host: nonEmptyStringSchema,
+          port: portSchema,
+        }),
+      )
+      .optional(),
+    allowResources: z
+      .array(
+        z.strictObject({
+          name: nonEmptyStringSchema,
+          host: nonEmptyStringSchema,
+          port: portSchema,
+          guestIp: nonEmptyStringSchema,
+        }),
+      )
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    for (const problem of networkPolicyProblems(value)) {
+      ctx.addIssue({ code: "custom", message: problem });
+    }
+  });
+
+export type WorkspaceNetworkPolicy = z.infer<typeof workspaceNetworkPolicySchema>;
+
+/**
+ * Project secrets the workspace never holds: it reads `placeholder` from `name`, and its egress
+ * proxy puts the real value (resolved by `secretRef`, never in the blueprint) into `headerName`
+ * only on HTTPS to one of `bindHosts`. Rules: the shared `brokeredSecretsProblems`.
+ */
+export const workspaceBrokeredSecretsSchema = z
+  .array(
+    z.strictObject({
+      secretId: nonEmptyStringSchema,
+      name: nonEmptyStringSchema,
+      placeholder: z.string().min(1),
+      secretRef: nonEmptyStringSchema,
+      headerName: z.string().min(1),
+      bindHosts: z.array(z.string().min(1)),
+      methods: z.array(nonEmptyStringSchema).optional(),
+      pathPrefixes: z.array(nonEmptyStringSchema).optional(),
+    }),
+  )
+  .superRefine((value, ctx) => {
+    for (const problem of brokeredSecretsProblems(value)) {
+      ctx.addIssue({ code: "custom", message: problem });
+    }
+  });
+
+export type WorkspaceBrokeredSecret = z.infer<typeof workspaceBrokeredSecretsSchema>[number];
+
 export const workspaceBlueprintSchema = z.strictObject({
   version: z.literal(workspaceBlueprintVersion).default(workspaceBlueprintVersion),
   sources: z.strictObject({
@@ -581,6 +664,23 @@ export const workspaceBlueprintSchema = z.strictObject({
   lifecycle: workspaceLifecycleSchema.prefault({}),
   runtime: workspaceSpecRuntimeSchema.prefault({}),
   target: workspaceTargetSchema.prefault({}),
+  networkPolicy: workspaceNetworkPolicySchema.optional(),
+  brokeredSecrets: workspaceBrokeredSecretsSchema.optional(),
+}).superRefine((blueprint, ctx) => {
+  // The workspace reads each placeholder from its variable: a variable the spec also sets would
+  // be ambiguous, and whichever value won, one of them would be lost.
+  const setByEnv = new Set([
+    ...Object.keys(blueprint.runtime.env),
+    ...Object.keys(blueprint.runtime.userEnv),
+  ]);
+  for (const secret of blueprint.brokeredSecrets ?? []) {
+    if (setByEnv.has(secret.name)) {
+      ctx.addIssue({
+        code: "custom",
+        message: `brokeredSecrets \`${secret.secretId}\`: ${secret.name} is also set in runtime.env or runtime.userEnv`,
+      });
+    }
+  }
 });
 
 export type WorkspaceBlueprint = z.infer<typeof workspaceBlueprintSchema>;

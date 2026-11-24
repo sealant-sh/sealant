@@ -1084,8 +1084,11 @@ export interface WorkspaceCreateState {
  * record at launch and to name in `stop({ completion })`.
  */
 export interface WorkspaceRuntimeInfo {
-  /** Recorded runtime family. Boat records remain readable while execution is unavailable. */
-  readonly kind: "docker" | "k8s" | "k3s" | "cloudflare" | "microvm" | "boat";
+  /**
+   * Recorded runtime family. Boat records remain readable while execution is unavailable.
+   * `host-vm`: each workspace in its own microVM on the deployment's Linux KVM host.
+   */
+  readonly kind: "docker" | "k8s" | "k3s" | "cloudflare" | "microvm" | "boat" | "host-vm";
   /** The executor's id on its runtime: the container id, the Pod name, the MicroVM id. */
   readonly resourceId: string;
   /** The runtime's name for it (container name, Pod name, MicroVM id). */
@@ -1727,6 +1730,22 @@ export interface RuntimeSupport {
     | RuntimeUnsupported;
   /** Whether a workspace that sits idle costs money, and the sentence that says so. */
   readonly idleCost: { readonly charged: boolean; readonly message: string };
+  /**
+   * What the runtime enforces of a network policy (`CreateOptions.networkPolicy`,
+   * `CreateOptions.brokeredSecrets`). A create that asks for an unsupported item is refused, never
+   * run with less. Absent from control planes that predate network policies: such a control plane
+   * enforces none, so ask it for none.
+   */
+  readonly networkPolicy?: {
+    /** The workspace in its own VM (`networkPolicy.requireVmIsolation`). */
+    readonly vmIsolation: RuntimeCapability;
+    /** `networkPolicy.mode: "restricted"`. */
+    readonly restricted: RuntimeCapability;
+    /** Restricted egress together with Docker inside the workspace. */
+    readonly restrictedWithDocker: RuntimeCapability;
+    /** Any brokered secret, whatever the mode. */
+    readonly brokeredSecrets: RuntimeCapability;
+  };
 }
 
 /** The runtimes this control plane launches workspaces on (see `workspaces.runtimes`). */
