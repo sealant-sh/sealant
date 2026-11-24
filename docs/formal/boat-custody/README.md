@@ -6,9 +6,11 @@ and keep them in step with the code. This file is the record: what is verified, 
 and assumptions, and what the check found.
 
 Confirmed against the code at `dd39b9de` (main, 2026-11-13), and the run ledger's create, replay and
-never-created rules again at sealant#648 (SLNT-825), which fixed P1-A. Run with tlx at the commit
-`docs/formal/tlx.sh` pins, which gives TLC's verdicts and counts on every case ("The checker"
-below).
+never-created rules again at sealant#648 (SLNT-825), which fixed P1-A. Read again at `7744d5d8`
+(SLNT-1318, 2026-11-24): the runtime-instance repository gained two statements over the host VM disk
+columns only (`recordHostVmDisk`, `listHostVmBaseImages`), which no Boat step reads or writes; no
+model change. Run with tlx at the commit `docs/formal/tlx.sh` pins, which gives TLC's verdicts and
+counts on every case ("The checker" below).
 
 ## The two promises
 
