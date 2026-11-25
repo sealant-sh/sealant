@@ -140,7 +140,13 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
   let kubernetes: Sealant;
   const person = `user_instances_sdk_${randomUUID()}`;
   /** What the link route told the worker, in order; each is also sent to the real queue. */
-  const told: Array<{ readonly workspaceId: string; readonly runId: string }> = [];
+  const told: Array<{
+    readonly workspaceId: string;
+    readonly runId: string;
+    readonly trace?: { readonly traceparent: string } | undefined;
+  }> = [];
+  /** `told`, by the run each message names. */
+  const toldRuns = () => told.map(({ workspaceId, runId }) => ({ workspaceId, runId }));
   let queueDown = false;
   const publisher = Layer.succeed(BoatResourceLinkPublisherService, {
     publishLinkChanged: async (input) => {
@@ -294,14 +300,16 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
       aliases: null,
       attachedExecutors: 0,
     });
-    expect(told).toEqual([{ workspaceId, runId }]);
-    expect(await waiting(runId)).toEqual([message]);
+    expect(toldRuns()).toEqual([{ workspaceId, runId }]);
+    // The link request's trace goes with the message, so the worker's handling continues it.
+    expect(told[0]?.trace?.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/);
+    expect(await waiting(runId)).toEqual([expect.objectContaining(message)]);
     // Mend re-links a running session when its project's bindings change: every change is
     // told, and the queue keeps one message for the run until a worker takes it.
     await scope.workspaces.link(workspaceId, { worktreeKey: "w1", aliases: { mail: "worktree" } });
     await scope.workspaces.link(workspaceId, { worktreeKey: "w2" });
     expect(told).toHaveLength(3);
-    expect(await waiting(runId)).toEqual([message]);
+    expect(await waiting(runId)).toEqual([expect.objectContaining(message)]);
     // The queue being down fails no link: the worker's sweep applies it.
     queueDown = true;
     try {
@@ -317,8 +325,8 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
     // Archiving the scope removes the link: the run's gateway is told to drop what it served.
     await scope.archive();
     expect(told).toHaveLength(4);
-    expect(told.at(-1)).toEqual({ workspaceId, runId });
-    expect(await waiting(runId)).toEqual([message]);
+    expect(toldRuns().at(-1)).toEqual({ workspaceId, runId });
+    expect(await waiting(runId)).toEqual([expect.objectContaining(message)]);
     const { boss } = await getJobQueueSingleton(DATABASE_URL ?? "");
     for (const job of await boss.findJobs<{ readonly runId: string }>(boatResourceLinkQueue.name))
       if (job.data.runId === runId) await boss.deleteJob(boatResourceLinkQueue.name, job.id);
