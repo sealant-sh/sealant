@@ -244,6 +244,9 @@ jobs:
       # The web image must never receive VITE_API_URL at build time — the server reads
       # CORE_API_BASE_URL at runtime, and a baked VITE_ value would shadow it. The version label is
       # one of the stable floor's markers once promote moves :latest to this image.
+      # The web image alone gets the Sentry release its browser bundle reports and, when the
+      # SENTRY_AUTH_TOKEN secret exists, the token its build uploads source maps with. Without the
+      # secret the build skips the upload and still passes.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -252,6 +255,12 @@ jobs:
           file: ${{ matrix.image.dockerfile }}
           platforms: linux/${{ matrix.platform.arch }}
           provenance: false
+          build-args: |
+            ${{ matrix.image.name == 'sealant-web' && format('SENTRY_RELEASE=sealant-web@{0}', needs.release.outputs.version) || '' }}
+            ${{ matrix.image.name == 'sealant-web' && format('SENTRY_URL={0}', vars.SENTRY_URL) || '' }}
+            ${{ matrix.image.name == 'sealant-web' && format('SENTRY_ORG={0}', vars.SENTRY_ORG) || '' }}
+          secrets: |
+            ${{ matrix.image.name == 'sealant-web' && secrets.SENTRY_AUTH_TOKEN != '' && format('sentry_auth_token={0}', secrets.SENTRY_AUTH_TOKEN) || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

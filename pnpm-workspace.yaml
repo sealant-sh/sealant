@@ -4,6 +4,7 @@ packages:
   - tooling/*
 
 allowBuilds:
+  "@sentry/cli": false
   cpu-features: true
   esbuild: true
   msgpackr-extract: true

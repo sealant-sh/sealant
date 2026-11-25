@@ -7,7 +7,7 @@
     "#/*": "./src/*"
   },
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && node scripts/source-maps.mjs",
     "dev": "vite dev --port 3000",
     "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
     "preview": "vite preview",
@@ -25,6 +25,7 @@
     "@sealant/db": "workspace:*",
     "@sealant/ui": "workspace:*",
     "@sealant/validators": "workspace:*",
+    "@sentry/react": "11.12.0",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/react-devtools": "catalog:",
     "@tanstack/react-form": "catalog:",
@@ -46,6 +47,7 @@
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
+    "@sentry/cli": "3.8.2",
     "@tailwindcss/typography": "catalog:",
     "@tanstack/devtools-vite": "catalog:",
     "@testing-library/dom": "catalog:",

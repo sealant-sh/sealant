@@ -1,0 +1,16 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "env": ["SENTRY_RELEASE"],
+      "passThroughEnv": [
+        "SENTRY_AUTH_TOKEN",
+        "SENTRY_AUTH_TOKEN_FILE",
+        "SENTRY_URL",
+        "SENTRY_ORG",
+        "SENTRY_PROJECT"
+      ]
+    }
+  }
+}
