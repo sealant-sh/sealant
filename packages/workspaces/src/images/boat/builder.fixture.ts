@@ -371,6 +371,10 @@ export const nativeBuilderFixture = async (
       if (saved === undefined) throw new Error("no saved snapshot of that name");
       snapshots.set(name, { ...saved, [field]: value });
     },
+    /** Boat no longer has a saved snapshot of that name: another client deleted it. */
+    dropSnapshot: (name: string) => {
+      if (!snapshots.delete(name)) throw new Error("no saved snapshot of that name");
+    },
     replaceSnapshot: (name: string) =>
       snapshots.set(name, {
         name,

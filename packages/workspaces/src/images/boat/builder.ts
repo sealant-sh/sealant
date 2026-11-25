@@ -1097,10 +1097,10 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         identity: journal.save.identity,
       });
       const found = await this.#getSnapshot(artifact.identity.name, this.#signal());
-      if (found !== null && !sameIdentity(artifact.identity, found))
-        throw identityMismatch(artifact.identity, found);
-      if (found === null || found.status !== "ready")
-        throw new NativeBuildError("native-snapshot-identity-mismatch");
+      // Boat has no saved snapshot by that name: the reason a launch's reuse check gives as well.
+      if (found === null) throw new NativeBuildError("native-publication-missing");
+      if (!sameIdentity(artifact.identity, found)) throw identityMismatch(artifact.identity, found);
+      if (found.status !== "ready") throw new NativeBuildError("native-snapshot-identity-mismatch");
       return { kind: "published", artifact, evidence: journal.evidence };
     }
     await this.#cleanup(journal, path);

@@ -211,19 +211,20 @@ const failureCode = (error: NativeCatalogFailure) =>
 const identityMismatchOf = (error: NativeCatalogFailure) =>
   error instanceof NativeCatalogError ? error.identityMismatch : undefined;
 /**
- * The worker's log line for an image quarantined because Boat answered its name with a saved
- * snapshot that is not the one sealant saved: which fields differ, and both values (SLNT-1347).
+ * The worker's log line for an image quarantined over what Boat answered for its saved snapshot
+ * (SLNT-1347): a snapshot that is not the one sealant saved, with the fields that differ and both
+ * values, or no snapshot of that name at all (another client deleted it). Nothing for other reasons.
  */
-const logIdentityMismatch = (
-  id: string,
-  reason: string,
-  identity: NativeIdentityMismatch | undefined,
-) =>
-  identity === undefined
-    ? Effect.void
-    : Effect.logWarning(
+const logQuarantine = (id: string, reason: string, identity: NativeIdentityMismatch | undefined) =>
+  identity !== undefined
+    ? Effect.logWarning(
         `Boat image identity differs: publication ${id} quarantined (${reason}); differences ${JSON.stringify(identity)}`,
-      );
+      )
+    : reason === "native-publication-missing"
+      ? Effect.logWarning(
+          `Boat has no saved snapshot for image: publication ${id} quarantined (${reason})`,
+        )
+      : Effect.void;
 
 const make = (
   options: BoatNativeCatalogOptions,
@@ -318,7 +319,7 @@ const make = (
             ? identityMismatchOf(checked.failure)
             : undefined;
           yield* repo.rejectReady(record.publication, reason);
-          yield* logIdentityMismatch(id, reason, identity);
+          yield* logQuarantine(id, reason, identity);
           return yield* Effect.fail(
             new NativeCatalogError(
               "publication-quarantined",
@@ -389,7 +390,7 @@ const make = (
           return yield* Effect.fail(new NativeCatalogError("publication-pending", id));
         }
         yield* repo.quarantine(claim, failureCode(built.failure));
-        yield* logIdentityMismatch(id, failureCode(built.failure), built.failure.identityMismatch);
+        yield* logQuarantine(id, failureCode(built.failure), built.failure.identityMismatch);
         return yield* Effect.fail(built.failure);
       }
       const exact = publication(record.ownership, built.success);
@@ -565,7 +566,7 @@ const make = (
             ? identityMismatchOf(recovered.failure)
             : undefined;
           yield* repo.rejectReady(record.publication, reason);
-          yield* logIdentityMismatch(id, reason, identity);
+          yield* logQuarantine(id, reason, identity);
           return yield* Effect.fail(
             new NativeCatalogError(
               "publication-quarantined",
@@ -599,7 +600,7 @@ const make = (
           return "active-attempt";
         }
         yield* repo.quarantine(claim, failureCode(recovered.failure));
-        yield* logIdentityMismatch(
+        yield* logQuarantine(
           id,
           failureCode(recovered.failure),
           recovered.failure.identityMismatch,
