@@ -176,16 +176,58 @@ export const parseHostPublicIps = (text: string | undefined): HostPublicAddresse
 const isPublic = (address: Cidr): boolean =>
   !NON_PUBLIC_RANGES.some((range) => cidrsOverlap(range, address));
 
+/** Every address in `ip -o addr show` output (busybox or iproute2), each as its own `/32` or `/128`. */
+const interfaceAddresses = (ipAddrOutput: string): ReadonlyArray<Cidr> =>
+  ipAddrOutput.split("\n").flatMap((line) => {
+    const match = /\binet6?\s+([0-9a-fA-F:.]+)\/\d+/.exec(line);
+    const parsed = match?.[1] === undefined ? undefined : parseCidr(match[1]);
+    return parsed === undefined ? [] : [parsed];
+  });
+
 /**
  * The public addresses in `ip -o addr show` output (busybox or iproute2), each as its own `/32` or
  * `/128`: what a packet to the host's own address would reach.
  */
 export const publicHostAddresses = (ipAddrOutput: string): ReadonlyArray<Cidr> =>
-  ipAddrOutput.split("\n").flatMap((line) => {
-    const match = /\binet6?\s+([0-9a-fA-F:.]+)\/\d+/.exec(line);
-    const parsed = match?.[1] === undefined ? undefined : parseCidr(match[1]);
-    return parsed === undefined || !isPublic(parsed) ? [] : [parsed];
-  });
+  interfaceAddresses(ipAddrOutput).filter(isPublic);
+
+/**
+ * The host's own addresses inside `subnets`, from `ip -o addr show` output: the host's side of a
+ * bridge on one of them. Read from the interfaces because no Docker before 29 names an
+ * auto-allocated gateway in `IPAM.Config`, and Docker 26 gives a bridge one even when asked for an
+ * isolated gateway.
+ */
+export const hostAddressesInSubnets = (
+  ipAddrOutput: string,
+  subnets: ReadonlyArray<Cidr>,
+): ReadonlyArray<Cidr> =>
+  sortCidrs(
+    interfaceAddresses(ipAddrOutput).filter((address) =>
+      subnets.some((subnet) => cidrContains(subnet, address)),
+    ),
+  );
+
+/**
+ * `docker run` of the guard image in the host's network namespace, printing its global IPv4
+ * addresses. No capability: reading addresses needs none.
+ */
+export const hostAddressesArgv = (image: string): ReadonlyArray<string> => [
+  "run",
+  "--rm",
+  "--network",
+  "host",
+  "--cap-drop",
+  "ALL",
+  "--entrypoint",
+  "ip",
+  image,
+  "-o",
+  "-4",
+  "addr",
+  "show",
+  "scope",
+  "global",
+];
 
 /**
  * The upstream resolvers Docker's embedded DNS forwards to from inside the container's own network
@@ -277,9 +319,9 @@ export const attachedNetworks = (networksJson: string): AttachedNetworks => {
 export interface IpamConfig {
   readonly subnets: ReadonlyArray<Cidr>;
   /**
-   * The bridge's own addresses on the host. An internal bridge has one too (only
-   * `gateway_mode_ipv4=isolated` leaves it out), and a container's endpoint never names it: its
-   * `Gateway` is empty on an internal network, so this is the only place to read it.
+   * The gateways `IPAM.Config` names. Docker 29 names an auto-allocated one; earlier engines only
+   * one passed with `--gateway`, so an empty list does not mean the bridge has no host address
+   * (`hostAddressesInSubnets` reads that).
    */
   readonly gateways: ReadonlyArray<Cidr>;
 }

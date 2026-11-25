@@ -37,7 +37,12 @@ import {
 import { desiredAttachments } from "../resources/reach.js";
 import { instanceRecord, linkedExecutor, postgresSpec } from "../resources/resource.fixture.js";
 import { cidr, cidrContains, formatCidr } from "./cidr.js";
-import { parseDockerEgressPolicy, prohibitRoutes } from "./docker-egress.js";
+import {
+  hostAddressesArgv,
+  hostAddressesInSubnets,
+  parseDockerEgressPolicy,
+  prohibitRoutes,
+} from "./docker-egress.js";
 import {
   isolatedNetworkCreateArgv,
   probeIsolatedGatewaySupport,
@@ -601,7 +606,8 @@ describe("per-workspace Docker egress", () => {
       await resources.detachExecutor(a.name);
       const network = reachNetworkName(a.name);
       // What `ensureNetwork` makes where the engine refuses `gateway_mode_ipv4=isolated`: a plain
-      // internal bridge, whose host side Docker names in IPAM alone (the endpoint's is empty).
+      // internal bridge with an address on the host. No endpoint names it, and no engine before
+      // 29 names it in IPAM either: it is read from the host's own interfaces.
       const subnet = await resourceTable.allocate({ name: network, kind: "reach", owner: a.name });
       await docker("docker", [
         "network",
@@ -616,16 +622,12 @@ describe("per-workspace Docker egress", () => {
         `${RESOURCE_LABELS.network}=reach`,
         network,
       ]);
-      const bridgeHost = (
-        await docker("docker", [
-          "network",
-          "inspect",
-          "--format",
-          "{{(index .IPAM.Config 0).Gateway}}",
-          network,
-        ])
-      ).stdout.trim();
-      expect(bridgeHost).toMatch(/^10\.248\./);
+      const hostSides = hostAddressesInSubnets(
+        (await docker("docker", [...hostAddressesArgv(DEFAULT_NETWORK_GUARD_IMAGE)])).stdout,
+        [cidr(subnet)],
+      );
+      expect(hostSides).toHaveLength(1);
+      const bridgeHost = formatCidr(hostSides[0] ?? cidr(subnet)).replace("/32", "");
 
       await resources.attachExecutor(a.name, attachments());
 

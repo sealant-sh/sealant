@@ -11,12 +11,14 @@ import type { ResourceInstanceState, ResourceInstanceVolume } from "@sealant/api
 import type { CredentialCipherService } from "@sealant/credentials";
 import type { ResourceInstanceRecord, ResourceNetworkKind } from "@sealant/db";
 
-import type { Cidr } from "../runtime/cidr.js";
+import { sortCidrs, type Cidr } from "../runtime/cidr.js";
 import { EGRESS_PROXY_BACKED_LABEL } from "../runtime/docker-egress-proxy.js";
 import {
   attachedNetworks,
   carveProhibitRouteScript,
   guardsPrivateRange,
+  hostAddressesArgv,
+  hostAddressesInSubnets,
   ipamConfig,
   prohibitRoutes,
   prohibitRouteScript,
@@ -485,7 +487,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
       }
       throw error;
     }
-    if (opened) await this.refuseReachGateway(member, network, (await plan()).gateways);
+    if (opened) await this.refuseReachGateway(member, network, await plan());
   }
 
   /**
@@ -502,19 +504,26 @@ export class DockerResourceRuntime implements ResourceRuntime {
   }
 
   /**
-   * A reach network made where the engine refused an isolated gateway still has the host's side of
-   * the bridge on it (`internal` only takes away the route out), which the carve just opened along
-   * with the rest of the subnet. Refused again for a member the carve opened; one that cannot be
-   * refused is disconnected. An isolated bridge has no gateway, and nothing runs.
+   * A reach network whose bridge has an address on the host (an engine that refused, or before 26
+   * ignored, an isolated gateway) puts the host one hop away (`internal` only takes away the route
+   * out), and the carve just opened it with the rest of the subnet. That address is refused again
+   * for a member the carve opened. It is read from the host's own interfaces, since no engine
+   * before 29 names it in the network's IPAM. An isolated bridge has none, and nothing more runs.
+   * One that cannot be read or refused leaves the member disconnected and the subnet refused.
    */
   private async refuseReachGateway(
     member: string,
     network: string,
-    reachGateways: ReadonlyArray<Cidr>,
+    ipam: IpamConfig,
   ): Promise<void> {
-    const gateways = ipv4(reachGateways);
-    if (gateways.length === 0) return;
+    const subnets = ipv4(ipam.subnets);
     try {
+      const host = await this.run(hostAddressesArgv(this.guardImage), GUARD_TIMEOUT_MS);
+      const gateways = sortCidrs([
+        ...hostAddressesInSubnets(host.stdout, subnets),
+        ...ipv4(ipam.gateways),
+      ]);
+      if (gateways.length === 0) return;
       await this.run(
         networkGuardArgv(member, this.guardImage, prohibitRouteScript(gateways)),
         GUARD_TIMEOUT_MS,
@@ -524,6 +533,10 @@ export class DockerResourceRuntime implements ResourceRuntime {
         disconnectArgv(network, member),
         (cause) => isMissing(cause) || isNotConnected(cause),
       );
+      await this.run(
+        networkGuardArgv(member, this.guardImage, prohibitRouteScript(subnets)),
+        GUARD_TIMEOUT_MS,
+      ).catch(() => undefined);
       throw error;
     }
   }

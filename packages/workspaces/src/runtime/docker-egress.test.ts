@@ -11,6 +11,7 @@ import {
   attachedNetworks,
   carveProhibitRouteScript,
   guardsPrivateRange,
+  hostAddressesInSubnets,
   imageCommand,
   ipamConfig,
   metadataDnsServer,
@@ -306,6 +307,20 @@ describe("the guard's inputs and script", () => {
       "203.0.113.7/32",
       "2001:db8::7/128",
     ]);
+  });
+
+  it("finds the host's side of a bridge inside given subnets, whatever IPAM says", () => {
+    const output = [
+      "2: eth0    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0",
+      "9: br-1a2b3c    inet 10.231.0.161/27 brd 10.231.0.191 scope global br-1a2b3c",
+      "10: br-4d5e6f    inet 10.231.0.193/27 brd 10.231.0.223 scope global br-4d5e6f",
+      "11: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0",
+    ].join("\n");
+    expect(hostAddressesInSubnets(output, [cidr("10.231.0.160/27")]).map(formatCidr)).toEqual([
+      "10.231.0.161/32",
+    ]);
+    // An isolated bridge has no address on the host: nothing to refuse.
+    expect(hostAddressesInSubnets(output, [cidr("10.231.0.224/27")])).toEqual([]);
   });
 
   it("reads a container's own networks, and refuses settings it cannot read", () => {

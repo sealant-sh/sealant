@@ -135,6 +135,7 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
   const released: Array<string> = [];
   let failGuard = false;
   let failConnect = false;
+  let failHostRead = false;
   const container = (name: string) => {
     const found = containers.get(name);
     if (found === undefined) throw missing(`container: ${name}`);
@@ -178,7 +179,8 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
       if (format(args) === "{{.Id}}") return { stdout: `${last}-id\n`, stderr: "" };
       if (format(args).includes("IPAM")) {
         return {
-          stdout: `${JSON.stringify([{ Subnet: formatCidr(network.subnet), Gateway: network.gateway ?? "" }])}\n`,
+          // As Docker before 29 answers: an auto-allocated gateway is not named here.
+          stdout: `${JSON.stringify([{ Subnet: formatCidr(network.subnet) }])}\n`,
           stderr: "",
         };
       }
@@ -231,6 +233,25 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
     if (verb === "network" && sub === "rm") {
       networks.delete(last);
       return { stdout: "", stderr: "" };
+    }
+    if (verb === "run" && args[args.indexOf("--network") + 1] === "host") {
+      if (failGuard || failHostRead) {
+        throw new Error("docker: Error response from daemon: cannot join the host network");
+      }
+      // The host's own interfaces: its uplink, and the host side of every bridge with a gateway.
+      const bridges = [...networks.values()].flatMap((network, index) =>
+        network.gateway === undefined
+          ? []
+          : [
+              `${String(index + 10)}: br-${String(index)}    inet ${network.gateway}/${String(network.subnet.prefix)} scope global br-${String(index)}`,
+            ],
+      );
+      return {
+        stdout: ["2: eth0    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0", ...bridges]
+          .map((line) => `${line}\n`)
+          .join(""),
+        stderr: "",
+      };
     }
     if (verb === "run") {
       const target = (args[args.indexOf("--network") + 1] ?? "").replace(/^container:/, "");
@@ -330,6 +351,9 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
     failConnects: () => {
       failConnect = true;
     },
+    failHostReads: () => {
+      failHostRead = true;
+    },
   };
 };
 
@@ -382,8 +406,9 @@ describe("DockerResourceRuntime reach of a workspace under per-workspace egress"
     ]) {
       expect(refuses(executor, address), address).toBe(true);
     }
-    // An isolated reach network has no gateway to refuse: no third guard container.
-    expect(host.guardRuns()).toHaveLength(2);
+    // An isolated reach network has no host address to refuse: the carve is the only route change.
+    expect(host.guardRuns().filter((call) => call.includes("NET_ADMIN"))).toHaveLength(1);
+    expect(refuses(executor, "10.231.0.161")).toBe(false);
   });
 
   it("opens and connects once more when Docker still refuses the route (another egress network)", async () => {
@@ -406,9 +431,23 @@ describe("DockerResourceRuntime reach of a workspace under per-workspace egress"
 
     expect(host.networks.get("sealant-run-1-reach")?.gateway).toBe("10.231.0.161");
     expect(executor?.networks.has("sealant-run-1-reach")).toBe(true);
-    // Docker names it in the network's IPAM alone: the workspace's endpoint says `Gateway: ""`.
+    // Neither the endpoint (`Gateway: ""`) nor the network's IPAM names it before Docker 29: the
+    // host's own interfaces do.
     expect(refuses(executor, "10.231.0.161")).toBe(true);
     expect(refuses(executor, "10.231.0.170")).toBe(false);
+  });
+
+  it("disconnects the workspace and refuses the subnet again when the host's side cannot be refused", async () => {
+    const host = reachHost({ refuseIsolated: true });
+    const executor = host.workspace("sealant-run-1");
+    host.failHostReads();
+
+    await expect(host.runtime.attachExecutor("sealant-run-1", [])).rejects.toThrow(/host/);
+
+    expect(executor?.networks.has("sealant-run-1-reach")).toBe(false);
+    for (const address of ["10.231.0.161", "10.231.0.170"]) {
+      expect(refuses(executor, address), address).toBe(true);
+    }
   });
 
   it("costs no guard container for a workspace already on its reach network, or one with no guard", async () => {
