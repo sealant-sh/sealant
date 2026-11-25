@@ -7,15 +7,24 @@ export interface BoatHostedControl {
   readonly cookie: BoatSecret;
 }
 
+/**
+ * The query parameters Boat puts on a hosted port's URL: the access token, and since 25 Nov 2026 the
+ * port's `_generation`. sealant reads only the token (sent as the `_port_auth` cookie); a parameter
+ * Boat has not been seen to send still refuses the URL.
+ */
+const HOSTED_PARAMS = new Set(["_token", "_generation"]);
+
 export const parseBoatHostedControl = (input: string): BoatResult<BoatHostedControl> => {
   const parsed = parseBoatUrl(input);
   if (!parsed.ok) return parsed;
   const url = parsed.value;
+  const names = [...url.searchParams.keys()];
   const token = BoatSecret.parse(url.searchParams.get("_token"));
   if (
     !token.ok ||
     url.pathname !== "/" ||
-    [...url.searchParams.keys()].length !== 1 ||
+    !names.every((name) => HOSTED_PARAMS.has(name)) ||
+    new Set(names).size !== names.length ||
     !url.searchParams.has("_token")
   ) {
     return { ok: false, error: new BoatApiError("host", null, "invalid_hosted_control") };
