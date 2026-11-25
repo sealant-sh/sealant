@@ -135,6 +135,7 @@ describe("network, exec and probe argv", () => {
       "create",
       "--driver",
       "bridge",
+      "--ipv6=false",
       "--internal",
       "--subnet",
       "10.231.0.0/27",
@@ -142,9 +143,9 @@ describe("network, exec and probe argv", () => {
       "sealant.resource-network=reach",
       "sealant-run-1-reach",
     ]);
-    expect(networkCreateArgv("sealres-x-egress", "egress", "10.232.0.16/28")).not.toContain(
-      "--internal",
-    );
+    const egress = networkCreateArgv("sealres-x-egress", "egress", "10.232.0.16/28");
+    expect(egress).not.toContain("--internal");
+    expect(egress).toContain("--ipv6=false");
   });
 
   it("gives an internal network no host gateway when asked, and never a routed one", () => {

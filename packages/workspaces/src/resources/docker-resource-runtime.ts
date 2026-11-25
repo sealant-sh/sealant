@@ -11,11 +11,27 @@ import type { ResourceInstanceState, ResourceInstanceVolume } from "@sealant/api
 import type { CredentialCipherService } from "@sealant/credentials";
 import type { ResourceInstanceRecord, ResourceNetworkKind } from "@sealant/db";
 
+import { sortCidrs, type Cidr } from "../runtime/cidr.js";
 import { EGRESS_PROXY_BACKED_LABEL } from "../runtime/docker-egress-proxy.js";
+import {
+  attachedNetworks,
+  carveProhibitRouteScript,
+  guardsPrivateRange,
+  hostAddressesArgv,
+  hostAddressesInSubnets,
+  ipamConfig,
+  prohibitRoutes,
+  prohibitRouteScript,
+  routeTableArgv,
+  workspaceEgressNetworkName,
+  type AttachedNetworks,
+  type IpamConfig,
+} from "../runtime/docker-egress.js";
 import {
   cloudMetadataGuardArgv,
   createDockerCommandRunner,
   DEFAULT_NETWORK_GUARD_IMAGE,
+  networkGuardArgv,
   type DockerCommandRunner,
 } from "../runtime/docker-runtime-adapter.js";
 import { egressProxyName } from "../runtime/egress-proxy-orchestrator.js";
@@ -198,6 +214,10 @@ const isGatewayModeRefused = (error: unknown) =>
 /** Docker's own words for an object that is already there. */
 const isPresent = (error: unknown) => /already exists|is already in use/i.test(errorText(error));
 const isNotConnected = (error: unknown) => /is not connected/i.test(errorText(error));
+/** Docker refusing an address that a route in the container's namespace overlaps. */
+const isRouteConflict = (error: unknown) => /conflicts with existing route/i.test(errorText(error));
+
+const ipv4 = (blocks: ReadonlyArray<Cidr>) => blocks.filter((block) => block.family === 4);
 
 /** The first line of a Docker failure, for a state's message or a reply; never an argv. */
 export const dockerFailureReason = (error: unknown): string => {
@@ -324,9 +344,19 @@ export class DockerResourceRuntime implements ResourceRuntime {
       .filter((line) => line.length > 0);
   }
 
-  private async removeNetwork(name: string): Promise<void> {
+  /**
+   * Disconnect every member, remove the network and release its subnet. `beforeEmpty` runs on the
+   * members first, while the network (and so its subnet) still exists: a failure there leaves the
+   * network for the next attempt, which finds the same members.
+   */
+  private async removeNetwork(
+    name: string,
+    beforeEmpty?: (members: ReadonlyArray<string>) => Promise<void>,
+  ): Promise<void> {
     if (await this.networkExists(name)) {
-      for (const container of await this.networkContainers(name)) {
+      const members = await this.networkContainers(name);
+      await beforeEmpty?.(members);
+      for (const container of members) {
         await this.runTolerating(
           disconnectArgv(name, container),
           (error) => isMissing(error) || isNotConnected(error),
@@ -374,24 +404,190 @@ export class DockerResourceRuntime implements ResourceRuntime {
     return parseImageVolumes((await this.run(imageVolumesArgv(image))).stdout);
   }
 
-  /** The executor's reach network exists with the executor on it. */
+  /** A container's state and networks; `undefined` when Docker has no such container. */
+  private async inspectMember(
+    name: string,
+  ): Promise<{ readonly running: boolean; readonly networks: AttachedNetworks } | undefined> {
+    try {
+      const result = await this.run([
+        "container",
+        "inspect",
+        "--format",
+        "{{.State.Running}}\t{{json .NetworkSettings.Networks}}",
+        name,
+      ]);
+      const [running = "", networks = ""] = result.stdout.trim().split("\t");
+      return { running: running === "true", networks: attachedNetworks(networks) };
+    } catch (error) {
+      if (isMissing(error)) return undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * The executor's reach network exists with the executor on it. A member already on it costs no
+   * guard container.
+   *
+   * A workspace under per-workspace egress (on its own `-egress` network) has a `prohibit` route
+   * over the whole reach pool, and Docker refuses to connect it to a network inside that route. It
+   * is opened for this network's subnet alone first (`openReach`). Anything else that Docker
+   * refuses for the same reason (a guard that ran in between, a guarded container on some other
+   * egress network) is opened and connected once more.
+   */
   private async ensureReach(executor: string): Promise<void> {
     const network = reachNetworkName(executor);
     // A network for an executor that is not there would only wait to be swept: refuse first.
-    if ((await this.inspectContainer(executor)) === undefined) {
+    const own = await this.inspectMember(executor);
+    if (own === undefined) {
       throw new Error(`The executor ${executor} is not on this Docker host.`);
     }
     // A workspace behind its own egress proxy never joins a network that leads past it: its
     // proxy joins the reach network in its place, and the workspace reaches a resource only as
     // its policy grants, through the proxy. No proxy there: refused, never attached directly.
-    const member = (await this.isProxyBacked(executor)) ? egressProxyName(executor) : executor;
-    if (member !== executor && (await this.inspectContainer(member)) === undefined) {
+    const proxyBacked = await this.isProxyBacked(executor);
+    const member = proxyBacked ? egressProxyName(executor) : executor;
+    const current = proxyBacked ? await this.inspectMember(member) : own;
+    if (current === undefined) {
       throw new Error(
         `The executor ${executor} runs behind an egress proxy, and its proxy ${member} is not on this Docker host: its resources are not attached.`,
       );
     }
     await this.ensureNetwork(network, "reach", executor);
-    await this.runTolerating(["network", "connect", network, member], isPresent);
+    if (current.networks.names.includes(network)) return;
+    // A stopped workspace (a parked one) has no namespace and no routes yet: it connects as is, and
+    // the guard that runs on its next start reads the reach network as one of its own.
+    const guarded =
+      current.running &&
+      !proxyBacked &&
+      current.networks.names.includes(workspaceEgressNetworkName(executor));
+    // Read once, and only for a member that may be opened.
+    let ipam: IpamConfig | undefined;
+    const plan = async () => (ipam ??= await this.networkIpam(network));
+    let opened = false;
+    try {
+      if (guarded) {
+        opened = true;
+        await this.openReach(member, (await plan()).subnets);
+      }
+      try {
+        await this.runTolerating(["network", "connect", network, member], isPresent);
+      } catch (error) {
+        if (!isRouteConflict(error)) throw error;
+        opened = true;
+        await this.openReach(member, (await plan()).subnets);
+        await this.runTolerating(["network", "connect", network, member], isPresent);
+      }
+    } catch (error) {
+      // Not connected after all: the subnet goes back to refused, as far as that can be done.
+      if (opened && ipam !== undefined) {
+        await this.run(
+          networkGuardArgv(member, this.guardImage, prohibitRouteScript(ipv4(ipam.subnets))),
+          GUARD_TIMEOUT_MS,
+        ).catch(() => undefined);
+      }
+      throw error;
+    }
+    if (opened) await this.refuseReachGateway(member, network, await plan());
+  }
+
+  /**
+   * Split every `prohibit` route in `member`'s namespace that overlaps a reach network's `subnets`
+   * so that subnet, and nothing else, is open (`carveProhibitRouteScript`). The routes are read with the
+   * guard image, never the member's own. Throws on anything it cannot read or run, so the member
+   * is not connected.
+   */
+  private async openReach(member: string, subnets: ReadonlyArray<Cidr>): Promise<void> {
+    const table = await this.run(routeTableArgv(member, this.guardImage, 4), GUARD_TIMEOUT_MS);
+    const script = carveProhibitRouteScript(prohibitRoutes(table.stdout, 4), ipv4(subnets));
+    if (script === undefined) return;
+    await this.run(networkGuardArgv(member, this.guardImage, script), GUARD_TIMEOUT_MS);
+  }
+
+  /**
+   * A reach network whose bridge has an address on the host (an engine that refused, or before 26
+   * ignored, an isolated gateway) puts the host one hop away (`internal` only takes away the route
+   * out), and the carve just opened it with the rest of the subnet. That address is refused again
+   * for a member the carve opened. It is read from the host's own interfaces, since no engine
+   * before 29 names it in the network's IPAM. An isolated bridge has none, and nothing more runs.
+   * One that cannot be read or refused leaves the member disconnected and the subnet refused.
+   */
+  private async refuseReachGateway(
+    member: string,
+    network: string,
+    ipam: IpamConfig,
+  ): Promise<void> {
+    const subnets = ipv4(ipam.subnets);
+    try {
+      const host = await this.run(hostAddressesArgv(this.guardImage), GUARD_TIMEOUT_MS);
+      const gateways = sortCidrs([
+        ...hostAddressesInSubnets(host.stdout, subnets),
+        ...ipv4(ipam.gateways),
+      ]);
+      if (gateways.length === 0) return;
+      await this.run(
+        networkGuardArgv(member, this.guardImage, prohibitRouteScript(gateways)),
+        GUARD_TIMEOUT_MS,
+      );
+    } catch (error) {
+      await this.runTolerating(
+        disconnectArgv(network, member),
+        (cause) => isMissing(cause) || isNotConnected(cause),
+      );
+      await this.run(
+        networkGuardArgv(member, this.guardImage, prohibitRouteScript(subnets)),
+        GUARD_TIMEOUT_MS,
+      ).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async networkIpam(network: string): Promise<IpamConfig> {
+    const result = await this.run([
+      "network",
+      "inspect",
+      "--format",
+      "{{json .IPAM.Config}}",
+      network,
+    ]);
+    return ipamConfig(result.stdout);
+  }
+
+  /**
+   * Before a reach network goes and its subnet can be handed to another workspace: each running
+   * member under per-workspace egress gets `prohibit <subnet>` back, the route its carve took
+   * out. Resource instances and an egress proxy never had one. Put in while the member is still
+   * connected (it takes the place of the connected route), so no attempt that stops halfway leaves
+   * a disconnected workspace without it.
+   */
+  private async closeReach(
+    executor: string,
+    network: string,
+    members: ReadonlyArray<string>,
+  ): Promise<void> {
+    const candidates = members.filter(
+      (member) => !member.startsWith("sealres-") && member !== egressProxyName(executor),
+    );
+    if (candidates.length === 0) return;
+    const subnets = ipv4((await this.networkIpam(network)).subnets);
+    for (const member of candidates) {
+      const state = await this.inspectMember(member);
+      if (state?.running !== true) continue;
+      const guarded =
+        state.networks.names.includes(workspaceEgressNetworkName(member)) ||
+        (await this.guardsReachRange(member, subnets));
+      if (!guarded) continue;
+      await this.run(
+        networkGuardArgv(member, this.guardImage, prohibitRouteScript(subnets)),
+        GUARD_TIMEOUT_MS,
+      );
+    }
+  }
+
+  /** Whether `member`'s routes guard the private range the reach subnets are in. */
+  private async guardsReachRange(member: string, subnets: ReadonlyArray<Cidr>): Promise<boolean> {
+    const table = await this.run(routeTableArgv(member, this.guardImage, 4), GUARD_TIMEOUT_MS);
+    const routes = prohibitRoutes(table.stdout, 4);
+    return subnets.some((subnet) => guardsPrivateRange(routes, subnet));
   }
 
   /** Whether an executor was launched behind its own egress proxy (`EGRESS_PROXY_BACKED_LABEL`). */
@@ -673,7 +869,8 @@ export class DockerResourceRuntime implements ResourceRuntime {
   }
 
   public async detachExecutor(executor: string): Promise<void> {
-    await this.removeNetwork(reachNetworkName(executor));
+    const network = reachNetworkName(executor);
+    await this.removeNetwork(network, (members) => this.closeReach(executor, network, members));
   }
 
   public async converge(input: {

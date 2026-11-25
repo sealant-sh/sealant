@@ -11,6 +11,7 @@ import { parseSubnetPool, type SubnetPool } from "@sealant/db";
 
 import {
   cidr,
+  cidrContains,
   cidrsOverlap,
   formatCidr,
   networkOf,
@@ -18,6 +19,7 @@ import {
   sortCidrs,
   subtractCidrs,
   type Cidr,
+  type IpFamily,
 } from "./cidr.js";
 
 /** Every workspace egress network is a `/28`: the workspace and the mirrors that join it. */
@@ -174,16 +176,58 @@ export const parseHostPublicIps = (text: string | undefined): HostPublicAddresse
 const isPublic = (address: Cidr): boolean =>
   !NON_PUBLIC_RANGES.some((range) => cidrsOverlap(range, address));
 
+/** Every address in `ip -o addr show` output (busybox or iproute2), each as its own `/32` or `/128`. */
+const interfaceAddresses = (ipAddrOutput: string): ReadonlyArray<Cidr> =>
+  ipAddrOutput.split("\n").flatMap((line) => {
+    const match = /\binet6?\s+([0-9a-fA-F:.]+)\/\d+/.exec(line);
+    const parsed = match?.[1] === undefined ? undefined : parseCidr(match[1]);
+    return parsed === undefined ? [] : [parsed];
+  });
+
 /**
  * The public addresses in `ip -o addr show` output (busybox or iproute2), each as its own `/32` or
  * `/128`: what a packet to the host's own address would reach.
  */
 export const publicHostAddresses = (ipAddrOutput: string): ReadonlyArray<Cidr> =>
-  ipAddrOutput.split("\n").flatMap((line) => {
-    const match = /\binet6?\s+([0-9a-fA-F:.]+)\/\d+/.exec(line);
-    const parsed = match?.[1] === undefined ? undefined : parseCidr(match[1]);
-    return parsed === undefined || !isPublic(parsed) ? [] : [parsed];
-  });
+  interfaceAddresses(ipAddrOutput).filter(isPublic);
+
+/**
+ * The host's own addresses inside `subnets`, from `ip -o addr show` output: the host's side of a
+ * bridge on one of them. Read from the interfaces because no Docker before 29 names an
+ * auto-allocated gateway in `IPAM.Config`, and Docker 26 gives a bridge one even when asked for an
+ * isolated gateway.
+ */
+export const hostAddressesInSubnets = (
+  ipAddrOutput: string,
+  subnets: ReadonlyArray<Cidr>,
+): ReadonlyArray<Cidr> =>
+  sortCidrs(
+    interfaceAddresses(ipAddrOutput).filter((address) =>
+      subnets.some((subnet) => cidrContains(subnet, address)),
+    ),
+  );
+
+/**
+ * `docker run` of the guard image in the host's network namespace, printing its global IPv4
+ * addresses. No capability: reading addresses needs none.
+ */
+export const hostAddressesArgv = (image: string): ReadonlyArray<string> => [
+  "run",
+  "--rm",
+  "--network",
+  "host",
+  "--cap-drop",
+  "ALL",
+  "--entrypoint",
+  "ip",
+  image,
+  "-o",
+  "-4",
+  "addr",
+  "show",
+  "scope",
+  "global",
+];
 
 /**
  * The upstream resolvers Docker's embedded DNS forwards to from inside the container's own network
@@ -271,6 +315,140 @@ export const attachedNetworks = (networksJson: string): AttachedNetworks => {
   return { names: Object.keys(parsed), ids, subnets, gateways };
 };
 
+/** A network's address plan: its subnets, and the host's side of the bridge on each. */
+export interface IpamConfig {
+  readonly subnets: ReadonlyArray<Cidr>;
+  /**
+   * The gateways `IPAM.Config` names. Docker 29 names an auto-allocated one; earlier engines only
+   * one passed with `--gateway`, so an empty list does not mean the bridge has no host address
+   * (`hostAddressesInSubnets` reads that).
+   */
+  readonly gateways: ReadonlyArray<Cidr>;
+}
+
+/**
+ * A network's address plan from `docker network inspect --format '{{json .IPAM.Config}}'`. Throws
+ * on output it cannot read and on a network with no subnet: a carve never guesses what it opens.
+ */
+export const ipamConfig = (ipamJson: string): IpamConfig => {
+  const parsed: unknown = JSON.parse(ipamJson.trim() || "null");
+  if (!Array.isArray(parsed)) {
+    throw new Error("docker network inspect returned no IPAM configuration for the network.");
+  }
+  const read = (key: "Subnet" | "Gateway") =>
+    parsed.flatMap((entry: unknown) => {
+      const value: unknown =
+        typeof entry === "object" && entry !== null ? Reflect.get(entry, key) : undefined;
+      if (typeof value !== "string" || value.length === 0) return [];
+      const block = parseCidr(value);
+      if (block === undefined) {
+        throw new Error(
+          `docker network inspect returned an unreadable ${key.toLowerCase()}: ${value}`,
+        );
+      }
+      return [block];
+    });
+  const subnets = read("Subnet");
+  if (subnets.length === 0) throw new Error("docker network inspect returned no subnet.");
+  return { subnets, gateways: read("Gateway") };
+};
+
+/**
+ * `docker run` of the guard image in a container's network namespace, printing its `family` route
+ * table. No capability at all: reading routes needs none, and the container's own image (which
+ * could print anything) is never run.
+ */
+export const routeTableArgv = (
+  container: string,
+  image: string,
+  family: IpFamily,
+): ReadonlyArray<string> => [
+  "run",
+  "--rm",
+  "--runtime",
+  "runc",
+  "--network",
+  `container:${container}`,
+  "--cap-drop",
+  "ALL",
+  "--entrypoint",
+  "ip",
+  image,
+  `-${String(family)}`,
+  "route",
+  "show",
+];
+
+/**
+ * The destinations of the `prohibit` routes in `ip -4 route show` or `ip -6 route show` output
+ * (busybox or iproute2, which print a host route without its prefix: `prohibit 169.254.169.254`).
+ * Other routes are skipped. Throws on a `prohibit` route it cannot read or of the other family,
+ * so a carve never runs on a table it misread.
+ */
+export const prohibitRoutes = (ipRouteOutput: string, family: IpFamily): ReadonlyArray<Cidr> =>
+  ipRouteOutput.split("\n").flatMap((line) => {
+    const [type, destination = ""] = line.trim().split(/\s+/);
+    if (type !== "prohibit") return [];
+    const block =
+      destination === "default"
+        ? cidr(family === 4 ? "0.0.0.0/0" : "::/0")
+        : parseCidr(destination);
+    if (block === undefined || block.family !== family) {
+      throw new Error(`ip route show printed a prohibit route it could not read: ${line.trim()}`);
+    }
+    return [block];
+  });
+
+/** `ip route del` of one route, where a route already gone (a concurrent carve) is no error. */
+const deleteProhibitRoute = (block: Cidr): string =>
+  [
+    `if ! out=$(ip -${String(block.family)} route del prohibit ${formatCidr(block)} 2>&1); then`,
+    `  case "$out" in *"No such process"*|*"No such file"*) ;; *) echo "$out" >&2; exit 1 ;; esac`,
+    "fi",
+  ].join("\n");
+
+/**
+ * The guard script that opens `open` (the subnets of a network about to join) in a namespace whose
+ * `prohibit` routes are `routes`, and nothing else: each route that overlaps `open` is replaced by
+ * the blocks around it. Every narrower route goes in before the broad one comes out, so no address
+ * outside `open` is unrefused at any moment. A route inside `open` (a subnet refused when an earlier
+ * network on it went, or that network's gateway) comes out with nothing in its place. `undefined`
+ * when no route overlaps `open`: there is nothing to run.
+ */
+export const carveProhibitRouteScript = (
+  routes: ReadonlyArray<Cidr>,
+  open: ReadonlyArray<Cidr>,
+): string | undefined => {
+  const covering = sortCidrs(
+    routes.filter((route) => open.some((block) => cidrsOverlap(route, block))),
+  );
+  if (covering.length === 0) return undefined;
+  return [
+    "set -e",
+    ...subtractCidrs(covering, open).map(
+      (block) => `ip -${String(block.family)} route replace prohibit ${formatCidr(block)}`,
+    ),
+    ...covering.map(deleteProhibitRoute),
+  ].join("\n");
+};
+
+/**
+ * Whether a namespace's `prohibit` routes guard the private range `block` lies in, as the
+ * per-workspace egress guard's do. The metadata guard's own addresses, which every workspace has,
+ * do not count.
+ */
+export const guardsPrivateRange = (routes: ReadonlyArray<Cidr>, block: Cidr): boolean => {
+  const range = PRIVATE_EGRESS_RANGES.find((each) => cidrContains(each, block));
+  return (
+    range !== undefined &&
+    routes.some(
+      (route) =>
+        cidrsOverlap(route, range) &&
+        !METADATA_EGRESS_ADDRESSES.some((address) => cidrsOverlap(address, route)),
+    )
+  );
+};
+
 /**
  * Every block a workspace's namespace gets a `prohibit` route for:
  *
@@ -284,8 +462,14 @@ export const attachedNetworks = (networksJson: string): AttachedNetworks => {
  *   server on one is refused before launch (`metadataDnsServer`).
  *
  * What is left open simply has no route here: a more specific allow never depends on route order,
- * and the kernel's own connected routes keep every attached network (a reach network joined later
- * included) on-link.
+ * and the kernel's own connected routes keep every network attached when the guard runs on-link.
+ *
+ * A network joined after the guard (a resource's reach network) is not covered by that. Its subnet
+ * usually sits inside one of these blocks (the workspace's `/28` taken out of `10.0.0.0/8` leaves
+ * `prohibit 10.224.0.0/13`, over the whole reach pool), and Docker refuses to give an interface an
+ * address that any route in the namespace overlaps ("conflicts with existing route"). Whoever
+ * connects such a network splits the covering route first, opening that one subnet and nothing
+ * else (`carveProhibitRouteScript`).
  */
 export const prohibitedEgress = (input: {
   readonly allowed: ReadonlyArray<Cidr>;

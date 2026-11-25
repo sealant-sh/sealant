@@ -1815,10 +1815,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * Run the workspace's Docker service on its own network. `guard` runs beside the daemon's
    * readiness wait, before the workspace container that drives the daemon exists: the service's
    * nested containers reach the network through the service's own namespace.
+   *
+   * `joins` is a network the service also joins under the `docker` alias (a proxy-backed
+   * workspace's isolated network). It joins before the guard runs, so the guard reads it as one of
+   * the service's own networks and leaves it open: joined after, its subnet would sit inside a
+   * `prohibit` route, and Docker refuses to connect a network a route overlaps.
    */
   private async provisionDockerService(
     containerName: string,
     guard: (containerId: string, name: string) => Promise<void>,
+    joins?: string,
   ): Promise<DockerServiceProvision> {
     const networkName = `${containerName}-network`;
     const serviceName = `${containerName}-docker`;
@@ -1863,6 +1869,25 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // Before the daemon starts, so its first pull already resolves the mirror.
       await this.joinRegistryMirrorNetwork(networkName);
       acquisition = await this.runOrAdoptContainer(args, serviceName);
+      if (joins !== undefined) {
+        await this.commandRunner("docker", [
+          "network",
+          "connect",
+          "--alias",
+          "docker",
+          joins,
+          acquisition.containerId,
+        ]).catch((error: unknown) => {
+          // An adopted service already joined it.
+          if (
+            !/already exists|already attached/i.test(
+              error instanceof Error ? error.message : String(error),
+            )
+          ) {
+            throw error;
+          }
+        });
+      }
       await readyThenGuarded(
         this.awaitDockerServiceReady(acquisition.containerId, serviceName),
         guard(acquisition.containerId, serviceName),
@@ -3293,32 +3318,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         await this.prepareEgressFacts(this.egress, egressNetworkName, cloudMetadataReachable);
         gate = await this.gatedCommand(imageReference);
       }
-      dockerService = dockerServiceEnabled
-        ? await this.provisionDockerService(containerName, (id, name) =>
-            this.guardNetwork(id, name, cloudMetadataReachable),
-          )
-        : undefined;
       // Behind a proxy the workspace stays on its isolated network alone: its Docker service joins
       // that network under the `docker` alias instead of the workspace joining the service's
       // routed bridge, which would give it a way out past the proxy.
-      if (proxied !== undefined && dockerService !== undefined && egressNetworkName !== undefined) {
-        await this.commandRunner("docker", [
-          "network",
-          "connect",
-          "--alias",
-          "docker",
-          egressNetworkName,
-          dockerService.acquisition.containerId,
-        ]).catch((error: unknown) => {
-          if (
-            !/already exists|already attached/i.test(
-              error instanceof Error ? error.message : String(error),
-            )
-          ) {
-            throw error;
-          }
-        });
-      }
+      dockerService = dockerServiceEnabled
+        ? await this.provisionDockerService(
+            containerName,
+            (id, name) => this.guardNetwork(id, name, cloudMetadataReachable),
+            proxied === undefined ? undefined : egressNetworkName,
+          )
+        : undefined;
       const dockerServiceAlias = dockerService === undefined ? undefined : "docker";
       const dockerNetworkName = proxied === undefined ? dockerService?.networkName : undefined;
       // Every route the guard adds is one a packet socket could skip: with the guard on, root has
