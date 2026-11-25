@@ -65,8 +65,27 @@ export interface SealantConfig {
    * then `usr_local`.
    */
   readonly ownerUserId?: string;
-  /** Override the `fetch` implementation (tests, custom agents, proxies). */
+  /**
+   * Override the `fetch` implementation (tests, custom agents, proxies). Every request the client
+   * makes goes through it: contract calls, session output streams and resource calls.
+   */
   readonly fetch?: typeof fetch;
+  /**
+   * The trace a call continues, read when each call starts. A call made inside an Effect span
+   * continues that span without this; otherwise the SDK calls this and, when it answers nothing,
+   * uses the active OpenTelemetry context if `@opentelemetry/api` is registered. With no parent
+   * from any of them, requests carry no trace header. Read per call, so one client can serve
+   * concurrent requests that belong to different traces.
+   */
+  readonly traceContext?: () => SealantTraceContext | undefined;
+}
+
+/** A W3C trace context the SDK's requests continue. */
+export interface SealantTraceContext {
+  /** A W3C `traceparent` header value, such as `00-<32 hex trace id>-<16 hex span id>-01`. */
+  readonly traceparent: string;
+  /** The W3C `tracestate` header value that travels with it, when there is one. */
+  readonly tracestate?: string;
 }
 
 // ---------------------------------------------------------------------------------------------

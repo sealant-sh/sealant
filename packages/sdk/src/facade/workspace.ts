@@ -41,6 +41,7 @@ import {
   releaseWorkspaceCredentialsOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
+import { withCallerTrace } from "../effect/trace.js";
 import {
   SealantApiError,
   SealantBoatError,
@@ -83,7 +84,7 @@ import type {
   WorkspaceStopOptions,
   WorkspaceStopResult,
 } from "../types.js";
-import type { SdkContext } from "./context.js";
+import { bindRun, captureTrace, type SdkContext } from "./context.js";
 import { type ForwardEndpoint, openForward, openForwardV2 } from "./forward.js";
 import { makeInteractiveSession } from "./session.js";
 
@@ -692,6 +693,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     },
 
     ready: async (options?: WorkspaceReadyOptions) => {
+      // Every poll, and a give-up stop, continues the trace ready() was called in.
+      const trace = captureTrace(ctx);
       // Bounded by phase: the readiness bound is spent only outside an image build (queued,
       // booting), so a first launch on a new image is not failed by a slow package mirror. The
       // build has its own bound (none by default) and fails when it stops making progress. A
@@ -724,7 +727,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         // runtime does not keep running (and billing) to the platform's lifetime cap.
         // Best-effort: the bound is what the caller must see, whatever the request answers.
         // The request being accepted is all that is known — not that anything has stopped.
-        const accepted = init.created === true ? await requestStop() : undefined;
+        const accepted =
+          init.created === true ? await withCallerTrace(trace, requestStop) : undefined;
         throw new SealantError(
           `${message}${
             accepted === undefined
@@ -740,6 +744,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       for (;;) {
         const details: WorkspaceDetails = await ctx.runtime.run(
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+          trace,
         );
         const now = elapsed();
         // The time since the last look was spent building when the last look saw a build.
@@ -903,7 +908,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     // Poll-backed lifecycle stream: emit a coarse event on each status transition until the workspace
     // reaches a terminal/ready state. Swaps to SSE over Postgres LISTEN/NOTIFY in Stage 5 (same shape).
     events: () => {
-      const ctxRun = ctx.runtime;
+      // Captured when events() is called: the generator's body first runs on the first next().
+      const run = bindRun(ctx);
       async function* iterate(): AsyncGenerator<WorkspaceEvent> {
         let lastStatus: WorkspaceStatus | undefined;
         let lastPhase: WorkspacePhase | undefined;
@@ -911,9 +917,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         // follows a build as long as the build is moving, like ready().
         let deadline = elapsed() + READY_TIMEOUT_MS;
         for (;;) {
-          const details = await ctxRun.run(
-            getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
-          );
+          const details = await run(getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId));
           if (details.status !== lastStatus) {
             lastStatus = details.status;
             yield {
@@ -958,6 +962,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     // a drain (a refused or abandoned drain answers too), so it never decides the state.
     stop: async (options?: WorkspaceStopOptions): Promise<WorkspaceStopResult> => {
       const ownerUserId = ctx.config.hostLocal.ownerUserId;
+      const trace = captureTrace(ctx);
       const accepted = await ctx.runtime.run(
         stopWorkspaceOp(init.id, {
           ownerUserId,
@@ -997,7 +1002,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       const deadline = elapsed() + STOP_TIMEOUT_MS;
       for (;;) {
         const details: WorkspaceDetails = await ctx.runtime
-          .run(getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId))
+          .run(getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId), trace)
           .catch((error: unknown) => {
             if (error instanceof SealantBudgetExceededError) {
               throw new SealantError(
@@ -1024,7 +1029,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         ) {
           // Observed: the executor ended and is kept for recovery; this stop does not remove it
           // (only a discard or an accepted completion would), so there is nothing to wait for.
-          const capture = await readCaptureStatus().catch(() => undefined);
+          const capture = await withCallerTrace(trace, readCaptureStatus).catch(() => undefined);
           return {
             state: "kept",
             drain: toCaptureDrain(details.captureDrain),
@@ -1035,7 +1040,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         if (elapsed() > deadline) {
           const drain =
             details.captureDrain === undefined ? undefined : toCaptureDrain(details.captureDrain);
-          const capture = await readCaptureStatus().catch(() => undefined);
+          const capture = await withCallerTrace(trace, readCaptureStatus).catch(() => undefined);
           const extras = { ...(capture === undefined ? {} : { capture }), ...completion };
           if (drain !== undefined && (drain.state === "draining" || drain.state === "kept")) {
             return { state: drain.state, drain, ...extras };

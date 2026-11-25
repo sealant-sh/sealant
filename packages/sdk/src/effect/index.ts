@@ -29,6 +29,10 @@ export * from "./operations.js";
 export { makeSdkRuntime } from "./runtime.js";
 export type { SdkRuntime, SdkServices } from "./runtime.js";
 
+// Trace continuation: the caller's trace an SDK call continues (see `captureCallerTrace`).
+export { captureCallerTrace } from "./trace.js";
+export type { CallerTrace } from "./trace.js";
+
 // The config the layer/runtime constructors take, and the resolver from the public `SealantConfig`.
 export { resolveInternalConfig } from "../internal/config.js";
 export type { SealantHostLocalConfig, SealantInternalConfig } from "../internal/config.js";

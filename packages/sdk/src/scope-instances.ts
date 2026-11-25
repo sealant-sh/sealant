@@ -23,6 +23,7 @@ import {
   upResourceInstanceOp,
 } from "./effect/operations.js";
 import type { SdkRuntime } from "./effect/runtime.js";
+import { captureCallerTrace, traceHeaders } from "./effect/trace.js";
 import { SealantApiError, SealantBudgetExceededError, SealantError } from "./errors.js";
 import { resolveRequestPriority, type SealantInternalConfig } from "./internal/config.js";
 import { toSealantError } from "./internal/map-error.js";
@@ -333,6 +334,7 @@ const exec = async (
     headers: {
       "content-type": "application/octet-stream",
       "x-sealant-request-priority": resolveRequestPriority(config.requestPriority),
+      ...traceHeaders(captureCallerTrace(config.traceContext)),
       ...(config.apiKey === undefined ? {} : { authorization: `Bearer ${config.apiKey}` }),
     },
     body: execBody(frame, options.stdin),
@@ -391,6 +393,7 @@ export const makeScopeInstances = (
       const response = await (config.fetch ?? fetch)(new URL(path, config.baseUrl), {
         headers: {
           "x-sealant-request-priority": resolveRequestPriority(config.requestPriority),
+          ...traceHeaders(captureCallerTrace(config.traceContext)),
           ...(config.apiKey === undefined ? {} : { authorization: `Bearer ${config.apiKey}` }),
         },
       });
