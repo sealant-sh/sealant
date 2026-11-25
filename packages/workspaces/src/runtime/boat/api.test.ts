@@ -1209,6 +1209,26 @@ describe("Boat connection credentials", () => {
     });
   });
 
+  it("reads the URL Boat hosts a port at since it added _generation (25 Nov 2026)", async () => {
+    const access = must(
+      parseBoatHostedControl(`https://sample-8080.on.boat.dev/?_token=${token}&_generation=3`),
+    );
+    expect(access.origin).toBe("https://sample-8080.on.boat.dev");
+    expect(
+      await boatControlConnection(access, must(BoatSecret.parse("b".repeat(64)))).prepare(),
+    ).toEqual({
+      headers: { Cookie: `_port_auth=${token}`, Authorization: `Bearer ${"b".repeat(64)}` },
+    });
+  });
+
+  it.each([
+    `https://sample.on.boat.dev/?_token=${token}&_token=${token}`,
+    `https://sample.on.boat.dev/?_token=${token}&_generation=1&_generation=2`,
+    "https://sample.on.boat.dev/?_generation=1",
+  ])("rejects a hosted control URL with a repeated or missing parameter", (input) => {
+    expect(parseBoatHostedControl(input).ok).toBe(false);
+  });
+
   it.each([
     "http://sample-8080.on.boat.dev/",
     "https://sample-8080.on.boat.dev.attacker.invalid/",
