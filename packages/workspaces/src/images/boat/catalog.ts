@@ -599,12 +599,12 @@ const make = (
           yield* repo.releaseClaim(claim);
           return "active-attempt";
         }
-        yield* repo.quarantine(claim, failureCode(recovered.failure));
-        yield* logQuarantine(
-          id,
-          failureCode(recovered.failure),
-          recovered.failure.identityMismatch,
-        );
+        const reason = failureCode(recovered.failure);
+        yield* repo.quarantine(claim, reason);
+        // Every pass checks a quarantined image again: its line is logged once, when it is
+        // quarantined or its reason changes, not every 30 seconds after.
+        if (record.state !== "quarantined" || record.reason !== reason)
+          yield* logQuarantine(id, reason, recovered.failure.identityMismatch);
         return yield* Effect.fail(recovered.failure);
       }
       if (recovered.success.kind !== "published") {

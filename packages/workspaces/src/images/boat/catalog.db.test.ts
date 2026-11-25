@@ -457,11 +457,12 @@ describe.skipIf(!enabled)("a saved image Boat answers with another identity (SLN
               const record = yield* repo.get(image.publicationId);
               if (record === undefined) throw new Error("missing publication");
               f.changeSnapshot(image.snapshot.identity.name, "createdAt", changed.createdAt);
-              expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
-                id: record.ownership.buildId,
-                outcome: "obligation",
-                code: "native-snapshot-identity-mismatch",
-              });
+              for (let pass = 0; pass < 2; pass++)
+                expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
+                  id: record.ownership.buildId,
+                  outcome: "obligation",
+                  code: "native-snapshot-identity-mismatch",
+                });
               expect(yield* repo.get(image.publicationId)).toMatchObject({
                 state: "quarantined",
                 reason: "native-snapshot-identity-mismatch",
@@ -504,11 +505,13 @@ describe.skipIf(!enabled)("a saved image Boat no longer has (SLNT-1347)", () => 
               if (recovered.ok) throw new Error("a snapshot Boat lacks was recovered");
               expect(recovered.error.code).toBe("native-publication-missing");
               expect(recovered.error.identityMismatch).toBeUndefined();
-              expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
-                id: record.ownership.buildId,
-                outcome: "obligation",
-                code: "native-publication-missing",
-              });
+              // Every pass checks it again; the line is logged at the first only.
+              for (let pass = 0; pass < 2; pass++)
+                expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
+                  id: record.ownership.buildId,
+                  outcome: "obligation",
+                  code: "native-publication-missing",
+                });
               expect(yield* repo.get(image.publicationId)).toMatchObject({
                 state: "quarantined",
                 reason: "native-publication-missing",
