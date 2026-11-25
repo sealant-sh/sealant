@@ -457,11 +457,12 @@ describe.skipIf(!enabled)("a saved image Boat answers with another identity (SLN
               const record = yield* repo.get(image.publicationId);
               if (record === undefined) throw new Error("missing publication");
               f.changeSnapshot(image.snapshot.identity.name, "createdAt", changed.createdAt);
-              expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
-                id: record.ownership.buildId,
-                outcome: "obligation",
-                code: "native-snapshot-identity-mismatch",
-              });
+              for (let pass = 0; pass < 2; pass++)
+                expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
+                  id: record.ownership.buildId,
+                  outcome: "obligation",
+                  code: "native-snapshot-identity-mismatch",
+                });
               expect(yield* repo.get(image.publicationId)).toMatchObject({
                 state: "quarantined",
                 reason: "native-snapshot-identity-mismatch",
@@ -472,6 +473,92 @@ describe.skipIf(!enabled)("a saved image Boat answers with another identity (SLN
         );
         expect(logged).toEqual([
           `Boat image identity differs: publication ${result.id} quarantined (native-snapshot-identity-mismatch); differences ${JSON.stringify([{ field: "createdAt", recorded: result.recorded, boat: changed.createdAt }])}`,
+        ]);
+      }),
+    ),
+  );
+});
+
+describe.skipIf(!enabled)("a saved image Boat no longer has (SLNT-1347)", () => {
+  it.live("the sweep quarantines it as missing, not as another identity, and logs it", () =>
+    test((repo, db) =>
+      Effect.gen(function* () {
+        const owner = yield* seed(db);
+        const f = yield* Effect.promise(() => nativeBuilderFixture("normal"));
+        const { result, logged } = yield* warnings(
+          throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const image = yield* catalog.acquire({
+                scope: { kind: "owner", ownerUserId: owner },
+                spec: f.spec,
+                consumer: yield* consumer(db, owner),
+              });
+              const record = yield* repo.get(image.publicationId);
+              if (record === undefined) throw new Error("missing publication");
+              f.dropSnapshot(image.snapshot.identity.name);
+              const recovered = yield* Effect.promise(() =>
+                f.builder.reconcileBuild(record.ownership, {
+                  artifact: image.snapshot,
+                  evidence: image.evidence,
+                }),
+              );
+              if (recovered.ok) throw new Error("a snapshot Boat lacks was recovered");
+              expect(recovered.error.code).toBe("native-publication-missing");
+              expect(recovered.error.identityMismatch).toBeUndefined();
+              // Every pass checks it again; the line is logged at the first only.
+              for (let pass = 0; pass < 2; pass++)
+                expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
+                  id: record.ownership.buildId,
+                  outcome: "obligation",
+                  code: "native-publication-missing",
+                });
+              expect(yield* repo.get(image.publicationId)).toMatchObject({
+                state: "quarantined",
+                reason: "native-publication-missing",
+              });
+              return image.publicationId;
+            }),
+          ),
+        );
+        expect(logged).toEqual([
+          `Boat has no saved snapshot for image: publication ${result} quarantined (native-publication-missing)`,
+        ]);
+      }),
+    ),
+  );
+
+  it.live("a launch quarantines it under the same reason and logs the same line", () =>
+    test((repo, db) =>
+      Effect.gen(function* () {
+        const owner = yield* seed(db);
+        const f = yield* Effect.promise(() => nativeBuilderFixture("normal"));
+        const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+        const { result, logged } = yield* warnings(
+          throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const image = yield* catalog.acquire({
+                ...input,
+                consumer: yield* consumer(db, owner),
+              });
+              f.dropSnapshot(image.snapshot.identity.name);
+              expect(
+                yield* Effect.flip(
+                  catalog.acquire({ ...input, consumer: yield* consumer(db, owner) }),
+                ),
+              ).toMatchObject({
+                code: "publication-quarantined",
+                detail: "native-publication-missing",
+              });
+              expect(yield* repo.get(image.publicationId)).toMatchObject({
+                state: "quarantined",
+                reason: "native-publication-missing",
+              });
+              return image.publicationId;
+            }),
+          ),
+        );
+        expect(logged).toEqual([
+          `Boat has no saved snapshot for image: publication ${result} quarantined (native-publication-missing)`,
         ]);
       }),
     ),
