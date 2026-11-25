@@ -2460,6 +2460,10 @@ const SKIPPED_TOGETHER = new Map([
   ["next.yml pack", "skipped exactly when plan decided not to publish"],
   ["next.yml publish", "skipped exactly when plan decided not to publish"],
   [
+    "next.yml sourcemaps",
+    "no tagged images to read the maps from when plan decided not to publish",
+  ],
+  [
     "version.yml approve-checks",
     "version skips only on a fork; nothing it did not push to approve",
   ],

@@ -4,6 +4,7 @@ import type { AuthContext, Connection, PseudoTtyInfo, ServerChannel } from "ssh2
 import ssh2 from "ssh2";
 const { Server, utils } = ssh2;
 
+import { captureProcessError } from "@sealant/observability";
 import type { Channel } from "@sealant/runtime-client";
 import { computeSshPublicKeyFingerprint } from "@sealant/validators/ssh-public-key";
 
@@ -403,6 +404,9 @@ const bindClientConnection = (
           fingerprint: computeSshPublicKeyFingerprint(offered.data),
           error: lookup.message,
         });
+        captureProcessError(new Error(`principal lookup failed: ${lookup.message}`), {
+          tags: { "sealant.boundary": "ssh.principal-lookup" },
+        });
         return undefined;
       }
 
@@ -645,6 +649,9 @@ const bindClientConnection = (
               workspaceId,
               error: error instanceof Error ? error.message : String(error),
             });
+            captureProcessError(error, {
+              tags: { "sealant.boundary": "ssh.shell", "sealant.workspace_id": workspaceId },
+            });
             sshChannel.exit(1);
             sshChannel.end();
           }
@@ -687,6 +694,9 @@ const bindClientConnection = (
             console.error("[ssh-gateway] exec session setup failed", {
               workspaceId,
               error: error instanceof Error ? error.message : String(error),
+            });
+            captureProcessError(error, {
+              tags: { "sealant.boundary": "ssh.exec", "sealant.workspace_id": workspaceId },
             });
             sshChannel.exit(1);
             sshChannel.end();
@@ -740,6 +750,9 @@ const bindClientConnection = (
             console.error("[ssh-gateway] sftp subsystem setup failed", {
               workspaceId,
               error: error instanceof Error ? error.message : String(error),
+            });
+            captureProcessError(error, {
+              tags: { "sealant.boundary": "ssh.sftp", "sealant.workspace_id": workspaceId },
             });
             sshChannel.end();
           }
@@ -864,6 +877,7 @@ export const startSshGatewayServer = (config: SshGatewayServerConfig) => {
     console.error("[ssh-gateway] server error", {
       error: error.message,
     });
+    captureProcessError(error, { tags: { "sealant.boundary": "ssh.server" } });
   });
 
   const listener = createNetServer((socket) => {

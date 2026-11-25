@@ -13,6 +13,7 @@
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
+    "@sealant/observability": "workspace:*",
     "@sealant/runtime-client": "npm:@sealant/runtime-client-next@0.21.0-next.209",
     "@sealant/runtime-protocol": "npm:@sealant/runtime-protocol-next@0.21.0-next.209",
     "@sealant/validators": "workspace:*",

@@ -4,6 +4,14 @@ import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { credentialCipherLayer } from "@sealant/credentials";
 import { ControlPlaneDataAccessLive, SealantDBLive, workspaceEgressRepoLayer } from "@sealant/db";
+import {
+  bundledRelease,
+  describeSetting,
+  observabilitySettingFromEnv,
+  observedLive,
+  observedMain,
+  withSentryTraceFallback,
+} from "@sealant/observability";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import {
   InlineByteaArtifactStoreLive,
@@ -36,7 +44,6 @@ import { budgetsOff, makeRateWindow } from "./services/budgets.js";
 import { CodexApiKeyConversionLive } from "./services/codex-api-key-conversion.js";
 import { ConnectedAccountDefaultsBackfillLive } from "./services/connected-account-defaults-backfill.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
-import { CredentialRedactionLive, observedMain } from "./services/credential-redaction.js";
 import { ResourceRuntimeHostLive } from "./services/resource-runtime.js";
 import {
   authPosture,
@@ -287,6 +294,11 @@ const corsMiddleware = HttpMiddleware.cors({
     "idempotency-key",
     "x-sealant-gateway-token",
     "x-sealant-request-priority",
+    // Trace context from browser callers (Sentry's browser SDK sends W3C and its own headers).
+    "traceparent",
+    "tracestate",
+    "baggage",
+    "sentry-trace",
   ],
   exposedHeaders: ["location", "retry-after"],
   maxAge: 86_400,
@@ -363,21 +375,33 @@ const authGate = servicePrincipalMiddleware(
   },
 );
 
+/**
+ * Where this process's spans, logs and errors go: off unless `SENTRY_DSN` is set
+ * (@sealant/observability).
+ */
+const observability = observabilitySettingFromEnv(process.env, {
+  serviceName: "sealant-api",
+  buildRelease: bundledRelease(),
+});
+
 // What the server observes (request spans, logs, error reports) holds credentials: the browser
 // routes take their bearer as `?token=`, headers carry others, HTTP errors quote and hold their
-// request. Observers receive plain, redacted data only (services/credential-redaction.ts). The
-// redaction is provided last, so the startup layers (which read sealed credentials) are beneath it.
+// request. Observers receive plain, redacted data only (the credential redaction in
+// @sealant/observability), and the exporters sit beneath that redaction. It is provided last, so
+// the startup layers (which read sealed credentials) are beneath it.
 const serverLayer = HttpRouter.serve(appLayer, {
   middleware: (app) => corsMiddleware(authGate(app)),
 }).pipe(
   Layer.provide(
-    NodeHttpServer.layer(() => captureUpgradeHeads(createServer()), { port: env.PORT }),
+    NodeHttpServer.layer(() => withSentryTraceFallback(captureUpgradeHeads(createServer())), {
+      port: env.PORT,
+    }),
   ),
   Layer.provide(ConnectedAccountDefaultsBackfillLive.pipe(Layer.provide(databaseLayer))),
   Layer.provide(
     CodexApiKeyConversionLive.pipe(Layer.provide(Layer.merge(databaseLayer, credentialCipher))),
   ),
-  Layer.provide(CredentialRedactionLive),
+  Layer.provide(observedLive(observability)),
 );
 
 /**
@@ -386,6 +410,7 @@ const serverLayer = HttpRouter.serve(appLayer, {
 const databaseUrl = new URL(env.DATABASE_URL);
 
 console.log(`[api] database: ${databaseUrl.protocol}//${databaseUrl.host}${databaseUrl.pathname}`);
+console.log(`[api] ${describeSetting(observability)}`);
 console.log(`[api] repology endpoint: ${urlForDisplay(env.REPOLOGY_API_BASE_URL)}`);
 console.log(
   authPosture.kind === "closed"

@@ -44,6 +44,7 @@ import {
   ProfileRepo,
   type ConnectedAccount,
 } from "@sealant/db";
+import { redactProviderKeys } from "@sealant/observability";
 import { Effect, Exit } from "effect";
 
 import { env } from "../../runtime-env.js";
@@ -53,7 +54,6 @@ import {
   lookupConnectedAccount,
   missingAccountMessage,
 } from "../../services/connected-account-lookup.js";
-import { redactProviderKeys } from "../../services/credential-redaction.js";
 import { spendOwnerLaunch } from "../../services/owner-budgets.js";
 import {
   InferenceEngine,

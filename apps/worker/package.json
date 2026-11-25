@@ -18,6 +18,7 @@
     "@sealant/credentials": "workspace:*",
     "@sealant/db": "workspace:*",
     "@sealant/jobs": "workspace:*",
+    "@sealant/observability": "workspace:*",
     "@sealant/source-integrations": "workspace:*",
     "@sealant/telemetry": "workspace:*",
     "@sealant/validators": "workspace:*",

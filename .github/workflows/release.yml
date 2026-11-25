@@ -255,8 +255,10 @@ jobs:
           file: ${{ matrix.image.dockerfile }}
           platforms: linux/${{ matrix.platform.arch }}
           provenance: false
+          # The release each image's errors report: the web image's browser bundle (whose maps it
+          # uploads itself) as sealant-web, the server bundles as sealant-server.
           build-args: |
-            ${{ matrix.image.name == 'sealant-web' && format('SENTRY_RELEASE=sealant-web@{0}', needs.release.outputs.version) || '' }}
+            SENTRY_RELEASE=${{ matrix.image.name == 'sealant-web' && 'sealant-web' || 'sealant-server' }}@${{ needs.release.outputs.version }}
             ${{ matrix.image.name == 'sealant-web' && format('SENTRY_URL={0}', vars.SENTRY_URL) || '' }}
             ${{ matrix.image.name == 'sealant-web' && format('SENTRY_ORG={0}', vars.SENTRY_ORG) || '' }}
           secrets: |

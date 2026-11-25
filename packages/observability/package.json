@@ -1,0 +1,25 @@
+{
+  "name": "@sealant/observability",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Trace, log and error export for sealant's server processes (Sentry over OTLP), with credential redaction beneath every observer",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "OXLINT_TSGOLINT_PATH=../../node_modules/.bin/tsrs-lint oxlint --type-aware .",
+    "test": "vitest run",
+    "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
+  },
+  "dependencies": {
+    "@sentry/core": "11.17.0",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@sealant/typescript": "workspace:*",
+    "vitest": "catalog:"
+  }
+}
