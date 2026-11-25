@@ -13,6 +13,7 @@ import ssh2 from "ssh2";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { startSshGatewayServer } from "./gateway-server.js";
+import { generateEd25519KeyPair } from "./host-key.js";
 import { createPrincipalResolver } from "./principal-resolver.js";
 
 const { Client, utils } = ssh2;
@@ -48,7 +49,7 @@ const publicBlob = (publicKey: string): Buffer => {
   return key.getPublicSSH();
 };
 
-const alice = utils.generateKeyPairSync("ed25519");
+const alice = generateEd25519KeyPair();
 const aliceBlob = publicBlob(alice.public);
 const aliceFingerprint = computeSshPublicKeyFingerprint(aliceBlob);
 
@@ -138,7 +139,7 @@ beforeAll(async () => {
   gateway = await startSshGatewayServer({
     host: "127.0.0.1",
     port: gatewayPort,
-    hostKey: utils.generateKeyPairSync("ed25519").private,
+    hostKey: generateEd25519KeyPair().private,
     allowedClientKeys: [],
     workspaceUsernamePrefix: "ws",
     coreApiBaseUrl: apiBaseUrl,
@@ -232,7 +233,7 @@ const login = async (source: string, keys: ReadonlyArray<string>): Promise<Login
 };
 
 const unknownKeys = (count: number) =>
-  Array.from({ length: count }, () => utils.generateKeyPairSync("ed25519").private);
+  Array.from({ length: count }, () => generateEd25519KeyPair().private);
 
 /** Runs `command`; resolves its exit code, or `"closed"` when the connection ended instead. */
 const exec = (client: SshClient, command: string) => {
