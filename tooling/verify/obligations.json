@@ -116,6 +116,7 @@
         "packages/validators/**",
         "packages/api-contracts/**",
         "packages/source-integrations/**",
+        "packages/observability/**",
         "packages/typescript/**",
         "apps/ssh-gateway/**",
         "deploy/**",
