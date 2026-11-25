@@ -20,6 +20,7 @@ import {
   WorkspaceRuntimeInstanceRepoLive,
   SealantDB,
 } from "@sealant/db";
+import { withProcessObservers } from "@sealant/observability";
 import {
   DAEMON_CONNECT_RETRY,
   InlineByteaArtifactStoreLive,
@@ -428,5 +429,7 @@ export const processRunExecJob = (options: ProcessRunExecJobOptions): Promise<vo
   );
   const appLayer = Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive, sinkLayer);
 
-  return Effect.runPromise(processRunExecJobEffect(options).pipe(Effect.provide(appLayer)));
+  return Effect.runPromise(
+    withProcessObservers(processRunExecJobEffect(options).pipe(Effect.provide(appLayer))),
+  );
 };

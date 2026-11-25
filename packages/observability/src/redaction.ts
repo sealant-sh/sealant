@@ -364,11 +364,17 @@ const PROVIDER_KEY =
 export const redactProviderKeys = (text: string): string => text.replace(PROVIDER_KEY, REDACTED);
 
 /**
+ * A failed query's bound values, as Drizzle appends them to its error (`Failed query: …\nparams:
+ * a,b`): the values are user data (names, repository URLs), the query text is not.
+ */
+const QUERY_PARAMS_LINE = /\nparams: [^\n]*/g;
+
+/**
  * Free text (an error message, a stack, a log line, an inspected value) with every credential it
  * can recognise replaced: a URL's userinfo (plain, slash-escaped or percent-encoded), a credential
  * query parameter, a `Bearer` or `Basic` credential (any case, quoted or escaped), the value of any
- * field or header named for a credential, and an Anthropic or OpenAI key by its shape. Linear in
- * the text's length.
+ * field or header named for a credential, and an Anthropic or OpenAI key by its shape. A failed
+ * query's bound values are withheld too. Linear in the text's length.
  */
 export const redactCredentialsInText = (text: string): string =>
   redactProviderKeys(
@@ -379,7 +385,7 @@ export const redactCredentialsInText = (text: string): string =>
         ),
       ),
     ),
-  );
+  ).replace(QUERY_PARAMS_LINE, "\nparams: [withheld]");
 
 // ---------------------------------------------------------------------------------------------
 // Values: deny by default
@@ -575,6 +581,11 @@ const knownForm = (value: object): unknown => {
     return freshObject([
       ["status", numberField(value, "status")],
       ["headers", headersOf(plainEntries(headers))],
+      // A server answers a failed request by dying with its response; that response is marked
+      // not to be reported, and its plain form keeps the mark.
+      ...(dataProperty(value, ErrorReporter.ignore) === true
+        ? [[ErrorReporter.ignore, true] as const]
+        : []),
     ]);
   }
   return undefined;

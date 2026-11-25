@@ -1,3 +1,9 @@
+import {
+  bundledRelease,
+  describeSetting,
+  installProcessObservability,
+  observabilitySettingFromEnv,
+} from "@sealant/observability";
 import { targetDerivationOptionsFromEnv } from "@sealant/workspaces";
 
 import { parseAuthorizedKeys } from "./authorized-keys.js";
@@ -35,6 +41,15 @@ console.log("[ssh-gateway] starting", {
 });
 
 const main = async () => {
+  // Errors at the gateway's boundaries go to Sentry when SENTRY_DSN is set, redacted.
+  const observability = await installProcessObservability(
+    observabilitySettingFromEnv(process.env, {
+      serviceName: "sealant-ssh-gateway",
+      buildRelease: bundledRelease(),
+    }),
+  );
+  console.log(`[ssh-gateway] ${describeSetting(observability.setting)}`);
+
   // Start the SSH server with fully-resolved config values from env.ts.
   const runtime = await startSshGatewayServer({
     host: env.SSH_GATEWAY_HOST,
@@ -57,11 +72,17 @@ const main = async () => {
       perSourceKeyLookupsPerMinute: env.SSH_GATEWAY_PER_SOURCE_KEY_LOOKUPS_PER_MINUTE,
     },
     keyRecheckIntervalMs: env.SSH_GATEWAY_KEY_RECHECK_SECONDS * 1000,
+  }).catch(async (error: unknown) => {
+    // A gateway that cannot listen is down: report it before the process dies of it.
+    observability.captureError(error, { tags: { "sealant.boundary": "ssh.start" } });
+    await observability.shutdown();
+    throw error;
   });
 
   const shutdown = async () => {
     // Graceful stop lets existing channels close cleanly.
     await runtime.stop();
+    await observability.shutdown();
     process.exit(0);
   };
 

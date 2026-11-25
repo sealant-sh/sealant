@@ -17,6 +17,10 @@ RUN pnpm config set fetch-timeout 600000 && pnpm config set fetch-retries 5
 # Bound to the committed pnpm-lock.yaml: an image never resolves a dependency the lockfile did not
 # name, so a package published after the commit (a prerelease of our own included) cannot drift in.
 RUN pnpm install --frozen-lockfile
+# The release this build's errors report and its source maps are uploaded under
+# (`sealant-server@<version>`, passed by CI). Unset in a local build, which then reads SENTRY_RELEASE
+# from its environment at run time.
+ARG SENTRY_RELEASE=""
 RUN pnpm --filter @sealant/api build
 # The bundled Agent SDK spawns its vendored `claude` CLI, resolved at runtime as
 # @anthropic-ai/claude-agent-sdk-{platform}-{arch} from a node_modules next to the bundle. Stage the

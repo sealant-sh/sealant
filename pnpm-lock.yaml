@@ -255,6 +255,9 @@ importers:
       '@sealant/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
+      '@sealant/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../../packages/source-integrations
@@ -560,6 +563,9 @@ importers:
 
   apps/ssh-gateway:
     dependencies:
+      '@sealant/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@sealant/runtime-client':
         specifier: npm:@sealant/runtime-client-next@0.21.0-next.209
         version: '@sealant/runtime-client-next@0.21.0-next.209'
@@ -751,6 +757,9 @@ importers:
       '@sealant/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
+      '@sealant/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../../packages/source-integrations
@@ -861,6 +870,28 @@ importers:
         specifier: 'catalog:'
         version: 12.30.0
     devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@26.2.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.3.4(@types/node@26.2.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  packages/observability:
+    dependencies:
+      '@sentry/core':
+        specifier: 11.17.0
+        version: 11.17.0
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+    devDependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(redis@6.3.0)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.5(@types/node@26.2.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.3.4(@types/node@26.2.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0)))
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
@@ -3736,8 +3767,16 @@ packages:
     resolution: {integrity: sha512-WkSQcDhUUsz1SwxR23LpmyPKba+dgxxiH0DWV4VSM9yaAvhhl87ppW2Ts3g4piIKCVflc31aJeWy+biUbYfsMQ==}
     engines: {node: '>=14'}
 
+  '@sentry/conventions@0.35.0':
+    resolution: {integrity: sha512-bq2ecu6zaBni0gG5bHN9cY7fmUsOW49ntjGZ6VA69PVAa1Uk1NvgF1SdTGoVC0zkqQKziTnxzOs9KuuVlpb26w==}
+    engines: {node: '>=14'}
+
   '@sentry/core@11.12.0':
     resolution: {integrity: sha512-HKER7EcRpPPgC8mLRe5BzP6njfRYFZ53BFLZxVp1whWbY6lp/b2mvTBk4q6+rKsUFhLhRDsd6jL8y/8ddEWv6A==}
+    engines: {node: '>=20.19.0 <22.0.0 || >=22.12.0 <23.0.0 || >=23.2.0'}
+
+  '@sentry/core@11.17.0':
+    resolution: {integrity: sha512-Tf9XOBEMeGdZZNaCBzFTk1lN/q9gzSnWtnNRZW9IYtokM99VVfx4wTWVeg6qZ++c6mNybmhUbltnN7b87RqOwQ==}
     engines: {node: '>=20.19.0 <22.0.0 || >=22.12.0 <23.0.0 || >=23.2.0'}
 
   '@sentry/feedback@11.12.0':
@@ -10761,9 +10800,15 @@ snapshots:
 
   '@sentry/conventions@0.32.0': {}
 
+  '@sentry/conventions@0.35.0': {}
+
   '@sentry/core@11.12.0':
     dependencies:
       '@sentry/conventions': 0.32.0
+
+  '@sentry/core@11.17.0':
+    dependencies:
+      '@sentry/conventions': 0.35.0
 
   '@sentry/feedback@11.12.0':
     dependencies:

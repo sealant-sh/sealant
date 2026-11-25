@@ -61,7 +61,7 @@ process.env["SEALANT_SERVICE_KEYS"] = MARKER;
 process.env["WORKSPACE_SSH_GATEWAY_TOKEN"] = GATEWAY_MARKER;
 
 let requestBudget: typeof import("../routes/request-budget.js");
-let redaction: typeof import("./credential-redaction.js");
+let redaction: typeof import("@sealant/observability");
 let browserRoutes: Layer.Layer<never, never, HttpRouter.HttpRouter>;
 let sshKeysHandlers: Layer.Layer<never>;
 
@@ -131,7 +131,7 @@ beforeAll(async () => {
     import("../routes/ssh-keys/ssh-keys.http-api.js"),
   ]);
   requestBudget = await import("../routes/request-budget.js");
-  redaction = await import("./credential-redaction.js");
+  redaction = await import("@sealant/observability");
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- drops the routes' Request<"Error", …> markers, which HttpRouter.serve answers (as index.ts does); the routes are built after the dynamic imports, so their type is written by hand.
   browserRoutes = Layer.mergeAll(
     ws.SessionAttachRoute,
@@ -571,6 +571,8 @@ const LINEAR_SEARCHES = new Set([
   String.raw`/([?&;])([^=&\s#?;]+)=([^&\s#;"'<>)\\]*)/g`,
   String.raw`/\b(bearer|basic)[ \t]+/gi`,
   String.raw`/(?<![A-Za-z0-9])sk-(?:(?:ant-(?:api|usr|oat|ort|admin)\d*|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})/g`,
+  // A literal prefix, then a run of one class to the next newline: no backtracking.
+  String.raw`/\nparams: [^\n]*/g`,
 ]);
 
 /** The built-ins redaction calls today, each charged below. Calling any other needs review first. */

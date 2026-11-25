@@ -128,8 +128,8 @@ jobs:
       # Disk use on / and /mnt every 5 s, so the step summary shows this job's peak on a hosted runner.
       - name: Start the disk sampler
         run: >-
-          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste -sd" ";
-          sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
+          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste
+          -sd" "; sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -154,9 +154,15 @@ jobs:
         with:
           # The Boat resource gateway builds from its own directory, as CI's boat-tunnel tests build it.
           context: ${{ matrix.image == 'boat-gateway' && 'packages/workspaces/boat-tunnel' || '.' }}
-          file: ${{ matrix.image == 'boat-gateway' && 'packages/workspaces/boat-tunnel/Dockerfile' || format('apps/{0}/Dockerfile', matrix.image) }}
+          file:
+            ${{ matrix.image == 'boat-gateway' && 'packages/workspaces/boat-tunnel/Dockerfile' ||
+            format('apps/{0}/Dockerfile', matrix.image) }}
           platforms: linux/${{ matrix.platform.arch }}
           provenance: false
+          # The release the server bundles report errors under, the same string the sourcemaps job
+          # uploads their maps under (the boat gateway's Dockerfile takes no such argument).
+          build-args: |
+            SENTRY_RELEASE=sealant-server@${{ needs.plan.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -224,8 +230,8 @@ jobs:
       # Disk use on / and /mnt every 5 s, so the step summary shows this job's peak on a hosted runner.
       - name: Start the disk sampler
         run: >-
-          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste -sd" ";
-          sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
+          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste
+          -sd" "; sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -290,8 +296,8 @@ jobs:
       # Disk use on / and /mnt every 5 s, so the step summary shows this job's peak on a hosted runner.
       - name: Start the disk sampler
         run: >-
-          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste -sd" ";
-          sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
+          nohup bash -c 'while :; do df -B1 --output=used / /mnt 2>/dev/null | tail -n +2 | paste
+          -sd" "; sleep 5; done' >"$RUNNER_TEMP/disk-used.log" 2>&1 &
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -488,6 +494,73 @@ jobs:
 
   # Builds and packs the two packages. No id-token here: nothing this job runs, the dependencies'
   # build tools included, can reach the npm credential.
+  # The server bundles' source maps, to Sentry under the release the images report
+  # (`sealant-server@<version>`, built in). Best effort and apart from publishing: it holds no write
+  # token, runs no repository code, reads the bundles back out of the tagged images, skips when the
+  # repository has no SENTRY_AUTH_TOKEN (a fork), and a failed upload fails only itself. Each bundle
+  # carries a debug ID from its content (tooling/scripts/bundle-app.mjs), so both platforms' builds
+  # of one commit share their maps.
+  sourcemaps:
+    name: Upload source maps to Sentry
+    needs: [plan, image-tag]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: read
+    env:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_URL: ${{ vars.SENTRY_URL }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: sealant-server
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - name: Skip without a Sentry token
+        id: gate
+        run: |
+          if [[ -z $SENTRY_AUTH_TOKEN || -z $SENTRY_URL || -z $SENTRY_ORG ]]; then
+            echo "::notice::No Sentry token or organisation in this repository; no source maps are uploaded."
+            echo "upload=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "upload=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        if: steps.gate.outputs.upload == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy the bundles out of the images
+        if: steps.gate.outputs.upload == 'true'
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          for image in api worker ssh-gateway; do
+            for arch in amd64 arm64; do
+              ref="ghcr.io/$OWNER/sealant-$image-next:$VERSION"
+              id=$(docker create --platform "linux/$arch" "$ref")
+              mkdir -p "maps/$image-$arch"
+              docker cp "$id:/app/dist/." "maps/$image-$arch/"
+              docker rm "$id" >/dev/null
+            done
+          done
+          find maps -name '*.js.map' -print
+
+      - name: Upload the source maps
+        if: steps.gate.outputs.upload == 'true'
+        run: |
+          set -euo pipefail
+          release="sealant-server@$VERSION"
+          cli() { npx --yes @sentry/cli@3.8.2 "$@"; }
+          cli releases new "$release"
+          cli sourcemaps upload --release "$release" maps
+          cli releases finalize "$release"
+
   pack:
     name: Pack npm prereleases
     needs: [plan, image-tag]
