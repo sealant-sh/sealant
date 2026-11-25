@@ -17,12 +17,13 @@ import {
   attachedNetworks,
   carveProhibitRouteScript,
   guardsPrivateRange,
-  ipamSubnets,
+  ipamConfig,
   prohibitRoutes,
   prohibitRouteScript,
   routeTableArgv,
   workspaceEgressNetworkName,
   type AttachedNetworks,
+  type IpamConfig,
 } from "../runtime/docker-egress.js";
 import {
   cloudMetadataGuardArgv,
@@ -457,42 +458,61 @@ export class DockerResourceRuntime implements ResourceRuntime {
       current.running &&
       !proxyBacked &&
       current.networks.names.includes(workspaceEgressNetworkName(executor));
-    if (guarded) await this.openReach(member, network);
-    let opened = guarded;
+    // Read once, and only for a member that may be opened.
+    let ipam: IpamConfig | undefined;
+    const plan = async () => (ipam ??= await this.networkIpam(network));
+    let opened = false;
     try {
-      await this.runTolerating(["network", "connect", network, member], isPresent);
+      if (guarded) {
+        opened = true;
+        await this.openReach(member, (await plan()).subnets);
+      }
+      try {
+        await this.runTolerating(["network", "connect", network, member], isPresent);
+      } catch (error) {
+        if (!isRouteConflict(error)) throw error;
+        opened = true;
+        await this.openReach(member, (await plan()).subnets);
+        await this.runTolerating(["network", "connect", network, member], isPresent);
+      }
     } catch (error) {
-      if (!isRouteConflict(error)) throw error;
-      await this.openReach(member, network);
-      opened = true;
-      await this.runTolerating(["network", "connect", network, member], isPresent);
+      // Not connected after all: the subnet goes back to refused, as far as that can be done.
+      if (opened && ipam !== undefined) {
+        await this.run(
+          networkGuardArgv(member, this.guardImage, prohibitRouteScript(ipv4(ipam.subnets))),
+          GUARD_TIMEOUT_MS,
+        ).catch(() => undefined);
+      }
+      throw error;
     }
-    if (opened) await this.refuseReachGateway(member, network);
+    if (opened) await this.refuseReachGateway(member, network, (await plan()).gateways);
   }
 
   /**
-   * Split every `prohibit` route in `member`'s namespace that overlaps `network`'s subnet so that
-   * subnet, and nothing else, is open (`carveProhibitRouteScript`). The routes are read with the
+   * Split every `prohibit` route in `member`'s namespace that overlaps a reach network's `subnets`
+   * so that subnet, and nothing else, is open (`carveProhibitRouteScript`). The routes are read with the
    * guard image, never the member's own. Throws on anything it cannot read or run, so the member
    * is not connected.
    */
-  private async openReach(member: string, network: string): Promise<void> {
-    const subnets = ipv4(await this.networkSubnets(network));
+  private async openReach(member: string, subnets: ReadonlyArray<Cidr>): Promise<void> {
     const table = await this.run(routeTableArgv(member, this.guardImage, 4), GUARD_TIMEOUT_MS);
-    const script = carveProhibitRouteScript(prohibitRoutes(table.stdout, 4), subnets);
+    const script = carveProhibitRouteScript(prohibitRoutes(table.stdout, 4), ipv4(subnets));
     if (script === undefined) return;
     await this.run(networkGuardArgv(member, this.guardImage, script), GUARD_TIMEOUT_MS);
   }
 
   /**
-   * A reach network made where the engine refused an isolated gateway has the host's side of the
-   * bridge on it, which the guard refuses on every network it saw at launch. Refused here too for
-   * a member the carve opened; one that cannot be refused is disconnected again.
+   * A reach network made where the engine refused an isolated gateway still has the host's side of
+   * the bridge on it (`internal` only takes away the route out), which the carve just opened along
+   * with the rest of the subnet. Refused again for a member the carve opened; one that cannot be
+   * refused is disconnected. An isolated bridge has no gateway, and nothing runs.
    */
-  private async refuseReachGateway(member: string, network: string): Promise<void> {
-    const gateways = ipv4(
-      (await this.inspectMember(member))?.networks.gatewaysByNetwork[network] ?? [],
-    );
+  private async refuseReachGateway(
+    member: string,
+    network: string,
+    reachGateways: ReadonlyArray<Cidr>,
+  ): Promise<void> {
+    const gateways = ipv4(reachGateways);
     if (gateways.length === 0) return;
     try {
       await this.run(
@@ -508,7 +528,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
     }
   }
 
-  private async networkSubnets(network: string): Promise<ReadonlyArray<Cidr>> {
+  private async networkIpam(network: string): Promise<IpamConfig> {
     const result = await this.run([
       "network",
       "inspect",
@@ -516,7 +536,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
       "{{json .IPAM.Config}}",
       network,
     ]);
-    return ipamSubnets(result.stdout);
+    return ipamConfig(result.stdout);
   }
 
   /**
@@ -535,7 +555,7 @@ export class DockerResourceRuntime implements ResourceRuntime {
       (member) => !member.startsWith("sealres-") && member !== egressProxyName(executor),
     );
     if (candidates.length === 0) return;
-    const subnets = ipv4(await this.networkSubnets(network));
+    const subnets = ipv4((await this.networkIpam(network)).subnets);
     for (const member of candidates) {
       const state = await this.inspectMember(member);
       if (state?.running !== true) continue;

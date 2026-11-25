@@ -226,8 +226,6 @@ export interface AttachedNetworks {
   readonly ids: Readonly<Record<string, string>>;
   readonly subnets: ReadonlyArray<Cidr>;
   readonly gateways: ReadonlyArray<Cidr>;
-  /** Network name to the gateways of the container's endpoint on it (none on an isolated bridge). */
-  readonly gatewaysByNetwork: Readonly<Record<string, ReadonlyArray<Cidr>>>;
 }
 
 /**
@@ -243,12 +241,10 @@ export const attachedNetworks = (networksJson: string): AttachedNetworks => {
   const subnets: Array<Cidr> = [];
   const gateways: Array<Cidr> = [];
   const ids: Record<string, string> = {};
-  const gatewaysByNetwork: Record<string, ReadonlyArray<Cidr>> = {};
   for (const [name, endpoint] of Object.entries(parsed)) {
     if (typeof endpoint !== "object" || endpoint === null) continue;
     const networkId: unknown = Reflect.get(endpoint, "NetworkID");
     if (typeof networkId === "string" && networkId.length > 0) ids[name] = networkId;
-    const own: Array<Cidr> = [];
     for (const key of ["Gateway", "IPv6Gateway"] as const) {
       const gateway: unknown = Reflect.get(endpoint, key);
       if (typeof gateway !== "string" || gateway.length === 0) continue;
@@ -256,10 +252,8 @@ export const attachedNetworks = (networksJson: string): AttachedNetworks => {
       if (parsedGateway === undefined) {
         throw new Error(`docker inspect returned an unreadable gateway: ${gateway}`);
       }
-      own.push(parsedGateway);
+      gateways.push(parsedGateway);
     }
-    gateways.push(...own);
-    gatewaysByNetwork[name] = own;
     for (const [addressKey, prefixKey] of [
       ["IPAddress", "IPPrefixLen"],
       ["GlobalIPv6Address", "GlobalIPv6PrefixLen"],
@@ -276,30 +270,45 @@ export const attachedNetworks = (networksJson: string): AttachedNetworks => {
       subnets.push(network);
     }
   }
-  return { names: Object.keys(parsed), ids, subnets, gateways, gatewaysByNetwork };
+  return { names: Object.keys(parsed), ids, subnets, gateways };
 };
 
+/** A network's address plan: its subnets, and the host's side of the bridge on each. */
+export interface IpamConfig {
+  readonly subnets: ReadonlyArray<Cidr>;
+  /**
+   * The bridge's own addresses on the host. An internal bridge has one too (only
+   * `gateway_mode_ipv4=isolated` leaves it out), and a container's endpoint never names it: its
+   * `Gateway` is empty on an internal network, so this is the only place to read it.
+   */
+  readonly gateways: ReadonlyArray<Cidr>;
+}
+
 /**
- * A network's subnets from `docker network inspect --format '{{json .IPAM.Config}}'`. Throws on
- * output it cannot read and on a network with none: a carve never guesses what it opens.
+ * A network's address plan from `docker network inspect --format '{{json .IPAM.Config}}'`. Throws
+ * on output it cannot read and on a network with no subnet: a carve never guesses what it opens.
  */
-export const ipamSubnets = (ipamJson: string): ReadonlyArray<Cidr> => {
+export const ipamConfig = (ipamJson: string): IpamConfig => {
   const parsed: unknown = JSON.parse(ipamJson.trim() || "null");
   if (!Array.isArray(parsed)) {
     throw new Error("docker network inspect returned no IPAM configuration for the network.");
   }
-  const subnets = parsed.flatMap((entry: unknown) => {
-    const subnet: unknown =
-      typeof entry === "object" && entry !== null ? Reflect.get(entry, "Subnet") : undefined;
-    if (typeof subnet !== "string" || subnet.length === 0) return [];
-    const block = parseCidr(subnet);
-    if (block === undefined) {
-      throw new Error(`docker network inspect returned an unreadable subnet: ${subnet}`);
-    }
-    return [block];
-  });
+  const read = (key: "Subnet" | "Gateway") =>
+    parsed.flatMap((entry: unknown) => {
+      const value: unknown =
+        typeof entry === "object" && entry !== null ? Reflect.get(entry, key) : undefined;
+      if (typeof value !== "string" || value.length === 0) return [];
+      const block = parseCidr(value);
+      if (block === undefined) {
+        throw new Error(
+          `docker network inspect returned an unreadable ${key.toLowerCase()}: ${value}`,
+        );
+      }
+      return [block];
+    });
+  const subnets = read("Subnet");
   if (subnets.length === 0) throw new Error("docker network inspect returned no subnet.");
-  return subnets;
+  return { subnets, gateways: read("Gateway") };
 };
 
 /**

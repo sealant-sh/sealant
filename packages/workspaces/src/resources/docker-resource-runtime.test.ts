@@ -106,8 +106,10 @@ interface ReachContainer {
 
 interface ReachNetwork {
   readonly subnet: Cidr;
-  /** The host's side of the bridge; none on an isolated one. */
+  /** The host's side of the bridge, in `IPAM.Config`; none on an isolated one. */
   readonly gateway: string | undefined;
+  /** An internal bridge: its endpoints name no gateway (`Gateway: ""`), as Docker answers. */
+  readonly internal: boolean;
   readonly members: Set<string>;
 }
 
@@ -132,6 +134,7 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
   const networks = new Map<string, ReachNetwork>();
   const released: Array<string> = [];
   let failGuard = false;
+  let failConnect = false;
   const container = (name: string) => {
     const found = containers.get(name);
     if (found === undefined) throw missing(`container: ${name}`);
@@ -153,7 +156,7 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
                 NetworkID: `${name}-id`,
                 IPAddress: address,
                 IPPrefixLen: network?.subnet.prefix ?? 28,
-                Gateway: network?.gateway ?? "",
+                Gateway: network === undefined || network.internal ? "" : (network.gateway ?? ""),
               },
             ];
           }),
@@ -192,6 +195,7 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
       networks.set(last, {
         subnet,
         gateway: isolated ? undefined : hostAt(subnet, 1),
+        internal: args.includes("--internal"),
         members: new Set(),
       });
       return { stdout: `${last}-id\n`, stderr: "" };
@@ -201,6 +205,9 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
       const network = networks.get(name);
       const member = container(last);
       if (network === undefined) throw missing("network");
+      if (failConnect) {
+        throw new Error("Error response from daemon: failed to allocate an address on the network");
+      }
       if (member.networks.has(name)) {
         throw new Error(`Error response from daemon: endpoint with name ${last} already exists`);
       }
@@ -277,7 +284,12 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
   ) => {
     const own = cidr("10.233.4.16/28");
     const network = setup.egress ?? `${name}-egress`;
-    networks.set(network, { subnet: own, gateway: hostAt(own, 1), members: new Set([name]) });
+    networks.set(network, {
+      subnet: own,
+      gateway: hostAt(own, 1),
+      internal: false,
+      members: new Set([name]),
+    });
     containers.set(name, {
       running: true,
       proxyBacked: setup.proxyBacked === true,
@@ -314,6 +326,9 @@ const reachHost = (options: { readonly refuseIsolated?: boolean } = {}) => {
     connectsOf,
     failGuards: () => {
       failGuard = true;
+    },
+    failConnects: () => {
+      failConnect = true;
     },
   };
 };
@@ -391,6 +406,7 @@ describe("DockerResourceRuntime reach of a workspace under per-workspace egress"
 
     expect(host.networks.get("sealant-run-1-reach")?.gateway).toBe("10.231.0.161");
     expect(executor?.networks.has("sealant-run-1-reach")).toBe(true);
+    // Docker names it in the network's IPAM alone: the workspace's endpoint says `Gateway: ""`.
     expect(refuses(executor, "10.231.0.161")).toBe(true);
     expect(refuses(executor, "10.231.0.170")).toBe(false);
   });
@@ -426,6 +442,19 @@ describe("DockerResourceRuntime reach of a workspace under per-workspace egress"
     await host.runtime.attachExecutor("sealant-run-1", []);
     expect(parked?.networks.has("sealant-run-1-reach")).toBe(true);
     expect(host.guardRuns()).toEqual([]);
+  });
+
+  it("refuses the subnet again when the connect fails after the carve", async () => {
+    const host = reachHost();
+    const executor = host.workspace("sealant-run-1");
+    host.failConnects();
+    await expect(host.runtime.attachExecutor("sealant-run-1", [])).rejects.toThrow(
+      /failed to allocate/,
+    );
+    expect(executor?.networks.has("sealant-run-1-reach")).toBe(false);
+    for (const address of ["10.231.0.160", "10.231.0.170", "10.231.0.191"]) {
+      expect(refuses(executor, address), address).toBe(true);
+    }
   });
 
   it("connects nothing when the routes cannot be read", async () => {

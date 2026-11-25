@@ -12,7 +12,7 @@ import {
   carveProhibitRouteScript,
   guardsPrivateRange,
   imageCommand,
-  ipamSubnets,
+  ipamConfig,
   metadataDnsServer,
   mirrorConnectArgv,
   namespaceDnsServers,
@@ -345,10 +345,6 @@ describe("the guard's inputs and script", () => {
       "172.18.0.1/32",
       "fd00:1::1/128",
     ]);
-    expect(networks.gatewaysByNetwork["sealant-run-egress"]?.map(formatCidr)).toEqual([
-      "10.233.0.1/32",
-    ]);
-    expect(attachedNetworks('{"reach":{"Gateway":""}}').gatewaysByNetwork).toEqual({ reach: [] });
     expect(() => attachedNetworks('{"n":{"Gateway":"not-an-address"}}')).toThrow(/gateway/);
     expect(() => attachedNetworks("null")).toThrow();
     expect(() => attachedNetworks('{"n":{"IPAddress":"10.0.0.1","IPPrefixLen":"x"}}')).toThrow();
@@ -599,12 +595,17 @@ describe("opening a network joined after the guard", () => {
     expect(guardsPrivateRange(guarded, cidr("198.51.100.0/24"))).toBe(false);
   });
 
-  it("reads a network's subnets, and refuses a network it cannot read", () => {
-    expect(
-      ipamSubnets('[{"Subnet":"10.231.0.160/27","Gateway":"10.231.0.161"}]\n').map(formatCidr),
-    ).toEqual(["10.231.0.160/27"]);
-    expect(() => ipamSubnets("null")).toThrow();
-    expect(() => ipamSubnets("[]")).toThrow(/no subnet/);
-    expect(() => ipamSubnets('[{"Subnet":"10.231.0.161/27"}]')).toThrow(/unreadable/);
+  it("reads a network's subnets and the host's side of its bridge, and refuses what it cannot read", () => {
+    // What Docker 29 answers for a plain internal bridge, and for an isolated one (no gateway).
+    const plain = ipamConfig('[{"Subnet":"10.231.0.160/27","Gateway":"10.231.0.161"}]\n');
+    expect(plain.subnets.map(formatCidr)).toEqual(["10.231.0.160/27"]);
+    expect(plain.gateways.map(formatCidr)).toEqual(["10.231.0.161/32"]);
+    expect(ipamConfig('[{"Subnet":"10.231.0.160/27"}]').gateways).toEqual([]);
+    expect(() => ipamConfig("null")).toThrow();
+    expect(() => ipamConfig("[]")).toThrow(/no subnet/);
+    expect(() => ipamConfig('[{"Subnet":"10.231.0.161/27"}]')).toThrow(/unreadable subnet/);
+    expect(() => ipamConfig('[{"Subnet":"10.231.0.160/27","Gateway":"x"}]')).toThrow(
+      /unreadable gateway/,
+    );
   });
 });

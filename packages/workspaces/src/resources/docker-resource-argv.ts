@@ -96,6 +96,9 @@ export const networkCreateArgv = (
   "create",
   "--driver",
   "bridge",
+  // IPv4 only, whatever the daemon's default: the pools are IPv4, and a guarded workspace's routes
+  // are opened for a reach network's IPv4 subnet alone, so an IPv6 side would be refused anyway.
+  "--ipv6=false",
   ...(kind !== "egress" ? ["--internal"] : []),
   ...(kind !== "egress" && options.isolatedGateway === true
     ? ["--opt", "com.docker.network.bridge.gateway_mode_ipv4=isolated"]

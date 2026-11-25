@@ -28,6 +28,7 @@ import {
   egressNetworkName,
   instanceContainerName,
   reachNetworkName,
+  RESOURCE_LABELS,
 } from "../resources/docker-resource-argv.js";
 import {
   DockerResourceRuntime,
@@ -315,9 +316,10 @@ describe("per-workspace Docker egress", () => {
     for (const name of [mirror, published, hostService, instanceContainerName(database.id)]) {
       await docker("docker", ["rm", "-f", name]).catch(() => undefined);
     }
+    // Only what this run made: the reach network of each workspace it launched, and the
+    // resource's own egress network.
     for (const network of [
-      reachNetworkName(a.name),
-      reachNetworkName(b.name),
+      ...launched.map(({ reference }) => reachNetworkName(reference)),
       egressNetworkName(database.id),
     ]) {
       await docker("docker", ["network", "rm", network]).catch(() => undefined);
@@ -593,6 +595,44 @@ describe("per-workspace Docker egress", () => {
       expect(resourceTable.held.get(reachNetworkName(a.name))).toBe(subnet);
       expect((await fetch(a.id, "http://probe:8080/")).output.trim()).toBe("resource-ok");
       await refusedAtOnce(a.id, `http://${await addressOn(b.id, reachNetworkName(b.name))}:8080/`);
+    });
+
+    it("refuses the host's side of a reach network made with a gateway, as an engine before 28 makes it", async () => {
+      await resources.detachExecutor(a.name);
+      const network = reachNetworkName(a.name);
+      // What `ensureNetwork` makes where the engine refuses `gateway_mode_ipv4=isolated`: a plain
+      // internal bridge, whose host side Docker names in IPAM alone (the endpoint's is empty).
+      const subnet = await resourceTable.allocate({ name: network, kind: "reach", owner: a.name });
+      await docker("docker", [
+        "network",
+        "create",
+        "--driver",
+        "bridge",
+        "--ipv6=false",
+        "--internal",
+        "--subnet",
+        subnet,
+        "--label",
+        `${RESOURCE_LABELS.network}=reach`,
+        network,
+      ]);
+      const bridgeHost = (
+        await docker("docker", [
+          "network",
+          "inspect",
+          "--format",
+          "{{(index .IPAM.Config 0).Gateway}}",
+          network,
+        ])
+      ).stdout.trim();
+      expect(bridgeHost).toMatch(/^10\.248\./);
+
+      await resources.attachExecutor(a.name, attachments());
+
+      expect((await fetch(a.id, "http://probe:8080/")).output.trim()).toBe("resource-ok");
+      expect((await routesOf(a)).map(formatCidr)).toContain(`${bridgeHost}/32`);
+      // Without the route this answers: the host serves the port on every address, this one too.
+      await refusedAtOnce(a.id, `http://${bridgeHost}:${HOST_PORT}/`);
     });
   });
 
