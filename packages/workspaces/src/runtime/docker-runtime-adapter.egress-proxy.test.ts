@@ -12,6 +12,7 @@ import { Redacted } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { cidr, cidrContains, cidrsOverlap, formatCidr, type Cidr } from "./cidr.js";
 import { EGRESS_PROXY_GATE_SCRIPT } from "./docker-egress-proxy.js";
 import { parseDockerEgressPolicy } from "./docker-egress.js";
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
@@ -62,11 +63,18 @@ const publication = {
 const noSuch = (what: string) =>
   Object.assign(new Error("failed"), { stderr: `Error: No such ${what}` });
 
+/** A container's name from the id the in-memory host gave it. */
+const nameOf = (reference: string) => reference.replace(/-cid$/, "");
+
 /** A Docker host in memory, answering what a proxy-backed launch asks of it. */
 const dockerHost = (options: { readonly engine?: string } = {}) => {
   const calls: string[][] = [];
   const networks = new Map<string, Set<string>>();
   const containers = new Map<string, { running: boolean; labels: Record<string, string> }>();
+  /** Each network's subnet, as created; Docker's default pool for one created without. */
+  const subnets = new Map<string, Cidr>();
+  /** The `prohibit` routes a guard put in each container's namespace. */
+  const routes = new Map<string, Array<Cidr>>();
   const run = vi.fn(async (_command: string, args: Array<string>) => {
     calls.push([...args]);
     const last = args.at(-1) ?? "";
@@ -74,6 +82,8 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
     if (verb === "version") return { stdout: `${options.engine ?? "28.1.0"}\n`, stderr: "" };
     if (verb === "network" && sub === "create") {
       networks.set(last, new Set());
+      const subnet = args.includes("--subnet") ? args[args.indexOf("--subnet") + 1] : undefined;
+      subnets.set(last, cidr(subnet ?? `172.30.${String(subnets.size)}.0/24`));
       return { stdout: `${last}-id\n`, stderr: "" };
     }
     if (verb === "network" && sub === "ls") return { stdout: "bridge-1\n", stderr: "" };
@@ -97,8 +107,18 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
     }
     if (verb === "network" && (sub === "connect" || sub === "disconnect")) {
       const set = networks.get(args.at(-2) ?? "");
-      if (sub === "connect") set?.add(last);
-      else set?.delete(last);
+      const subnet = subnets.get(args.at(-2) ?? "");
+      // libnetwork refuses an address that a route in the namespace overlaps.
+      const conflict = (routes.get(nameOf(last)) ?? []).find(
+        (route) => subnet !== undefined && cidrsOverlap(route, subnet),
+      );
+      if (sub === "connect" && conflict !== undefined) {
+        throw Object.assign(new Error("failed"), {
+          stderr: `Error response from daemon: cannot program address in sandbox interface because it conflicts with existing route {Dst: ${formatCidr(conflict)}}`,
+        });
+      }
+      if (sub === "connect") set?.add(nameOf(last));
+      else set?.delete(nameOf(last));
       return { stdout: "", stderr: "" };
     }
     if (verb === "create") {
@@ -121,7 +141,14 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
     }
     if (verb === "image")
       return { stdout: '["/usr/local/bin/sealantd","boot"]\tnull\n', stderr: "" };
-    if (verb === "run" && args.includes("NET_ADMIN")) return { stdout: "", stderr: "" };
+    if (verb === "run" && args.includes("NET_ADMIN")) {
+      const target = nameOf((args[args.indexOf("--network") + 1] ?? "").replace(/^container:/, ""));
+      const added = [...last.matchAll(/ip -4 route replace prohibit (\S+)/g)].map((match) =>
+        cidr(match[1] ?? ""),
+      );
+      routes.set(target, [...(routes.get(target) ?? []), ...added]);
+      return { stdout: "", stderr: "" };
+    }
     if (verb === "run" && args.includes("cat")) {
       return { stdout: "# ExtServers: [host(127.0.0.53)]\n", stderr: "" };
     }
@@ -136,6 +163,9 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
         }),
       );
       containers.set(name, { running: true, labels });
+      for (const [index, arg] of args.entries()) {
+        if (args[index - 1] === "--network") networks.get(arg)?.add(name);
+      }
       return { stdout: `${name}-cid\n`, stderr: "" };
     }
     if (verb === "inspect") {
@@ -144,14 +174,32 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
       const container = containers.get(name);
       if (container === undefined) throw noSuch("container");
       if (format.includes("NetworkSettings")) {
+        const joined = [...networks].filter(([, members]) => members.has(name));
         return {
-          stdout: JSON.stringify({
-            [`${name}-isolated`]: {
-              NetworkID: `${name}-isolated-id`,
-              IPAddress: "10.233.0.2",
-              IPPrefixLen: 28,
-            },
-          }),
+          stdout: JSON.stringify(
+            joined.length === 0
+              ? {
+                  [`${name}-isolated`]: {
+                    NetworkID: `${name}-isolated-id`,
+                    IPAddress: "10.233.0.2",
+                    IPPrefixLen: 28,
+                  },
+                }
+              : Object.fromEntries(
+                  joined.map(([network]) => {
+                    const subnet = subnets.get(network) ?? cidr("172.31.0.0/24");
+                    const address = formatCidr({ ...subnet, base: subnet.base + 2n, prefix: 32 });
+                    return [
+                      network,
+                      {
+                        NetworkID: `${network}-id`,
+                        IPAddress: address.replace("/32", ""),
+                        IPPrefixLen: subnet.prefix,
+                      },
+                    ];
+                  }),
+                ),
+          ),
           stderr: "",
         };
       }
@@ -173,7 +221,7 @@ const dockerHost = (options: { readonly engine?: string } = {}) => {
     }
     return { stdout: "", stderr: "" };
   });
-  return { run, calls, networks, containers };
+  return { run, calls, networks, containers, routes };
 };
 
 const subnetPool = () => {
@@ -362,6 +410,38 @@ describe("a Docker workspace behind its own egress proxy", () => {
     ]);
   });
 
+  it("joins the Docker service to the isolated network before its guard runs, so the guard leaves it open", async () => {
+    const docker = dockerHost();
+    await adapterOn(docker).launch(
+      launchInput({
+        networkPolicy: { mode: "standard", policyHash: "sha256:policy" },
+        tooling: { services: { docker: { enabled: true } } },
+      }),
+    );
+    const joined = docker.calls.findIndex(
+      (call) =>
+        call[1] === "connect" &&
+        call.at(-2) === "sealant-run-1-isolated" &&
+        call.at(-1) === "sealant-run-1-docker-cid",
+    );
+    const guarded = docker.calls.findIndex(
+      (call) =>
+        call[0] === "run" &&
+        call.includes("NET_ADMIN") &&
+        call.includes("container:sealant-run-1-docker-cid"),
+    );
+    expect(joined).toBeGreaterThanOrEqual(0);
+    expect(guarded).toBeGreaterThan(joined);
+    expect(docker.networks.get("sealant-run-1-isolated")?.has("sealant-run-1-docker")).toBe(true);
+    // The service's guard refuses the rest of the private range and leaves the isolated one open.
+    const serviceRoutes = docker.routes.get("sealant-run-1-docker") ?? [];
+    const refused = (address: string) =>
+      serviceRoutes.some((route) => cidrContains(route, cidr(address)));
+    expect(refused("10.233.0.2")).toBe(false);
+    expect(refused("10.233.0.30")).toBe(true);
+    expect(refused("10.0.0.1")).toBe(true);
+  });
+
   it("runs behind its proxy when the worker hands one for a stored host revocation alone", async () => {
     const docker = dockerHost();
     await adapterOn(docker).launch(
@@ -399,7 +479,10 @@ describe("a Docker workspace behind its own egress proxy", () => {
     expect(docker.networks.get("sealant-run-1-proxy-egress")?.has("sealant-run-1-proxy")).toBe(
       true,
     );
-    expect(docker.networks.get("sealant-run-1-isolated")).toEqual(new Set(["sealant-run-1-proxy"]));
+    // The proxy and the workspace it serves: no mirror, and no route out.
+    expect(docker.networks.get("sealant-run-1-isolated")).toEqual(
+      new Set(["sealant-run-1-proxy", "sealant-run-1"]),
+    );
   });
 
   it("refuses the launch, with nothing started, on an engine that cannot isolate the network", async () => {

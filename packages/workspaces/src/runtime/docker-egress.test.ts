@@ -1,9 +1,18 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
 import { describe, expect, it } from "vitest";
 
 import { cidr, cidrContains, cidrsOverlap, formatCidr, type Cidr } from "./cidr.js";
 import {
   attachedNetworks,
+  carveProhibitRouteScript,
+  guardsPrivateRange,
   imageCommand,
+  ipamSubnets,
   metadataDnsServer,
   mirrorConnectArgv,
   namespaceDnsServers,
@@ -12,10 +21,13 @@ import {
   parseDockerEgressPolicy,
   parseHostPublicIps,
   parseWorkspaceMirrorContainers,
+  prohibitRoutes,
   prohibitRouteScript,
   prohibitedEgress,
   publicHostAddresses,
 } from "./docker-egress.js";
+
+const execFileAsync = promisify(execFile);
 
 const policy = (overrides: {
   readonly operatorAllowedPrivateEgress?: string;
@@ -333,6 +345,10 @@ describe("the guard's inputs and script", () => {
       "172.18.0.1/32",
       "fd00:1::1/128",
     ]);
+    expect(networks.gatewaysByNetwork["sealant-run-egress"]?.map(formatCidr)).toEqual([
+      "10.233.0.1/32",
+    ]);
+    expect(attachedNetworks('{"reach":{"Gateway":""}}').gatewaysByNetwork).toEqual({ reach: [] });
     expect(() => attachedNetworks('{"n":{"Gateway":"not-an-address"}}')).toThrow(/gateway/);
     expect(() => attachedNetworks("null")).toThrow();
     expect(() => attachedNetworks('{"n":{"IPAddress":"10.0.0.1","IPPrefixLen":"x"}}')).toThrow();
@@ -380,5 +396,215 @@ describe("the network gate", () => {
     expect(gate.args[1]?.endsWith('exec "$@"')).toBe(true);
     expect(() => imageCommand("null\tnull")).toThrow(/no entrypoint or command/);
     expect(() => imageCommand('"sh -c x"\tnull')).toThrow(/unreadable command/);
+  });
+});
+
+/**
+ * The route table a guard script leaves, applied step by step the way the kernel would: `replace`
+ * adds a route (once), `del` removes one. Each step's table is kept, to check what was refused in
+ * between.
+ */
+const applyCarve = (
+  table: ReadonlyArray<Cidr>,
+  script: string,
+): ReadonlyArray<ReadonlyArray<string>> => {
+  let current = table.map(formatCidr);
+  const steps = [current];
+  for (const match of script.matchAll(/ip -4 route (replace|del) prohibit (\S+?)(?= |\)|$)/gm)) {
+    const [, verb, block = ""] = match;
+    current =
+      verb === "replace"
+        ? current.includes(block)
+          ? current
+          : [...current, block]
+        : current.filter((route) => route !== block);
+    steps.push(current);
+  }
+  return steps;
+};
+
+/** A dotted IPv4 address from its number. */
+const dotted = (base: bigint) =>
+  [24n, 16n, 8n, 0n].map((shift) => String((base >> shift) & 255n)).join(".");
+
+const refusedBy = (routes: ReadonlyArray<string>, address: string): boolean =>
+  routes.some((route) => cidrContains(cidr(route), cidr(address)));
+
+describe("opening a network joined after the guard", () => {
+  // What the guard leaves in a workspace on 10.233.4.16/28: one route over the whole reach pool.
+  const guarded = prohibitedEgress({ ...none, ownSubnets: [cidr("10.233.4.16/28")] });
+  const reach = cidr("10.231.0.160/27");
+
+  it("reads the prohibit routes of busybox and iproute2 output, and refuses one it cannot read", () => {
+    const busybox = [
+      "default via 10.233.4.17 dev eth0 ",
+      "prohibit 10.0.0.0/9 ",
+      "prohibit 10.224.0.0/13 ",
+      "10.233.4.16/28 dev eth0 scope link  src 10.233.4.18 ",
+      "prohibit 169.254.169.254 ",
+      "unreachable 192.0.2.0/24 ",
+      "",
+    ].join("\n");
+    expect(prohibitRoutes(busybox, 4).map(formatCidr)).toEqual([
+      "10.0.0.0/9",
+      "10.224.0.0/13",
+      "169.254.169.254/32",
+    ]);
+    expect(
+      prohibitRoutes("prohibit 172.16.0.0/12 proto static metric 5\nprohibit default\n", 4).map(
+        formatCidr,
+      ),
+    ).toEqual(["172.16.0.0/12", "0.0.0.0/0"]);
+    expect(
+      prohibitRoutes("prohibit fc00::/7 dev lo metric 1024 pref medium\n", 6).map(formatCidr),
+    ).toEqual(["fc00::/7"]);
+    expect(prohibitRoutes("", 4)).toEqual([]);
+    for (const line of ["prohibit 10.0.0.5/8", "prohibit fc00::/7", "prohibit", "prohibit x"]) {
+      expect(() => prohibitRoutes(line, 4), line).toThrow(/could not read/);
+    }
+  });
+
+  it("opens the joining subnet alone, with every narrower route in before the covering one goes", () => {
+    const script = carveProhibitRouteScript(guarded, [reach]) ?? "";
+    const lines = script.split("\n");
+    const lastReplace = lines.findLastIndex((line) => line.includes("route replace"));
+    const firstDelete = lines.findIndex((line) => line.includes("route del"));
+    expect(lines[0]).toBe("set -e");
+    expect(lastReplace).toBeGreaterThan(0);
+    expect(firstDelete).toBeGreaterThan(lastReplace);
+    expect([...script.matchAll(/route del prohibit (\S+?)(?= |\))/g)].map((m) => m[1])).toEqual([
+      "10.224.0.0/13",
+    ]);
+
+    const steps = applyCarve(guarded, script);
+    const after = steps.at(-1) ?? [];
+    for (const address of ["10.231.0.160", "10.231.0.175", "10.231.0.191"]) {
+      expect(refusedBy(after, address), address).toBe(false);
+    }
+    // Another workspace's reach subnet either side, the rest of the block, and its own range.
+    for (const address of [
+      "10.231.0.159",
+      "10.231.0.192",
+      "10.231.0.33",
+      "10.224.0.1",
+      "10.0.0.1",
+    ]) {
+      expect(refusedBy(after, address), address).toBe(true);
+    }
+  });
+
+  it("drops a route inside the joining subnet with nothing in its place, and has nothing to do without an overlap", () => {
+    const restored = [...guarded.filter((route) => !cidrsOverlap(route, reach)), reach];
+    const withGateway = [...restored, cidr("10.231.0.161/32")];
+    const script = carveProhibitRouteScript(withGateway, [reach]) ?? "";
+    expect(script).not.toContain("route replace");
+    expect([...script.matchAll(/route del prohibit (\S+?)(?= |\))/g)].map((m) => m[1])).toEqual([
+      "10.231.0.160/27",
+      "10.231.0.161/32",
+    ]);
+    expect(carveProhibitRouteScript(guarded, [cidr("10.233.4.16/28")])).toBeUndefined();
+    expect(carveProhibitRouteScript([], [reach])).toBeUndefined();
+  });
+
+  it("opens exactly the joining subnet and never unrefuses anything else for a moment (seeded rule)", () => {
+    let state = 0x1342;
+    const random = () => {
+      state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+      return state / 4294967296;
+    };
+    const blockIn = (prefix: number): Cidr => {
+      const size = 2 ** (32 - prefix);
+      const offset = Math.floor((random() * 2 ** 24) / size) * size;
+      return { family: 4, base: 0x0a000000n + BigInt(offset), prefix };
+    };
+    for (let round = 0; round < 200; round += 1) {
+      const own = blockIn(28);
+      let open = blockIn(24 + Math.floor(random() * 6));
+      while (cidrsOverlap(open, own)) open = blockIn(open.prefix);
+      // Sometimes a subnet refused when an earlier network on it went.
+      const extra = random() < 0.3 ? [open] : [];
+      const table = [...prohibitedEgress({ ...none, ownSubnets: [own] }), ...extra];
+      const script = carveProhibitRouteScript(table, [open]);
+      expect(script, formatCidr(open)).toBeDefined();
+      const steps = applyCarve(table, script ?? "");
+      const size = 2n ** BigInt(32 - open.prefix);
+      const probes = [
+        open.base,
+        open.base + size - 1n,
+        open.base - 1n,
+        open.base + size,
+        ...Array.from({ length: 20 }, () => 0x0a000000n + BigInt(Math.floor(random() * 2 ** 24))),
+      ].map(dotted);
+      for (const probe of probes) {
+        const inOpen = cidrContains(open, cidr(probe));
+        const before = refusedBy(steps[0] ?? [], probe);
+        expect(refusedBy(steps.at(-1) ?? [], probe), `${formatCidr(open)} ${probe}`).toBe(
+          before && !inOpen,
+        );
+        if (before && !inOpen) {
+          for (const step of steps) expect(refusedBy(step, probe), probe).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("tolerates a route a concurrent carve already took out, and fails on any other error", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sealant-carve-"));
+    try {
+      const table = join(dir, "table");
+      await writeFile(table, `${guarded.map(formatCidr).join("\n")}\n`);
+      // A stand-in `ip` over a table file: `No such process` for a route that is not there, as
+      // the kernel answers, and `Operation not permitted` everywhere when told to.
+      await writeFile(
+        join(dir, "ip"),
+        [
+          "#!/bin/sh",
+          'op="$3"; dst="$5"',
+          'if [ -n "$IP_DENY" ]; then echo "RTNETLINK answers: Operation not permitted" >&2; exit 2; fi',
+          'case "$op" in',
+          '  replace) grep -qxF "$dst" "$TABLE" || echo "$dst" >> "$TABLE" ;;',
+          '  del) grep -qxF "$dst" "$TABLE" || { echo "RTNETLINK answers: No such process" >&2; exit 2; }',
+          '       grep -vxF "$dst" "$TABLE" > "$TABLE.next"; mv "$TABLE.next" "$TABLE" ;;',
+          "esac",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const script = carveProhibitRouteScript(guarded, [reach]) ?? "";
+      const run = (env: Record<string, string> = {}) =>
+        execFileAsync("sh", ["-c", script], {
+          env: {
+            ...process.env,
+            PATH: `${dir}:${process.env["PATH"] ?? ""}`,
+            TABLE: table,
+            ...env,
+          },
+        });
+      await run();
+      await run();
+      const routes = (await readFile(table, "utf8")).split("\n").filter((line) => line.length > 0);
+      expect(routes).not.toContain("10.224.0.0/13");
+      expect(refusedBy(routes, "10.231.0.170")).toBe(false);
+      expect(refusedBy(routes, "10.231.0.130")).toBe(true);
+      await expect(run({ IP_DENY: "1" })).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts the per-workspace guard around a private range, and never the metadata guard alone", () => {
+    expect(guardsPrivateRange(guarded, reach)).toBe(true);
+    expect(guardsPrivateRange([cidr("169.254.169.254/32")], reach)).toBe(false);
+    expect(guardsPrivateRange([cidr("169.254.169.254/32")], cidr("169.254.1.0/24"))).toBe(false);
+    expect(guardsPrivateRange(guarded, cidr("198.51.100.0/24"))).toBe(false);
+  });
+
+  it("reads a network's subnets, and refuses a network it cannot read", () => {
+    expect(
+      ipamSubnets('[{"Subnet":"10.231.0.160/27","Gateway":"10.231.0.161"}]\n').map(formatCidr),
+    ).toEqual(["10.231.0.160/27"]);
+    expect(() => ipamSubnets("null")).toThrow();
+    expect(() => ipamSubnets("[]")).toThrow(/no subnet/);
+    expect(() => ipamSubnets('[{"Subnet":"10.231.0.161/27"}]')).toThrow(/unreadable/);
   });
 });
