@@ -1,4 +1,5 @@
 import { PackageResolutionCacheRepo } from "@sealant/db";
+import type { TraceCarrier } from "@sealant/observability";
 import {
   publishBoatResourceLinkChanged,
   publishRunExecRequested,
@@ -45,6 +46,8 @@ export interface RunExecPublisher {
     readonly user?: string;
     /** With `user`: the executor (its launch run id) the user was checked against. */
     readonly checkedExecutorRunId?: string;
+    /** The request's trace, which the run's execution continues (`currentTraceCarrier`). */
+    readonly trace?: TraceCarrier | undefined;
   }) => Promise<void>;
 }
 
@@ -59,6 +62,8 @@ export interface WorkspaceLifecyclePublisher {
     readonly workspaceId: string;
     readonly runId: string;
     readonly stopReason: WorkspaceStopReason;
+    /** The request's trace, which the stop continues (`currentTraceCarrier`). */
+    readonly trace?: TraceCarrier | undefined;
   }) => Promise<void>;
 }
 
@@ -76,6 +81,8 @@ export interface BoatResourceLinkPublisher {
   readonly publishLinkChanged: (input: {
     readonly workspaceId: string;
     readonly runId: string;
+    /** The request's trace, which applying the link continues (`currentTraceCarrier`). */
+    readonly trace?: TraceCarrier | undefined;
   }) => Promise<void>;
 }
 
@@ -107,20 +114,23 @@ export const WorkspaceBuildJobPublisherServiceLive = Layer.succeed(
 );
 
 export const RunExecPublisherServiceLive = Layer.succeed(RunExecPublisherService, {
-  publishRequested: (input) => publishRunExecRequested(env.DATABASE_URL, input),
+  publishRequested: ({ trace, ...input }) =>
+    publishRunExecRequested(env.DATABASE_URL, input, trace),
 });
 
 export const WorkspaceLifecyclePublisherServiceLive = Layer.succeed(
   WorkspaceLifecyclePublisherService,
   {
-    publishStopRequested: (input) => publishWorkspaceStopRequested(env.DATABASE_URL, input),
+    publishStopRequested: ({ trace, ...input }) =>
+      publishWorkspaceStopRequested(env.DATABASE_URL, input, trace),
   },
 );
 
 export const BoatResourceLinkPublisherServiceLive = Layer.succeed(
   BoatResourceLinkPublisherService,
   {
-    publishLinkChanged: (input) => publishBoatResourceLinkChanged(env.DATABASE_URL, input),
+    publishLinkChanged: ({ trace, ...input }) =>
+      publishBoatResourceLinkChanged(env.DATABASE_URL, input, trace),
   },
 );
 

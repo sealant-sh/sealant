@@ -863,6 +863,9 @@ importers:
 
   packages/jobs:
     dependencies:
+      '@sealant/observability':
+        specifier: workspace:*
+        version: link:../observability
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -1089,6 +1092,9 @@ importers:
       '@sealant/jobs':
         specifier: workspace:*
         version: link:../jobs
+      '@sealant/observability':
+        specifier: workspace:*
+        version: link:../observability
       '@sealant/runtime-client':
         specifier: npm:@sealant/runtime-client-next@0.21.0-next.209
         version: '@sealant/runtime-client-next@0.21.0-next.209'

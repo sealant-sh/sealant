@@ -1,5 +1,8 @@
+import type { TraceCarrier } from "@sealant/observability";
+
 import { getJobQueueSingleton } from "./singleton.js";
 import type { JobQueueDefinition } from "./topology.js";
+import { withJobTrace } from "./trace.js";
 
 export interface PublishJobQueueJsonInput {
   readonly databaseUrl: string;
@@ -10,6 +13,11 @@ export interface PublishJobQueueJsonInput {
    * delivery with this key waits, another message with it is dropped.
    */
   readonly collapseKey?: string;
+  /**
+   * The sender's trace, so the delivery's handling continues it (`currentTraceCarrier` in
+   * @sealant/observability). Omitted, the consumer starts a trace of its own.
+   */
+  readonly trace?: TraceCarrier | undefined;
 }
 
 export const publishJobQueueJson = async (input: PublishJobQueueJsonInput): Promise<void> => {
@@ -18,7 +26,7 @@ export const publishJobQueueJson = async (input: PublishJobQueueJsonInput): Prom
   // pg-boss answers `null` for a message it dropped as a duplicate: that is the collapse.
   await singleton.boss.send(
     input.queue.name,
-    input.message,
+    withJobTrace(input.message, input.trace),
     input.collapseKey === undefined ? {} : { singletonKey: input.collapseKey },
   );
 };

@@ -101,6 +101,7 @@ import {
   type ConnectedAccount,
   type WorkspaceCaptureDrain as WorkspaceCaptureDrainRecord,
 } from "@sealant/db";
+import { currentTraceCarrier } from "@sealant/observability";
 import {
   GitHubSourceIntegrationService,
   createGitHubInstallationRepositoryAuthRef,
@@ -2041,11 +2042,13 @@ export const createWorkspace = (input: {
     }
 
     const workspaceBuildJobPublisher = yield* WorkspaceBuildJobPublisherService;
+    const requestTrace = yield* currentTraceCarrier;
 
     yield* Effect.tryPromise({
       try: () =>
         workspaceBuildJobPublisher.publishRequested({
           jobId,
+          trace: requestTrace,
         }),
       catch: (error) => error,
     }).pipe(
@@ -3051,12 +3054,14 @@ export const execWorkspace = (input: ExecWorkspaceInput) => {
     );
 
     const publisher = yield* RunExecPublisherService;
+    const requestTrace = yield* currentTraceCarrier;
     yield* Effect.tryPromise({
       try: () =>
         publisher.publishRequested({
           runId: run.id,
           commands: execCommands(input.payload),
           ...asUserRun,
+          trace: requestTrace,
         }),
       catch: (error) =>
         new WorkspaceInternalServerError({
@@ -3855,12 +3860,14 @@ export const stopWorkspace = (input: {
     );
 
     const publisher = yield* WorkspaceLifecyclePublisherService;
+    const requestTrace = yield* currentTraceCarrier;
     yield* Effect.tryPromise({
       try: () =>
         publisher.publishStopRequested({
           workspaceId: workspace.id,
           runId: latestRunId,
           stopReason: "user",
+          trace: requestTrace,
         }),
       catch: (error) =>
         // The intent is already recorded, so even on 502 the reaper converges the container;
@@ -4076,12 +4083,14 @@ export const restartWorkspace = (input: {
 
     // Stop the old runtime first (idempotent in the worker even if it already stopped/failed).
     const lifecyclePublisher = yield* WorkspaceLifecyclePublisherService;
+    const requestTrace = yield* currentTraceCarrier;
     yield* Effect.tryPromise({
       try: () =>
         lifecyclePublisher.publishStopRequested({
           workspaceId: workspace.id,
           runId: previousRunId,
           stopReason: "user",
+          trace: requestTrace,
         }),
       catch: (error) =>
         new WorkspaceBadGatewayError({
@@ -4144,8 +4153,10 @@ export const restartWorkspace = (input: {
     }
 
     const workspaceBuildJobPublisher = yield* WorkspaceBuildJobPublisherService;
+    // The restart's stop half (above) and its new build share this request's trace.
+    const buildTrace = yield* currentTraceCarrier;
     yield* Effect.tryPromise({
-      try: () => workspaceBuildJobPublisher.publishRequested({ jobId }),
+      try: () => workspaceBuildJobPublisher.publishRequested({ jobId, trace: buildTrace }),
       catch: (error) => error,
     }).pipe(
       Effect.catch((error) =>

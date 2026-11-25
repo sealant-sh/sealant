@@ -28,6 +28,7 @@ import {
   type UpdateRunRequest,
 } from "@sealant/api-contracts";
 import { RunRepo, WorkspaceRepo } from "@sealant/db";
+import { currentTraceCarrier } from "@sealant/observability";
 import {
   payloadCaseValues,
   TelemetryQuery,
@@ -271,8 +272,14 @@ export const createRun = (payload: CreateRunRequest) =>
     // caller-runs-it path).
     if (resolvedCommand !== undefined && payload.mode !== "interactive") {
       const publisher = yield* RunExecPublisherService;
+      const requestTrace = yield* currentTraceCarrier;
       yield* Effect.tryPromise({
-        try: () => publisher.publishRequested({ runId: run.id, command: resolvedCommand }),
+        try: () =>
+          publisher.publishRequested({
+            runId: run.id,
+            command: resolvedCommand,
+            trace: requestTrace,
+          }),
         catch: (error) =>
           new RunInternalServerError({
             message: toErrorMessage(error, "Failed to enqueue run execution."),

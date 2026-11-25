@@ -5,7 +5,7 @@
  */
 import type { IncomingMessage, Server } from "node:http";
 
-import { Option, Tracer } from "effect";
+import { Effect, Option, type Tracer } from "effect";
 import { Headers, HttpTraceContext } from "effect/http";
 
 /** A trace context as it is stored or sent: the W3C fields, `tracestate` when one came. */
@@ -18,6 +18,16 @@ export interface TraceCarrier {
 export const carrierOf = (span: Tracer.AnySpan): TraceCarrier => ({
   traceparent: `00-${span.traceId.padStart(32, "0")}-${span.spanId}-${span.sampled ? "01" : "00"}`,
 });
+
+/**
+ * The current span's context as a carrier, to send with work another process picks up (a queued
+ * job, a boot config), or `undefined` outside any span.
+ */
+export const currentTraceCarrier: Effect.Effect<TraceCarrier | undefined> =
+  Effect.currentParentSpan.pipe(
+    Effect.map(carrierOf),
+    Effect.orElseSucceed(() => undefined),
+  );
 
 /** The remote parent a carrier names, or `undefined` when it names none validly. */
 export const parentOf = (carrier: TraceCarrier): Tracer.ExternalSpan | undefined =>
