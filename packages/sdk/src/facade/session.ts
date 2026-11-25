@@ -19,6 +19,7 @@ import {
   sendSessionInputOp,
   signalSessionOp,
 } from "../effect/operations.js";
+import { traceHeaders, type CallerTrace } from "../effect/trace.js";
 import { SealantBudgetExceededError } from "../errors.js";
 import { resolveRequestPriority } from "../internal/config.js";
 import { toSealantError } from "../internal/map-error.js";
@@ -30,7 +31,7 @@ import type {
   SessionAttachOptions,
   SessionOutputChunk,
 } from "../types.js";
-import type { SdkContext } from "./context.js";
+import { captureTrace, type SdkContext } from "./context.js";
 
 /**
  * Open the held-WebSocket terminal attachment (the data plane). One socket:
@@ -180,6 +181,7 @@ async function* streamOverSse(
   from: bigint,
   signal: AbortSignal | undefined,
   priority: RequestPriority,
+  trace: CallerTrace | undefined,
 ): AsyncGenerator<SessionOutputChunk> {
   const config = ctx.config;
   const fetchImpl = config.fetch ?? fetch;
@@ -191,6 +193,7 @@ async function* streamOverSse(
     headers: {
       accept: "text/event-stream",
       "x-sealant-request-priority": priority,
+      ...traceHeaders(trace),
       ...(config.apiKey === undefined ? {} : { authorization: `Bearer ${config.apiKey}` }),
     },
     ...(signal === undefined ? {} : { signal }),
@@ -244,6 +247,7 @@ async function* streamByPolling(
   sessionId: string,
   from: bigint,
   signal: AbortSignal | undefined,
+  trace: CallerTrace | undefined,
 ): AsyncGenerator<SessionOutputChunk> {
   let cursor = from;
   for (;;) {
@@ -255,6 +259,7 @@ async function* streamByPolling(
         ownerUserId: ctx.config.hostLocal.ownerUserId,
         from: cursor.toString(),
       }),
+      trace,
     );
     for (const chunk of page.chunks) {
       yield { sequence: BigInt(chunk.sequence), data: decodeBase64(chunk.dataBase64) };
@@ -291,11 +296,20 @@ export const makeInteractiveSession = (ctx: SdkContext, wire: SessionWire): Inte
     output: (options) => {
       const from = options?.from ?? 0n;
       const signal = options?.signal;
+      // Captured when output() is called: the generator's body first runs on the first next().
+      const trace = captureTrace(ctx);
       async function* iterate(): AsyncGenerator<SessionOutputChunk> {
         let cursor = from;
         const priority = resolveRequestPriority(ctx.config.requestPriority);
         try {
-          for await (const chunk of streamOverSse(ctx, sessionId, cursor, signal, priority)) {
+          for await (const chunk of streamOverSse(
+            ctx,
+            sessionId,
+            cursor,
+            signal,
+            priority,
+            trace,
+          )) {
             yield chunk;
             cursor = chunk.sequence + 1n;
           }
@@ -309,7 +323,7 @@ export const makeInteractiveSession = (ctx: SdkContext, wire: SessionWire): Inte
           // from the cursor; the sequence keying makes the switch seamless.
           void error;
         }
-        yield* streamByPolling(ctx, sessionId, cursor, signal);
+        yield* streamByPolling(ctx, sessionId, cursor, signal, trace);
       }
       return iterate();
     },
