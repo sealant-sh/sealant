@@ -51,6 +51,8 @@ import {
   syncGitHubInstallationResponseSchema,
 } from "@sealant/validators";
 
+import type { TraceHeaders } from "@/lib/telemetry/trace-headers";
+
 const DEFAULT_CORE_API_URL = "http://localhost:4000";
 
 interface JsonSchema<TOutput> {
@@ -88,6 +90,8 @@ export interface CreateCoreApiClientOptions {
    * else's workspace or run by id, whatever a route forgets to check.
    */
   readonly ownerUserId?: string;
+  /** The caller's trace context, sent on every request so the API's spans join its trace. */
+  readonly traceHeaders?: TraceHeaders;
   readonly baseUrl?: string;
   readonly fetchImplementation?: typeof fetch;
 }
@@ -133,6 +137,8 @@ const parseWithSchema = <TOutput>(schema: JsonSchema<TOutput>, input: unknown): 
 export interface CoreApiClient {
   /** The same client, with every request made for `ownerUserId`. */
   forOwner(ownerUserId: string): CoreApiClient;
+  /** The same client, with every request continuing the trace these headers carry. */
+  withTraceHeaders(traceHeaders: TraceHeaders): CoreApiClient;
   readonly github: {
     importInstallation(
       input: InferSchema<typeof importGitHubInstallationRequestSchema>,
@@ -675,6 +681,10 @@ class CoreApiClientImpl implements CoreApiClient {
     return new CoreApiClientImpl({ ...this.options, ownerUserId });
   }
 
+  public withTraceHeaders(traceHeaders: TraceHeaders): CoreApiClient {
+    return new CoreApiClientImpl({ ...this.options, traceHeaders });
+  }
+
   /** The request made for this client's owner. It wins over an owner the caller named. */
   private scoped<TOutput>(options: CoreApiRequestOptions<TOutput>): CoreApiRequestOptions<TOutput> {
     const ownerUserId = this.ownerUserId;
@@ -694,6 +704,9 @@ class CoreApiClientImpl implements CoreApiClient {
     const serviceKey = getCoreApiServiceKey();
     if (serviceKey !== undefined && !headers.has("authorization")) {
       headers.set("authorization", `Bearer ${serviceKey}`);
+    }
+    for (const [name, value] of Object.entries(this.options.traceHeaders ?? {})) {
+      if (!headers.has(name)) headers.set(name, value);
     }
 
     if (options.body !== undefined) {

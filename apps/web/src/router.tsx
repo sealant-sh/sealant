@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { createRouter as createTanStackRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 
+import { startBrowserTelemetry } from "@/lib/telemetry/browser";
 import { createTrpcClient, createTrpcOptions } from "@/lib/trpc/client";
 import { TRPCProvider } from "@/lib/trpc/react";
 
@@ -28,6 +29,9 @@ export function getRouter() {
   });
 
   setupRouterSsrQueryIntegration({ router, queryClient });
+
+  // Before hydration, so the page load and the first tRPC requests are traced.
+  if (!router.isServer) startBrowserTelemetry(router);
 
   return router;
 }

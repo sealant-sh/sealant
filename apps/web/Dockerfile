@@ -19,7 +19,16 @@ RUN pnpm config set fetch-timeout 600000 && pnpm config set fetch-retries 5
 # Bound to the committed pnpm-lock.yaml: an image never resolves a dependency the lockfile did not
 # name, so a package published after the commit (a prerelease of our own included) cannot drift in.
 RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @sealant/web build
+# The Sentry release the browser bundle reports, and where its source maps go. The build uploads the
+# maps only when the sentry_auth_token secret is mounted (CI's release and next builds), and always
+# deletes them from dist/client, so the image never serves one. Without these it builds as before.
+ARG SENTRY_RELEASE=""
+ARG SENTRY_URL=""
+ARG SENTRY_ORG=""
+RUN --mount=type=secret,id=sentry_auth_token \
+  SENTRY_RELEASE="$SENTRY_RELEASE" SENTRY_URL="$SENTRY_URL" SENTRY_ORG="$SENTRY_ORG" \
+  SENTRY_AUTH_TOKEN_FILE=/run/secrets/sentry_auth_token \
+  pnpm --filter @sealant/web build
 RUN pnpm --filter @sealant/web deploy --legacy --prod /deploy
 
 FROM node:24-bookworm-slim AS runtime
