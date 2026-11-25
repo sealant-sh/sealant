@@ -30,10 +30,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { DockerRuntimeAdapter, parseRuntimeAdapterLaunchInput } from "@sealant/workspaces";
-import ssh2 from "ssh2";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { startSshGatewayServer } from "./gateway-server.js";
+import { generateEd25519KeyPair } from "./host-key.js";
 
 const run = promisify(execFile);
 
@@ -289,7 +289,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => api?.listen(apiPort, "127.0.0.1", resolve));
 
   gatewayPort = await freePort();
-  const hostKey = ssh2.utils.generateKeyPairSync("ed25519");
+  const hostKey = generateEd25519KeyPair();
   gateway = await startSshGatewayServer({
     host: "127.0.0.1",
     port: gatewayPort,
