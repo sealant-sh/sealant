@@ -50,7 +50,7 @@ import {
   type SealantTargetDerivationOptions,
   type SealantTarget,
 } from "@sealant/workspaces";
-import { Cause, Duration, Effect, Layer, Result } from "effect";
+import { Cause, Duration, Effect, identity, Layer, Result, type Tracer } from "effect";
 
 /** How long `dotfiles.apply` may take to answer: the clone and the apply, not the bootstrap. */
 const DOTFILES_APPLY_TIMEOUT = Duration.minutes(10);
@@ -84,6 +84,8 @@ export interface ProcessRunExecJobOptions {
   readonly credentialCipher?: CredentialCipherService;
   /** How this worker reaches each runtime family (client TLS for Kubernetes). */
   readonly targetOptions?: SealantTargetDerivationOptions;
+  /** The delivery's span (`sealant.job.process`): the run's execution is traced beneath it. */
+  readonly parentSpan?: Tracer.AnySpan;
 }
 
 const resolveRuntimeTarget = (runId: string, targetOptions: SealantTargetDerivationOptions) =>
@@ -430,6 +432,11 @@ export const processRunExecJob = (options: ProcessRunExecJobOptions): Promise<vo
   const appLayer = Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive, sinkLayer);
 
   return Effect.runPromise(
-    withProcessObservers(processRunExecJobEffect(options).pipe(Effect.provide(appLayer))),
+    withProcessObservers(
+      processRunExecJobEffect(options).pipe(
+        Effect.provide(appLayer),
+        options.parentSpan === undefined ? identity : Effect.withParentSpan(options.parentSpan),
+      ),
+    ),
   );
 };

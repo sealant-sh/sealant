@@ -1,9 +1,3 @@
-/**
- * The workspace RUN-EXEC queue — mirrors the workspace-build queue, but for executing a harness run
- * server-side. The API enqueues a message when a run is created with a `command`; the worker consumes
- * it, docker-execs the harness in the workspace, ingests telemetry, and marks the run terminal. This is
- * what lets the SDK be a thin HTTP client (it no longer docker-execs or writes telemetry itself).
- */
 import {
   createJobQueueService,
   defineJobQueue,
@@ -11,6 +5,13 @@ import {
   jobQueueSchemaName,
   type JobQueueConsumerMessage,
 } from "@sealant/jobs";
+/**
+ * The workspace RUN-EXEC queue — mirrors the workspace-build queue, but for executing a harness run
+ * server-side. The API enqueues a message when a run is created with a `command`; the worker consumes
+ * it, docker-execs the harness in the workspace, ingests telemetry, and marks the run terminal. This is
+ * what lets the SDK be a thin HTTP client (it no longer docker-execs or writes telemetry itself).
+ */
+import type { TraceCarrier } from "@sealant/observability";
 
 import { processUserProblem } from "../runtime/process-user.js";
 
@@ -351,9 +352,11 @@ export const runExecRequestEnvelope = (
 export const publishRunExecRequested = async (
   databaseUrl: string,
   input: RunExecRequestInput,
+  /** The sender's trace, which the run's execution continues. */
+  trace?: TraceCarrier,
 ): Promise<void> => {
   const { queue, message } = runExecRequestEnvelope(input);
-  await createJobQueueService(databaseUrl).publishJson({ queue, message });
+  await createJobQueueService(databaseUrl).publishJson({ queue, message, trace });
 };
 
 export type RunExecConsumerMessage = JobQueueConsumerMessage<RunExecRequestedMessage>;

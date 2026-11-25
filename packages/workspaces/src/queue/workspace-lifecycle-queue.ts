@@ -1,10 +1,11 @@
+import { createJobQueueService, defineJobQueue, type JobQueueConsumerMessage } from "@sealant/jobs";
 /**
  * The workspace LIFECYCLE queue — mirrors the run-exec queue, but for runtime teardown. The API
  * enqueues a stop request (user stop, or the stop half of a restart); the worker consumes it, removes
  * the container via the runtime adapter, and records the terminal "stopped" state. Runtime mutations
  * stay in the worker: the API never needs a Docker socket (or, later, kube credentials).
  */
-import { createJobQueueService, defineJobQueue, type JobQueueConsumerMessage } from "@sealant/jobs";
+import type { TraceCarrier } from "@sealant/observability";
 import { Predicate } from "effect";
 
 export const workspaceLifecycleQueueName = "workspace-lifecycle";
@@ -70,6 +71,8 @@ export const publishWorkspaceStopRequested = async (
     readonly runId: string;
     readonly stopReason: WorkspaceStopReason;
   },
+  /** The sender's trace, which the stop continues. */
+  trace?: TraceCarrier,
 ): Promise<void> => {
   const message: WorkspaceStopRequestedMessage = {
     kind: workspaceStopRequestedMessageKind,
@@ -80,7 +83,7 @@ export const publishWorkspaceStopRequested = async (
   const jobs = createJobQueueService(databaseUrl);
   // A duplicate stop for the same runtime is harmless: the adapter stop and the status writes are
   // both idempotent.
-  await jobs.publishJson({ queue: workspaceLifecycleQueue, message });
+  await jobs.publishJson({ queue: workspaceLifecycleQueue, message, trace });
 };
 
 export type WorkspaceLifecycleConsumerMessage =

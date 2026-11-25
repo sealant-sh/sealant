@@ -35,6 +35,7 @@ import {
 } from "@sealant/api-contracts";
 import { CredentialCipher } from "@sealant/credentials";
 import { ResourceDomainRepo, ResourceInstanceRepo, type ResourceInstanceRecord } from "@sealant/db";
+import { currentTraceCarrier } from "@sealant/observability";
 import {
   desiredAttachments,
   dockerFailureReason,
@@ -559,8 +560,9 @@ const announceBoatLink = (workspaceId: string) =>
   Effect.gen(function* () {
     const repo = yield* ResourceInstanceRepo;
     const publisher = yield* BoatResourceLinkPublisherService;
+    const trace = yield* currentTraceCarrier;
     for (const runId of yield* repo.liveBoatRuns(workspaceId)) {
-      yield* Effect.tryPromise(() => publisher.publishLinkChanged({ workspaceId, runId }));
+      yield* Effect.tryPromise(() => publisher.publishLinkChanged({ workspaceId, runId, trace }));
     }
   }).pipe(
     Effect.catch(() =>

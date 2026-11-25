@@ -800,9 +800,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const runExecConsumer = await consumeRunExecJobs({
     databaseUrl: env.DATABASE_URL,
     concurrency: env.RUN_EXEC_QUEUE_CONCURRENCY,
-    onMessage: async ({ message }) => {
+    onMessage: async ({ message, span }) => {
       try {
         await processRunExecJob({
+          parentSpan: span,
           runId: message.runId,
           ...(message.command === undefined ? {} : { command: message.command }),
           ...(message.commands === undefined ? {} : { commands: message.commands }),

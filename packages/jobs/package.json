@@ -13,6 +13,7 @@
     "typecheck": "tsrs -p tsconfig.json --noEmit --checkers 1"
   },
   "dependencies": {
+    "@sealant/observability": "workspace:*",
     "effect": "catalog:",
     "pg-boss": "catalog:"
   },

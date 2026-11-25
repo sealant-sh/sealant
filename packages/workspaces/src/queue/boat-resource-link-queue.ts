@@ -1,3 +1,4 @@
+import { createJobQueueService, defineJobQueue, type JobQueueConsumerMessage } from "@sealant/jobs";
 /**
  * The Boat resource-link queue. A Boat run reaches its project's resources through a gateway that
  * only the worker configures, so a link the API writes changes nothing a session can reach until
@@ -6,7 +7,7 @@
  * once. The worker's resource sweep visits every live run every few ticks and applies the same
  * link, so a message that is lost, dropped or failed costs a short delay and nothing else.
  */
-import { createJobQueueService, defineJobQueue, type JobQueueConsumerMessage } from "@sealant/jobs";
+import type { TraceCarrier } from "@sealant/observability";
 
 export const boatResourceLinkQueueName = "boat-resource-links";
 
@@ -54,6 +55,8 @@ export const parseBoatResourceLinkChangedMessage = (
 export const publishBoatResourceLinkChanged = async (
   databaseUrl: string,
   input: { readonly workspaceId: string; readonly runId: string },
+  /** The sender's trace, which applying the link continues. */
+  trace?: TraceCarrier,
 ): Promise<void> => {
   const message: BoatResourceLinkChangedMessage = {
     kind: boatResourceLinkChangedMessageKind,
@@ -61,7 +64,12 @@ export const publishBoatResourceLinkChanged = async (
     runId: input.runId,
   };
   const jobs = createJobQueueService(databaseUrl);
-  await jobs.publishJson({ queue: boatResourceLinkQueue, message, collapseKey: input.runId });
+  await jobs.publishJson({
+    queue: boatResourceLinkQueue,
+    message,
+    collapseKey: input.runId,
+    trace,
+  });
 };
 
 export type BoatResourceLinkConsumerMessage =

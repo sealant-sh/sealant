@@ -21,6 +21,7 @@ import {
   type ApplyWorkspaceDotfilesRequest,
 } from "@sealant/api-contracts";
 import { RunRepo, WorkspaceCredentialHomeRepo } from "@sealant/db";
+import { currentTraceCarrier } from "@sealant/observability";
 import {
   buildDotfilesCleanupScript,
   buildDotfilesStageScript,
@@ -216,10 +217,12 @@ export const applyWorkspaceDotfiles = (input: {
       );
 
     const publisher = yield* RunExecPublisherService;
+    const requestTrace = yield* currentTraceCarrier;
     const repository = payload.repository;
     yield* Effect.tryPromise({
       try: () =>
         publisher.publishRequested({
+          trace: requestTrace,
           runId: run.id,
           dotfiles: {
             ...who,

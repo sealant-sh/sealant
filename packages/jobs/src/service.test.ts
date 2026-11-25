@@ -6,7 +6,7 @@
  *     -e POSTGRES_USER=jobs -e POSTGRES_DB=jobs postgres:17-alpine
  *   SEALANT_JOBS_TEST_DATABASE_URL=postgresql://jobs:jobs@127.0.0.1:55432/jobs pnpm vitest run
  */
-import { Schema } from "effect";
+import { Option, Schema, type Tracer } from "effect";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createJobQueueService } from "./service.js";
@@ -52,6 +52,42 @@ describe.skipIf(databaseUrl === undefined)("job queue (pg-boss)", () => {
     const { boss } = await getJobQueueSingleton(url);
     const [completed] = await boss.findJobs(queue.name);
     expect(completed?.state).toBe("completed");
+  });
+
+  it("continues the sender's trace in the delivery's span, and parses the message without it", async () => {
+    const queue = defineJobQueue(`test-trace-${suffix}`, { activeTimeoutSeconds: 60 });
+    const jobs = createJobQueueService(url);
+    const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+    const senderSpanId = "00f067aa0ba902b7";
+    const parsed: unknown[] = [];
+    const { promise: delivered, resolve: resolveDelivered } =
+      Promise.withResolvers<Tracer.AnySpan>();
+
+    const consumer = await jobs.consumeJson<{ readonly id: string }>({
+      queue,
+      parseMessage: (input) => {
+        parsed.push(input);
+        return decodeIdMessage(input);
+      },
+      onMessage: async ({ span }) => {
+        resolveDelivered(span);
+      },
+    });
+    await jobs.publishJson({
+      queue,
+      message: { id: "traced" },
+      trace: { traceparent: `00-${traceId}-${senderSpanId}-01` },
+    });
+    const span = await delivered;
+    await consumer.cancel();
+
+    expect(parsed).toEqual([{ id: "traced" }]);
+    expect(span.traceId).toBe(traceId);
+    // The delivery's own span, not the sender's: its parent is the sender's span.
+    expect("parent" in span && Option.getOrUndefined(span.parent)?.spanId).toBe(senderSpanId);
+    expect("attributes" in span && span.attributes.get("messaging.destination.name")).toBe(
+      queue.name,
+    );
   });
 
   it("delivers two messages that share one wake-up without waiting out pg-boss's NOTIFY backstop", async () => {
