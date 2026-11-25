@@ -4,6 +4,7 @@ import { createSealantDBFromEnv, type DB } from "@sealant/db";
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 
 import { createCoreApiClient, type CoreApiClient } from "@/lib/api/core-api-client";
+import { traceHeadersFrom } from "@/lib/telemetry/trace-headers";
 
 interface TrpcServerResources {
   readonly auth: SealantAuth;
@@ -73,7 +74,8 @@ export const createTrpcContext = async (
 
   return {
     auth: resources.auth,
-    coreApi: resources.coreApi,
+    // The browser's trace context goes on to the API, so the API's spans join the browser's trace.
+    coreApi: resources.coreApi.withTraceHeaders(traceHeadersFrom(options.req.headers)),
     db: resources.db,
     session,
     headers: options.req.headers,
