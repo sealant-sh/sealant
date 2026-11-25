@@ -71,6 +71,26 @@ export const nativeCommandFailure = (
   });
 };
 
+/** A value of a saved image's identity: a snapshot name, a `bx_` VM id, an ISO time or Boat's snapshot id. */
+const identityValue = z.string().regex(/^[A-Za-z0-9_.:+-]{1,256}$/);
+/**
+ * Why sealant refused the saved snapshot Boat answered for an image's name (SLNT-1347): each
+ * identity field that differs from what sealant recorded when it saved the image, with both
+ * values, `null` where one side has none. Only the identifiers and the time sealant compares, each
+ * already checked against Boat's response schema; nothing else from Boat's answer.
+ */
+export const nativeIdentityMismatchSchema = z
+  .array(
+    z.object({
+      field: z.enum(["name", "sourceSandboxId", "createdAt", "snapshotId"]),
+      recorded: identityValue.nullable(),
+      boat: identityValue.nullable(),
+    }),
+  )
+  .min(1)
+  .max(4);
+export type NativeIdentityMismatch = z.infer<typeof nativeIdentityMismatchSchema>;
+
 /** Transport failures have no command result. Retain safe provider context and the known local step. */
 export const nativeProviderFailureSchema = boatProviderFailureSchema.extend({
   step: nativeCommandFailureSchema.shape.step.optional(),

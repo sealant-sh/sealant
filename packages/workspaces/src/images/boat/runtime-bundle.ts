@@ -7,8 +7,10 @@ export { nativeRuntimeIdentitySchema } from "@sealant/validators";
 
 import {
   nativeCommandFailureSchema,
+  nativeIdentityMismatchSchema,
   nativeProviderFailureSchema,
   type NativeCommandFailure,
+  type NativeIdentityMismatch,
   type NativeProviderFailure,
 } from "./command-diagnostics.js";
 import runtimePin from "./runtime-pin.json" with { type: "json" };
@@ -25,12 +27,15 @@ export class NativeBuildError extends Error {
   readonly _tag = "NativeBuildError";
   readonly commandFailure: NativeCommandFailure | undefined;
   readonly providerFailure: NativeProviderFailure | undefined;
+  /** On `native-snapshot-identity-mismatch`: the fields Boat's saved snapshot differs in. */
+  readonly identityMismatch: NativeIdentityMismatch | undefined;
 
   constructor(
     readonly code: string,
     readonly journalPath?: string,
     commandFailure?: NativeCommandFailure,
     providerFailure?: NativeProviderFailure,
+    identityMismatch?: NativeIdentityMismatch,
   ) {
     const provider =
       providerFailure === undefined
@@ -38,11 +43,16 @@ export class NativeBuildError extends Error {
         : nativeProviderFailureSchema.parse(providerFailure);
     const diagnostic =
       commandFailure === undefined ? undefined : nativeCommandFailureSchema.parse(commandFailure);
+    const identity =
+      identityMismatch === undefined
+        ? undefined
+        : nativeIdentityMismatchSchema.parse(identityMismatch);
     super(
-      `Native snapshot failed: ${code}${journalPath === undefined ? "" : `; journal ${journalPath}`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}`,
+      `Native snapshot failed: ${code}${journalPath === undefined ? "" : `; journal ${journalPath}`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}${identity === undefined ? "" : `; identity differs ${JSON.stringify(identity)}`}`,
     );
     this.commandFailure = diagnostic;
     this.providerFailure = provider;
+    this.identityMismatch = identity;
   }
 }
 

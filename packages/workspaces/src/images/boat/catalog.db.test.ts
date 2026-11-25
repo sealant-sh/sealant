@@ -27,7 +27,7 @@ import {
   nativeBuildOwnershipSchema,
   type NativePublicationKey,
 } from "@sealant/validators";
-import { Arbitrary, Effect, Layer, Result, Schema } from "effect";
+import { Arbitrary, Effect, Layer, Logger, Result, Schema } from "effect";
 import { beforeAll, describe, expect } from "vitest";
 import { z } from "zod";
 
@@ -349,6 +349,132 @@ describe.skipIf(!enabled)("a quarantine a person fixed is built again (SLNT-783)
           );
         }),
       ),
+  );
+});
+
+/** The warnings the catalog logs while `effect` runs, by message. */
+const warnings = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const logged: string[] = [];
+    const result = yield* effect.pipe(
+      Effect.provide(
+        Logger.layer([
+          Logger.make(({ logLevel, message }) => {
+            if (logLevel === "Warn")
+              logged.push(Array.isArray(message) ? message.join(" ") : String(message));
+          }),
+        ]),
+      ),
+    );
+    return { result, logged };
+  });
+
+describe.skipIf(!enabled)("a saved image Boat answers with another identity (SLNT-1347)", () => {
+  /** A value Boat could answer for each identity field, unlike the one the fixture saved. */
+  const changed = {
+    name: "sealant-dev-boat-stream-changed",
+    sourceSandboxId: "bx_3456789a",
+    createdAt: "2020-01-01T00:00:00.000Z",
+    snapshotId: "changed-provider-id",
+  } as const;
+  for (const field of ["name", "sourceSandboxId", "createdAt", "snapshotId"] as const)
+    it.live(`${field} alone: reuse and recovery refuse it naming ${field} with both values`, () =>
+      test((repo, db) =>
+        Effect.gen(function* () {
+          const owner = yield* seed(db);
+          const f = yield* Effect.promise(() => nativeBuilderFixture("normal"));
+          const input = { scope: { kind: "owner" as const, ownerUserId: owner }, spec: f.spec };
+          const { result, logged } = yield* warnings(
+            throughCatalog(db, f, (catalog) =>
+              Effect.gen(function* () {
+                const image = yield* catalog.acquire({
+                  ...input,
+                  consumer: yield* consumer(db, owner),
+                });
+                const record = yield* repo.get(image.publicationId);
+                if (record === undefined) throw new Error("missing publication");
+                const identity = image.snapshot.identity;
+                const differences = [
+                  { field, recorded: identity[field] ?? null, boat: changed[field] },
+                ];
+                f.changeSnapshot(identity.name, field, changed[field]);
+                // A launch's reuse check (`findPublished`) and the sweep's (`#recover`).
+                for (const refused of [
+                  yield* Effect.promise(() =>
+                    f.builder.findPublished({ spec: f.spec, previous: image.snapshot }),
+                  ),
+                  yield* Effect.promise(() =>
+                    f.builder.reconcileBuild(record.ownership, {
+                      artifact: image.snapshot,
+                      evidence: image.evidence,
+                    }),
+                  ),
+                ]) {
+                  if (refused.ok) throw new Error("Boat's changed snapshot was accepted");
+                  expect(refused.error.code).toBe("native-snapshot-identity-mismatch");
+                  expect(refused.error.identityMismatch).toEqual(differences);
+                  expect(refused.error.message).toContain(JSON.stringify(differences));
+                }
+                // The next launch quarantines it as before, and its error carries the fields.
+                const quarantined = yield* Effect.flip(
+                  catalog.acquire({ ...input, consumer: yield* consumer(db, owner) }),
+                );
+                expect(quarantined).toMatchObject({
+                  code: "publication-quarantined",
+                  detail: "native-snapshot-identity-mismatch",
+                });
+                if (!(quarantined instanceof NativeCatalogError)) throw quarantined;
+                expect(quarantined.identityMismatch).toEqual(differences);
+                expect(quarantined.message).toContain(JSON.stringify(differences));
+                expect(yield* repo.get(image.publicationId)).toMatchObject({
+                  state: "quarantined",
+                  reason: "native-snapshot-identity-mismatch",
+                });
+                return { id: image.publicationId, differences };
+              }),
+            ),
+          );
+          expect(logged).toEqual([
+            `Boat image identity differs: publication ${result.id} quarantined (native-snapshot-identity-mismatch); differences ${JSON.stringify(result.differences)}`,
+          ]);
+        }),
+      ),
+    );
+
+  it.live("the sweep quarantines it and logs the fields that differ", () =>
+    test((repo, db) =>
+      Effect.gen(function* () {
+        const owner = yield* seed(db);
+        const f = yield* Effect.promise(() => nativeBuilderFixture("normal"));
+        const { result, logged } = yield* warnings(
+          throughCatalog(db, f, (catalog) =>
+            Effect.gen(function* () {
+              const image = yield* catalog.acquire({
+                scope: { kind: "owner", ownerUserId: owner },
+                spec: f.spec,
+                consumer: yield* consumer(db, owner),
+              });
+              const record = yield* repo.get(image.publicationId);
+              if (record === undefined) throw new Error("missing publication");
+              f.changeSnapshot(image.snapshot.identity.name, "createdAt", changed.createdAt);
+              expect((yield* catalog.reconcile({ limit: 100 })).entries).toContainEqual({
+                id: record.ownership.buildId,
+                outcome: "obligation",
+                code: "native-snapshot-identity-mismatch",
+              });
+              expect(yield* repo.get(image.publicationId)).toMatchObject({
+                state: "quarantined",
+                reason: "native-snapshot-identity-mismatch",
+              });
+              return { id: image.publicationId, recorded: image.snapshot.identity.createdAt };
+            }),
+          ),
+        );
+        expect(logged).toEqual([
+          `Boat image identity differs: publication ${result.id} quarantined (native-snapshot-identity-mismatch); differences ${JSON.stringify([{ field: "createdAt", recorded: result.recorded, boat: changed.createdAt }])}`,
+        ]);
+      }),
+    ),
   );
 });
 

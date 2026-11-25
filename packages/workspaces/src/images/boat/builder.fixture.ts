@@ -96,7 +96,9 @@ export const nativeBuilderFixture = async (
   const mutations: string[] = [];
   let allocationLabels: Record<string, string> = {};
   let marker = "",
-    snapshot: { name: string; sourceSandboxId: string; createdAt: string } | undefined;
+    snapshot:
+      | { name: string; sourceSandboxId: string; createdAt: string; snapshotId?: string }
+      | undefined;
   const snapshots = new Map<string, NonNullable<typeof snapshot>>();
   let savedPosts = 0,
     deleted = false,
@@ -295,8 +297,8 @@ export const nativeBuilderFixture = async (
           respond({
             ok: true,
             snapshot: {
-              ...snapshot,
               snapshotId: "exact-provider-id",
+              ...snapshot,
               status: mode === "failed-save" ? "failed" : "ready",
             },
           });
@@ -358,6 +360,16 @@ export const nativeBuilderFixture = async (
     posts: () => savedPosts,
     failSnapshotRemoval: () => {
       removalFailures++;
+    },
+    /** Boat answers `name` with a saved snapshot that differs from the one saved in `field` alone. */
+    changeSnapshot: (
+      name: string,
+      field: "name" | "sourceSandboxId" | "createdAt" | "snapshotId",
+      value: string,
+    ) => {
+      const saved = snapshots.get(name);
+      if (saved === undefined) throw new Error("no saved snapshot of that name");
+      snapshots.set(name, { ...saved, [field]: value });
     },
     replaceSnapshot: (name: string) =>
       snapshots.set(name, {
