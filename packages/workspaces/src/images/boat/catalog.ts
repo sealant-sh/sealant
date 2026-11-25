@@ -27,8 +27,10 @@ import { Context, Effect, Layer, Result } from "effect";
 import type { IBoatSnapshotBuilder } from "./builder.js";
 import {
   nativeCommandFailureSchema,
+  nativeIdentityMismatchSchema,
   nativeProviderFailureSchema,
   type NativeCommandFailure,
+  type NativeIdentityMismatch,
   type NativeProviderFailure,
 } from "./command-diagnostics.js";
 import type { NativeResult } from "./runtime-bundle.js";
@@ -38,6 +40,8 @@ export class NativeCatalogError extends Error {
   readonly _tag = "NativeCatalogError";
   readonly commandFailure: NativeCommandFailure | undefined;
   readonly providerFailure: NativeProviderFailure | undefined;
+  /** On `native-snapshot-identity-mismatch`: the fields Boat's saved snapshot differs in. */
+  readonly identityMismatch: NativeIdentityMismatch | undefined;
   constructor(
     readonly code:
       | "publication-pending"
@@ -50,6 +54,7 @@ export class NativeCatalogError extends Error {
     readonly detail?: string,
     commandFailure?: NativeCommandFailure,
     providerFailure?: NativeProviderFailure,
+    identityMismatch?: NativeIdentityMismatch,
   ) {
     const provider =
       providerFailure === undefined
@@ -57,11 +62,16 @@ export class NativeCatalogError extends Error {
         : nativeProviderFailureSchema.parse(providerFailure);
     const diagnostic =
       commandFailure === undefined ? undefined : nativeCommandFailureSchema.parse(commandFailure);
+    const identity =
+      identityMismatch === undefined
+        ? undefined
+        : nativeIdentityMismatchSchema.parse(identityMismatch);
     super(
-      `Native catalog: ${code}${code === "publication-build-attempts-exhausted" ? "; this environment build failed twice. Fix the recorded cause before trying a changed environment" : ""}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}`,
+      `Native catalog: ${code}${code === "publication-build-attempts-exhausted" ? "; this environment build failed twice. Fix the recorded cause before trying a changed environment" : ""}${detail === undefined ? "" : ` (${detail})`}${diagnostic === undefined ? "" : `; command ${JSON.stringify(diagnostic)}`}${provider === undefined ? "" : `; provider ${JSON.stringify(provider)}`}${identity === undefined ? "" : `; identity differs ${JSON.stringify(identity)}`}`,
     );
     this.commandFailure = diagnostic;
     this.providerFailure = provider;
+    this.identityMismatch = identity;
   }
 }
 
@@ -167,6 +177,7 @@ const mechanism = <A>(
               result.error.code,
               result.error.commandFailure,
               result.error.providerFailure,
+              result.error.identityMismatch,
             ),
           ),
     ),
@@ -197,6 +208,22 @@ const startsOnBoat = (spec: NativeAcquireInput["spec"], adapter: string | null) 
     : adapter === "boat") && boatLaunchSupport(spec).supported;
 const failureCode = (error: NativeCatalogFailure) =>
   error instanceof NativeCatalogError ? (error.detail ?? error.code) : error.code;
+const identityMismatchOf = (error: NativeCatalogFailure) =>
+  error instanceof NativeCatalogError ? error.identityMismatch : undefined;
+/**
+ * The worker's log line for an image quarantined because Boat answered its name with a saved
+ * snapshot that is not the one sealant saved: which fields differ, and both values (SLNT-1347).
+ */
+const logIdentityMismatch = (
+  id: string,
+  reason: string,
+  identity: NativeIdentityMismatch | undefined,
+) =>
+  identity === undefined
+    ? Effect.void
+    : Effect.logWarning(
+        `Boat image identity differs: publication ${id} quarantined (${reason}); differences ${JSON.stringify(identity)}`,
+      );
 
 const make = (
   options: BoatNativeCatalogOptions,
@@ -287,8 +314,21 @@ const make = (
           const reason = Result.isFailure(checked)
             ? failureCode(checked.failure)
             : "native-publication-missing";
+          const identity = Result.isFailure(checked)
+            ? identityMismatchOf(checked.failure)
+            : undefined;
           yield* repo.rejectReady(record.publication, reason);
-          return yield* Effect.fail(new NativeCatalogError("publication-quarantined", id, reason));
+          yield* logIdentityMismatch(id, reason, identity);
+          return yield* Effect.fail(
+            new NativeCatalogError(
+              "publication-quarantined",
+              id,
+              reason,
+              undefined,
+              undefined,
+              identity,
+            ),
+          );
         }
         return record.publication;
       }
@@ -349,6 +389,7 @@ const make = (
           return yield* Effect.fail(new NativeCatalogError("publication-pending", id));
         }
         yield* repo.quarantine(claim, failureCode(built.failure));
+        yield* logIdentityMismatch(id, failureCode(built.failure), built.failure.identityMismatch);
         return yield* Effect.fail(built.failure);
       }
       const exact = publication(record.ownership, built.success);
@@ -520,8 +561,21 @@ const make = (
           const reason = Result.isFailure(recovered)
             ? failureCode(recovered.failure)
             : "native-publication-evidence-mismatch";
+          const identity = Result.isFailure(recovered)
+            ? identityMismatchOf(recovered.failure)
+            : undefined;
           yield* repo.rejectReady(record.publication, reason);
-          return yield* Effect.fail(new NativeCatalogError("publication-quarantined", id, reason));
+          yield* logIdentityMismatch(id, reason, identity);
+          return yield* Effect.fail(
+            new NativeCatalogError(
+              "publication-quarantined",
+              id,
+              reason,
+              undefined,
+              undefined,
+              identity,
+            ),
+          );
         }
         return "verified";
       }
@@ -545,6 +599,11 @@ const make = (
           return "active-attempt";
         }
         yield* repo.quarantine(claim, failureCode(recovered.failure));
+        yield* logIdentityMismatch(
+          id,
+          failureCode(recovered.failure),
+          recovered.failure.identityMismatch,
+        );
         return yield* Effect.fail(recovered.failure);
       }
       if (recovered.success.kind !== "published") {

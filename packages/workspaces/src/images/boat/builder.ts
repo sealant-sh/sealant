@@ -35,6 +35,7 @@ import { sealantdHasRecoveryBoot } from "../../runtime/daemon-recovery.js";
 import {
   nativeCommandFailure,
   nativeCommandFailureSchema,
+  nativeIdentityMismatchSchema,
   nativeProviderFailureSchema,
   type NativeCommandFailure,
 } from "./command-diagnostics.js";
@@ -204,6 +205,7 @@ const failure = (error: unknown, path?: string) =>
         path ?? error.journalPath,
         error.commandFailure,
         error.providerFailure,
+        error.identityMismatch,
       )
     : new NativeBuildError("native-local-io-failed", path);
 
@@ -289,6 +291,30 @@ const sameIdentity = (
   expected.sourceSandboxId === actual.sourceSandboxId &&
   expected.createdAt === actual.createdAt &&
   expected.snapshotId === actual.snapshotId;
+
+type IdentityField = "name" | "sourceSandboxId" | "createdAt" | "snapshotId";
+/**
+ * The refusal of a saved snapshot whose identity is not the one sealant saved, naming each field
+ * `sameIdentity` compares that differs, with what sealant recorded and what Boat answered.
+ */
+const identityMismatch = (
+  recorded: { readonly [F in IdentityField]?: string | undefined },
+  boat: { readonly [F in IdentityField]?: string | undefined },
+) => {
+  const fields = ["name", "sourceSandboxId", "createdAt", "snapshotId"] as const;
+  const differences = nativeIdentityMismatchSchema.safeParse(
+    fields
+      .filter((field) => recorded[field] !== boat[field])
+      .map((field) => ({ field, recorded: recorded[field] ?? null, boat: boat[field] ?? null })),
+  );
+  return new NativeBuildError(
+    "native-snapshot-identity-mismatch",
+    undefined,
+    undefined,
+    undefined,
+    differences.success ? differences.data : undefined,
+  );
+};
 
 const persist = async (path: string, journal: Journal) => {
   const temporary = `${path}.next-${randomUUID()}`;
@@ -525,7 +551,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         : found;
     }, signal);
     if (result !== null && result.name !== name)
-      throw new NativeBuildError("native-snapshot-identity-mismatch");
+      throw identityMismatch({ name }, { name: result.name });
     return result;
   }
 
@@ -1071,7 +1097,9 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         identity: journal.save.identity,
       });
       const found = await this.#getSnapshot(artifact.identity.name, this.#signal());
-      if (found === null || !sameIdentity(artifact.identity, found) || found.status !== "ready")
+      if (found !== null && !sameIdentity(artifact.identity, found))
+        throw identityMismatch(artifact.identity, found);
+      if (found === null || found.status !== "ready")
         throw new NativeBuildError("native-snapshot-identity-mismatch");
       return { kind: "published", artifact, evidence: journal.evidence };
     }
@@ -1189,8 +1217,7 @@ export class BoatSnapshotBuilder implements IBoatSnapshotBuilder {
         return { ok: true, value: null };
       const found = await this.#getSnapshot(artifact.identity.name, this.#signal());
       if (found === null) return { ok: true, value: null };
-      if (!sameIdentity(artifact.identity, found))
-        throw new NativeBuildError("native-snapshot-identity-mismatch");
+      if (!sameIdentity(artifact.identity, found)) throw identityMismatch(artifact.identity, found);
       return { ok: true, value: found.status === "ready" ? artifact : null };
     } catch (error) {
       return { ok: false, error: failure(error) };
