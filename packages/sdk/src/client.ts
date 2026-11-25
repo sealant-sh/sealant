@@ -51,8 +51,9 @@ import {
 } from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
 import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
+import { withCallerTrace } from "./effect/trace.js";
 import { SealantBudgetExceededError, SealantError } from "./errors.js";
-import type { SdkContext } from "./facade/context.js";
+import { captureTrace, type SdkContext } from "./facade/context.js";
 import { makeRun } from "./facade/run.js";
 import {
   makeWorkspace,
@@ -178,11 +179,13 @@ export class Sealant {
   /** Workspace lifecycle: create, fetch, and list live environments. */
   readonly workspaces = {
     create: async (options: CreateOptions): Promise<Workspace> => {
+      // Every request create makes, readiness polls included, continues the caller's trace.
+      const trace = captureTrace(this.#ctx);
       if (options.sshAsOwner === true) {
-        await requireSshUser(this.#ctx);
+        await withCallerTrace(trace, () => requireSshUser(this.#ctx));
       }
       const { payload } = buildCreateWorkspaceRequest(options, this.#ctx.config);
-      const created = await this.#runtime.run(createWorkspaceOp(payload));
+      const created = await this.#runtime.run(createWorkspaceOp(payload), trace);
       const workspace = makeWorkspace(this.#ctx, {
         id: created.workspaceId,
         name: created.name,
@@ -212,7 +215,7 @@ export class Sealant {
         const onEvent = options.onEvent;
         void (async () => {
           try {
-            for await (const event of workspace.events()) {
+            for await (const event of withCallerTrace(trace, () => workspace.events())) {
               onEvent(event);
             }
           } catch {
@@ -220,7 +223,7 @@ export class Sealant {
           }
         })();
       }
-      return workspace.ready().catch((error: unknown) => {
+      return withCallerTrace(trace, () => workspace.ready()).catch((error: unknown) => {
         if (error instanceof SealantBudgetExceededError) {
           throw new SealantError(
             `Workspace ${created.workspaceId} was created, but a readiness request reached its budget. Resume this workspace instead of creating it again.`,

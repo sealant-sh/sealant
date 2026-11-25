@@ -13,13 +13,18 @@ import { Cause, Context, Effect, Exit, Layer, Scope } from "effect";
 import type { SealantInternalConfig } from "../internal/config.js";
 import { toSealantError } from "../internal/map-error.js";
 import { SealantApiClient, sealantApiClientLayer } from "./api-client.js";
+import { captureCallerTrace, continueCallerTrace, type CallerTrace } from "./trace.js";
 
 /** Services the SDK runtime provides to operation effects. */
 export type SdkServices = SealantApiClient;
 
 export interface SdkRuntime {
-  /** Provide the app context and run an operation effect, surfacing plain `SealantError`s. */
-  readonly run: <A, E>(effect: Effect.Effect<A, E, SdkServices>) => Promise<A>;
+  /**
+   * Provide the app context and run an operation effect, surfacing plain `SealantError`s. The
+   * effect continues `trace` when given, else the caller's trace captured when `run` is called
+   * (see `captureCallerTrace`).
+   */
+  readonly run: <A, E>(effect: Effect.Effect<A, E, SdkServices>, trace?: CallerTrace) => Promise<A>;
   /** Dispose the runtime scope (the HTTP client). Idempotent. */
   readonly dispose: () => Promise<void>;
 }
@@ -60,17 +65,24 @@ export const makeSdkRuntime = (config: SealantInternalConfig): SdkRuntime => {
     return built;
   };
 
+  const runTraced = async <A, E>(
+    effect: Effect.Effect<A, E, SdkServices>,
+    trace: CallerTrace | undefined,
+  ): Promise<A> => {
+    const { context } = await build();
+    const provided = Effect.provide(effect, context).pipe(continueCallerTrace(trace));
+    const exit = await Effect.runPromiseExit(provided);
+    if (Exit.isSuccess(exit)) {
+      return exit.value;
+    }
+    // Squash the Cause to its underlying failure/defect value, then map to a plain error.
+    throw toSealantError(Cause.squash(exit.cause));
+  };
+
   return {
-    run: async <A, E>(effect: Effect.Effect<A, E, SdkServices>): Promise<A> => {
-      const { context } = await build();
-      const provided = Effect.provide(effect, context);
-      const exit = await Effect.runPromiseExit(provided);
-      if (Exit.isSuccess(exit)) {
-        return exit.value;
-      }
-      // Squash the Cause to its underlying failure/defect value, then map to a plain error.
-      throw toSealantError(Cause.squash(exit.cause));
-    },
+    // Captured before the first `await`, while a calling Effect fiber is still current.
+    run: <A, E>(effect: Effect.Effect<A, E, SdkServices>, trace?: CallerTrace) =>
+      runTraced(effect, trace ?? captureCallerTrace(config.traceContext)),
     dispose: async () => {
       if (built === undefined) {
         return;

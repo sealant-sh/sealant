@@ -29,7 +29,7 @@ import type {
   RunSummary,
   TimelineEntry,
 } from "../types.js";
-import type { SdkContext } from "./context.js";
+import { bindRun, type SdkContext } from "./context.js";
 
 // Live `stream()` is poll-backed for now: it tails the timeline endpoint until the run is terminal.
 // The transport swaps to SSE over Postgres LISTEN/NOTIFY in Stage 5 behind this same signature.
@@ -238,12 +238,13 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
     transcript: async () => renderTranscript(reconstructCommands(await fetchTimeline())),
 
     stream: (options) => {
-      const ctxRun = ctx.runtime;
+      // Captured when stream() is called: the generator's body first runs on the first next().
+      const traced = bindRun(ctx);
       async function* iterate(): AsyncGenerator<TimelineEntry> {
         let from = options?.from;
         const deadline = elapsed() + STREAM_TIMEOUT_MS;
         for (;;) {
-          const wire = await ctxRun.run(
+          const wire = await traced(
             getRunTimelineOp(runId, {
               ownerUserId: ctx.config.hostLocal.ownerUserId,
               ...(from === undefined ? {} : { fromSequence: from.toString() }),
@@ -256,9 +257,9 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
           }
           // Stop once the run is terminal — with one final drain to catch entries written between the
           // last timeline fetch and the status check.
-          const run = await ctxRun.run(getRunOp(runId, ctx.config.hostLocal.ownerUserId));
+          const run = await traced(getRunOp(runId, ctx.config.hostLocal.ownerUserId));
           if (TERMINAL_RUN_STATUSES.has(run.status)) {
-            const tail = await ctxRun.run(
+            const tail = await traced(
               getRunTimelineOp(runId, {
                 ownerUserId: ctx.config.hostLocal.ownerUserId,
                 ...(from === undefined ? {} : { fromSequence: from.toString() }),

@@ -13,7 +13,7 @@ import { getRunChangesOp, getRunOp } from "../effect/operations.js";
 import { SealantError, SealantNotImplementedError } from "../errors.js";
 import { elapsed } from "../internal/clock.js";
 import type { Run, RunArtifacts, RunChanges, RunFileChange, RunResult } from "../types.js";
-import type { SdkContext } from "./context.js";
+import { bindRun, type SdkContext } from "./context.js";
 import { makeRunRecord } from "./record.js";
 
 export interface RunChangesData {
@@ -83,6 +83,8 @@ export const makeRun = (ctx: SdkContext, init: RunInit): Run => {
     record: makeRunRecord(ctx, runId),
 
     wait: async () => {
+      // Each poll continues the trace wait() was called in.
+      const run = bindRun(ctx);
       let current = init.wire;
       const deadline = elapsed() + WAIT_TIMEOUT_MS;
       while (!TERMINAL_STATUSES.has(current.status)) {
@@ -92,15 +94,13 @@ export const makeRun = (ctx: SdkContext, init: RunInit): Run => {
           });
         }
         await delay(WAIT_POLL_INTERVAL_MS);
-        current = await ctx.runtime.run(getRunOp(runId, ctx.config.hostLocal.ownerUserId));
+        current = await run(getRunOp(runId, ctx.config.hostLocal.ownerUserId));
       }
       // Settle the changes: a handle from `harness.start()` or `runs.get()` has none captured yet,
       // so read the server-side capture now that the run is terminal.
       const settledChanges =
         changesData ??
-        toRunChangesData(
-          await ctx.runtime.run(getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId)),
-        );
+        toRunChangesData(await run(getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId)));
       return makeRun(ctx, { wire: current, changes: settledChanges });
     },
   };

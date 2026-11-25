@@ -21,6 +21,7 @@ export interface SealantInternalConfig {
   readonly baseUrl: string;
   readonly apiKey: string | undefined;
   readonly fetch: typeof fetch | undefined;
+  readonly traceContext?: SealantConfig["traceContext"];
   readonly hostLocal: SealantHostLocalConfig;
 }
 
@@ -46,6 +47,7 @@ export const resolveInternalConfig = (config: SealantConfig): SealantInternalCon
   ...(config.requestPriority === undefined ? {} : { requestPriority: config.requestPriority }),
   apiKey: config.apiKey,
   fetch: config.fetch,
+  ...(config.traceContext === undefined ? {} : { traceContext: config.traceContext }),
   hostLocal: {
     ownerUserId: config.ownerUserId ?? env("SEALANT_OWNER_USER_ID") ?? DEFAULT_OWNER_USER_ID,
     registryId: env("SEALANT_REGISTRY_ID") ?? DEFAULT_REGISTRY_ID,
