@@ -37,65 +37,66 @@ const mapToken = (token: AccessToken): AccessTokenWire => ({
   createdAt: token.createdAt.toISOString(),
 });
 
-export const createAccessToken = (payload: CreateAccessTokenRequest) =>
-  Effect.gen(function* () {
-    const tokens = yield* AccessTokenRepo;
-    const secret = `slt_${randomBytes(32).toString("base64url")}`;
-    const tokenHash = createHash("sha256").update(secret).digest("hex");
+export const createAccessToken = Effect.fn("sealant.access_token.create")(function* (
+  payload: CreateAccessTokenRequest,
+) {
+  const tokens = yield* AccessTokenRepo;
+  const secret = `slt_${randomBytes(32).toString("base64url")}`;
+  const tokenHash = createHash("sha256").update(secret).digest("hex");
 
-    const token = yield* withInternalError(
-      tokens.createToken({
-        id: `tok_${randomUUID()}`,
-        ownerUserId: payload.ownerUserId,
-        tokenHash,
-        scopes: [...new Set(payload.scopes)],
-        ...(payload.name === undefined ? {} : { name: payload.name }),
-        ...(payload.workspaceId === undefined ? {} : { workspaceId: payload.workspaceId }),
-        ...(payload.ttlSeconds === undefined
-          ? {}
-          : { expiresAt: new Date(Date.now() + payload.ttlSeconds * 1000) }),
-      }),
-      "Failed to create access token.",
-    );
+  const token = yield* withInternalError(
+    tokens.createToken({
+      id: `tok_${randomUUID()}`,
+      ownerUserId: payload.ownerUserId,
+      tokenHash,
+      scopes: [...new Set(payload.scopes)],
+      ...(payload.name === undefined ? {} : { name: payload.name }),
+      ...(payload.workspaceId === undefined ? {} : { workspaceId: payload.workspaceId }),
+      ...(payload.ttlSeconds === undefined
+        ? {}
+        : { expiresAt: new Date(Date.now() + payload.ttlSeconds * 1000) }),
+    }),
+    "Failed to create access token.",
+  );
 
-    return { ...mapToken(token), token: secret };
-  });
+  return { ...mapToken(token), token: secret };
+});
 
-export const listAccessTokens = (ownerUserId: string) =>
-  Effect.gen(function* () {
-    const tokens = yield* AccessTokenRepo;
-    const items = yield* withInternalError(
-      tokens.listTokens(ownerUserId),
-      "Failed to list access tokens.",
-    );
-    return { items: items.map(mapToken) } satisfies ListAccessTokensResponse;
-  });
+export const listAccessTokens = Effect.fn("sealant.access_token.list")(function* (
+  ownerUserId: string,
+) {
+  const tokens = yield* AccessTokenRepo;
+  const items = yield* withInternalError(
+    tokens.listTokens(ownerUserId),
+    "Failed to list access tokens.",
+  );
+  return { items: items.map(mapToken) } satisfies ListAccessTokensResponse;
+});
 
-export const revokeAccessToken = (input: {
+export const revokeAccessToken = Effect.fn("sealant.access_token.revoke")(function* (input: {
   readonly tokenId: string;
   readonly ownerUserId: string;
-}) =>
-  Effect.gen(function* () {
-    const tokens = yield* AccessTokenRepo;
-    // Owner-scoped like everything else: look the token up via the owner's list, uniform 404.
-    const items = yield* withInternalError(
-      tokens.listTokens(input.ownerUserId),
-      "Failed to load access tokens.",
-    );
-    const target = items.find((token) => token.id === input.tokenId);
-    if (target === undefined) {
-      return yield* new AccessTokenNotFoundError({
-        message: `Access token not found: ${input.tokenId}`,
-      });
-    }
-    const revoked = yield* withInternalError(
-      tokens.revokeToken(target.id),
-      "Failed to revoke access token.",
-    );
-    if (revoked === null) {
-      return yield* new AccessTokenNotFoundError({
-        message: `Access token not found: ${input.tokenId}`,
-      });
-    }
-    return mapToken(revoked);
-  });
+}) {
+  const tokens = yield* AccessTokenRepo;
+  // Owner-scoped like everything else: look the token up via the owner's list, uniform 404.
+  const items = yield* withInternalError(
+    tokens.listTokens(input.ownerUserId),
+    "Failed to load access tokens.",
+  );
+  const target = items.find((token) => token.id === input.tokenId);
+  if (target === undefined) {
+    return yield* new AccessTokenNotFoundError({
+      message: `Access token not found: ${input.tokenId}`,
+    });
+  }
+  const revoked = yield* withInternalError(
+    tokens.revokeToken(target.id),
+    "Failed to revoke access token.",
+  );
+  if (revoked === null) {
+    return yield* new AccessTokenNotFoundError({
+      message: `Access token not found: ${input.tokenId}`,
+    });
+  }
+  return mapToken(revoked);
+});

@@ -4,83 +4,81 @@
 
 ### Minor Changes
 
-- 55326dd: A capture source takes an owner map, for executors where each person is a Linux user of their own
-  (Mend's per-person layout):
-
+- 55326dd: A capture source takes an owner map, for executors where each person is a Linux user of
+  their own (Mend's per-person layout):
   - `create({ source: { kind: "capture", …, ownerMap: { gid, worktreeUid, people: [{ id, uid }] } } })`
     reaches the workspace daemon as `SEALANT_CAPTURE_OWNER_MAP`. Its restore gives each listed
     person's saved directory (`<harnessHome>/people/<id>/`) to their uid and the worktree to the
     group, and a map that names anyone makes the executor a per-person one: no no-new-privileges, so
     every person's `sudo` works. Without a map nothing changes.
-  - Checked by the SDK and the control plane alike: `gid` 40000, uids in 40001–49999, ids that are one
-    directory name, no id or uid twice, at most 256 people. Refused on Cloudflare and Kubernetes. A
-    launch on an image whose probe does not report `restore.owner_map` fails with
+  - Checked by the SDK and the control plane alike: `gid` 40000, uids in 40001–49999, ids that are
+    one directory name, no id or uid twice, at most 256 people. Refused on Cloudflare and
+    Kubernetes. A launch on an image whose probe does not report `restore.owner_map` fails with
     `owner-map-unsupported` before anything starts. Only the source sets the variable: it comes last
-    in every capture launch's boot environment, empty without a map, and a `runtime.env` name must be
-    an environment variable name.
-  - `workspace.capture.replan({ expectedOwnerMap })` (`null` for none) refuses a claim on an executor
-    launched with another map (`409`, `owner-map-mismatch`); `capture.status()` reports `ownerMap`.
-  - `@sealant/api-contracts/capture-owner-map` holds the shape, the checks (`captureOwnerMapProblems`)
-    and the daemon's encoding (`encodeCaptureOwnerMap`).
+    in every capture launch's boot environment, empty without a map, and a `runtime.env` name must
+    be an environment variable name.
+  - `workspace.capture.replan({ expectedOwnerMap })` (`null` for none) refuses a claim on an
+    executor launched with another map (`409`, `owner-map-mismatch`); `capture.status()` reports
+    `ownerMap`.
+  - `@sealant/api-contracts/capture-owner-map` holds the shape, the checks
+    (`captureOwnerMapProblems`) and the daemon's encoding (`encodeCaptureOwnerMap`).
 
-- 78e1763: `workspace.credentials.put({ …, partial: true })` writes what the person has connected and reports
-  what they have not, in one call: a provider whose account is refused (`connected-account-missing`,
-  `connected-account-invalid` or `connected-account-unsupported`) is left out, its login is removed
-  from the home as `null` would remove it, and the result's `skipped` lists
-  `{ provider, reason, message }` for each, instead of the whole put rejecting. Every other refusal
-  still rejects. The put now always resolves with `skipped` (empty for a whole put); on the wire,
-  `partial` on the request and `skipped: [{ provider, code, message }]` on a partial put's answer. A
-  pi or opencode `auth.json` that cannot be written in the home (not a regular file, or really outside
-  it) is left out the same way, with `reason` `login-file-unusable`, and everything else is still
-  written and removed.
+- 78e1763: `workspace.credentials.put({ …, partial: true })` writes what the person has connected
+  and reports what they have not, in one call: a provider whose account is refused
+  (`connected-account-missing`, `connected-account-invalid` or `connected-account-unsupported`) is
+  left out, its login is removed from the home as `null` would remove it, and the result's `skipped`
+  lists `{ provider, reason, message }` for each, instead of the whole put rejecting. Every other
+  refusal still rejects. The put now always resolves with `skipped` (empty for a whole put); on the
+  wire, `partial` on the request and `skipped: [{ provider, code, message }]` on a partial put's
+  answer. A pi or opencode `auth.json` that cannot be written in the home (not a regular file, or
+  really outside it) is left out the same way, with `reason` `login-file-unusable`, and everything
+  else is still written and removed.
 - a3f65d9: pi's and opencode's ChatGPT logins are providers of `workspace.credentials`:
-
-  - `put({ …, pi, opencode })` names one of the person's Codex accounts (`true` is their default) and
-    writes its ChatGPT login, with no refresh token, as one entry of each tool's own `auth.json`:
-    `openai-codex` in `<home>/.pi/agent/auth.json`, `openai` in
-    `<home>/.local/share/opencode/auth.json`. The file is merged in place as the home's owner, through
-    links to where it really is, which must be inside the home and outside `/workspace`. Its other
-    entries stay, and a login the person made inside pi or opencode is never replaced or removed.
+  - `put({ …, pi, opencode })` names one of the person's Codex accounts (`true` is their default)
+    and writes its ChatGPT login, with no refresh token, as one entry of each tool's own
+    `auth.json`: `openai-codex` in `<home>/.pi/agent/auth.json`, `openai` in
+    `<home>/.local/share/opencode/auth.json`. The file is merged in place as the home's owner,
+    through links to where it really is, which must be inside the home and outside `/workspace`. Its
+    other entries stay, and a login the person made inside pi or opencode is never replaced or
+    removed.
   - The home's record and `list()` name the Codex account under `pi` and `opencode`; `null` or a
     release removes only Core's copy, and a refresh of the Codex login rewrites both entries.
-  - A Codex account that is not a ChatGPT login is refused with `409` `connected-account-unsupported`
-    and `provider: "codex"`.
-  - A first put refused because a login would land outside the home (`home-unusable`) no longer leaves
-    its hold's marker behind: the home can be put into again without a release first.
+  - A Codex account that is not a ChatGPT login is refused with `409`
+    `connected-account-unsupported` and `provider: "codex"`.
+  - A first put refused because a login would land outside the home (`home-unusable`) no longer
+    leaves its hold's marker behind: the home can be put into again without a release first.
   - Without node on the image's system PATH, a put naming pi or opencode, and a release or put that
-    would remove a pi or opencode login whose file exists, are refused (`home-unusable`) and the home
-    stays held: no earlier holder's copy is ever left behind. A pi or opencode file that cannot be
-    written, or really is outside the home, is refused naming the file.
+    would remove a pi or opencode login whose file exists, are refused (`home-unusable`) and the
+    home stays held: no earlier holder's copy is ever left behind. A pi or opencode file that cannot
+    be written, or really is outside the home, is refused naming the file.
 
 - a4522bd: A refused connected account says which provider it is about, in a stable code:
-
   - `workspace.credentials.put()` and a create that names an account answer `404` with
     `code: "connected-account-missing"` for an account the person cannot name, and `409` with
-    `code: "connected-account-invalid"` for one marked invalid or holding an unusable credential, each
-    with `provider` (`claude`, `codex` or `github`). The messages are unchanged.
-  - `WorkspaceNotFoundError` takes an optional `code` and `provider`, and `WorkspaceConflictError` an
-    optional `provider`; `connectedAccountRefusalCodes` lists the two codes.
+    `code: "connected-account-invalid"` for one marked invalid or holding an unusable credential,
+    each with `provider` (`claude`, `codex` or `github`). The messages are unchanged.
+  - `WorkspaceNotFoundError` takes an optional `code` and `provider`, and `WorkspaceConflictError`
+    an optional `provider`; `connectedAccountRefusalCodes` lists the two codes.
   - `SealantApiError` carries the body's stable code as `reason` and the account's `provider`, so a
-    caller branches on `error.reason === "connected-account-missing"` and `error.provider` instead of
-    the words or `error.cause`.
+    caller branches on `error.reason === "connected-account-missing"` and `error.provider` instead
+    of the words or `error.cause`.
 
-- 0a9cf91: The SDK and the contracts run on stable Effect: their peer dependency is `effect` `^4.0.5` (was
-  `>=4.0.0-beta.85 <5`). Effect 4.0.0 moved the HTTP modules out of `effect/unstable/*` and removed
-  the old paths, so the packages built against the beta failed to load beside Effect 4.0.x
-  (`ERR_MODULE_NOT_FOUND .../effect/dist/unstable/httpapi.js`) while the old peer range let a package
-  manager pair them without a warning. The built packages now import `effect/http` and
-  `effect/http-api`.
+- 0a9cf91: The SDK and the contracts run on stable Effect: their peer dependency is `effect`
+  `^4.0.5` (was `>=4.0.0-beta.85 <5`). Effect 4.0.0 moved the HTTP modules out of
+  `effect/unstable/*` and removed the old paths, so the packages built against the beta failed to
+  load beside Effect 4.0.x (`ERR_MODULE_NOT_FOUND .../effect/dist/unstable/httpapi.js`) while the
+  old peer range let a package manager pair them without a warning. The built packages now import
+  `effect/http` and `effect/http-api`.
 
   A consumer on an Effect 4 beta or release candidate moves to Effect 4.0.5 or later with this
-  release; the narrowed range keeps a beta from being paired with it. The SDK's surface, its contract
-  errors and the wire format are unchanged.
+  release; the narrowed range keeps a beta from being paired with it. The SDK's surface, its
+  contract errors and the wire format are unchanged.
 
 - 856412f: The SDK surface for per-person homes (Mend ADR 0016):
-
   - `create({ credentialsHome: { path, uid, gid } })` writes the launch's logins into that home
     instead of `$HOME` and the environment: Claude (a setup token too) and Codex as their files,
-    GitHub as `.config/gh/hosts.yml`, all in one write, every file owned by `uid`:`gid`, the home made
-    for them if it does not exist. The home is then held for the workspace's owner, as
+    GitHub as `.config/gh/hosts.yml`, all in one write, every file owned by `uid`:`gid`, the home
+    made for them if it does not exist. The home is then held for the workspace's owner, as
     `workspace.credentials.put` holds it, and kept refreshed; a launch delivered again writes again.
     Refused on the Cloudflare runtime.
   - `exec(argv, { user })` and `sessions.open(argv, { user })` ask for a process to run as a Linux
@@ -91,18 +89,17 @@
     instead. `SessionConflictError` gains an optional `code`.
   - An image's per-person capability (`personLayout`: `status`, `missing`, `unknown`, `runtime`,
     `acl`), derived from the image probe the build records (`metadata.imageProbe`), is on every
-    workspace read's `publishedImage`, on `launch.image` after `ready()` and from `workspace.image()`.
-    `workspaces.imageKey(options)` computes, with no call, a key for the image a create would build;
-    `workspaces.inspectImage(options)` (`POST /v1/workspaces/image`) reads the capability before a
-    create, for a key not yet known.
+    workspace read's `publishedImage`, on `launch.image` after `ready()` and from
+    `workspace.image()`. `workspaces.imageKey(options)` computes, with no call, a key for the image
+    a create would build; `workspaces.inspectImage(options)` (`POST /v1/workspaces/image`) reads the
+    capability before a create, for a key not yet known.
 
-- 58bba78: Sealant no longer stores the arguments a process, a run's command or a session was started with.
-  Arguments can carry secrets (a token a script writes, a file's bytes in base64, `env KEY=value`),
-  and redaction covers output and terminal input, never arguments. What is kept is the executable, the
-  argument count and each argument's length in UTF-8 bytes:
-
-  - A record's `processStarted` event keeps its executable, working directory and pid, adds `argCount`
-    and `argLengths`, and its `args` is always empty. The timeline summary reads
+- 58bba78: Sealant no longer stores the arguments a process, a run's command or a session was
+  started with. Arguments can carry secrets (a token a script writes, a file's bytes in base64,
+  `env KEY=value`), and redaction covers output and terminal input, never arguments. What is kept is
+  the executable, the argument count and each argument's length in UTF-8 bytes:
+  - A record's `processStarted` event keeps its executable, working directory and pid, adds
+    `argCount` and `argLengths`, and its `args` is always empty. The timeline summary reads
     `exec sh (2 arguments not recorded)`.
   - A run's `command` has an empty `args`, with `argCount` and `argLengths`.
   - A session's `argv` holds only the program, with `argCount` and `argLengths`.
@@ -113,16 +110,15 @@
   still carries its arguments, and reads in full until the upgrade's migration rewrites it.
 
   Rotate every secret delivered through arguments before this release, such as Mend's secret files.
-  Anyone with read access to the database, its dumps or its backups could read them, and rewriting the
-  rows cannot recall a copy already taken.
+  Anyone with read access to the database, its dumps or its backups could read them, and rewriting
+  the rows cannot recall a copy already taken.
 
 - 720a38b: A process runs as a person's Linux user (Mend ADR 0016):
-
   - `exec(argv, { user })` and `sessions.open(argv, { user })` now start the process as that user,
-    through the workspace's sealantd (`exec.user`, 0.20.0 and later): their uid, groups,
-    `HOME`, umask 0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`, the image's person environment, and
-    none of the daemon's logins. Only a person in Mend's range (a uid in 40001–49999 whose primary
-    group is `mend`, never root), on a workspace whose sealantd reports `exec.user`. Anything else is
+    through the workspace's sealantd (`exec.user`, 0.20.0 and later): their uid, groups, `HOME`,
+    umask 0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`, the image's person environment, and none
+    of the daemon's logins. Only a person in Mend's range (a uid in 40001–49999 whose primary group
+    is `mend`, never root), on a workspace whose sealantd reports `exec.user`. Anything else is
     refused before anything starts (`409`, code `user-unsupported`), the message saying why: the
     workspace's sealantd doesn't run processes as another user, the user is not in range, or it does
     not exist yet. An exec as a user whose executor does not answer the check is a `502`.
@@ -141,46 +137,45 @@
     `credentialsPartialPut`, `credentialsPiOpencode` and `captureOwnerMap`. On the wire: the index's
     `features`; a feature an older control plane does not name is `false`.
 
-- 4cfff68: `ready()` no longer spends its readiness bound on an image build. A first launch on a new image
-  whose `apt-get install` took eight minutes on a slow mirror used to fail at the 10-minute bound even
-  though the workspace would have come up.
-
+- 4cfff68: `ready()` no longer spends its readiness bound on an image build. A first launch on a new
+  image whose `apt-get install` took eight minutes on a slow mirror used to fail at the 10-minute
+  bound even though the workspace would have come up.
   - A launch reports its phase while the workspace is not ready: `queued`, `image-build` (with the
-    build's `step`/`steps`/`stepName` and `progressAt`, when it last wrote output) or `boot`. Read it
-    with `workspace.phase()`; on the wire it is `phase` on a workspace read. `events()` (and
+    build's `step`/`steps`/`stepName` and `progressAt`, when it last wrote output) or `boot`. Read
+    it with `workspace.phase()`; on the wire it is `phase` on a workspace read. `events()` (and
     `onEvent`) yields `phase.<name>` each time the launch moves to another phase or its build to
     another step, e.g. `Building the workspace image (step 2/12: RUN apt-get update …)`.
   - `ready()` bounds each phase on its own. `readyTimeoutMs` (default 10 minutes) bounds the launch
     outside the image build, queued and booting (`workspace_ready_timeout`); `imageBuildTimeoutMs`
     (default none) bounds the build as a whole (`workspace_image_build_timeout`). Pass them to
-    `create()` for the handle or to `ready(options)` for one wait. A build is otherwise waited for as
-    long as it reports progress: the worker fails one that writes nothing for
+    `create()` for the handle or to `ready(options)` for one wait. A build is otherwise waited for
+    as long as it reports progress: the worker fails one that writes nothing for
     `WORKSPACE_IMAGE_BUILD_STALL_MS` (10 minutes, `workspace_image_build_stalled`) or runs past
     `WORKSPACE_IMAGE_BUILD_MAX_MS` (45 minutes, `workspace_image_build_timeout`), naming the step.
     `ready()` gives up on its own on a build that shows no new progress for 20 minutes, and on one
-    that never reports any 20 minutes after it started (unless `imageBuildTimeoutMs` is set). A launch
-    the control plane failed rejects with `workspace_not_ready` and the control plane's reason. A
-    control plane that reports no phase is bounded by `readyTimeoutMs` as before.
-  - `stop()` while the image is still being built cancels the launch: the build stops, nothing boots,
-    and the workspace reads `cancelled`. It used to be refused until the runtime was up.
+    that never reports any 20 minutes after it started (unless `imageBuildTimeoutMs` is set). A
+    launch the control plane failed rejects with `workspace_not_ready` and the control plane's
+    reason. A control plane that reports no phase is bounded by `readyTimeoutMs` as before.
+  - `stop()` while the image is still being built cancels the launch: the build stops, nothing
+    boots, and the workspace reads `cancelled`. It used to be refused until the runtime was up.
   - A Docker worker whose database has no record of a plan reuses the `plan-<hash>` image the Engine
     kept, once the image carries the plan's full hash (the `sh.sealant.plan-hash` label builds now
     stamp) and its probe reads back, instead of building it again. `WORKSPACE_IMAGE_BUILD_CACHE_DIR`
     keeps BuildKit's layer cache in a directory between builds.
 
-- 5049cf2: A run's changes say whether they were read. `GET /v1/runs/:runId/changes` answers `available` and,
-  when it is `false`, `unavailableReason`, which says what happened: the run has not ended, no reading
-  of its changes was recorded, or reading them failed. The SDK's `run.changes` carries both. Until now
-  a failed reading came back as an empty diff and no files, which read as "nothing changed". A control
-  plane older than the field answers without it, and the SDK reads that as available.
-  `PATCH /v1/runs/:runId` takes `changesReadFailed` for a caller that read a run's changes and failed.
-- 15c5e87: A session's arguments may be any string. `argv[0]`, the program, must still be non-empty with no
-  leading or trailing whitespace; every word after it is passed to the program as it was sent: empty,
-  whitespace-led or multi-line, so `["bash", "-lc", "\n echo hi"]` and `["git", "commit", "-m", ""]`
-  now open a session where both were refused. This applies to `POST /v1/sessions`,
-  `POST /v1/sessions/as-user` and the SDK's `sessions.open(argv)`, which checks the same rule before
-  it sends.
-
+- 5049cf2: A run's changes say whether they were read. `GET /v1/runs/:runId/changes` answers
+  `available` and, when it is `false`, `unavailableReason`, which says what happened: the run has
+  not ended, no reading of its changes was recorded, or reading them failed. The SDK's `run.changes`
+  carries both. Until now a failed reading came back as an empty diff and no files, which read as
+  "nothing changed". A control plane older than the field answers without it, and the SDK reads that
+  as available. `PATCH /v1/runs/:runId` takes `changesReadFailed` for a caller that read a run's
+  changes and failed.
+- 15c5e87: A session's arguments may be any string. `argv[0]`, the program, must still be non-empty
+  with no leading or trailing whitespace; every word after it is passed to the program as it was
+  sent: empty, whitespace-led or multi-line, so `["bash", "-lc", "\n echo hi"]` and
+  `["git", "commit", "-m", ""]` now open a session where both were refused. This applies to
+  `POST /v1/sessions`, `POST /v1/sessions/as-user` and the SDK's `sessions.open(argv)`, which checks
+  the same rule before it sends.
   - Limits: at most 64 words (as before), 131,071 bytes per word and 1 MiB in all, counted in UTF-8
     bytes. 131,071 is the longest word `execve` takes on Linux with 4 KiB pages (`MAX_ARG_STRLEN` is
     128 KiB and counts the terminating NUL). A word with a NUL byte is refused, since no process
@@ -188,24 +183,25 @@
     `@sealant/api-contracts` exports the limits as `SESSION_ARGV_MAX_WORDS`,
     `SESSION_ARGV_MAX_WORD_BYTES` and `SESSION_ARGV_MAX_TOTAL_BYTES`, the rule as
     `sessionArgvIssue(argv)` and `sessionArgvSchema`.
-  - A request any control plane route cannot decode (a body that is not JSON or not an object, a field
-    missing or of the wrong type, a refused `argv`) answers `400` `RequestRefusedError`. Its `message`
-    names where the request is wrong and what was expected, never a value it held. The
+  - A request any control plane route cannot decode (a body that is not JSON or not an object, a
+    field missing or of the wrong type, a refused `argv`) answers `400` `RequestRefusedError`. Its
+    `message` names where the request is wrong and what was expected, never a value it held. The
     `RequestRefusal` middleware is applied to the whole `ControlPlaneAPI`, so every route has it.
     `describeRequestIssue` words the reason. Before this, such a request got an empty `400`, and the
     server's request log, error reporters and tracing span quoted the rejected input: a session's
     arguments, an exec's command, a run's command. A handler's own failure on a request that decoded
     stays a `500`, a text payload's (GitHub's webhook) included.
-  - In the SDK, `sessions.open(argv)` throws `SealantError` `invalid_argv` with the same reason before
-    it sends a refused argv, surfaces a control plane's `RequestRefusedError` with its reason, and
-    explains an older control plane's empty `400`.
-  - If `sealantd` refuses to start the program, the session and its run are now marked failed. Before
-    this, both were left running. If the answer to an open is lost instead, Sealant asks `sealantd`
-    again: a program it reports becomes the session's leader, and one it cannot report about leaves
-    the session open for a close to find and stop. A close that cannot reach `sealantd` changes
-    nothing and answers `502`, so it can be retried.
+  - In the SDK, `sessions.open(argv)` throws `SealantError` `invalid_argv` with the same reason
+    before it sends a refused argv, surfaces a control plane's `RequestRefusedError` with its
+    reason, and explains an older control plane's empty `400`.
+  - If `sealantd` refuses to start the program, the session and its run are now marked failed.
+    Before this, both were left running. If the answer to an open is lost instead, Sealant asks
+    `sealantd` again: a program it reports becomes the session's leader, and one it cannot report
+    about leaves the session open for a close to find and stop. A close that cannot reach `sealantd`
+    changes nothing and answers `502`, so it can be retried.
   - Upgrade the control plane before the SDK. An older control plane refuses an empty or untrimmed
-    argument with an empty `400` and logs the argument. An older SDK refuses such an argument itself.
+    argument with an empty `400` and logs the argument. An older SDK refuses such an argument
+    itself.
   - The arguments still reach `sealantd` as an argv array, never a shell string, and Sealant still
     stores only their count and lengths.
 
@@ -215,201 +211,209 @@
   `default`) and are read under the home's lock; `null` removes that provider's login from the home.
   Core writes copies (no refresh token; a Claude setup token as its credentials file) owned by the
   home's owner, mode `0600`, keeps them refreshed there, and writes GitHub as
-  `<home>/.config/gh/hosts.yml`. With `uid` and `gid` a home that does not exist yet is made for them.
-  A home holds one person's logins until it is released: a put naming anyone else is refused
+  `<home>/.config/gh/hosts.yml`. With `uid` and `gid` a home that does not exist yet is made for
+  them. A home holds one person's logins until it is released: a put naming anyone else is refused
   (`409 home-held`), and `/root` takes only the workspace owner's.
   `workspace.credentials.release(home)` (`DELETE`) removes the files and the record;
   `workspace.credentials.list()` (`GET`) lists the homes. Every write into a home is fenced in the
   executor, under a lock there, so a late write from an earlier hold never lands. A write that waits
   too long answers `409 home-busy` (retryable). Only a service key may call these.
-- 2f3ddc3: A person's dotfiles applied into their home of a running workspace (Mend's per-person layout):
-
+- 2f3ddc3: A person's dotfiles applied into their home of a running workspace (Mend's per-person
+  layout):
   - `workspace.dotfiles.apply({ onBehalfOf, user, home, repository?, archives? })` and
     `POST /v1/workspaces/:id/dotfiles` (service key only) take a create's dotfiles sources (a
-    repository cloned with no credential, `https://` only and never with a credential in its URL, and
-    up to 4 archives) and apply them with the workspace daemon's applier: the clone, chezmoi, stow or
-    copy as the user, then each tree's `./install.sh` as the user. `user` must exist and must not be
-    root or in root's group, `home` must be its passwd home, and a home whose logins another person
-    holds is refused (`home-held`). The run records `onBehalfOf` (`metadata.dotfiles`).
+    repository cloned with no credential, `https://` only and never with a credential in its URL,
+    and up to 4 archives) and apply them with the workspace daemon's applier: the clone, chezmoi,
+    stow or copy as the user, then each tree's `./install.sh` as the user. `user` must exist and
+    must not be root or in root's group, `home` must be its passwd home, and a home whose logins
+    another person holds is refused (`home-held`). The run records `onBehalfOf`
+    (`metadata.dotfiles`).
   - Every file in the home is written as the person: the daemon unpacks archives outside every home
-    and follows a link the person planted only as them, so a link into another person's home fails the
-    apply.
-  - The call resolves once every file is applied, with `bootstrap` running as the person (or `null`);
-    `bootstrap.wait()` resolves with its exit code and output, read from the run the apply is recorded
-    in (`harnessId` `dotfiles`). A bootstrap running past 30 minutes is stopped and the run fails.
+    and follows a link the person planted only as them, so a link into another person's home fails
+    the apply.
+  - The call resolves once every file is applied, with `bootstrap` running as the person (or
+    `null`); `bootstrap.wait()` resolves with its exit code and output, read from the run the apply
+    is recorded in (`harnessId` `dotfiles`). A bootstrap running past 30 minutes is stopped and the
+    run fails.
   - Refusals, nothing applied: `409` `dotfiles-user-unsupported` (the workspace's sealantd cannot
     apply as a user), `user-unknown`, `user-root`, `home-mismatch`, `home-unusable`, `home-held`,
     `workspace-not-running`; `400` for root, a home under `/workspace`, a URL with a credential, or
     nothing to apply; `403` without a service key. A failed apply rejects with `dotfiles_failed` and
     the daemon's words.
-  - Archives are staged root-only in the workspace over stdin and removed once the daemon answers; no
-    archive's bytes reach a job row or the run's record.
+  - Archives are staged root-only in the workspace over stdin and removed once the daemon answers;
+    no archive's bytes reach a job row or the run's record.
 
-- 9af9707: A workspace's SSH sessions run as its owner's own Linux user (Mend's per-person layout runs VS Code
-  Remote-SSH as the launcher's user, never root).
-
-  - A user's person is bound once: `POST /v1/users/:id/person { id, uid, home }` (owner-map id, a uid
-    in 40001–49999, a home under `SEALANT_PERSON_HOMES_ROOT`). The same values again are a no-op; a
-    different binding, or a person id or uid another user holds, answers `409`
+- 9af9707: A workspace's SSH sessions run as its owner's own Linux user (Mend's per-person layout
+  runs VS Code Remote-SSH as the launcher's user, never root).
+  - A user's person is bound once: `POST /v1/users/:id/person { id, uid, home }` (owner-map id, a
+    uid in 40001–49999, a home under `SEALANT_PERSON_HOMES_ROOT`). The same values again are a
+    no-op; a different binding, or a person id or uid another user holds, answers `409`
     (`person-binding-differs`, `person-taken`) and changes nothing. There is no rebind route.
-  - `sshAsOwner: true` on a create runs the sessions as that bound person. The create's capture owner
-    map must give the person their bound uid, and its `credentialsHome` must be their bound uid and
-    home; otherwise `403` (`WorkspaceSshOwnerRefusedError`). No caller names the user.
-    `DELETE /v1/workspaces/:id/ssh-user` sets the sessions back to root, the only change after create.
+  - `sshAsOwner: true` on a create runs the sessions as that bound person. The create's capture
+    owner map must give the person their bound uid, and its `credentialsHome` must be their bound
+    uid and home; otherwise `403` (`WorkspaceSshOwnerRefusedError`). No caller names the user.
+    `DELETE /v1/workspaces/:id/ssh-user` sets the sessions back to root, the only change after
+    create.
   - The SSH gateway starts every shell and command, and its disconnect-time working-tree capture, as
-    that user, on a `sealantd` that reports `exec.user`, and refuses the session otherwise rather than
-    run it as root. It asks who for every new session channel, so a change reaches a connection
-    already open. `GET .../ssh-target` always states `sessionUser` (`null` for root), and the gateway
-    refuses an answer without it. SFTP runs as the user too, on a `sealantd` that reports `sftp.user`
-    (refused on one that does not), so an upload is theirs, in the directory's group, with its default
-    ACL inherited.
+    that user, on a `sealantd` that reports `exec.user`, and refuses the session otherwise rather
+    than run it as root. It asks who for every new session channel, so a change reaches a connection
+    already open. `GET .../ssh-target` always states `sessionUser` (`null` for root), and the
+    gateway refuses an answer without it. SFTP runs as the user too, on a `sealantd` that reports
+    `sftp.user` (refused on one that does not), so an upload is theirs, in the directory's group,
+    with its default ACL inherited.
   - SDK: `users.bindPerson()`, `create({ sshAsOwner })`, `workspace.sshAsRoot()`,
     `features().workspaceSshUser` and `features().personBinding`. A create with `sshAsOwner` is
     refused (`ssh-user-unsupported`) with nothing sent to a control plane without the feature.
 
 ### Patch Changes
 
-- cada001: Arch workspaces run natively on arm64 Docker hosts and Kubernetes nodes. Docker Hub's `archlinux`
-  image is amd64 only, so an Arch image was built for amd64 everywhere and ran under emulation on
-  arm64 (Rosetta on Apple silicon, QEMU elsewhere). On arm64 it now starts from Arch Linux ARM's
-  rootfs, verified against the port's build key: the same stages the MicroVM images already used,
-  which now also drop the board kernel and firmware (1.3 GB) and lock the tarball's default accounts.
-  amd64 hosts build from `archlinux` as before. Fedora, Ubuntu and nix were already native.
+- cada001: Arch workspaces run natively on arm64 Docker hosts and Kubernetes nodes. Docker Hub's
+  `archlinux` image is amd64 only, so an Arch image was built for amd64 everywhere and ran under
+  emulation on arm64 (Rosetta on Apple silicon, QEMU elsewhere). On arm64 it now starts from Arch
+  Linux ARM's rootfs, verified against the port's build key: the same stages the MicroVM images
+  already used, which now also drop the board kernel and firmware (1.3 GB) and lock the tarball's
+  default accounts. amd64 hosts build from `archlinux` as before. Fedora, Ubuntu and nix were
+  already native.
 
-  On Apple silicon and other arm64 hosts, an existing Arch workspace switches from emulated x86_64 to
-  native aarch64 at its next launch. Dependencies with native modules that were installed under
+  On Apple silicon and other arm64 hosts, an existing Arch workspace switches from emulated x86_64
+  to native aarch64 at its next launch. Dependencies with native modules that were installed under
   emulation in existing worktrees (`node_modules`, `.venv`, `target/`) are x86_64 builds: reinstall
   them (`pnpm install`, `uv sync`, …). The first Arch build on such a host downloads the Arch Linux
   ARM rootfs from `os.archlinuxarm.org` (829 MB), outside any registry mirror. A mirror the port's
-  redirector picks that delivers less than 1 MB/s over 30 seconds is left for the redirector again and
-  then for three mirrors known to carry the tarball; the build prints the download's progress every 30
-  seconds, so its no-output bound does not stop a moving download. The tarball is kept in a BuildKit
-  cache mount: later Arch builds on the host reuse it while it verifies against the current signature,
-  and a download stopped midway resumes.
+  redirector picks that delivers less than 1 MB/s over 30 seconds is left for the redirector again
+  and then for three mirrors known to carry the tarball; the build prints the download's progress
+  every 30 seconds, so its no-output bound does not stop a moving download. The tarball is kept in a
+  BuildKit cache mount: later Arch builds on the host reuse it while it verifies against the current
+  signature, and a download stopped midway resumes.
 
   Every image is planned for the platform it runs on, and the plan hash covers it, so an amd64 image
-  is never reused on arm64. Plan hashes change once, and every image is built again on its next launch
-  (on amd64 from the layer cache: the Containerfile is unchanged). The platform is the Docker daemon's
-  architecture; on Kubernetes, the one the workspace node selector names, else the worker's node's.
-  `SEALANT_WORKSPACE_IMAGE_PLATFORM` (`linux/amd64` or `linux/arm64`) pins it for the API and the
-  worker; the Helm chart sets it on both from `workspaces.imagePlatform` or from the arch
+  is never reused on arm64. Plan hashes change once, and every image is built again on its next
+  launch (on amd64 from the layer cache: the Containerfile is unchanged). The platform is the Docker
+  daemon's architecture; on Kubernetes, the one the workspace node selector names, else the worker's
+  node's. `SEALANT_WORKSPACE_IMAGE_PLATFORM` (`linux/amd64` or `linux/arm64`) pins it for the API
+  and the worker; the Helm chart sets it on both from `workspaces.imagePlatform` or from the arch
   `workspaces.nodeSelector` selects. Workspace Pods and image build Jobs select nodes of that
   architecture, build Jobs run in the workspaces' node pool, and a build Job no node can take fails
   after five minutes instead of waiting out the build's bound. A custom base image is built for the
   platform its manifest offers, as before.
 
-- 1e2df7d: `workspace.credentials.put()` and `release()` keep every login out of every process's arguments and
-  environment inside the workspace. The home script used to start `env -i … p0="$p0" … setpriv …`, so
-  each login was in `env`'s arguments for an instant and in the environment of the person's shell and
-  every command it ran (`/proc/<pid>/environ`), including the launch's own write into a
-  `credentialsHome` and a refresh's rewrite. The logins now travel on standard input at every step,
-  and a shell's temporary file for one never lands where the workspace's `TMPDIR` points.
+- 1e2df7d: `workspace.credentials.put()` and `release()` keep every login out of every process's
+  arguments and environment inside the workspace. The home script used to start
+  `env -i … p0="$p0" … setpriv …`, so each login was in `env`'s arguments for an instant and in the
+  environment of the person's shell and every command it ran (`/proc/<pid>/environ`), including the
+  launch's own write into a `credentialsHome` and a refresh's rewrite. The logins now travel on
+  standard input at every step, and a shell's temporary file for one never lands where the
+  workspace's `TMPDIR` points.
 
   A Claude, Codex or GitHub login file in the home that is not a regular file, or that has another
-  hard link, is refused with `409` `home-unusable` naming the file, and nothing is written into it. A
-  `partial: true` put leaves such a provider out with `reason` `login-file-unusable` and writes the
-  rest, as it already did for pi's and opencode's files, and a refresh does the same for the file it
-  cannot write, so one bad file never keeps the home's other logins stale.
+  hard link, is refused with `409` `home-unusable` naming the file, and nothing is written into it.
+  A `partial: true` put leaves such a provider out with `reason` `login-file-unusable` and writes
+  the rest, as it already did for pi's and opencode's files, and a refresh does the same for the
+  file it cannot write, so one bad file never keeps the home's other logins stale.
 
-- 8906fb4: Deadline preservation no longer stops a MicroVM early on an idle interval's throughput. A reading of
-  uploaded bytes over the time between two sweeps measures the link only when the capture queue held
-  work at both ends of that interval; any other reading now only raises the estimated rate, never
-  lowering it under the previous estimate or the assumed 1 MiB/s. On a one-hour MicroVM, a reading of
-  140 KB/s taken three minutes in (the uploader idle most of the interval) put the estimate for 780 MB
-  at 6890 s and started the final drain at once; the same upload then ran at about 80 MB/s. The
-  sample's pending bytes are kept beside it (`upload_sample_pending_bytes`).
-- e8ad7f7: Workspace Docker services can pull Docker Hub images through registry mirrors. A worker with
-  `SEALANT_DOCKER_REGISTRY_MIRRORS=http://docker-mirror:5000` starts every workspace's Docker daemon,
-  on the Docker and Kubernetes runtimes, with `--registry-mirror` for each origin, plus
+- 8906fb4: Deadline preservation no longer stops a MicroVM early on an idle interval's throughput. A
+  reading of uploaded bytes over the time between two sweeps measures the link only when the capture
+  queue held work at both ends of that interval; any other reading now only raises the estimated
+  rate, never lowering it under the previous estimate or the assumed 1 MiB/s. On a one-hour MicroVM,
+  a reading of 140 KB/s taken three minutes in (the uploader idle most of the interval) put the
+  estimate for 780 MB at 6890 s and started the final drain at once; the same upload then ran at
+  about 80 MB/s. The sample's pending bytes are kept beside it (`upload_sample_pending_bytes`).
+- e8ad7f7: Workspace Docker services can pull Docker Hub images through registry mirrors. A worker
+  with `SEALANT_DOCKER_REGISTRY_MIRRORS=http://docker-mirror:5000` starts every workspace's Docker
+  daemon, on the Docker and Kubernetes runtimes, with `--registry-mirror` for each origin, plus
   `--insecure-registry` for a plain-http one so BuildKit reaches it too. The daemon falls back to
   Docker Hub when a mirror fails. On Docker, `SEALANT_DOCKER_REGISTRY_MIRROR_CONTAINER` names the
   container serving the mirrors: it joins each workspace's Docker service network under the mirrors'
-  host names before the daemon starts, and leaves it before the network is removed. The daemon itself
-  stays off every shared network. An entry that is not a bare origin, or carries credentials, is
-  refused at startup.
-- ef9e537: `@sealant/sdk` depends on the exact `@sealant/api-contracts` version it was published with, not a
-  caret range. The two are versioned together, and a caret on a prerelease (`^0.39.0-next.9`) would
-  accept any later prerelease of the contract.
-- 597db62: `workspace.exec()` reads its run every 25 ms for the first half second, then waits twice as long
-  each time, from 50 ms up to 250 ms until 2 s and up to 500 ms after that. Doubling from 25 ms read
-  it at 25, 75, 175 and 375 ms, so an exec that ended at 80 ms was seen at 175 ms; it is now seen
-  within about 25 ms of ending.
+  host names before the daemon starts, and leaves it before the network is removed. The daemon
+  itself stays off every shared network. An entry that is not a bare origin, or carries credentials,
+  is refused at startup.
+- ef9e537: `@sealant/sdk` depends on the exact `@sealant/api-contracts` version it was published
+  with, not a caret range. The two are versioned together, and a caret on a prerelease
+  (`^0.39.0-next.9`) would accept any later prerelease of the contract.
+- 597db62: `workspace.exec()` reads its run every 25 ms for the first half second, then waits twice
+  as long each time, from 50 ms up to 250 ms until 2 s and up to 500 ms after that. Doubling from 25
+  ms read it at 25, 75, 175 and 375 ms, so an exec that ended at 80 ms was seen at 175 ms; it is now
+  seen within about 25 ms of ending.
 
   A read of the exec's run that is refused (429), fails on the control plane (5xx) or is lost in
   transport is read again, after the `Retry-After` the answer named or a backoff from 100 ms to 2 s,
-  for up to a minute. One failed read used to reject the exec while its run went on. Every read error
-  `exec()` rejects with names the run. `GET /v1/runs/:runId` declares `BudgetExceededError`, so a 429
-  from the request budget decodes as one.
+  for up to a minute. One failed read used to reject the exec while its run went on. Every read
+  error `exec()` rejects with names the run. `GET /v1/runs/:runId` declares `BudgetExceededError`,
+  so a 429 from the request budget decodes as one.
 
-- 17baa1d: The SDK's waits and bounds (`ready()`'s readiness bound and image-build stall guard, `events()`,
-  `stop()`, `run.wait()`, `record.stream()`, `harness.run()`, `exec()`, dotfiles) run on a clock that
-  only moves forward (`performance.now()`). A wall clock stepped forward, as a VM's is when it is
-  resynced after its host slept (OrbStack, Docker Desktop), no longer counts as time waited: a build 8
-  minutes in was given up on as "no progress for 80 min" after a 72-minute step.
+- 17baa1d: The SDK's waits and bounds (`ready()`'s readiness bound and image-build stall guard,
+  `events()`, `stop()`, `run.wait()`, `record.stream()`, `harness.run()`, `exec()`, dotfiles) run on
+  a clock that only moves forward (`performance.now()`). A wall clock stepped forward, as a VM's is
+  when it is resynced after its host slept (OrbStack, Docker Desktop), no longer counts as time
+  waited: a build 8 minutes in was given up on as "no progress for 80 min" after a 72-minute step.
 
   Stopping a workspace whose image build failed answers with its status (`failed`, or `cancelled`)
   instead of refusing it as "still launching": nothing runs and nothing will. `stop()` resolves
   `stopped` for such a workspace.
 
-- 540b7db: `packages.resolvePackage` answers from the workspace build's own package catalog, so an id resolves
-  as supported on a family exactly when an image of that family installs it, on amd64 and arm64. It
-  used to answer from an older, shorter list: `bun`, `unzip`, `starship`, `direnv` and the three zsh
-  plugins fell through to Repology and came back with no `canonicalId`, and `pnpm`, `uv`, `mise` and
-  `lazygit` read unsupported on Ubuntu (and `mise` on Fedora), though the image installs them from npm
-  or a pinned release. A client that saves only catalog ids (Mend's Setup page) could not save its own
-  defaults. A catalog id is answered from the catalog before any cached answer, so a resolution cached
-  before the catalog knew the id no longer stands for its 30 days.
-- 068d02b: pi is a harness (`pi()`, harness id `pi`), and every workspace image now carries all four agent
-  CLIs: Claude Code, Codex, opencode and pi. opencode was installed only into an opencode blueprint's
-  own image; it is baked now, so a standby or a shell workspace can run it too. pi is installed from
-  its release binary for the machine (x64 or arm64), checked against the release's SHA256SUMS, so it
-  needs no Node: its npm package wants Node 22.19 or newer, which Ubuntu 24.04 does not have.
-- a8b2d5c: Workspaces run sealantd 0.20.0 (`ghcr.io/sealant-sh/sealantd`, pinned by digest). A capture leaves every harness login out of the harness home, including pi's, opencode's
-  and opencode's MCP server logins, under every person's saved directory too, and a restore never
-  writes one back. A restore gives each person's saved directory to their uid and the worktree to the
+- 540b7db: `packages.resolvePackage` answers from the workspace build's own package catalog, so an
+  id resolves as supported on a family exactly when an image of that family installs it, on amd64
+  and arm64. It used to answer from an older, shorter list: `bun`, `unzip`, `starship`, `direnv` and
+  the three zsh plugins fell through to Repology and came back with no `canonicalId`, and `pnpm`,
+  `uv`, `mise` and `lazygit` read unsupported on Ubuntu (and `mise` on Fedora), though the image
+  installs them from npm or a pinned release. A client that saves only catalog ids (Mend's Setup
+  page) could not save its own defaults. A catalog id is answered from the catalog before any cached
+  answer, so a resolution cached before the catalog knew the id no longer stands for its 30 days.
+- 068d02b: pi is a harness (`pi()`, harness id `pi`), and every workspace image now carries all four
+  agent CLIs: Claude Code, Codex, opencode and pi. opencode was installed only into an opencode
+  blueprint's own image; it is baked now, so a standby or a shell workspace can run it too. pi is
+  installed from its release binary for the machine (x64 or arm64), checked against the release's
+  SHA256SUMS, so it needs no Node: its npm package wants Node 22.19 or newer, which Ubuntu 24.04
+  does not have.
+- a8b2d5c: Workspaces run sealantd 0.20.0 (`ghcr.io/sealant-sh/sealantd`, pinned by digest). A
+  capture leaves every harness login out of the harness home, including pi's, opencode's and
+  opencode's MCP server logins, under every person's saved directory too, and a restore never writes
+  one back. A restore gives each person's saved directory to their uid and the worktree to the
   group. Executions, sessions and dotfiles can run as a given user, and a per-person executor leaves
   no-new-privileges unset so every person's sudo works. A person's dotfiles are unpacked by root
   outside every home and written as the person, so a link they planted cannot redirect them, and an
   archive that unpacks to more than 256 MiB, or 64 MiB in one file, is refused. The daemon runs an
   exec, a session or a dotfiles apply only as one of the owner map's people or a person in Mend's
-  reserved range (a uid in 40001-49999 whose primary group is 40000, so a person who joins after boot
-  runs), checking the passwd entry it resolves itself, and refuses root, root's group and anyone
-  outside the range. A restore writes files on every core, and a final flush reads on every core.
-  Upload URLs carry the SHA-256 of their bytes. The image fetches socat over HTTPS and checks it
-  against a pinned checksum. A process's `process.started` event carries the count and UTF-8 lengths
-  of its arguments (`argCount`, `argLengths`), never their text, so no argument reaches an event
-  subscriber or the daemon's spool, and spool segments an older daemon wrote are rewritten without it.
-  A failed lifecycle step is logged by its step, program and argument sizes, and a clone URL without
-  its credentials. An SFTP bridge runs as a given user (`sftp.user`), admitted as an exec is, and the
-  managed Fedora and Ubuntu images carry an `sftp-server`, so a workspace's SFTP works and runs as its
-  SSH user. A pty's file descriptors are close-on-exec and a child process gets only its stdio, and a
-  directory a dotfiles copy makes in a home takes the tree's mode under what a new directory takes.
-- e4a3593: Removing an SSH key ends the gateway connections opened with it. `GET /v1/workspaces/:id/ssh-target`
-  takes an optional `x-sealant-ssh-key-fingerprint` header: when the gateway names the key a
-  connection logged in with, the API answers only while that key is still registered to the principal
-  (else `401` `WorkspaceSshKeyNoLongerRegisteredError`, the one refusal on which the gateway ends a
-  connection), and echoes it as `sshKeyFingerprint`. The control plane reports this as
-  `features().sshKeyRemovalEndsConnections`, so a client can say whether removing a key ends what is
-  already open.
-- cc83f27: The workspace package catalog knows `bun` and `unzip`. `bun` installs bun 1.4.2 on Fedora, Arch and
-  Ubuntu from its pinned release zip, checksummed before it is unpacked (the baseline build on x86_64,
-  so a CPU without AVX2 runs it), and links `bunx`; on nix it is the `bun` package. It adds about 80
-  MB to an image. A release may now ship as a `.zip`; the build installs `unzip` beside the release's
-  other tools only when one does.
+  reserved range (a uid in 40001-49999 whose primary group is 40000, so a person who joins after
+  boot runs), checking the passwd entry it resolves itself, and refuses root, root's group and
+  anyone outside the range. A restore writes files on every core, and a final flush reads on every
+  core. Upload URLs carry the SHA-256 of their bytes. The image fetches socat over HTTPS and checks
+  it against a pinned checksum. A process's `process.started` event carries the count and UTF-8
+  lengths of its arguments (`argCount`, `argLengths`), never their text, so no argument reaches an
+  event subscriber or the daemon's spool, and spool segments an older daemon wrote are rewritten
+  without it. A failed lifecycle step is logged by its step, program and argument sizes, and a clone
+  URL without its credentials. An SFTP bridge runs as a given user (`sftp.user`), admitted as an
+  exec is, and the managed Fedora and Ubuntu images carry an `sftp-server`, so a workspace's SFTP
+  works and runs as its SSH user. A pty's file descriptors are close-on-exec and a child process
+  gets only its stdio, and a directory a dotfiles copy makes in a home takes the tree's mode under
+  what a new directory takes.
+- e4a3593: Removing an SSH key ends the gateway connections opened with it.
+  `GET /v1/workspaces/:id/ssh-target` takes an optional `x-sealant-ssh-key-fingerprint` header: when
+  the gateway names the key a connection logged in with, the API answers only while that key is
+  still registered to the principal (else `401` `WorkspaceSshKeyNoLongerRegisteredError`, the one
+  refusal on which the gateway ends a connection), and echoes it as `sshKeyFingerprint`. The control
+  plane reports this as `features().sshKeyRemovalEndsConnections`, so a client can say whether
+  removing a key ends what is already open.
+- cc83f27: The workspace package catalog knows `bun` and `unzip`. `bun` installs bun 1.4.2 on
+  Fedora, Arch and Ubuntu from its pinned release zip, checksummed before it is unpacked (the
+  baseline build on x86_64, so a CPU without AVX2 runs it), and links `bunx`; on nix it is the `bun`
+  package. It adds about 80 MB to an image. A release may now ship as a `.zip`; the build installs
+  `unzip` beside the release's other tools only when one does.
 
 ## 0.38.1
 
 ### Patch Changes
 
-- 2b78985: Claude and Codex logins have one refresher. Workspaces and inference calls get a copy that cannot
-  refresh (Claude's file without its refresh token, Codex's `auth.json` with a placeholder), so no
-  copy can rotate, spend or revoke the stored login. The worker refreshes each login through the
-  official CLI (Claude an hour before its access token expires, Codex a day before, one refresh per
-  login at a time across workers) and writes the new copy into every running workspace launched with
-  it; Claude Code and Codex pick it up without a restart. A refused refresh marks the account invalid.
-  Workspaces launched before this still have their rotations read back until they end.
-- 488a5a7: The worker handles up to four run-exec deliveries (harness runs and workspace execs) at once
-  (`RUN_EXEC_QUEUE_CONCURRENCY`, default 4). They shared the build queue's single slot
+- 2b78985: Claude and Codex logins have one refresher. Workspaces and inference calls get a copy
+  that cannot refresh (Claude's file without its refresh token, Codex's `auth.json` with a
+  placeholder), so no copy can rotate, spend or revoke the stored login. The worker refreshes each
+  login through the official CLI (Claude an hour before its access token expires, Codex a day
+  before, one refresh per login at a time across workers) and writes the new copy into every running
+  workspace launched with it; Claude Code and Codex pick it up without a restart. A refused refresh
+  marks the account invalid. Workspaces launched before this still have their rotations read back
+  until they end.
+- 488a5a7: The worker handles up to four run-exec deliveries (harness runs and workspace execs) at
+  once (`RUN_EXEC_QUEUE_CONCURRENCY`, default 4). They shared the build queue's single slot
   (`WORKSPACE_BUILD_QUEUE_PREFETCH`, default 1), so one slow exec (a cold binary read, an executor
   that is gone) held every other workspace's setup and harness start for minutes.
 
@@ -417,88 +421,83 @@
 
 ### Minor Changes
 
-- c8c9c7b: A retained executor reads `retained`, and the drain and retention can be read without a stop.
-
+- c8c9c7b: A retained executor reads `retained`, and the drain and retention can be read without a
+  stop.
   - Workspace status and runtime status gain `retained` (`workspaceStatusSchema`,
     `workspaceRuntimeSchema.status`; SDK `WorkspaceStatus`, `WorkspaceRuntimeInfo.status`): the
     executor ended — or its capture launch failed after it started — with work on its disk not
     confirmed saved. It is kept, not dead: the control plane drains or recovers it with the capture
-    token it was launched with, and the status reads `stopped` or `failed` again only once that ends.
-    Keep the session's lease and token while it reads `retained`. An SDK that predates the value fails
-    to decode such a workspace rather than reading it as ended.
+    token it was launched with, and the status reads `stopped` or `failed` again only once that
+    ends. Keep the session's lease and token while it reads `retained`. An SDK that predates the
+    value fails to decode such a workspace rather than reading it as ended.
   - `ready()` fails at once on `retained`; `stop()` of a retained workspace answers `kept` with the
     drain at once (unless it discards, or its completion attestation was accepted).
-  - `workspace.captureDrain()` reads the drain and retention as last observed (state, retained and its
-    recovery, the accepted completion, the executor it is about) without stopping anything; `null`
-    when nothing was observed, which says nothing about whether the work is saved.
+  - `workspace.captureDrain()` reads the drain and retention as last observed (state, retained and
+    its recovery, the accepted completion, the executor it is about) without stopping anything;
+    `null` when nothing was observed, which says nothing about whether the work is saved.
   - `captureDrain.executor.launchId`: the launch identity the create named for that executor.
 
-  Server-side (the packages ride the release train): a retained executor's recovery starts the moment
-  it is retained and is retried after 10 s, doubling (`WORKSPACE_RECOVERY_SWEEP_INTERVAL_MS`, 5 s);
-  one stop of a capture executor at a time (a second finds the drain claim held and leaves it); a
-  drain of an executor that ended ends at once; an ended retained executor's Docker sidecar is
-  stopped; every capture executor bounds its shutdown final flush inside its stop grace
+  Server-side (the packages ride the release train): a retained executor's recovery starts the
+  moment it is retained and is retried after 10 s, doubling (`WORKSPACE_RECOVERY_SWEEP_INTERVAL_MS`,
+  5 s); one stop of a capture executor at a time (a second finds the drain claim held and leaves
+  it); a drain of an executor that ended ends at once; an ended retained executor's Docker sidecar
+  is stopped; every capture executor bounds its shutdown final flush inside its stop grace
   (`SEALANT_SHUTDOWN_FINAL_DEADLINE_MS`); a launch whose worker died before it recorded its executor
   is found by its run, or ended `launch-lost` when nothing started (`WORKSPACE_LAUNCH_LEASE_MS`, 2
   min); saved means `complete` with no `incompleteReason` (`unwatched` and unknown reasons ask for
   FINAL again).
 
-- 206abab: `workspace.capture.flush()` takes options: `flush({ kind: "final", deadlineMs, graceMs })`.
-  `POST /v1/workspaces/:id/capture/flush` accepts the same fields beside `ownerUserId`. The public
-  type is `WorkspaceCaptureFlushOptions`.
-
-  - `kind: "final"` says the executor is ending. sealantd stops its managed processes, snapshots both
-    capture classes, ships, and reports `complete`. After it, the daemon refuses new work.
+- 206abab: `workspace.capture.flush()` takes options:
+  `flush({ kind: "final", deadlineMs, graceMs })`. `POST /v1/workspaces/:id/capture/flush` accepts
+  the same fields beside `ownerUserId`. The public type is `WorkspaceCaptureFlushOptions`.
+  - `kind: "final"` says the executor is ending. sealantd stops its managed processes, snapshots
+    both capture classes, ships, and reports `complete`. After it, the daemon refuses new work.
     `kind: "suspend"` is a checkpoint and stays the default, so `flush()` with no options is
     unchanged.
   - `deadlineMs` bounds how long the daemon may take before it answers. A final flush past its
-    deadline answers `complete: false` and keeps shipping in the daemon, so later `status()` reads and
-    repeated final flushes converge.
+    deadline answers `complete: false` and keeps shipping in the daemon, so later `status()` reads
+    and repeated final flushes converge.
   - `graceMs` is how long managed processes get between SIGTERM and SIGKILL, inside the deadline.
   - Both are positive integers in milliseconds. Absent, the daemon uses its own defaults.
 
   The control plane passes these to sealantd as given. The pinned sealantd (0.18.2) takes no flush
-  arguments and runs its only flush whatever `kind` says. The fields take effect once the pin moves to
-  the release that accepts them.
+  arguments and runs its only flush whatever `kind` says. The fields take effect once the pin moves
+  to the release that accepts them.
 
   Server-side (the packages ride the release train):
-
   - A drain's FINAL flush asks for a deadline and a grace. The deadline is
     `WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS`, capped at the round trip's bound
     (`WORKSPACE_CAPTURE_DRAIN_REQUEST_TIMEOUT_MS`, 60 s) less 5 s. The grace is
     `WORKSPACE_CAPTURE_DRAIN_FINAL_GRACE_MS` (30 s), capped at the deadline.
 
-- 878e2ee: A capture-sourced executor's disk is kept until something proves its work saved, and a kept executor
-  can be recovered.
+- 878e2ee: A capture-sourced executor's disk is kept until something proves its work saved, and a
+  kept executor can be recovered.
 
   `workspace.stop({ completion: { captureN, epoch, executorId } })` attests that your capture store
   holds a sealed final capture of the workspace's current executor. `POST /v1/workspaces/:id/stop`
   takes the same `completion` beside `ownerUserId`.
-
   - `executorId` names the executor. Send the runtime's `resourceId` from
     `workspace.details().runtime`. Its `reference`, or the run id, are accepted too.
   - `epoch` is the capture lease epoch the seal was made under. `captureN` is the sealed capture's
     chain position.
   - The control plane accepts the attestation only when `executorId` names the current executor and
     `epoch` is not older than any the executor reported. An accepted attestation lets the executor's
-    disk go once the executor has ended, even when the control plane never read `complete: true` from
-    it itself. An ignored one changes nothing.
-  - When you send one, the stop's answer and `WorkspaceStopResult` carry `completion`, with `outcome`
-    (`accepted` or `ignored`) and, when ignored, `detail`.
+    disk go once the executor has ended, even when the control plane never read `complete: true`
+    from it itself. An ignored one changes nothing.
+  - When you send one, the stop's answer and `WorkspaceStopResult` carry `completion`, with
+    `outcome` (`accepted` or `ignored`) and, when ignored, `detail`.
   - A running executor is still drained first; the attestation never skips that.
 
   `workspace.recover()` (`POST /v1/workspaces/:id/recover`) makes a recovery attempt of the
-  workspace's retained executor due now. It answers `requested` with `recoverable`, or `not-retained`
-  when nothing is kept.
+  workspace's retained executor due now. It answers `requested` with `recoverable`, or
+  `not-retained` when nothing is kept.
 
   `WorkspaceCaptureDrain` (`workspace.details().captureDrain`) gains two optional fields:
-
-  - `retained`: the executor is kept because its disk holds work not confirmed saved. It has `since`,
-    `reason`, `recoverable`, `recoveryAttempts`, `nextRecoveryAt` and `lastRecoveryError`.
+  - `retained`: the executor is kept because its disk holds work not confirmed saved. It has
+    `since`, `reason`, `recoverable`, `recoveryAttempts`, `nextRecoveryAt` and `lastRecoveryError`.
   - `completion`: the latest accepted attestation.
 
   A caller can record the executor it launched and find it again:
-
   - `workspace.runtime()` reads the current executor:
     `{ kind, resourceId, reference, status, runId?, deadline }`, or `null` before one is launched.
     `WorkspaceRuntime` on the wire gains `runId`.
@@ -508,48 +507,47 @@
     `runId`, `runtime` and `replayed`.
   - `captureDrain.executor` names the executor an observation is about: `runId`, `resourceId`,
     `reference`, and the runtime (`adapter` on the wire, `kind` in the SDK).
-  - `workspaces.create({ idempotencyKey })` (the `idempotencyKey` body field, or the `idempotency-key`
-    header) is idempotent per owner. A repeated create with the same key answers with the first
-    workspace, `replayed: true`, and creates nothing. Another owner's workspace is never returned for
-    the same key.
-  - `workspaces.findByIdempotencyKey(key)` (`GET /v1/workspaces?idempotencyKey=`) finds that workspace
-    after a lost answer, or returns `null`.
+  - `workspaces.create({ idempotencyKey })` (the `idempotencyKey` body field, or the
+    `idempotency-key` header) is idempotent per owner. A repeated create with the same key answers
+    with the first workspace, `replayed: true`, and creates nothing. Another owner's workspace is
+    never returned for the same key.
+  - `workspaces.findByIdempotencyKey(key)` (`GET /v1/workspaces?idempotencyKey=`) finds that
+    workspace after a lost answer, or returns `null`.
 
   Server-side (the packages ride the release train):
-
   - Every path that can remove an executor or its disk now asks one preservation policy first: the
     planned stop, the exit reconciler, the Kubernetes orphan sweep, launch adoption and redelivery,
     launch readiness cleanup, the deadline sweep and recovery. A capture-sourced executor, or one
     whose source is unknown, goes only when the control plane observed its final flush complete, the
-    caller attested a sealed final capture of it, the owner discarded it, or nothing of it is left. An
-    exited executor with no such evidence is kept, whatever its exit code, and so is one whose drain
-    record cannot be read. A stop that passes no capture drain still reads the source, and keeps a
-    capture-sourced or unknown executor.
-  - Retention starts when the executor is created, not when it answers readiness. A launch that fails
-    after its container, Pod or MicroVM launch push exists keeps it. A redelivered launch that finds
-    an ended executor of the same run keeps it instead of replacing it. A capture container is never
-    created with `--rm`.
-  - Retained executors are recorded and retried on a backoff (1 min doubling to 1 h). Docker restarts
-    the kept container on its own disk (`docker start`), and a final flush follows at once. The
-    executor is removed only after that flush reports complete. The restart boots sealantd in recovery
-    mode: the marker `/.sealantd-recovery` is `docker cp`'d into the stopped container first, so no
-    lifecycle step, dotfiles or harness runs and nothing is admitted. Its capture token, read once at
-    boot from a file removed after readiness, is kept sealed at launch (`capture_token_sealed`,
-    cleared when the executor goes) and staged again first. With no token kept, or none the worker can
-    unseal, the executor is not started and is reported `not recoverable · no capture token`.
-    Kubernetes cannot restart an ended Pod, and its emptyDir lasts only while the Pod object exists,
-    so an ended capture Pod is reported and kept. A terminated MicroVM's disk is gone, so only the
-    pre-deadline drain protects it.
+    caller attested a sealed final capture of it, the owner discarded it, or nothing of it is left.
+    An exited executor with no such evidence is kept, whatever its exit code, and so is one whose
+    drain record cannot be read. A stop that passes no capture drain still reads the source, and
+    keeps a capture-sourced or unknown executor.
+  - Retention starts when the executor is created, not when it answers readiness. A launch that
+    fails after its container, Pod or MicroVM launch push exists keeps it. A redelivered launch that
+    finds an ended executor of the same run keeps it instead of replacing it. A capture container is
+    never created with `--rm`.
+  - Retained executors are recorded and retried on a backoff (1 min doubling to 1 h). Docker
+    restarts the kept container on its own disk (`docker start`), and a final flush follows at once.
+    The executor is removed only after that flush reports complete. The restart boots sealantd in
+    recovery mode: the marker `/.sealantd-recovery` is `docker cp`'d into the stopped container
+    first, so no lifecycle step, dotfiles or harness runs and nothing is admitted. Its capture
+    token, read once at boot from a file removed after readiness, is kept sealed at launch
+    (`capture_token_sealed`, cleared when the executor goes) and staged again first. With no token
+    kept, or none the worker can unseal, the executor is not started and is reported
+    `not recoverable · no capture token`. Kubernetes cannot restart an ended Pod, and its emptyDir
+    lasts only while the Pod object exists, so an ended capture Pod is reported and kept. A
+    terminated MicroVM's disk is gone, so only the pre-deadline drain protects it.
   - The deadline sweep persists a plan for every runtime in its watch window before it drives any
     drain. It then drives every due runtime each tick, earliest deadline first, four at a time. The
-    upload estimate counts bytes not yet uploaded, or everything staged when that is unreported. While
-    bulk is being built it adds at least the staged size again, or 256 MiB. Until a rate has been
-    observed it assumes 1 MiB/s.
+    upload estimate counts bytes not yet uploaded, or everything staged when that is unreported.
+    While bulk is being built it adds at least the staged size again, or 256 MiB. Until a rate has
+    been observed it assumes 1 MiB/s.
   - `incomplete_reason: "sealing"` (nothing pending, the seal not yet acknowledged) is handled like
-    any empty queue without a complete final flush. The drain asks for FINAL again, never takes it as
-    saved, and keeps the executor until the daemon reports `complete`.
-  - Two drains of one run never overlap, including within one worker: each claim holds the lease under
-    its own token.
+    any empty queue without a complete final flush. The drain asks for FINAL again, never takes it
+    as saved, and keeps the executor until the daemon reports `complete`.
+  - Two drains of one run never overlap, including within one worker: each claim holds the lease
+    under its own token.
   - The idempotency key is stored on the workspace row, unique per owner, and that row is written
     first. A racing create with the same key fails its insert and answers with the winner. A unique
     violation from Postgres (`23505`) is now recognised; before, only SQLite's wording was, so on
@@ -557,45 +555,43 @@
   - A discard is logged as requested before the runtime is ended. It is logged as terminated only
     after the runtime adapter confirms it.
   - The MicroVM terminate hook sends `--final` whenever the image's sealantctl offers it
-    (`SEALANT_MICROVM_FINAL_FLUSH=0` turns it off). It answers 200 only for a complete final flush. A
-    daemon without `--final` gets the ordinary flush, and the hook answers 500.
+    (`SEALANT_MICROVM_FINAL_FLUSH=0` turns it off). It answers 200 only for a complete final flush.
+    A daemon without `--final` gets the ordinary flush, and the hook answers 500.
 
 - dd4e856: An idempotent create can be cancelled by its key, and a create names the launch it makes.
-
-  - `workspaces.cancelCreate(key)` (`POST /v1/workspaces/idempotency-keys/:key/cancel`) makes sure the
-    create with that key never launches. A key that is pending, or that no create has reached yet, is
-    cancelled for good: a later create with it, a delayed original request included, is refused with
-    409 and `code: "create-cancelled"`, and a create still writing cannot commit. A create that
-    already committed answers `found`; stop that workspace instead.
-  - `workspaces.createState(key)` (`GET /v1/workspaces/idempotency-keys/:key`) answers what became of
-    the create: `pending` (started, not committed), `found` (with `workspaceId`, `runId`, `launchId`),
-    `cancelled`, or `none`. `none` holds only as of the answer; `cancelCreate` is the answer that
-    stays true. An answer the SDK cannot decode fails instead of reading as `none`.
+  - `workspaces.cancelCreate(key)` (`POST /v1/workspaces/idempotency-keys/:key/cancel`) makes sure
+    the create with that key never launches. A key that is pending, or that no create has reached
+    yet, is cancelled for good: a later create with it, a delayed original request included, is
+    refused with 409 and `code: "create-cancelled"`, and a create still writing cannot commit. A
+    create that already committed answers `found`; stop that workspace instead.
+  - `workspaces.createState(key)` (`GET /v1/workspaces/idempotency-keys/:key`) answers what became
+    of the create: `pending` (started, not committed), `found` (with `workspaceId`, `runId`,
+    `launchId`), `cancelled`, or `none`. `none` holds only as of the answer; `cancelCreate` is the
+    answer that stays true. An answer the SDK cannot decode fails instead of reading as `none`.
   - `WorkspaceConflictError` gains an optional `code`.
-  - `workspaces.create({ launchId })` names the one executor the create launches. It is recorded with
-    the launch and reported as `runtime.launchId`, `workspace.launch.launchId` and the create answer's
-    `launchId`.
+  - `workspaces.create({ launchId })` names the one executor the create launches. It is recorded
+    with the launch and reported as `runtime.launchId`, `workspace.launch.launchId` and the create
+    answer's `launchId`.
   - `workspace.stop({ completion: { …, launchId } })`: when the create named a `launchId`, an
     attestation must name the same one. One that names another launch, or none, is ignored (a seal
     never transfers between executors). `captureDrain.completion` carries the accepted `launchId`.
 
   Server-side (the packages ride the release train):
-
   - A create's writes (workspace, attempt, link, snapshot, launch job, and its key's commit) are one
-    transaction. A repeat that finds a workspace an older create left half-made finishes it instead of
-    replaying it forever, and a repeat that finds its launch job still queued publishes it again.
+    transaction. A repeat that finds a workspace an older create left half-made finishes it instead
+    of replaying it forever, and a repeat that finds its launch job still queued publishes it again.
   - A launch owns its runtime row under a lease from its first `pending` write until it settles. A
-    worker that dies (or is interrupted) after the executor started no longer strands it outside every
-    sweep: its lapsed launch is adopted as a retained launch, drained, preserved before its deadline,
-    recovered if it ended, and stopped only once its work is confirmed saved.
+    worker that dies (or is interrupted) after the executor started no longer strands it outside
+    every sweep: its lapsed launch is adopted as a retained launch, drained, preserved before its
+    deadline, recovered if it ended, and stopped only once its work is confirmed saved.
   - The deadline sweep also drives retained executors: a retained launch is drained and stopped, and
-    an executor whose daemon exited on a machine that still runs has its recovery made due before the
-    cap.
+    an executor whose daemon exited on a machine that still runs has its recovery made due before
+    the cap.
   - A MicroVM whose sealantd exited while the VM runs on is recovered on its own disk: the agent
     (`POST /sealant/recover`) kills every process the dead daemon left, then starts
     `sealantd boot --recovery` with the first boot's environment and its secret env file holding the
-    capture token kept at launch, and the recovery drains it. An image whose agent predates the route,
-    or a disk the recovery boot refuses (an older daemon's), is reported and kept.
+    capture token kept at launch, and the recovery drains it. An image whose agent predates the
+    route, or a disk the recovery boot refuses (an older daemon's), is reported and kept.
   - `incomplete_reason: "changed"` (the disk changed after the final flush) is not saved: the drain
     asks for FINAL again, and a complete flush read before it is no longer evidence.
   - Recovery restarts an executor in place only when its launch recorded a daemon with sealantd's
@@ -605,38 +601,38 @@
   - Every removal of an ended capture executor (the exit reconciler's and the Kubernetes orphan
     sweep's included) ends its retention and clears its sealed recovery token.
 
-- 0e31ee0: A completion attestation carries the seal's time, and a newer observation that the work is not saved
-  revokes an older seal.
-
+- 0e31ee0: A completion attestation carries the seal's time, and a newer observation that the work
+  is not saved revokes an older seal.
   - `stop({ completion: { sealedAt } })` (`StopWorkspaceRequest.completion.sealedAt`, ISO 8601,
-    optional): when the store recorded the seal. The control plane weighs the attestation against its
-    own observations of the executor, when it is accepted and again whenever it is used: an older
-    epoch, a capture past `captureN`, or — in the same epoch — a report that the work is not saved
-    (incomplete, changed, unreadable, a failed snapshot) that did not come before the seal (its head
-    short of `captureN`, or read more than 60 s before `sealedAt`) makes it `ignored`. Without
-    `sealedAt`, any such report at or past `captureN` does. A seal stands in for a lost FINAL answer,
-    never for a received one that said the work is not saved. An unparseable `sealedAt` is ignored.
+    optional): when the store recorded the seal. The control plane weighs the attestation against
+    its own observations of the executor, when it is accepted and again whenever it is used: an
+    older epoch, a capture past `captureN`, or — in the same epoch — a report that the work is not
+    saved (incomplete, changed, unreadable, a failed snapshot) that did not come before the seal
+    (its head short of `captureN`, or read more than 60 s before `sealedAt`) makes it `ignored`.
+    Without `sealedAt`, any such report at or past `captureN` does. A seal stands in for a lost
+    FINAL answer, never for a received one that said the work is not saved. An unparseable
+    `sealedAt` is ignored.
   - `captureDrain().completion.sealedAt` reports it back.
 
-  Server-side (the packages ride the release train): recorded evidence (an earlier complete flush, an
-  attestation) removes only an executor that ended; a running one is drained (FINAL) first, the
+  Server-side (the packages ride the release train): recorded evidence (an earlier complete flush,
+  an attestation) removes only an executor that ended; a running one is drained (FINAL) first, the
   retained-executor recovery included. A kept executor's retention and its terminal write commit in
-  one transaction, and every sweep looks again at an ended capture executor nothing settled. A launch
-  still pending when its runtime's preservation start arrives is taken from its worker and drained,
-  and a launch never waits for readiness past that start (`WORKSPACE_CAPTURE_DEADLINE_LEAD_MS`). The
-  MicroVM agent spares, in a recovery and in the list it hands sealantd (`SEALANT_SWEEP_EXEMPT_FILE`),
-  only the processes it started itself, by pid and start time — never by name — and stops the guest
-  Docker service before a recovery boot. Migration `capture_attestation_freshness`.
+  one transaction, and every sweep looks again at an ended capture executor nothing settled. A
+  launch still pending when its runtime's preservation start arrives is taken from its worker and
+  drained, and a launch never waits for readiness past that start
+  (`WORKSPACE_CAPTURE_DEADLINE_LEAD_MS`). The MicroVM agent spares, in a recovery and in the list it
+  hands sealantd (`SEALANT_SWEEP_EXEMPT_FILE`), only the processes it started itself, by pid and
+  start time — never by name — and stops the guest Docker service before a recovery boot. Migration
+  `capture_attestation_freshness`.
 
   Also server-side: every capture executor boots with `SEALANT_CAPTURE_LAUNCH_ID` when the create
-  named a launch; `store-fidelity` is never saved; a FINAL whose connection closes under it (its sweep
-  stops the relay) is read again rather than reported as refused, in the flush route and in every
-  drain; a Docker recovery starts the workspace's parked Docker sidecar first; and an executor whose
-  recovery boot finds nothing to save (sealantd exit 76: it never materialized) is released with the
-  daemon's words recorded.
+  named a launch; `store-fidelity` is never saved; a FINAL whose connection closes under it (its
+  sweep stops the relay) is read again rather than reported as refused, in the flush route and in
+  every drain; a Docker recovery starts the workspace's parked Docker sidecar first; and an executor
+  whose recovery boot finds nothing to save (sealantd exit 76: it never materialized) is released
+  with the daemon's words recorded.
 
 - 6219580: Capture evidence is ordered by the executor's own history, never by clocks.
-
   - `WorkspaceCaptureStatus.origin` (optional, from `capture.status()` and `capture.flush()`): where
     in the executor's own history the answer was made —
     `{ epoch, launch, bootId, bootGeneration, observation, headN? }`, sealantd's stamp (wire fields
@@ -645,32 +641,31 @@
     `observation`; anything else cannot be ordered and must fail closed. Absent from a daemon that
     predates the stamp.
   - `stop({ completion: { origin } })` (`StopWorkspaceRequest.completion.origin`, optional): the
-    seal's position (the `final_seal`'s stamp). The control plane places a report that the work is not
-    saved before the seal only by the executor's history (its head short of `captureN`, or its
-    `origin` before the seal's); `sealedAt` is kept for display and no longer orders anything. Without
-    `origin`, any such report at or past `captureN` revokes the seal. The accepted attestation reads
-    back with its `origin` on the workspace's `captureDrain.completion`.
+    seal's position (the `final_seal`'s stamp). The control plane places a report that the work is
+    not saved before the seal only by the executor's history (its head short of `captureN`, or its
+    `origin` before the seal's); `sealedAt` is kept for display and no longer orders anything.
+    Without `origin`, any such report at or past `captureN` revokes the seal. The accepted
+    attestation reads back with its `origin` on the workspace's `captureDrain.completion`.
   - A FINAL relayed by `capture.flush({ kind: "final" })` whose answer is lost, whose status is read
-    again, and whose repeated FINAL loses its answer too now returns the last status the daemon gave,
-    not the transport error: a received "not saved" is never turned into a lost answer.
+    again, and whose repeated FINAL loses its answer too now returns the last status the daemon
+    gave, not the transport error: a received "not saved" is never turned into a lost answer.
   - `capture.status()` and `capture.flush()` fail (500) without asking the daemon when the control
     plane cannot mark the observation in flight; an answer it receives but cannot record is still
     returned, and the executor it came from is kept until a later observation is recorded.
 
-- 206abab: A capture-sourced workspace's capture status now carries everything sealantd reports, so a caller
-  can show a session whose captures are failing. The fields are optional on
+- 206abab: A capture-sourced workspace's capture status now carries everything sealantd reports, so
+  a caller can show a session whose captures are failing. The fields are optional on
   `GET /v1/workspaces/:id/capture`, on the `POST /v1/workspaces/:id/capture/flush` answer, and on
   `WorkspaceCaptureStatus` from `workspace.capture.status()` and `workspace.capture.flush()`:
-
   - `snaps`: one entry per captured class, with `class` (`small` or `bulk`), `snapsFailed` (failed
     snaps since the daemon started), and, while that class's last snap failed, `lastSnapError` and
-    `snapFailingSinceUnixMs`. A snap that fails stages nothing, so the changes since the last capture
-    exist only on the executor's disk. A path longer than `PATH_MAX` once stopped every snap of a
-    session while `pending` read 0.
-  - `lastSnapError`, `snapFailingSinceUnixMs`, `snapsFailed`: flat fields derived from `snaps`, for a
-    caller that shows one error. They hold the error of the class that has been failing longest, the
-    earliest start, and the sum of failed snaps. While `lastSnapError` is present, the newest work is
-    not being captured.
+    `snapFailingSinceUnixMs`. A snap that fails stages nothing, so the changes since the last
+    capture exist only on the executor's disk. A path longer than `PATH_MAX` once stopped every snap
+    of a session while `pending` read 0.
+  - `lastSnapError`, `snapFailingSinceUnixMs`, `snapsFailed`: flat fields derived from `snaps`, for
+    a caller that shows one error. They hold the error of the class that has been failing longest,
+    the earliest start, and the sum of failed snaps. While `lastSnapError` is present, the newest
+    work is not being captured.
   - `unreadable`, `carried`, `unreadablePaths`: paths the last snap could not read, how many of them
     kept their last captured content, and the first 20 of them (`tree/…`, `.git/…`, `harness/…`).
   - `registerRefused` (`missing-objects` or `unrestorable`), `registerRefusedN`, `registerMissing`,
@@ -681,102 +676,101 @@
   `incompleteReason` documents every reason sealantd gives, including the new `in-progress`: a final
   flush is still running.
 
-  A field sealantd does not report stays absent. It is never filled with a default. The control plane
-  pins sealantd's wire at 0.18.2, which carries none of these, so every one of them stays absent until
-  that pin moves to a release that reports them.
+  A field sealantd does not report stays absent. It is never filled with a default. The control
+  plane pins sealantd's wire at 0.18.2, which carries none of these, so every one of them stays
+  absent until that pin moves to a release that reports them.
 
-  Server-side (the packages ride the release train): a drain logs a class whose snaps fail as an error
-  once per distinct error, and every keep it records names each failing class and its error. The
-  stored drain status keeps every field.
+  Server-side (the packages ride the release train): a drain logs a class whose snaps fail as an
+  error once per distinct error, and every keep it records names each failing class and its error.
+  The stored drain status keeps every field.
 
 - cbd6bf5: A workspace reports when its runtime ends it. `runtime.deadline` on the workspace API
   (`GET /v1/workspaces/:id`, the list, the attempts) is the ISO-8601 instant the runtime itself ends
-  the executor, whatever anyone asks: a Lambda MicroVM's maximum duration from its start. It is `null`
-  where the runtime imposes no lifetime (Docker, Kubernetes), and absent from control planes that
-  predate it. The SDK reads it as `workspace.runtimeDeadline()` (`string | null`). A caller holding
-  unsaved work on the executor drains before it.
+  the executor, whatever anyone asks: a Lambda MicroVM's maximum duration from its start. It is
+  `null` where the runtime imposes no lifetime (Docker, Kubernetes), and absent from control planes
+  that predate it. The SDK reads it as `workspace.runtimeDeadline()` (`string | null`). A caller
+  holding unsaved work on the executor drains before it.
 
   A capture-sourced workspace's queue can be read without flushing:
   `GET /v1/workspaces/:id/capture?ownerUserId=…` (sealantd `capture.status`), and
-  `workspace.capture.status()` in the SDK. It answers `pending` (captures not yet saved), `headN` and
-  `registered` (what the session channel holds), and `refused`: the capture classes (`small`, `bulk`)
-  the registrar turned away for the session's byte quota. Non-empty `refused` means that work is not
-  being saved. The flush reply carries `refused` too. `pendingBytes` and `pendingBulk` are reserved
-  and absent until sealantd reports them. The SDK reads a missing `refused` as nothing refused.
+  `workspace.capture.status()` in the SDK. It answers `pending` (captures not yet saved), `headN`
+  and `registered` (what the session channel holds), and `refused`: the capture classes (`small`,
+  `bulk`) the registrar turned away for the session's byte quota. Non-empty `refused` means that
+  work is not being saved. The flush reply carries `refused` too. `pendingBytes` and `pendingBulk`
+  are reserved and absent until sealantd reports them. The SDK reads a missing `refused` as nothing
+  refused.
 
   `workspace.stop()` now resolves a `WorkspaceStopResult` (see the drain-ownership changeset for its
   states). Callers that ignored the old `void` result are unaffected.
 
   `workspace.ready()` on a handle `workspaces.create()` made requests a stop before it throws
-  `workspace_ready_timeout`, so a launch nobody will use does not run to the platform's lifetime cap.
-  The error says whether the stop request was accepted.
+  `workspace_ready_timeout`, so a launch nobody will use does not run to the platform's lifetime
+  cap. The error says whether the stop request was accepted.
 
   Server-side (the packages ride the release train): no platform-initiated stop loses a
   capture-sourced workspace's unsaved work. The worker drains the workspace's sealantd before a
   lifecycle stop, and before the expired, stranded, superseded and orphaned reapers tear a runtime
   down (what counts as drained: see the drain-ownership changeset). A queue still moving defers the
   stop to the next sweep. The workspace is kept running, and every sweep asks again, when:
-
   - the daemon answers but its queue does not move for `WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS` (10
     min), logged `not saved · kept`;
   - the daemon reports a refused capture class, logged `not saved · refused · kept`;
-  - the daemon is silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` (5 min) while the runtime
-    reports the executor running, logged `not saved · daemon silent · kept`.
+  - the daemon is silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` (5 min) while the
+    runtime reports the executor running, logged `not saved · daemon silent · kept`.
 
   A runtime that reports the executor gone lets a stop proceed without a confirmed drain: there is
   nothing left to save. The exit reconciler asks the daemon before it records an exit, and drains a
   runtime whose daemon still answers. A MicroVM whose guest Docker failed while sealantd is up is
-  reported and no longer terminated. A MicroVM ended at its lifetime cap is logged as an error. Docker
-  stops send SIGTERM first (`docker stop -t`, `SEALANT_DOCKER_STOP_GRACE_SECONDS`, default 120 s), so
-  sealantd's final flush runs. Kubernetes workspace Pods get `terminationGracePeriodSeconds` from
-  `SEALANT_K8S_TERMINATION_GRACE_SECONDS` (default 120, was 30).
+  reported and no longer terminated. A MicroVM ended at its lifetime cap is logged as an error.
+  Docker stops send SIGTERM first (`docker stop -t`, `SEALANT_DOCKER_STOP_GRACE_SECONDS`, default
+  120 s), so sealantd's final flush runs. Kubernetes workspace Pods get
+  `terminationGracePeriodSeconds` from `SEALANT_K8S_TERMINATION_GRACE_SECONDS` (default 120, was
+  30).
 
 - 206abab: `workspace.stop({ discardUnsaved: true })` (`POST /v1/workspaces/:id/stop` with
   `discardUnsaved: true`) ends a workspace without saving its unsaved captures. The stop skips the
-  drain, the runtime is terminated at once, and the request is recorded. It is the owner's only way to
-  end a capture-sourced workspace that the control plane keeps because its work cannot be confirmed
-  saved. It is accepted on a workspace whose stop was already recorded. It is owner only and
-  irreversible. The workspace's `captureDrain` then reads `discarded`, with
-  `discard: { requestedBy, requestedAt }`. `captureDrain.state` also reads `stop-failed` when removing
-  the runtime failed (the control plane retries it) and `stopped` once the runtime was removed after
-  its drain.
+  drain, the runtime is terminated at once, and the request is recorded. It is the owner's only way
+  to end a capture-sourced workspace that the control plane keeps because its work cannot be
+  confirmed saved. It is accepted on a workspace whose stop was already recorded. It is owner only
+  and irreversible. The workspace's `captureDrain` then reads `discarded`, with
+  `discard: { requestedBy, requestedAt }`. `captureDrain.state` also reads `stop-failed` when
+  removing the runtime failed (the control plane retries it) and `stopped` once the runtime was
+  removed after its drain.
 
   Server-side (the packages ride the release train):
-
   - Every Docker workspace container is created with its own stop timeout (`--stop-timeout`), so a
     plain `docker stop` from an operator, a host restart or Docker Desktop quitting waits for
     sealantd's final flush instead of killing it after 10 s. The timeout is
-    `SEALANT_DOCKER_STOP_GRACE_SECONDS` (120 s), or `SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS` (3600
-    s) for a capture-sourced workspace. Docker's own `shutdown-timeout` still bounds a daemon
+    `SEALANT_DOCKER_STOP_GRACE_SECONDS` (120 s), or `SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS`
+    (3600 s) for a capture-sourced workspace. Docker's own `shutdown-timeout` still bounds a daemon
     shutdown.
   - Kubernetes capture-sourced Pods get `terminationGracePeriodSeconds` from
     `SEALANT_K8S_CAPTURE_TERMINATION_GRACE_SECONDS` (3600).
   - Recording a run's changes no longer restages the workspace's git index. The diff is staged in a
-    throwaway index, and the user's index keeps its exact bytes. This covers the worker's run exec and
-    the SSH gateway's interactive runs.
-  - A stop records that it is under way before the runtime is asked to go. An exit observed after that
-    is recorded as the planned stop (`stopped`), never `failed`.
+    throwaway index, and the user's index keeps its exact bytes. This covers the worker's run exec
+    and the SSH gateway's interactive runs.
+  - A stop records that it is under way before the runtime is asked to go. An exit observed after
+    that is recorded as the planned stop (`stopped`), never `failed`.
   - A stop whose launch-material cleanup fails still completes.
 
-- 206abab: A stop reports only what was observed. `workspace.stop()` resolves `{ state: "stopped" }` once the
-  runtime is gone. If it is still up after a minute, it resolves what the control plane last observed
-  of the workspace's capture drain: `{ state: "draining", drain }` while the queue moves,
-  `{ state: "kept", drain }` when the control plane will not remove the runtime because its work is
-  not confirmed saved (`drain.detail` says why), and otherwise `{ state: "requested" }`: the stop was
-  accepted and nothing more has been observed. A capture queue that merely answers is no longer
-  reported as a drain, and `stop()` no longer throws `workspace_stop_timeout`. `capture` carries the
-  daemon's queue when it answers. After a readiness timeout, the error says a stop was requested, not
-  that the workspace stopped.
+- 206abab: A stop reports only what was observed. `workspace.stop()` resolves `{ state: "stopped" }`
+  once the runtime is gone. If it is still up after a minute, it resolves what the control plane
+  last observed of the workspace's capture drain: `{ state: "draining", drain }` while the queue
+  moves, `{ state: "kept", drain }` when the control plane will not remove the runtime because its
+  work is not confirmed saved (`drain.detail` says why), and otherwise `{ state: "requested" }`: the
+  stop was accepted and nothing more has been observed. A capture queue that merely answers is no
+  longer reported as a drain, and `stop()` no longer throws `workspace_stop_timeout`. `capture`
+  carries the daemon's queue when it answers. After a readiness timeout, the error says a stop was
+  requested, not that the workspace stopped.
 
   `GET /v1/workspaces/:id` gains `captureDrain`: `state` (`draining`, `kept`, `saved`, `gone`),
   `detail`, `observedAt`, and `preservationStartsAt`, when the control plane starts a drain ahead of
   the runtime's deadline. The capture status (`workspace.capture.status()` / `flush()`) gains
   `complete` and `incompleteReason`: the daemon's account of its last FINAL flush. Only
-  `complete === true` means the executor's work is saved. They are absent until sealantd reports them;
-  read absent as not complete.
+  `complete === true` means the executor's work is saved. They are absent until sealantd reports
+  them; read absent as not complete.
 
   Server-side (the packages ride the release train):
-
   - A drain sends a FINAL flush and lets a runtime go only when the daemon reports it `complete`. An
     empty queue is not enough. Until the pinned sealantd reports `complete`, capture-sourced
     workspaces are kept, logged `not saved · not confirmed · kept`, instead of stopped.
@@ -785,156 +779,162 @@
     `WORKSPACE_CAPTURE_DRAIN_LEASE_MS`.
   - A run whose workspace source cannot be read is treated as capture-sourced. The source kind is
     recorded on the runtime instance.
-  - A capture-sourced launch that fails after its executor became ready keeps the executor (error code
-    `launch-retained`) and is drained before it is stopped. This applies to Docker, Kubernetes,
+  - A capture-sourced launch that fails after its executor became ready keeps the executor (error
+    code `launch-retained`) and is drained before it is stopped. This applies to Docker, Kubernetes,
     MicroVM, and a runtime row that could not be written. A Kubernetes Pod with no runtime row is
     recorded, not deleted.
-  - An executor that exits after a final flush it never confirmed complete is left in place. Its disk
-    holds the staged captures.
+  - An executor that exits after a final flush it never confirmed complete is left in place. Its
+    disk holds the staged captures.
   - A runtime with its own deadline gets its final drain and a planned stop early enough to finish:
-    `WORKSPACE_CAPTURE_DEADLINE_LEAD_MS` plus an upload estimate from observed throughput and pending
-    bytes.
+    `WORKSPACE_CAPTURE_DEADLINE_LEAD_MS` plus an upload estimate from observed throughput and
+    pending bytes.
   - The MicroVM terminate/suspend hook answers 500 when its flush failed.
   - Credentials are read back before the final flush.
 
 ### Patch Changes
 
-- a815ca9: An executor whose status request was cut off no longer waits out the request's whole fence before
-  a complete FINAL can release it. Before, when a caller of `capture.status()` or `capture.flush()`
-  went away, or a deadline sweep's bounded read ran out, while the answer was being recorded, that
-  observation stayed in flight for up to 56 minutes. Every stop in that window kept the executor, even
-  after it answered `complete`.
+- a815ca9: An executor whose status request was cut off no longer waits out the request's whole
+  fence before a complete FINAL can release it. Before, when a caller of `capture.status()` or
+  `capture.flush()` went away, or a deadline sweep's bounded read ran out, while the answer was
+  being recorded, that observation stayed in flight for up to 56 minutes. Every stop in that window
+  kept the executor, even after it answered `complete`.
 
-  The control plane now always records an answer it received, whoever interrupts. An answer it cannot
-  record ends its observation at once, because no answer can arrive after the request is over. The
-  next observation of that executor then settles it. An observation whose request is still out is
-  honoured as before: nothing is removed while its answer could still arrive unrecorded.
+  The control plane now always records an answer it received, whoever interrupts. An answer it
+  cannot record ends its observation at once, because no answer can arrive after the request is
+  over. The next observation of that executor then settles it. An observation whose request is still
+  out is honoured as before: nothing is removed while its answer could still arrive unrecorded.
 
-- 44653fd: A retained executor's recovery and a removal from another path can no longer overlap. Recovery
-  starts an executor only under its own live recovery claim. While that claim is live, no other path
-  can remove the executor; only the recovery attempt that holds the claim can. Another path decides
-  again once the claim is released or lapses.
-- 44653fd: A removal issued again after its first request's outcome was lost now checks the evidence again
-  right before it asks the runtime. Before, only the handover checked it, so an answer published
-  between the handover and the call could not stop a second request. Now that answer refuses the call.
-  The first request stays issued and keeps observation and recovery closed until the runtime shows its
-  outcome.
-- 44653fd: A rolling deploy can no longer weaken the capture ledger's guarantees. While older and newer
-  control-plane processes run side by side, the database now enforces the ledger's rules for writes
-  from older processes. An older process that replaces a status keeps the replaced answer on record if
-  the work was not saved, so an earlier seal cannot stand again. An older process can no longer give
-  up a removal it already issued; only the removal's outcome ends it. It can no longer send a removal
-  again after the evidence changed, or authorize one while a recovery attempt holds the executor. It
-  also no longer finds a claimed executor due for recovery, so it cannot start a second recovery
-  beside the first. Apply the migration before starting the new processes.
-- 44653fd: A MicroVM termination is sent once and never retried inside the call. Before, the AWS SDK could
-  retry a termination whose first request reached the platform and lost its reply, and a refusal of
-  the retry was read as proof that nothing had been removed. The removal was then given up while the
-  first request could still act. A refusal now ends a removal only when it answers the call's only
-  request and is an error the platform documents as not acting. Any other failure leaves the removal
-  issued until the runtime shows its outcome.
-- e671cbd: During a rolling deploy, an older control-plane process can no longer remove an executor while an
-  answer that says its work is not saved is on record. The database already kept such answers for
-  newer processes, but an older process reads only the latest status, which can look covered by a
-  seal. The database now refuses an older process's removal while any unsaved answer is on record, and
-  the older process keeps the executor. Newer processes weigh those answers themselves and are not
-  affected.
-- e671cbd: Capture status and flush answers now carry `overdue` when a capture step on the executor is running
-  past its bound: the step, when it started, how long it has been running and its bound. The field
-  comes from sealantd's `CaptureStatusReport.overdue` and reaches SDK callers as
+- 44653fd: A retained executor's recovery and a removal from another path can no longer overlap.
+  Recovery starts an executor only under its own live recovery claim. While that claim is live, no
+  other path can remove the executor; only the recovery attempt that holds the claim can. Another
+  path decides again once the claim is released or lapses.
+- 44653fd: A removal issued again after its first request's outcome was lost now checks the evidence
+  again right before it asks the runtime. Before, only the handover checked it, so an answer
+  published between the handover and the call could not stop a second request. Now that answer
+  refuses the call. The first request stays issued and keeps observation and recovery closed until
+  the runtime shows its outcome.
+- 44653fd: A rolling deploy can no longer weaken the capture ledger's guarantees. While older and
+  newer control-plane processes run side by side, the database now enforces the ledger's rules for
+  writes from older processes. An older process that replaces a status keeps the replaced answer on
+  record if the work was not saved, so an earlier seal cannot stand again. An older process can no
+  longer give up a removal it already issued; only the removal's outcome ends it. It can no longer
+  send a removal again after the evidence changed, or authorize one while a recovery attempt holds
+  the executor. It also no longer finds a claimed executor due for recovery, so it cannot start a
+  second recovery beside the first. Apply the migration before starting the new processes.
+- 44653fd: A MicroVM termination is sent once and never retried inside the call. Before, the AWS SDK
+  could retry a termination whose first request reached the platform and lost its reply, and a
+  refusal of the retry was read as proof that nothing had been removed. The removal was then given
+  up while the first request could still act. A refusal now ends a removal only when it answers the
+  call's only request and is an error the platform documents as not acting. Any other failure leaves
+  the removal issued until the runtime shows its outcome.
+- e671cbd: During a rolling deploy, an older control-plane process can no longer remove an executor
+  while an answer that says its work is not saved is on record. The database already kept such
+  answers for newer processes, but an older process reads only the latest status, which can look
+  covered by a seal. The database now refuses an older process's removal while any unsaved answer is
+  on record, and the older process keeps the executor. Newer processes weigh those answers
+  themselves and are not affected.
+- e671cbd: Capture status and flush answers now carry `overdue` when a capture step on the executor
+  is running past its bound: the step, when it started, how long it has been running and its bound.
+  The field comes from sealantd's `CaptureStatusReport.overdue` and reaches SDK callers as
   `WorkspaceCaptureStatus.overdue`. It is absent while nothing is past its bound, and from older
   daemons. It reports a stuck step and is not a verdict; the step's own limit ends it.
-- e671cbd: A refused removal request no longer cancels an earlier one that may still act. Core now records
-  every request it sends to remove an executor, each with its own outcome. When a request sent again
-  is refused, only that request is settled. If an earlier request's outcome is still unknown, the
-  removal stays issued, so the executor is not observed or recovered. It stays that way until the
-  runtime no longer has the executor, or until the runtime's bound on every unknown request has
-  passed. Requests sent by older control-plane processes during a rolling deploy are recorded by the
-  database. Apply the migration before starting the new processes.
-- 7aa048f: During a rolling deploy, the control-plane release immediately before this one can no longer give up
-  an executor's removal while an earlier removal request, one the runtime may have accepted, has no
-  known outcome. That release already marked itself as a current writer of the capture ledger, so the
-  database let it through, though it didn't track each request's outcome. The marker now carries the
-  ledger contract's version, and the database holds every writer with another version to the older
-  rules. For every writer, the current one included, the database also refuses to end an issued
-  removal, other than as removed, while any request it sent has an unknown outcome.
-- f139a21: Removing a capture executor is now an owned transition. Once the control plane authorizes the
-  removal on the evidence it holds, `capture.status()` and `capture.flush()` for that workspace fail
-  (500) without asking the daemon, until the removal is released or completes. After the executor is
-  removed they keep failing. Nothing received after that authorization can come too late to be
-  weighed. A status recorded anyway voids the removal, and the control plane decides again on the new
-  evidence.
+- e671cbd: A refused removal request no longer cancels an earlier one that may still act. Core now
+  records every request it sends to remove an executor, each with its own outcome. When a request
+  sent again is refused, only that request is settled. If an earlier request's outcome is still
+  unknown, the removal stays issued, so the executor is not observed or recovered. It stays that way
+  until the runtime no longer has the executor, or until the runtime's bound on every unknown
+  request has passed. Requests sent by older control-plane processes during a rolling deploy are
+  recorded by the database. Apply the migration before starting the new processes.
+- 7aa048f: During a rolling deploy, the control-plane release immediately before this one can no
+  longer give up an executor's removal while an earlier removal request, one the runtime may have
+  accepted, has no known outcome. That release already marked itself as a current writer of the
+  capture ledger, so the database let it through, though it didn't track each request's outcome. The
+  marker now carries the ledger contract's version, and the database holds every writer with another
+  version to the older rules. For every writer, the current one included, the database also refuses
+  to end an issued removal, other than as removed, while any request it sent has an unknown outcome.
+- f139a21: Removing a capture executor is now an owned transition. Once the control plane authorizes
+  the removal on the evidence it holds, `capture.status()` and `capture.flush()` for that workspace
+  fail (500) without asking the daemon, until the removal is released or completes. After the
+  executor is removed they keep failing. Nothing received after that authorization can come too late
+  to be weighed. A status recorded anyway voids the removal, and the control plane decides again on
+  the new evidence.
 - d4ec29c: Once the runtime has been asked to remove a capture executor, `capture.status()` and
-  `capture.flush()` for that workspace keep failing (500) without asking the daemon until the outcome
-  is known. This holds even if the worker that asked stops renewing its hold, because the request
-  cannot be withdrawn. If that worker is gone, the control plane checks the runtime. If the executor
-  is gone, it is recorded removed. If it is still there and the evidence has not changed, the removal
-  is issued again. If the evidence changed, the removal is dropped and the control plane decides
-  again. A status recorded in the meantime is kept as evidence and no longer cancels a removal already
-  issued. The deadline sweep now releases an executor's FINAL slot as soon as its FINAL is answered,
-  so a slow removal of one executor no longer delays another's first FINAL or the next sweep.
-- ba6cc76: A seal must cover every unsaved answer an executor gave. Before, the control plane kept only the
-  latest status, so an older answer that arrived late could erase a newer failure and bring an old
-  seal back. The control plane now keeps every unsaved answer that no later answer covers. A stop's
-  `completion` attestation is `ignored` unless its seal covers all of them. An executor reads saved
-  only once each one is covered by an answer or a seal.
+  `capture.flush()` for that workspace keep failing (500) without asking the daemon until the
+  outcome is known. This holds even if the worker that asked stops renewing its hold, because the
+  request cannot be withdrawn. If that worker is gone, the control plane checks the runtime. If the
+  executor is gone, it is recorded removed. If it is still there and the evidence has not changed,
+  the removal is issued again. If the evidence changed, the removal is dropped and the control plane
+  decides again. A status recorded in the meantime is kept as evidence and no longer cancels a
+  removal already issued. The deadline sweep now releases an executor's FINAL slot as soon as its
+  FINAL is answered, so a slow removal of one executor no longer delays another's first FINAL or the
+  next sweep.
+- ba6cc76: A seal must cover every unsaved answer an executor gave. Before, the control plane kept
+  only the latest status, so an older answer that arrived late could erase a newer failure and bring
+  an old seal back. The control plane now keeps every unsaved answer that no later answer covers. A
+  stop's `completion` attestation is `ignored` unless its seal covers all of them. An executor reads
+  saved only once each one is covered by an answer or a seal.
 
-  A removal the runtime was asked to make no longer ends when its call fails with an unknown outcome,
-  for example a lost reply. Until the outcome is known, `capture.status()` and `capture.flush()` keep
-  failing without asking the daemon, and the executor is not recovered. Only the runtime's own
-  refusal, the executor being gone, or the runtime's bound on the request having passed ends it. On
-  MicroVM that bound is 19.5 minutes: the terminate calls are bounded and AWS accepts a signed request
-  only within 15 minutes of signing.
+  A removal the runtime was asked to make no longer ends when its call fails with an unknown
+  outcome, for example a lost reply. Until the outcome is known, `capture.status()` and
+  `capture.flush()` keep failing without asking the daemon, and the executor is not recovered. Only
+  the runtime's own refusal, the executor being gone, or the runtime's bound on the request having
+  passed ends it. On MicroVM that bound is 19.5 minutes: the terminate calls are bounded and AWS
+  accepts a signed request only within 15 minutes of signing.
 
-  Retained executors are now recovered independently, the one whose runtime ends soonest first. Every
-  call of a recovery attempt is bounded, and only one attempt runs per executor at a time. The
+  Retained executors are now recovered independently, the one whose runtime ends soonest first.
+  Every call of a recovery attempt is bounded, and only one attempt runs per executor at a time. The
   deadline sweep starts an urgent recovery itself instead of waiting for the recovery sweep. It
   reports a removal as under way only after the removal was issued.
 
-- ab5af90: Workspaces run sealantd 0.19.0. A capture flush now sends its kind (final or suspend), deadline and grace to the daemon, so a stop's final flush is a real FINAL, and every status field a 0.19.0 daemon reports (completion, the executor-origin stamp, the overdue step) reaches the SDK.
+- ab5af90: Workspaces run sealantd 0.19.0. A capture flush now sends its kind (final or suspend),
+  deadline and grace to the daemon, so a stop's final flush is a real FINAL, and every status field
+  a 0.19.0 daemon reports (completion, the executor-origin stamp, the overdue step) reaches the SDK.
 
 ## 0.37.2
 
 ### Patch Changes
 
-- f85ccbf: Six more workspace package ids (server-side; the packages ride the release train): `starship`,
-  `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-history-substring-search`, `direnv` and
-  `eza`, on fedora, arch, ubuntu and nix. Each is the family's repository package where there is one.
-  Fedora 41 and Ubuntu 24.04 package neither `starship` nor `zsh-history-substring-search`: there
-  `starship` is its pinned 1.26.0 release and the plugin is its 1.1.0 tag, checked by SHA-256 and
-  installed to `/usr/local/share/zsh-history-substring-search/`. The reference page lists where each
-  plugin's `.zsh` file lands on each family.
+- f85ccbf: Six more workspace package ids (server-side; the packages ride the release train):
+  `starship`, `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-history-substring-search`,
+  `direnv` and `eza`, on fedora, arch, ubuntu and nix. Each is the family's repository package where
+  there is one. Fedora 41 and Ubuntu 24.04 package neither `starship` nor
+  `zsh-history-substring-search`: there `starship` is its pinned 1.26.0 release and the plugin is
+  its 1.1.0 tag, checked by SHA-256 and installed to
+  `/usr/local/share/zsh-history-substring-search/`. The reference page lists where each plugin's
+  `.zsh` file lands on each family.
 
-  `POST /v1/workspaces` keeps the package ids a request names. It used to rewrite them to one family's
-  package names (`python` to `python3`, `github-cli` to `gh`) after checking them against the catalog,
-  and the image planner, which takes catalog ids, then refused the rewritten names: every nix, Fedora
-  and Ubuntu workspace that asked for `python` or `github-cli` failed to build. The rewrite also
-  refused ids its own map lacked on a family (`mise` on Fedora), and dropped a requested version.
+  `POST /v1/workspaces` keeps the package ids a request names. It used to rewrite them to one
+  family's package names (`python` to `python3`, `github-cli` to `gh`) after checking them against
+  the catalog, and the image planner, which takes catalog ids, then refused the rewritten names:
+  every nix, Fedora and Ubuntu workspace that asked for `python` or `github-cli` failed to build.
+  The rewrite also refused ids its own map lacked on a family (`mise` on Fedora), and dropped a
+  requested version.
 
 ## 0.37.1
 
 ### Patch Changes
 
-- b7731e1: sealantd 0.18.2 (daemon image only; the packages ride the release train). Dotfiles `manager: auto`
-  picks stow only for a stow layout, so a home mirror (`.config/`, `.zshenv` beside plain directories)
-  is copied with its dot entries instead of stowed without them; `HOME` is set for every apply, and an
-  arm64 loader shim is included (sealant-sh/sealantd#96). The baked daemon default for workspace
-  images and the Cloudflare bridge image is now `ghcr.io/sealant-sh/sealantd:0.18.2`, and
-  `@sealant/runtime-client` and `@sealant/runtime-protocol` move to `^0.18.2`.
+- b7731e1: sealantd 0.18.2 (daemon image only; the packages ride the release train). Dotfiles
+  `manager: auto` picks stow only for a stow layout, so a home mirror (`.config/`, `.zshenv` beside
+  plain directories) is copied with its dot entries instead of stowed without them; `HOME` is set
+  for every apply, and an arm64 loader shim is included (sealant-sh/sealantd#96). The baked daemon
+  default for workspace images and the Cloudflare bridge image is now
+  `ghcr.io/sealant-sh/sealantd:0.18.2`, and `@sealant/runtime-client` and
+  `@sealant/runtime-protocol` move to `^0.18.2`.
 
 ## 0.37.0
 
 ### Minor Changes
 
-- 9672849: A catalog for workspace packages (server-side; the packages ride the release train). Each package id
-  a blueprint may ask for now has an entry per managed OS family: the family's repository package
-  where there is one, or a pinned upstream release (one archive per architecture, its SHA-256 checked
-  before anything is unpacked) where there is not, plus the link where a repository installs a binary
-  under another name. Until now an id the family map did not know was handed to the package manager as
-  is, and Mend's default list only existed on Arch x86_64: Fedora 41 has no `mise` or `lazygit`,
-  Ubuntu 24.04 also lacks `uv` and `pnpm`, both call the GitHub CLI `gh`, and Arch Linux ARM lacks
-  `mise`. Every id in Mend's default list now installs on fedora, arch, ubuntu and nix, on x86_64 and
-  ARM64.
+- 9672849: A catalog for workspace packages (server-side; the packages ride the release train). Each
+  package id a blueprint may ask for now has an entry per managed OS family: the family's repository
+  package where there is one, or a pinned upstream release (one archive per architecture, its
+  SHA-256 checked before anything is unpacked) where there is not, plus the link where a repository
+  installs a binary under another name. Until now an id the family map did not know was handed to
+  the package manager as is, and Mend's default list only existed on Arch x86_64: Fedora 41 has no
+  `mise` or `lazygit`, Ubuntu 24.04 also lacks `uv` and `pnpm`, both call the GitHub CLI `gh`, and
+  Arch Linux ARM lacks `mise`. Every id in Mend's default list now installs on fedora, arch, ubuntu
+  and nix, on x86_64 and ARM64.
 
   An id the catalog does not know is refused when the image is planned, and `POST /v1/workspaces`
   refuses it as a 400 naming the id and the catalog, rather than failing minutes into a build. A
@@ -942,41 +942,42 @@
 
 ### Patch Changes
 
-- 9d208e3: An Arch image build fails at the package step when pacman cannot install a package (server-side;
-  the packages ride the release train). The step was rendered as `pacman -Syu && pacman -S … &&
-pacman -Scc || true`, so the `|| true` meant for the cache clean covered the whole chain: a package
-  pacman could not find passed the step with nothing installed, and the build died steps later on a
-  missing `npm`, with the real cause buried in the log. Seen on Arch Linux ARM on 2026-09-21, where
-  `mise` is not packaged. The `|| true` now covers the cache clean alone.
+- 9d208e3: An Arch image build fails at the package step when pacman cannot install a package
+  (server-side; the packages ride the release train). The step was rendered as
+  `pacman -Syu && pacman -S … && pacman -Scc || true`, so the `|| true` meant for the cache clean
+  covered the whole chain: a package pacman could not find passed the step with nothing installed,
+  and the build died steps later on a missing `npm`, with the real cause buried in the log. Seen on
+  Arch Linux ARM on 2026-09-21, where `mise` is not packaged. The `|| true` now covers the cache
+  clean alone.
 
 ## 0.36.1
 
 ### Patch Changes
 
-- 59ebed3: Workspace-scoped Docker in a Lambda MicroVM on every managed OS family, proven live (server-side;
-  the packages ride the release train). Each family's image carries the Docker engine and the packages
-  it needs when the blueprint asks for `tooling.services.docker`, nix included, which had no Docker
-  line at all. Three faults in the families' recipes, found by that proof and fixed for every runtime:
-  Docker Hub's `archlinux` image is x86_64 only, so an Arch image on ARM64 now starts from Arch Linux
-  ARM's signed rootfs, verified against the port's build key; the nix image has no FHS dynamic loader
-  path, so no native harness binary (codex, claude, opencode) could start on it, and its package layer
-  now links glibc's loader into `/lib` and `/lib64`; and a recent npm skipped opencode's postinstall,
-  which fetches its binary, so that install now allows it. The worker image copies every file of
-  `microvm-image/`, the Arch signing key among them.
+- 59ebed3: Workspace-scoped Docker in a Lambda MicroVM on every managed OS family, proven live
+  (server-side; the packages ride the release train). Each family's image carries the Docker engine
+  and the packages it needs when the blueprint asks for `tooling.services.docker`, nix included,
+  which had no Docker line at all. Three faults in the families' recipes, found by that proof and
+  fixed for every runtime: Docker Hub's `archlinux` image is x86_64 only, so an Arch image on ARM64
+  now starts from Arch Linux ARM's signed rootfs, verified against the port's build key; the nix
+  image has no FHS dynamic loader path, so no native harness binary (codex, claude, opencode) could
+  start on it, and its package layer now links glibc's loader into `/lib` and `/lib64`; and a recent
+  npm skipped opencode's postinstall, which fetches its binary, so that install now allows it. The
+  worker image copies every file of `microvm-image/`, the Arch signing key among them.
 
 ## 0.36.0
 
 ### Minor Changes
 
-- 9acbe11: A Lambda MicroVM workspace boots the image built from its blueprint (server-side; the packages ride
-  the release train). Until now the MicroVM adapter booted one hand-registered image for every
-  workspace, so a blueprint's OS family, base image, packages and shell did nothing there, and the
-  container image the worker built for the run was never used.
+- 9acbe11: A Lambda MicroVM workspace boots the image built from its blueprint (server-side; the
+  packages ride the release train). Until now the MicroVM adapter booted one hand-registered image
+  for every workspace, so a blueprint's OS family, base image, packages and shell did nothing there,
+  and the container image the worker built for the run was never used.
 
-  Each runtime is now registered with the builder of the image it boots. MicroVM gets one of its own:
-  it takes the Containerfile planned for the blueprint, puts the in-VM agent on top, and has AWS's
-  managed image build run it under a build role. No recipe step runs on the control plane, and a
-  worker that serves only MicroVMs needs no Docker and no registry. One plan is one image, named
+  Each runtime is now registered with the builder of the image it boots. MicroVM gets one of its
+  own: it takes the Containerfile planned for the blueprint, puts the in-VM agent on top, and has
+  AWS's managed image build run it under a build role. No recipe step runs on the control plane, and
+  a worker that serves only MicroVMs needs no Docker and no registry. One plan is one image, named
   `sealant-ws-<plan hash>` and reused by every workspace with that plan. A cap
   (`SEALANT_MICROVM_MAX_IMAGES`, 50) refuses to build past it and says so, and the worker's image
   retention deletes the ones nothing uses. Images are told by name, so two control planes that share
@@ -985,85 +986,88 @@ pacman -Scc || true`, so the `|| true` meant for the cache clean covered the who
   Breaking for a MicroVM deployment. `SEALANT_MICROVM_IMAGE_ARN`, `SEALANT_MICROVM_IMAGE_VERSION`,
   `SEALANT_MICROVM_DOCKER_IMAGE_ARN` and `SEALANT_MICROVM_DOCKER_IMAGE_VERSION` are retired, and the
   API and worker refuse to start while one is set. Set `SEALANT_MICROVM_BUILD_ROLE_ARN` (it now
-  enables the adapter) and `SEALANT_MICROVM_ARTIFACT_BUCKET` on the worker. Workspace-scoped Docker is
-  `SEALANT_MICROVM_DOCKER_ENABLED` on the API and worker, off by default, because such an image is
-  created with the `ALL` OS capability. A recipe step can obtain the build role's credentials, so give
-  that role `s3:GetObject` on the artifacts prefix and the two log actions only. The worker needs the
-  four `lambda:*MicrovmImage` actions, `iam:PassRole` on the build role, and `s3:PutObject` /
-  `s3:DeleteObject` on the prefix. `microvm-image/build-image.sh` and its Dockerfiles are removed.
+  enables the adapter) and `SEALANT_MICROVM_ARTIFACT_BUCKET` on the worker. Workspace-scoped Docker
+  is `SEALANT_MICROVM_DOCKER_ENABLED` on the API and worker, off by default, because such an image
+  is created with the `ALL` OS capability. A recipe step can obtain the build role's credentials, so
+  give that role `s3:GetObject` on the artifacts prefix and the two log actions only. The worker
+  needs the four `lambda:*MicrovmImage` actions, `iam:PassRole` on the build role, and
+  `s3:PutObject` / `s3:DeleteObject` on the prefix. `microvm-image/build-image.sh` and its
+  Dockerfiles are removed.
 
-  Needs a sealantd release whose image ships `sealantctl` (sealant-sh/sealantd#94): the recipe copies
-  it from beside the daemon, for the capture flush in the suspend and terminate hooks.
+  Needs a sealantd release whose image ships `sealantctl` (sealant-sh/sealantd#94): the recipe
+  copies it from beside the daemon, for the capture flush in the suspend and terminate hooks.
 
 ### Patch Changes
 
-- be6dcd4: Two faults in the MicroVM image builder, found by its first run against AWS (server-side; the
-  packages ride the release train). It looked images up and deleted them by name, where the platform
-  takes an image ARN, so every build failed at its first lookup with "Invalid ARN format". And it sent
-  the plan hash as the create request's `clientToken`: a plan built again after its image was deleted
-  replayed a token the platform had already completed, and that create sat in `CREATING` for the whole
-  build timeout with no build running. The name is now completed to an ARN from the build role's
-  account, and the token is one per build attempt. An opt-in live spec
-  (`SEALANT_MICROVM_BUILT_IMAGE_E2E=1`) builds a customised blueprint, boots it and checks inside the
-  VM.
-- 679caa3: sealantd 0.18.1 (daemon image only; the packages ride the release train). The released daemon image
-  now ships `sealantctl` beside `sealantd` and `socat` (sealant-sh/sealantd#94). The MicroVM image
-  builder copies it into every workspace image, because the in-VM agent runs
+- be6dcd4: Two faults in the MicroVM image builder, found by its first run against AWS (server-side;
+  the packages ride the release train). It looked images up and deleted them by name, where the
+  platform takes an image ARN, so every build failed at its first lookup with "Invalid ARN format".
+  And it sent the plan hash as the create request's `clientToken`: a plan built again after its
+  image was deleted replayed a token the platform had already completed, and that create sat in
+  `CREATING` for the whole build timeout with no build running. The name is now completed to an ARN
+  from the build role's account, and the token is one per build attempt. An opt-in live spec
+  (`SEALANT_MICROVM_BUILT_IMAGE_E2E=1`) builds a customised blueprint, boots it and checks inside
+  the VM.
+- 679caa3: sealantd 0.18.1 (daemon image only; the packages ride the release train). The released
+  daemon image now ships `sealantctl` beside `sealantd` and `socat` (sealant-sh/sealantd#94). The
+  MicroVM image builder copies it into every workspace image, because the in-VM agent runs
   `sealantctl capture flush` in the platform's suspend and terminate hooks. Against 0.18.0 that copy
-  fails and no MicroVM image builds. The baked daemon default for workspace images and the Cloudflare
-  bridge image is now `ghcr.io/sealant-sh/sealantd:0.18.1`, and `@sealant/runtime-client` and
-  `@sealant/runtime-protocol` move to `^0.18.1`. No daemon behaviour changed.
+  fails and no MicroVM image builds. The baked daemon default for workspace images and the
+  Cloudflare bridge image is now `ghcr.io/sealant-sh/sealantd:0.18.1`, and `@sealant/runtime-client`
+  and `@sealant/runtime-protocol` move to `^0.18.1`. No daemon behaviour changed.
 
 ## 0.35.1
 
 ### Patch Changes
 
-- 8a0e88e: Needs sealantd 0.18.0 (sealant-sh/sealantd#91, #93). The repository of a capture-source workspace
-  gets the remotes its control plane names: `plan.get` may answer `remotes` (a name and a URL each),
-  and the daemon sets them after it materializes the head, at boot and at every `capture.replan`. The
-  daemon builds that repository itself, so until now it had none, and `git push origin` or
-  `git fetch origin` failed inside every captured session with "'origin' does not appear to be a git
-  repository". A registrar that answers no `remotes` is unchanged. The daemon also sends the reply to
-  `runtime.gracefulShutdown` before it exits: the Unix control frontend now joins its live
-  connections, where the reply used to race the process exit and the client saw its connection close.
+- 8a0e88e: Needs sealantd 0.18.0 (sealant-sh/sealantd#91, #93). The repository of a capture-source
+  workspace gets the remotes its control plane names: `plan.get` may answer `remotes` (a name and a
+  URL each), and the daemon sets them after it materializes the head, at boot and at every
+  `capture.replan`. The daemon builds that repository itself, so until now it had none, and
+  `git push origin` or `git fetch origin` failed inside every captured session with "'origin' does
+  not appear to be a git repository". A registrar that answers no `remotes` is unchanged. The daemon
+  also sends the reply to `runtime.gracefulShutdown` before it exits: the Unix control frontend now
+  joins its live connections, where the reply used to race the process exit and the client saw its
+  connection close.
 
-  Daemon-only, with no new API surface. `@sealant/runtime-client` and `@sealant/runtime-protocol` move
-  to ^0.18.0, and the baked daemon default for workspace images, the MicroVM image and the Cloudflare
-  bridge image is `ghcr.io/sealant-sh/sealantd:0.18.0`.
+  Daemon-only, with no new API surface. `@sealant/runtime-client` and `@sealant/runtime-protocol`
+  move to ^0.18.0, and the baked daemon default for workspace images, the MicroVM image and the
+  Cloudflare bridge image is `ghcr.io/sealant-sh/sealantd:0.18.0`.
 
 ## 0.35.0
 
 ### Minor Changes
 
-- 6a668f5: A connected account reports how fresh its credential is. `ConnectedAccountSummary` gains a
-  `credential` object with `accessExpiresAt`, `refreshExpiresAt`, `lastRefreshAt` and
-  `lastRefreshOutcome` (`refreshed`, `fresh` or `failed`), and the SDK's `ConnectedAccount` carries it
-  through.
+- 6a668f5: A connected account reports how fresh its credential is. `ConnectedAccountSummary` gains
+  a `credential` object with `accessExpiresAt`, `refreshExpiresAt`, `lastRefreshAt` and
+  `lastRefreshOutcome` (`refreshed`, `fresh` or `failed`), and the SDK's `ConnectedAccount` carries
+  it through.
 
   Every field is null when nothing was observed: a setup token has no expiry, a row connected before
   this shipped has no stored one, and an account the keep-fresh sweeper has never touched has no
-  outcome. The numbers come from the non-secret metadata mirror and the account's own columns, so the
-  sealed payload stays sealed and a consumer gets an observation rather than a guess.
+  outcome. The numbers come from the non-secret metadata mirror and the account's own columns, so
+  the sealed payload stays sealed and a consumer gets an observation rather than a guess.
 
   Two smaller changes make that possible: a Claude credentials file now records its
   `refreshTokenExpiresAt` beside the access expiry it already recorded, and the keep-fresh sweeper
-  records what each sweep did. A consumer can now tell someone their grant expires on the 15th, or has
-  expired, before a harness fails to authenticate rather than after.
+  records what each sweep did. A consumer can now tell someone their grant expires on the 15th, or
+  has expired, before a harness fails to authenticate rather than after.
 
 ### Patch Changes
 
-- effb7c2: A Claude credentials file is stored as its `claudeAiOauth` grant alone. The file Claude Code writes
-  is `{ claudeAiOauth, mcpOAuth }`, and the `mcpOAuth` half holds refresh tokens for whichever MCP
-  servers the person authorized on their own machine. Connecting stored the document whole, so those
-  third-party tokens reached the control plane's database and every workspace that attached the
-  account; a rotated file read back by the sync-back worker could bring them back again.
+- effb7c2: A Claude credentials file is stored as its `claudeAiOauth` grant alone. The file Claude
+  Code writes is `{ claudeAiOauth, mcpOAuth }`, and the `mcpOAuth` half holds refresh tokens for
+  whichever MCP servers the person authorized on their own machine. Connecting stored the document
+  whole, so those third-party tokens reached the control plane's database and every workspace that
+  attached the account; a rotated file read back by the sync-back worker could bring them back
+  again.
 
-  Both ends now narrow: `POST /v1/connected-accounts` seals the grant and records the sections it left
-  out as `metadata.droppedSections`, and the workspace sync-back drops an `mcpOAuth` section a
+  Both ends now narrow: `POST /v1/connected-accounts` seals the grant and records the sections it
+  left out as `metadata.droppedSections`, and the workspace sync-back drops an `mcpOAuth` section a
   rotation hands back. Nothing about the grant changes, so a workspace's Claude Code still has the
   refresh token it rotates with, and a document with nothing to drop is stored byte for byte as it
-  arrived. A client that narrows before sending sees no difference; one that does not is stored narrow
-  anyway.
+  arrived. A client that narrows before sending sees no difference; one that does not is stored
+  narrow anyway.
 
 ## 0.34.0
 
@@ -1076,7 +1080,6 @@ pacman -Scc || true`, so the `|| true` meant for the cache clean covered the who
   handler refusals carry `retryAfterSeconds` in the body). A budget refuses new work and never stops
   running work. A ceiling is checked before the work is created, so creates that race can overshoot
   it by the number in flight.
-
   - `SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE` (12000: one service key is a whole product) and
     `SEALANT_BUDGET_OWNER_LAUNCHES_PER_MINUTE` (120), counted per API process.
   - `SEALANT_BUDGET_OWNER_LIVE_WORKSPACES` (100) and `SEALANT_BUDGET_OWNER_ACTIVE_RUNS` (100), read
@@ -1090,7 +1093,6 @@ pacman -Scc || true`, so the `|| true` meant for the cache clean covered the who
   `0` turns a budget off, and the API logs at start which are off.
 
 - 613376c: Credentials are bound to the destination they were issued for.
-
   - A client-supplied `authRef` is now checked against its source URL: the installation token is
     minted only for `https://<GitHub host>/<owner>/<name>[.git]` of the repository the ref stands
     for. A grant on one installation could previously attach its token to a clone of any URL. A
@@ -1746,7 +1748,6 @@ pacman -Scc || true`, so the `|| true` meant for the cache clean covered the who
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
-
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and

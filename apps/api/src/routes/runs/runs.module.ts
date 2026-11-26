@@ -188,395 +188,392 @@ const isGatewayRecordedRun = (run: {
   readonly mode: string | null | undefined;
 }): boolean => run.harnessId === SSH_GATEWAY_HARNESS_ID && run.mode === "interactive";
 
-export const createRun = (payload: CreateRunRequest) =>
-  Effect.gen(function* () {
-    const runs = yield* RunRepo;
+export const createRun = Effect.fn("sealant.run.create")(function* (payload: CreateRunRequest) {
+  const runs = yield* RunRepo;
 
-    const principal = yield* CurrentPrincipal;
-    if (
-      principal.kind === "gateway" &&
-      !isGatewayRecordedRun({ harnessId: payload.harnessId, mode: payload.mode })
-    ) {
-      return yield* new RunBadRequestError({
-        message: "The SSH gateway records interactive ssh runs only.",
-      });
+  const principal = yield* CurrentPrincipal;
+  if (
+    principal.kind === "gateway" &&
+    !isGatewayRecordedRun({ harnessId: payload.harnessId, mode: payload.mode })
+  ) {
+    return yield* new RunBadRequestError({
+      message: "The SSH gateway records interactive ssh runs only.",
+    });
+  }
+
+  // The run executes inside the workspace, so the workspace must be the named owner's. A
+  // foreign key proved only that both rows exist: any owner could start a run, server-side, in
+  // another owner's workspace. Uniform 404, like every other owner mismatch.
+  const workspace = yield* withRunInternalError(
+    (yield* WorkspaceRepo).getWorkspaceById(payload.workspaceId),
+    "Failed to load workspace.",
+  );
+  if (workspace === undefined || workspace.ownerUserId !== payload.ownerUserId) {
+    return yield* new RunNotFoundError({
+      message: `Workspace not found: ${payload.workspaceId}`,
+    });
+  }
+
+  // Budgets last among the refusals (CORE-04), before the run row exists.
+  yield* requireActiveRunRoom(payload.ownerUserId);
+  yield* spendOwnerLaunch(payload.ownerUserId);
+
+  // Resolve the invocation: an explicit command wins (custom harnesses); otherwise, for a
+  // one-shot run with a prompt on a built-in harness, the control plane constructs it — the
+  // server-side invoke knowledge that lets a re-fetched workspace handle start a harness.
+  const resolvedCommand = (() => {
+    if (payload.command !== undefined) {
+      return {
+        executable: payload.command.executable,
+        args: [...payload.command.args],
+        ...(payload.command.cwd === undefined ? {} : { cwd: payload.command.cwd }),
+      };
     }
-
-    // The run executes inside the workspace, so the workspace must be the named owner's. A
-    // foreign key proved only that both rows exist: any owner could start a run, server-side, in
-    // another owner's workspace. Uniform 404, like every other owner mismatch.
-    const workspace = yield* withRunInternalError(
-      (yield* WorkspaceRepo).getWorkspaceById(payload.workspaceId),
-      "Failed to load workspace.",
-    );
-    if (workspace === undefined || workspace.ownerUserId !== payload.ownerUserId) {
-      return yield* new RunNotFoundError({
-        message: `Workspace not found: ${payload.workspaceId}`,
-      });
+    if (payload.prompt === undefined || payload.mode === "interactive") {
+      return undefined;
     }
+    const integration = getHarnessIntegration(payload.harnessId);
+    if (integration === undefined) {
+      return undefined;
+    }
+    const built = integration.buildRunCommand(payload.prompt);
+    return { executable: built.executable, args: [...built.args] };
+  })();
 
-    // Budgets last among the refusals (CORE-04), before the run row exists.
-    yield* requireActiveRunRoom(payload.ownerUserId);
-    yield* spendOwnerLaunch(payload.ownerUserId);
-
-    // Resolve the invocation: an explicit command wins (custom harnesses); otherwise, for a
-    // one-shot run with a prompt on a built-in harness, the control plane constructs it — the
-    // server-side invoke knowledge that lets a re-fetched workspace handle start a harness.
-    const resolvedCommand = (() => {
-      if (payload.command !== undefined) {
-        return {
-          executable: payload.command.executable,
-          args: [...payload.command.args],
-          ...(payload.command.cwd === undefined ? {} : { cwd: payload.command.cwd }),
-        };
-      }
-      if (payload.prompt === undefined || payload.mode === "interactive") {
-        return undefined;
-      }
-      const integration = getHarnessIntegration(payload.harnessId);
-      if (integration === undefined) {
-        return undefined;
-      }
-      const built = integration.buildRunCommand(payload.prompt);
-      return { executable: built.executable, args: [...built.args] };
-    })();
-
-    const run = yield* runs
-      .createRun({
-        id: `run_${randomUUID()}`,
-        workspaceId: payload.workspaceId,
-        ownerUserId: payload.ownerUserId,
-        harnessId: payload.harnessId,
-        ...(payload.mode === undefined ? {} : { mode: payload.mode }),
-        ...(payload.prompt === undefined ? {} : { prompt: payload.prompt }),
-        ...(payload.attemptId === undefined ? {} : { attemptId: payload.attemptId }),
-        ...(resolvedCommand === undefined ? {} : { command: resolvedCommand }),
-        ...(payload.metadata === undefined ? {} : { metadata: { ...payload.metadata } }),
-      })
-      .pipe(
-        Effect.mapError((error) => {
-          if (isForeignKeyViolation(error)) {
-            return new RunBadRequestError({
-              message: `Unknown workspace or owner for run (workspace=${payload.workspaceId}).`,
-            });
-          }
-          return new RunInternalServerError({
-            message: toErrorMessage(error, "Failed to create run."),
+  const run = yield* runs
+    .createRun({
+      id: `run_${randomUUID()}`,
+      workspaceId: payload.workspaceId,
+      ownerUserId: payload.ownerUserId,
+      harnessId: payload.harnessId,
+      ...(payload.mode === undefined ? {} : { mode: payload.mode }),
+      ...(payload.prompt === undefined ? {} : { prompt: payload.prompt }),
+      ...(payload.attemptId === undefined ? {} : { attemptId: payload.attemptId }),
+      ...(resolvedCommand === undefined ? {} : { command: resolvedCommand }),
+      ...(payload.metadata === undefined ? {} : { metadata: { ...payload.metadata } }),
+    })
+    .pipe(
+      Effect.mapError((error) => {
+        if (isForeignKeyViolation(error)) {
+          return new RunBadRequestError({
+            message: `Unknown workspace or owner for run (workspace=${payload.workspaceId}).`,
           });
-        }),
-      );
-
-    // With a resolved command (explicit or server-constructed), EXECUTE the run server-side:
-    // enqueue a run-exec job for the worker (it docker-execs the harness + ingests telemetry).
-    // Absent any command, the run row is created but not executed (the legacy host-local
-    // caller-runs-it path).
-    if (resolvedCommand !== undefined && payload.mode !== "interactive") {
-      const publisher = yield* RunExecPublisherService;
-      const requestTrace = yield* currentTraceCarrier;
-      yield* Effect.tryPromise({
-        try: () =>
-          publisher.publishRequested({
-            runId: run.id,
-            command: resolvedCommand,
-            trace: requestTrace,
-          }),
-        catch: (error) =>
-          new RunInternalServerError({
-            message: toErrorMessage(error, "Failed to enqueue run execution."),
-          }),
-      });
-    }
-    return mapRun(run);
-  });
-
-export const listRuns = (query: ListRunsQuery) =>
-  Effect.gen(function* () {
-    if (resolveOwnerScope(query.ownerUserId).kind === "missing") {
-      return yield* new RunBadRequestError({ message: `${OWNER_REQUIRED_HINT}.` });
-    }
-    const limit = yield* parseLimit(query.limit, 50, 200);
-    const runs = yield* RunRepo;
-    const items = yield* withRunInternalError(
-      runs.listRuns({
-        ...(query.workspaceId === undefined ? {} : { workspaceId: query.workspaceId }),
-        ...(query.ownerUserId === undefined ? {} : { ownerUserId: query.ownerUserId }),
-        ...(query.status === undefined ? {} : { statuses: [query.status] }),
-        limit,
+        }
+        return new RunInternalServerError({
+          message: toErrorMessage(error, "Failed to create run."),
+        });
       }),
-      "Failed to list runs.",
     );
-    return { items: items.map(mapRun) } satisfies ListRunsResponse;
-  });
 
-export const getRun = (runId: string, ownerUserId?: string) =>
-  Effect.gen(function* () {
-    const run = yield* requireRun(runId, ownerUserId);
-    return mapRun(run);
-  });
+  // With a resolved command (explicit or server-constructed), EXECUTE the run server-side:
+  // enqueue a run-exec job for the worker (it docker-execs the harness + ingests telemetry).
+  // Absent any command, the run row is created but not executed (the legacy host-local
+  // caller-runs-it path).
+  if (resolvedCommand !== undefined && payload.mode !== "interactive") {
+    const publisher = yield* RunExecPublisherService;
+    const requestTrace = yield* currentTraceCarrier;
+    yield* Effect.tryPromise({
+      try: () =>
+        publisher.publishRequested({
+          runId: run.id,
+          command: resolvedCommand,
+          trace: requestTrace,
+        }),
+      catch: (error) =>
+        new RunInternalServerError({
+          message: toErrorMessage(error, "Failed to enqueue run execution."),
+        }),
+    });
+  }
+  return mapRun(run);
+});
 
-export const getRunChanges = (runId: string, ownerUserId?: string) =>
-  Effect.gen(function* () {
-    const run = yield* requireRun(runId, ownerUserId);
-    // A reading that succeeded records both, empty when nothing changed; a run that has not
-    // ended, that no reading ran for (a workspace session's run, a run cancelled or failed
-    // before its reading, a row from before readings were recorded), or whose reading failed
-    // records neither — never reported as "no changes", and each said as what happened.
-    const available = run.diff !== null || run.changedFiles !== null;
-    const ended =
-      run.status === "completed" || run.status === "failed" || run.status === "cancelled";
-    return {
-      files: (run.changedFiles ?? []).map((file) => ({
-        path: file.path,
-        change: file.change,
-        ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
-      })),
-      diff: run.diff ?? "",
-      available,
-      ...(available
-        ? {}
-        : {
-            unavailableReason:
-              run.changesReadFailedAt !== null
-                ? "reading the run's changes failed"
-                : ended
-                  ? "no reading of the run's changes was recorded"
-                  : "the run has not ended",
-          }),
-    } satisfies RunChangesResponse;
-  });
+export const listRuns = Effect.fn("sealant.run.list")(function* (query: ListRunsQuery) {
+  if (resolveOwnerScope(query.ownerUserId).kind === "missing") {
+    return yield* new RunBadRequestError({ message: `${OWNER_REQUIRED_HINT}.` });
+  }
+  const limit = yield* parseLimit(query.limit, 50, 200);
+  const runs = yield* RunRepo;
+  const items = yield* withRunInternalError(
+    runs.listRuns({
+      ...(query.workspaceId === undefined ? {} : { workspaceId: query.workspaceId }),
+      ...(query.ownerUserId === undefined ? {} : { ownerUserId: query.ownerUserId }),
+      ...(query.status === undefined ? {} : { statuses: [query.status] }),
+      limit,
+    }),
+    "Failed to list runs.",
+  );
+  return { items: items.map(mapRun) } satisfies ListRunsResponse;
+});
 
-export const updateRun = (input: { readonly runId: string; readonly payload: UpdateRunRequest }) =>
-  Effect.gen(function* () {
-    const runs = yield* RunRepo;
-    const run = yield* requireRun(input.runId, input.payload.ownerUserId);
-    // The SSH gateway's secret records the interactive runs of the sessions it carries, and
-    // nothing else: it is a narrower authority than a service key, not a second one.
-    const principal = yield* CurrentPrincipal;
-    if (principal.kind === "gateway" && !isGatewayRecordedRun(run)) {
-      return yield* new RunNotFoundError({ message: `Run not found: ${input.runId}` });
-    }
-    const status: RunStatusWire | undefined = input.payload.status;
+export const getRun = Effect.fn("sealant.run.get")(function* (runId: string, ownerUserId?: string) {
+  const run = yield* requireRun(runId, ownerUserId);
+  return mapRun(run);
+});
 
-    const capturedChanges = {
-      ...(input.payload.changesReadFailed === true ? { changesReadFailed: true } : {}),
-      ...(input.payload.diff === undefined ? {} : { diff: input.payload.diff }),
-      ...(input.payload.changedFiles === undefined
-        ? {}
-        : {
-            changedFiles: input.payload.changedFiles.map((file) => ({
-              path: file.path,
-              change: file.change,
-              ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
-            })),
-          }),
-    };
-    const updated = yield* withRunInternalError(
-      status === "running"
-        ? runs.markRunRunning({ id: input.runId })
-        : status === "completed"
-          ? runs.markRunCompleted({
+export const getRunChanges = Effect.fn("sealant.run.get_changes")(function* (
+  runId: string,
+  ownerUserId?: string,
+) {
+  const run = yield* requireRun(runId, ownerUserId);
+  // A reading that succeeded records both, empty when nothing changed; a run that has not
+  // ended, that no reading ran for (a workspace session's run, a run cancelled or failed
+  // before its reading, a row from before readings were recorded), or whose reading failed
+  // records neither — never reported as "no changes", and each said as what happened.
+  const available = run.diff !== null || run.changedFiles !== null;
+  const ended = run.status === "completed" || run.status === "failed" || run.status === "cancelled";
+  return {
+    files: (run.changedFiles ?? []).map((file) => ({
+      path: file.path,
+      change: file.change,
+      ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+    })),
+    diff: run.diff ?? "",
+    available,
+    ...(available
+      ? {}
+      : {
+          unavailableReason:
+            run.changesReadFailedAt !== null
+              ? "reading the run's changes failed"
+              : ended
+                ? "no reading of the run's changes was recorded"
+                : "the run has not ended",
+        }),
+  } satisfies RunChangesResponse;
+});
+
+export const updateRun = Effect.fn("sealant.run.update")(function* (input: {
+  readonly runId: string;
+  readonly payload: UpdateRunRequest;
+}) {
+  const runs = yield* RunRepo;
+  const run = yield* requireRun(input.runId, input.payload.ownerUserId);
+  // The SSH gateway's secret records the interactive runs of the sessions it carries, and
+  // nothing else: it is a narrower authority than a service key, not a second one.
+  const principal = yield* CurrentPrincipal;
+  if (principal.kind === "gateway" && !isGatewayRecordedRun(run)) {
+    return yield* new RunNotFoundError({ message: `Run not found: ${input.runId}` });
+  }
+  const status: RunStatusWire | undefined = input.payload.status;
+
+  const capturedChanges = {
+    ...(input.payload.changesReadFailed === true ? { changesReadFailed: true } : {}),
+    ...(input.payload.diff === undefined ? {} : { diff: input.payload.diff }),
+    ...(input.payload.changedFiles === undefined
+      ? {}
+      : {
+          changedFiles: input.payload.changedFiles.map((file) => ({
+            path: file.path,
+            change: file.change,
+            ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+          })),
+        }),
+  };
+  const updated = yield* withRunInternalError(
+    status === "running"
+      ? runs.markRunRunning({ id: input.runId })
+      : status === "completed"
+        ? runs.markRunCompleted({
+            id: input.runId,
+            exitCode: input.payload.exitCode ?? 0,
+            ...capturedChanges,
+          })
+        : status === "failed"
+          ? runs.markRunFailed({
               id: input.runId,
-              exitCode: input.payload.exitCode ?? 0,
+              ...(input.payload.exitCode === undefined ? {} : { exitCode: input.payload.exitCode }),
+              ...(input.payload.errorMessage === undefined
+                ? {}
+                : { errorMessage: input.payload.errorMessage }),
               ...capturedChanges,
             })
-          : status === "failed"
-            ? runs.markRunFailed({
-                id: input.runId,
-                ...(input.payload.exitCode === undefined
-                  ? {}
-                  : { exitCode: input.payload.exitCode }),
-                ...(input.payload.errorMessage === undefined
-                  ? {}
-                  : { errorMessage: input.payload.errorMessage }),
-                ...capturedChanges,
-              })
-            : Effect.succeed<RunRecord | null>(null),
-      "Failed to update run.",
-    );
+          : Effect.succeed<RunRecord | null>(null),
+    "Failed to update run.",
+  );
 
-    if (status !== "running" && status !== "completed" && status !== "failed") {
-      return yield* new RunBadRequestError({
-        message: "updateRun supports status transitions to running, completed, or failed.",
-      });
-    }
+  if (status !== "running" && status !== "completed" && status !== "failed") {
+    return yield* new RunBadRequestError({
+      message: "updateRun supports status transitions to running, completed, or failed.",
+    });
+  }
 
-    // A run that settled already keeps its outcome: a failure is never written over it.
-    const current =
-      updated === null && status === "failed"
-        ? yield* withRunInternalError(runs.getRunById(input.runId), "Failed to read the run.")
-        : updated;
-    if (current === null || current === undefined) {
-      return yield* new RunNotFoundError({ message: `Run not found: ${input.runId}` });
-    }
+  // A run that settled already keeps its outcome: a failure is never written over it.
+  const current =
+    updated === null && status === "failed"
+      ? yield* withRunInternalError(runs.getRunById(input.runId), "Failed to read the run.")
+      : updated;
+  if (current === null || current === undefined) {
+    return yield* new RunNotFoundError({ message: `Run not found: ${input.runId}` });
+  }
 
-    return mapRun(current);
-  });
+  return mapRun(current);
+});
 
-export const getRunTimeline = (input: {
+export const getRunTimeline = Effect.fn("sealant.run.get_timeline")(function* (input: {
   readonly runId: string;
   readonly query: GetRunTimelineQuery;
-}) =>
-  Effect.gen(function* () {
-    yield* requireRun(input.runId, input.query.ownerUserId);
-    const fromSequence = yield* parseSequence(input.query.fromSequence, "fromSequence");
-    const toSequence = yield* parseSequence(input.query.toSequence, "toSequence");
-    const limit = yield* parseLimit(input.query.limit, 500, 5000);
-    const kinds = yield* parseKinds(input.query.kinds);
+}) {
+  yield* requireRun(input.runId, input.query.ownerUserId);
+  const fromSequence = yield* parseSequence(input.query.fromSequence, "fromSequence");
+  const toSequence = yield* parseSequence(input.query.toSequence, "toSequence");
+  const limit = yield* parseLimit(input.query.limit, 500, 5000);
+  const kinds = yield* parseKinds(input.query.kinds);
 
-    const query = yield* TelemetryQuery;
-    const chunk = yield* withRunInternalError(
-      Stream.runCollect(
-        query.getTimeline(input.runId, {
-          ...(fromSequence === undefined ? {} : { fromSequence }),
-          ...(toSequence === undefined ? {} : { toSequence }),
-          ...(kinds === undefined ? {} : { cases: kinds }),
-        }),
-      ),
-      "Failed to read run timeline.",
+  const query = yield* TelemetryQuery;
+  const chunk = yield* withRunInternalError(
+    Stream.runCollect(
+      query.getTimeline(input.runId, {
+        ...(fromSequence === undefined ? {} : { fromSequence }),
+        ...(toSequence === undefined ? {} : { toSequence }),
+        ...(kinds === undefined ? {} : { cases: kinds }),
+      }),
+    ),
+    "Failed to read run timeline.",
+  );
+
+  const items = Array.from(chunk)
+    .slice(0, limit)
+    .map(
+      (entry): TimelineEntry => ({
+        eventId: entry.eventId,
+        sequence: entry.sequence.toString(),
+        kind: entry.kind,
+        occurredAt: entry.occurredAt.toString(),
+        summary: entry.summary,
+        ...(entry.ref === null || entry.ref === undefined ? {} : { ref: entry.ref }),
+        ...(entry.processId === null ? {} : { processId: entry.processId }),
+        ...(entry.executionId === null || entry.executionId === ""
+          ? {}
+          : { executionId: entry.executionId }),
+        captureMethod: entry.captureMethod,
+        confidence: entry.confidence,
+      }),
     );
 
-    const items = Array.from(chunk)
-      .slice(0, limit)
-      .map(
-        (entry): TimelineEntry => ({
-          eventId: entry.eventId,
-          sequence: entry.sequence.toString(),
-          kind: entry.kind,
-          occurredAt: entry.occurredAt.toString(),
-          summary: entry.summary,
-          ...(entry.ref === null || entry.ref === undefined ? {} : { ref: entry.ref }),
-          ...(entry.processId === null ? {} : { processId: entry.processId }),
-          ...(entry.executionId === null || entry.executionId === ""
-            ? {}
-            : { executionId: entry.executionId }),
-          captureMethod: entry.captureMethod,
-          confidence: entry.confidence,
-        }),
-      );
+  return { items } satisfies RunTimelineResponse;
+});
 
-    return { items } satisfies RunTimelineResponse;
-  });
-
-export const getRunEvent = (input: {
+export const getRunEvent = Effect.fn("sealant.run.get_event")(function* (input: {
   readonly runId: string;
   readonly sequence: string;
   readonly ownerUserId?: string | undefined;
-}) =>
-  Effect.gen(function* () {
-    yield* requireRun(input.runId, input.ownerUserId);
-    const sequence = yield* parseSequence(input.sequence, "sequence");
-    if (sequence === undefined) {
-      return yield* new RunBadRequestError({ message: "sequence must be a decimal integer." });
-    }
+}) {
+  yield* requireRun(input.runId, input.ownerUserId);
+  const sequence = yield* parseSequence(input.sequence, "sequence");
+  if (sequence === undefined) {
+    return yield* new RunBadRequestError({ message: "sequence must be a decimal integer." });
+  }
 
-    const query = yield* TelemetryQuery;
-    // A missing sequence is an InvariantError from TelemetryQuery — surface it as a 404, not a 500.
-    const row = yield* query.getEvent(input.runId, sequence).pipe(
-      Effect.mapError((error) =>
-        error instanceof TelemetryQueryInvariantError
-          ? new RunNotFoundError({
-              message: `No event at sequence ${input.sequence} for run ${input.runId}.`,
-            })
-          : new RunInternalServerError({
-              message: toErrorMessage(error, "Failed to read run event."),
-            }),
-      ),
-    );
+  const query = yield* TelemetryQuery;
+  // A missing sequence is an InvariantError from TelemetryQuery — surface it as a 404, not a 500.
+  const row = yield* query.getEvent(input.runId, sequence).pipe(
+    Effect.mapError((error) =>
+      error instanceof TelemetryQueryInvariantError
+        ? new RunNotFoundError({
+            message: `No event at sequence ${input.sequence} for run ${input.runId}.`,
+          })
+        : new RunInternalServerError({
+            message: toErrorMessage(error, "Failed to read run event."),
+          }),
+    ),
+  );
 
-    return {
-      eventId: row.eventId,
-      runId: row.runId,
-      runtimeId: row.runtimeId,
-      ...(row.executionId === null ? {} : { executionId: row.executionId }),
-      ...(row.sessionId === null ? {} : { sessionId: row.sessionId }),
-      ...(row.processId === null ? {} : { processId: row.processId }),
-      ...(row.requestId === null ? {} : { requestId: row.requestId }),
-      schemaVersion: row.schemaVersion,
-      sequence: row.sequence.toString(),
-      observedAt: row.observedAt.toString(),
-      monotonicTimestamp: row.monotonicTimestamp.toString(),
-      captureMethod: row.captureMethod,
-      confidence: row.confidence,
-      payloadCase: row.payloadCase,
-      payload: row.payload,
-      ingestedAt: row.ingestedAt.toISOString(),
-    } satisfies RunEvent;
-  });
+  return {
+    eventId: row.eventId,
+    runId: row.runId,
+    runtimeId: row.runtimeId,
+    ...(row.executionId === null ? {} : { executionId: row.executionId }),
+    ...(row.sessionId === null ? {} : { sessionId: row.sessionId }),
+    ...(row.processId === null ? {} : { processId: row.processId }),
+    ...(row.requestId === null ? {} : { requestId: row.requestId }),
+    schemaVersion: row.schemaVersion,
+    sequence: row.sequence.toString(),
+    observedAt: row.observedAt.toString(),
+    monotonicTimestamp: row.monotonicTimestamp.toString(),
+    captureMethod: row.captureMethod,
+    confidence: row.confidence,
+    payloadCase: row.payloadCase,
+    payload: row.payload,
+    ingestedAt: row.ingestedAt.toISOString(),
+  } satisfies RunEvent;
+});
 
-export const getRunScrollback = (input: {
+export const getRunScrollback = Effect.fn("sealant.run.get_scrollback")(function* (input: {
   readonly runId: string;
   readonly query: GetRunScrollbackQuery;
-}) =>
-  Effect.gen(function* () {
-    yield* requireRun(input.runId, input.query.ownerUserId);
-    const atSequence = (yield* parseSequence(input.query.atSequence, "atSequence")) ?? MAX_SEQUENCE;
-    const fromSequence = yield* parseSequence(input.query.fromSequence, "fromSequence");
-    const limit = yield* parseLimit(input.query.limit, 5000, 10_000);
-    const streamKind =
-      input.query.stream === "stdout"
-        ? STREAM_KIND_STDOUT
-        : input.query.stream === "stderr"
-          ? STREAM_KIND_STDERR
-          : STREAM_KIND_PTY_OUTPUT;
+}) {
+  yield* requireRun(input.runId, input.query.ownerUserId);
+  const atSequence = (yield* parseSequence(input.query.atSequence, "atSequence")) ?? MAX_SEQUENCE;
+  const fromSequence = yield* parseSequence(input.query.fromSequence, "fromSequence");
+  const limit = yield* parseLimit(input.query.limit, 5000, 10_000);
+  const streamKind =
+    input.query.stream === "stdout"
+      ? STREAM_KIND_STDOUT
+      : input.query.stream === "stderr"
+        ? STREAM_KIND_STDERR
+        : STREAM_KIND_PTY_OUTPUT;
 
-    const query = yield* TelemetryQuery;
-    // Range reads go through the sequence-ordered chunk fold (the resumable path); the legacy
-    // whole-history read keeps the stream-offset reassembly order.
-    const buffer = yield* fromSequence === undefined && input.query.limit === undefined
-      ? withRunInternalError(
-          Stream.runCollect(
-            query.reconstructScrollback(input.runId, input.query.processId, streamKind, atSequence),
-          ),
-          "Failed to reconstruct run scrollback.",
-        ).pipe(Effect.map((chunk) => Buffer.concat(Array.from(chunk))))
-      : withRunInternalError(
-          query.scrollbackChunks(input.runId, streamKind, {
-            processId: input.query.processId,
-            ...(fromSequence === undefined ? {} : { fromSequence }),
-            toSequence: atSequence,
-            limit,
-          }),
-          "Failed to reconstruct run scrollback.",
-        ).pipe(Effect.map((chunks) => Buffer.concat(chunks.map((chunk) => chunk.bytes))));
-
-    return {
-      processId: input.query.processId,
-      stream: input.query.stream,
-      byteCount: buffer.byteLength,
-      contentBase64: buffer.toString("base64"),
-    } satisfies RunScrollbackResponse;
-  });
-
-export const getRunLoss = (runId: string, ownerUserId?: string) =>
-  Effect.gen(function* () {
-    yield* requireRun(runId, ownerUserId);
-    const query = yield* TelemetryQuery;
-    const report = yield* withRunInternalError(
-      query.getLossReport(runId),
-      "Failed to read loss report.",
-    );
-
-    return {
-      runId: report.runId,
-      droppedEventCount: report.droppedEventCount.toString(),
-      sequenceGapCount: report.sequenceGapCount,
-      watchOverflowCount: report.watchOverflowCount,
-      earlyClose: report.earlyClose,
-      spans: report.spans.map(
-        (span): LossSpan => ({
-          kind: span.kind,
-          ...(span.fromSequence === null || span.fromSequence === undefined
-            ? {}
-            : { fromSequence: span.fromSequence.toString() }),
-          ...(span.toSequence === null || span.toSequence === undefined
-            ? {}
-            : { toSequence: span.toSequence.toString() }),
-          ...(span.droppedCount === null || span.droppedCount === undefined
-            ? {}
-            : { droppedCount: span.droppedCount.toString() }),
-          detectedVia: span.detectedVia,
-          ...(span.reason === null || span.reason === undefined ? {} : { reason: span.reason }),
+  const query = yield* TelemetryQuery;
+  // Range reads go through the sequence-ordered chunk fold (the resumable path); the legacy
+  // whole-history read keeps the stream-offset reassembly order.
+  const buffer = yield* fromSequence === undefined && input.query.limit === undefined
+    ? withRunInternalError(
+        Stream.runCollect(
+          query.reconstructScrollback(input.runId, input.query.processId, streamKind, atSequence),
+        ),
+        "Failed to reconstruct run scrollback.",
+      ).pipe(Effect.map((chunk) => Buffer.concat(Array.from(chunk))))
+    : withRunInternalError(
+        query.scrollbackChunks(input.runId, streamKind, {
+          processId: input.query.processId,
+          ...(fromSequence === undefined ? {} : { fromSequence }),
+          toSequence: atSequence,
+          limit,
         }),
-      ),
-    } satisfies RunLossReport;
-  });
+        "Failed to reconstruct run scrollback.",
+      ).pipe(Effect.map((chunks) => Buffer.concat(chunks.map((chunk) => chunk.bytes))));
+
+  return {
+    processId: input.query.processId,
+    stream: input.query.stream,
+    byteCount: buffer.byteLength,
+    contentBase64: buffer.toString("base64"),
+  } satisfies RunScrollbackResponse;
+});
+
+export const getRunLoss = Effect.fn("sealant.run.get_loss")(function* (
+  runId: string,
+  ownerUserId?: string,
+) {
+  yield* requireRun(runId, ownerUserId);
+  const query = yield* TelemetryQuery;
+  const report = yield* withRunInternalError(
+    query.getLossReport(runId),
+    "Failed to read loss report.",
+  );
+
+  return {
+    runId: report.runId,
+    droppedEventCount: report.droppedEventCount.toString(),
+    sequenceGapCount: report.sequenceGapCount,
+    watchOverflowCount: report.watchOverflowCount,
+    earlyClose: report.earlyClose,
+    spans: report.spans.map(
+      (span): LossSpan => ({
+        kind: span.kind,
+        ...(span.fromSequence === null || span.fromSequence === undefined
+          ? {}
+          : { fromSequence: span.fromSequence.toString() }),
+        ...(span.toSequence === null || span.toSequence === undefined
+          ? {}
+          : { toSequence: span.toSequence.toString() }),
+        ...(span.droppedCount === null || span.droppedCount === undefined
+          ? {}
+          : { droppedCount: span.droppedCount.toString() }),
+        detectedVia: span.detectedVia,
+        ...(span.reason === null || span.reason === undefined ? {} : { reason: span.reason }),
+      }),
+    ),
+  } satisfies RunLossReport;
+});

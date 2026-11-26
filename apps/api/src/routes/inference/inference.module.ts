@@ -680,61 +680,61 @@ const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
  * is still returned, so the budget can under-count after a database fault and never over-refuses
  * because of one.
  */
-export const respond = (payload: InferenceRespondRequest) =>
-  Effect.gen(function* () {
-    const usage = yield* InferenceUsageRepo;
-    const now = new Date();
-    // Only a well-formed new exchange is metered: a malformed request spends nothing.
-    const opensExchange =
-      payload.prompt !== undefined &&
-      payload.sessionId === undefined &&
-      payload.toolResults === undefined;
-    if (opensExchange) {
-      const limit = budgetLimits.ownerInferenceTokensPerDay;
-      if (limit > 0) {
-        const spent = yield* usage
-          .tokensOn(payload.ownerUserId, utcDay(now))
-          .pipe(
-            Effect.mapError(
-              () =>
-                new InferenceInternalServerError({ message: "Failed to read inference usage." }),
-            ),
-          );
-        const decision = ceilingDecision(
-          "ownerInferenceTokensPerDay",
-          spent,
-          limit,
-          secondsUntilUtcMidnight(now),
-        );
-        if (!decision.allowed) {
-          return yield* new InferenceBudgetExceededError({
-            message: budgetMessage(decision),
-            budget: decision.budget,
-            limit: decision.limit,
-            retryAfterSeconds: decision.retryAfterSeconds,
-          });
-        }
-      }
-    }
-
-    const response = yield* respondUnmetered(payload);
-
-    if (response.usage !== undefined) {
-      yield* usage
-        .record({
-          ownerUserId: payload.ownerUserId,
-          day: utcDay(new Date()),
-          inputTokens: response.usage.inputTokens,
-          outputTokens: response.usage.outputTokens,
-        })
+export const respond = Effect.fn("sealant.inference.respond")(function* (
+  payload: InferenceRespondRequest,
+) {
+  const usage = yield* InferenceUsageRepo;
+  const now = new Date();
+  // Only a well-formed new exchange is metered: a malformed request spends nothing.
+  const opensExchange =
+    payload.prompt !== undefined &&
+    payload.sessionId === undefined &&
+    payload.toolResults === undefined;
+  if (opensExchange) {
+    const limit = budgetLimits.ownerInferenceTokensPerDay;
+    if (limit > 0) {
+      const spent = yield* usage
+        .tokensOn(payload.ownerUserId, utcDay(now))
         .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning(
-              "Failed to record inference usage; the daily budget under-counts.",
-              cause,
-            ),
+          Effect.mapError(
+            () => new InferenceInternalServerError({ message: "Failed to read inference usage." }),
           ),
         );
+      const decision = ceilingDecision(
+        "ownerInferenceTokensPerDay",
+        spent,
+        limit,
+        secondsUntilUtcMidnight(now),
+      );
+      if (!decision.allowed) {
+        return yield* new InferenceBudgetExceededError({
+          message: budgetMessage(decision),
+          budget: decision.budget,
+          limit: decision.limit,
+          retryAfterSeconds: decision.retryAfterSeconds,
+        });
+      }
     }
-    return response;
-  });
+  }
+
+  const response = yield* respondUnmetered(payload);
+
+  if (response.usage !== undefined) {
+    yield* usage
+      .record({
+        ownerUserId: payload.ownerUserId,
+        day: utcDay(new Date()),
+        inputTokens: response.usage.inputTokens,
+        outputTokens: response.usage.outputTokens,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            "Failed to record inference usage; the daily budget under-counts.",
+            cause,
+          ),
+        ),
+      );
+  }
+  return response;
+});

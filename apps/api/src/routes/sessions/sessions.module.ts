@@ -200,22 +200,24 @@ export const authorize = (input: {
 // ---------------------------------------------------------------------------------------------
 
 /** Uniform 404 on owner or token-workspace mismatch — existence is not leaked. */
-export const requireSession = (sessionId: string, principal: SessionPrincipal) =>
-  Effect.gen(function* () {
-    const sessions = yield* WorkspaceSessionRepo;
-    const session = yield* withInternalError(
-      sessions.getSessionById(sessionId),
-      "Failed to load session.",
-    );
-    if (
-      session === undefined ||
-      session.ownerUserId !== principal.ownerUserId ||
-      (principal.workspaceId !== undefined && session.workspaceId !== principal.workspaceId)
-    ) {
-      return yield* new SessionNotFoundError({ message: `Session not found: ${sessionId}` });
-    }
-    return session;
-  });
+export const requireSession = Effect.fn("sealant.session.require")(function* (
+  sessionId: string,
+  principal: SessionPrincipal,
+) {
+  const sessions = yield* WorkspaceSessionRepo;
+  const session = yield* withInternalError(
+    sessions.getSessionById(sessionId),
+    "Failed to load session.",
+  );
+  if (
+    session === undefined ||
+    session.ownerUserId !== principal.ownerUserId ||
+    (principal.workspaceId !== undefined && session.workspaceId !== principal.workspaceId)
+  ) {
+    return yield* new SessionNotFoundError({ message: `Session not found: ${sessionId}` });
+  }
+  return session;
+});
 
 /** Resolve the workspace's live daemon target (docker adapter, ready instance). */
 export const resolveDaemonTarget = (workspaceId: string) =>
@@ -225,8 +227,8 @@ export const resolveDaemonTarget = (workspaceId: string) =>
  * The workspace's ready executor and how to reach its daemon (`target` undefined when this process
  * has no way to); `undefined` when there is no ready executor.
  */
-export const resolveDaemonInstance = (workspaceId: string) =>
-  Effect.gen(function* () {
+export const resolveDaemonInstance = Effect.fn("sealant.session.resolve_daemon_instance")(
+  function* (workspaceId: string) {
     const workspaces = yield* WorkspaceRepo;
     const instances = yield* WorkspaceRuntimeInstanceRepo;
     const workspace = yield* withInternalError(
@@ -249,7 +251,8 @@ export const resolveDaemonInstance = (workspaceId: string) =>
       instance,
       target: sealantTargetForRuntimeInstance(instance, yield* requestTargetOptions),
     };
-  });
+  },
+);
 
 /** Run `f` over a short-lived daemon connection (scoped: the bridge is torn down after). */
 const withDaemon = <A, E>(
@@ -314,32 +317,33 @@ interface ExitEvidence {
 }
 
 /** Look for the ingested `processExited` event of the session's PTY process. */
-const findExitEvidence = (session: WorkspaceSession) =>
-  Effect.gen(function* () {
-    if (session.daemonProcessId === null) {
-      return undefined;
-    }
-    const query = yield* TelemetryQuery;
-    const entries = yield* withInternalError(
-      Stream.runCollect(query.getTimeline(session.runId, { cases: ["processExited"] })),
-      "Failed to read session settle evidence.",
-    );
-    for (const entry of entries) {
-      if (entry.processId !== session.daemonProcessId) {
-        continue;
-      }
-      const ref = entry.ref;
-      if (typeof ref === "object" && ref !== null) {
-        const record = ref as { exitCode?: unknown; signal?: unknown };
-        return {
-          ...(typeof record.exitCode === "number" ? { exitCode: record.exitCode } : {}),
-          ...(typeof record.signal === "number" ? { exitSignal: record.signal } : {}),
-        } satisfies ExitEvidence;
-      }
-      return {} satisfies ExitEvidence;
-    }
+const findExitEvidence = Effect.fn("sealant.session.find_exit_evidence")(function* (
+  session: WorkspaceSession,
+) {
+  if (session.daemonProcessId === null) {
     return undefined;
-  });
+  }
+  const query = yield* TelemetryQuery;
+  const entries = yield* withInternalError(
+    Stream.runCollect(query.getTimeline(session.runId, { cases: ["processExited"] })),
+    "Failed to read session settle evidence.",
+  );
+  for (const entry of entries) {
+    if (entry.processId !== session.daemonProcessId) {
+      continue;
+    }
+    const ref = entry.ref;
+    if (typeof ref === "object" && ref !== null) {
+      const record = ref as { exitCode?: unknown; signal?: unknown };
+      return {
+        ...(typeof record.exitCode === "number" ? { exitCode: record.exitCode } : {}),
+        ...(typeof record.signal === "number" ? { exitSignal: record.signal } : {}),
+      } satisfies ExitEvidence;
+    }
+    return {} satisfies ExitEvidence;
+  }
+  return undefined;
+});
 
 /**
  * Settle a session row (and its run) from recorded evidence. DB-only — no daemon roundtrip — so
@@ -347,54 +351,55 @@ const findExitEvidence = (session: WorkspaceSession) =>
  * prior output is durably recorded (the log is ordered). A dead runtime with no exit evidence
  * settles as `failed`.
  */
-export const reconcileSession = (session: WorkspaceSession) =>
-  Effect.gen(function* () {
-    if (session.status !== "starting" && session.status !== "running") {
-      return session;
-    }
-    const sessions = yield* WorkspaceSessionRepo;
-    const runs = yield* RunRepo;
-
-    const evidence = yield* findExitEvidence(session);
-    if (evidence !== undefined) {
-      const updated = yield* withInternalError(
-        sessions.markSessionEnded({
-          id: session.id,
-          status: "exited",
-          ...(evidence.exitCode === undefined ? {} : { exitCode: evidence.exitCode }),
-          ...(evidence.exitSignal === undefined ? {} : { exitSignal: evidence.exitSignal }),
-        }),
-        "Failed to settle session.",
-      );
-      yield* withInternalError(
-        runs.markRunCompleted({ id: session.runId, exitCode: evidence.exitCode ?? 0 }),
-        "Failed to settle session run.",
-      );
-      return updated ?? session;
-    }
-
-    const target = yield* resolveDaemonTarget(session.workspaceId);
-    if (target === undefined) {
-      const updated = yield* withInternalError(
-        sessions.markSessionEnded({
-          id: session.id,
-          status: "failed",
-          errorMessage: "Workspace runtime is gone; the session did not settle cleanly.",
-        }),
-        "Failed to settle session.",
-      );
-      yield* withInternalError(
-        runs.markRunFailed({
-          id: session.runId,
-          errorMessage: "Workspace runtime is gone; interactive session did not settle cleanly.",
-        }),
-        "Failed to settle session run.",
-      );
-      return updated ?? session;
-    }
-
+export const reconcileSession = Effect.fn("sealant.session.reconcile")(function* (
+  session: WorkspaceSession,
+) {
+  if (session.status !== "starting" && session.status !== "running") {
     return session;
-  });
+  }
+  const sessions = yield* WorkspaceSessionRepo;
+  const runs = yield* RunRepo;
+
+  const evidence = yield* findExitEvidence(session);
+  if (evidence !== undefined) {
+    const updated = yield* withInternalError(
+      sessions.markSessionEnded({
+        id: session.id,
+        status: "exited",
+        ...(evidence.exitCode === undefined ? {} : { exitCode: evidence.exitCode }),
+        ...(evidence.exitSignal === undefined ? {} : { exitSignal: evidence.exitSignal }),
+      }),
+      "Failed to settle session.",
+    );
+    yield* withInternalError(
+      runs.markRunCompleted({ id: session.runId, exitCode: evidence.exitCode ?? 0 }),
+      "Failed to settle session run.",
+    );
+    return updated ?? session;
+  }
+
+  const target = yield* resolveDaemonTarget(session.workspaceId);
+  if (target === undefined) {
+    const updated = yield* withInternalError(
+      sessions.markSessionEnded({
+        id: session.id,
+        status: "failed",
+        errorMessage: "Workspace runtime is gone; the session did not settle cleanly.",
+      }),
+      "Failed to settle session.",
+    );
+    yield* withInternalError(
+      runs.markRunFailed({
+        id: session.runId,
+        errorMessage: "Workspace runtime is gone; interactive session did not settle cleanly.",
+      }),
+      "Failed to settle session run.",
+    );
+    return updated ?? session;
+  }
+
+  return session;
+});
 
 // ---------------------------------------------------------------------------------------------
 // Wire mapping
@@ -422,21 +427,67 @@ const mapSession = (session: WorkspaceSession, outputHighWater: bigint): Session
   ...(session.endedAt === null ? {} : { endedAt: session.endedAt.toISOString() }),
 });
 
-const sessionWithHighWater = (session: WorkspaceSession) =>
-  Effect.gen(function* () {
-    const query = yield* TelemetryQuery;
-    const highWater = yield* withInternalError(
-      query.maxSequence(session.runId),
-      "Failed to read session output high-water mark.",
+const sessionWithHighWater = Effect.fn("sealant.session.with_high_water")(function* (
+  session: WorkspaceSession,
+) {
+  const query = yield* TelemetryQuery;
+  const highWater = yield* withInternalError(
+    query.maxSequence(session.runId),
+    "Failed to read session output high-water mark.",
+  );
+  return mapSession(session, highWater);
+});
+
+/**
+ * Wait for the telemetry ingester to open the run's epoch before the PTY opens: the daemon
+ * telemetry protocol is live-tail (no replay), so output emitted before it attaches is lost.
+ */
+const waitForRecorder = Effect.fn("sealant.session.wait_for_recorder")(function* (
+  runId: string,
+  sessionId: string,
+) {
+  const runs = yield* RunRepo;
+  const sessions = yield* WorkspaceSessionRepo;
+  const query = yield* TelemetryQuery;
+  const deadline = Date.now() + EPOCH_WAIT_TIMEOUT_MS;
+  for (;;) {
+    const recording = yield* withInternalError(
+      query.hasEpoch(runId),
+      "Failed to check session recording status.",
     );
-    return mapSession(session, highWater);
-  });
+    if (recording) {
+      break;
+    }
+    if (Date.now() > deadline) {
+      yield* withInternalError(
+        runs.markRunFailed({
+          id: runId,
+          errorMessage: "Telemetry ingester never attached; is the worker running?",
+        }),
+        "Failed to settle session run.",
+      ).pipe(Effect.ignore);
+      yield* withInternalError(
+        sessions.markSessionEnded({
+          id: sessionId,
+          status: "failed",
+          errorMessage: "Telemetry ingester never attached; is the worker running?",
+        }),
+        "Failed to settle session.",
+      ).pipe(Effect.ignore);
+      return yield* new SessionBadGatewayError({
+        message:
+          "The session recorder did not attach in time (is the worker running?). No PTY was opened.",
+      });
+    }
+    yield* delay(EPOCH_WAIT_INTERVAL_MS);
+  }
+});
 
 // ---------------------------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------------------------
 
-export const createSession = (input: {
+export const createSession = Effect.fn("sealant.session.create")(function* (input: {
   readonly payload: CreateSessionRequest;
   readonly headers: SessionAuthorizationHeaders;
   /**
@@ -447,309 +498,271 @@ export const createSession = (input: {
   readonly asUser?: boolean;
   /** For tests; defaults to the live channel (asked only for a session as a user). */
   readonly processUserChannel?: ProcessUserChannel;
-}) =>
-  Effect.gen(function* () {
-    const principal = yield* authorize({
-      headers: input.headers,
-      requiredScope: "workspace:exec",
-      assertedOwnerUserId: input.payload.ownerUserId,
+}) {
+  const principal = yield* authorize({
+    headers: input.headers,
+    requiredScope: "workspace:exec",
+    assertedOwnerUserId: input.payload.ownerUserId,
+  });
+  if (principal.workspaceId !== undefined && principal.workspaceId !== input.payload.workspaceId) {
+    return yield* new SessionNotFoundError({
+      message: `Workspace not found: ${input.payload.workspaceId}`,
     });
-    if (
-      principal.workspaceId !== undefined &&
-      principal.workspaceId !== input.payload.workspaceId
-    ) {
-      return yield* new SessionNotFoundError({
-        message: `Workspace not found: ${input.payload.workspaceId}`,
-      });
-    }
+  }
 
-    const workspaces = yield* WorkspaceRepo;
-    const workspace = yield* withInternalError(
-      workspaces.getWorkspaceById(input.payload.workspaceId),
-      "Failed to load workspace.",
-    );
-    if (workspace === undefined || workspace.ownerUserId !== principal.ownerUserId) {
-      return yield* new SessionNotFoundError({
-        message: `Workspace not found: ${input.payload.workspaceId}`,
-      });
-    }
-    const user = input.payload.user;
-    if (user !== undefined && input.asUser !== true) {
+  const workspaces = yield* WorkspaceRepo;
+  const workspace = yield* withInternalError(
+    workspaces.getWorkspaceById(input.payload.workspaceId),
+    "Failed to load workspace.",
+  );
+  if (workspace === undefined || workspace.ownerUserId !== principal.ownerUserId) {
+    return yield* new SessionNotFoundError({
+      message: `Workspace not found: ${input.payload.workspaceId}`,
+    });
+  }
+  const user = input.payload.user;
+  if (user !== undefined && input.asUser !== true) {
+    return yield* new SessionConflictError({
+      message: processUserOnLegacyRoute(user, "POST /v1/sessions/as-user"),
+      code: PROCESS_USER_UNSUPPORTED_CODE,
+    });
+  }
+  if (user !== undefined) {
+    const refused = processUserNameRefusal(workspace.id, user);
+    if (refused !== undefined) {
       return yield* new SessionConflictError({
-        message: processUserOnLegacyRoute(user, "POST /v1/sessions/as-user"),
+        message: refused,
         code: PROCESS_USER_UNSUPPORTED_CODE,
       });
     }
-    if (user !== undefined) {
-      const refused = processUserNameRefusal(workspace.id, user);
-      if (refused !== undefined) {
-        return yield* new SessionConflictError({
-          message: refused,
-          code: PROCESS_USER_UNSUPPORTED_CODE,
-        });
-      }
-    }
+  }
 
-    const resolved = yield* resolveDaemonInstance(workspace.id);
-    // A session as a person: only where the executor's daemon starts one as that user, for a
-    // person in Mend's range. Asked before the run exists, so a refusal leaves nothing behind.
-    if (user !== undefined && resolved !== undefined) {
-      const verdict = yield* checkProcessUser({
-        workspaceId: workspace.id,
-        instance: resolved.instance,
-        target: resolved.target,
-        user,
-        ...(input.processUserChannel === undefined ? {} : { channel: input.processUserChannel }),
-      });
-      if (verdict.kind === "refused") {
-        return yield* new SessionConflictError({
-          message: verdict.message,
-          code: PROCESS_USER_UNSUPPORTED_CODE,
-        });
-      }
-      if (verdict.kind === "unanswered") {
-        return yield* new SessionBadGatewayError({ message: verdict.message });
-      }
-    }
-    const target = resolved?.target;
-    if (target === undefined) {
+  const resolved = yield* resolveDaemonInstance(workspace.id);
+  // A session as a person: only where the executor's daemon starts one as that user, for a
+  // person in Mend's range. Asked before the run exists, so a refusal leaves nothing behind.
+  if (user !== undefined && resolved !== undefined) {
+    const verdict = yield* checkProcessUser({
+      workspaceId: workspace.id,
+      instance: resolved.instance,
+      target: resolved.target,
+      user,
+      ...(input.processUserChannel === undefined ? {} : { channel: input.processUserChannel }),
+    });
+    if (verdict.kind === "refused") {
       return yield* new SessionConflictError({
-        message: "The workspace has no ready runtime to host a session.",
+        message: verdict.message,
+        code: PROCESS_USER_UNSUPPORTED_CODE,
       });
     }
+    if (verdict.kind === "unanswered") {
+      return yield* new SessionBadGatewayError({ message: verdict.message });
+    }
+  }
+  const target = resolved?.target;
+  if (target === undefined) {
+    return yield* new SessionConflictError({
+      message: "The workspace has no ready runtime to host a session.",
+    });
+  }
 
-    // Default cwd: the blueprint's working directory (where the repository lives).
-    const attempts = yield* WorkspaceAttemptRepo;
-    const snapshot =
-      workspace.latestRunId === null
-        ? undefined
-        : yield* withInternalError(
-            attempts.getAttemptSnapshotByRunId(workspace.latestRunId),
-            "Failed to load workspace blueprint snapshot.",
-          );
-    const blueprintWorkingDirectory = (() => {
-      const spec = snapshot?.resolvedSpecPayload as
-        | { runtime?: { workingDirectory?: string } }
-        | undefined;
-      return spec?.runtime?.workingDirectory ?? "/workspace/repo";
-    })();
+  // Default cwd: the blueprint's working directory (where the repository lives).
+  const attempts = yield* WorkspaceAttemptRepo;
+  const snapshot =
+    workspace.latestRunId === null
+      ? undefined
+      : yield* withInternalError(
+          attempts.getAttemptSnapshotByRunId(workspace.latestRunId),
+          "Failed to load workspace blueprint snapshot.",
+        );
+  const blueprintWorkingDirectory = (() => {
+    const spec = snapshot?.resolvedSpecPayload as
+      | { runtime?: { workingDirectory?: string } }
+      | undefined;
+    return spec?.runtime?.workingDirectory ?? "/workspace/repo";
+  })();
 
-    const runs = yield* RunRepo;
-    const sessions = yield* WorkspaceSessionRepo;
-    const query = yield* TelemetryQuery;
+  const runs = yield* RunRepo;
+  const sessions = yield* WorkspaceSessionRepo;
 
-    const runId = `run_${randomUUID()}`;
-    const sessionId = `sess_${randomUUID()}`;
-    const argv = [...input.payload.argv];
-    const cwd = input.payload.cwd ?? blueprintWorkingDirectory;
-    const mode = input.payload.mode ?? "pty";
-    // A pipe leader has no terminal: size is meaningless, recorded as 0×0.
-    const cols = mode === "pipe" ? 0 : (input.payload.cols ?? DEFAULT_COLS);
-    const rows = mode === "pipe" ? 0 : (input.payload.rows ?? DEFAULT_ROWS);
+  const runId = `run_${randomUUID()}`;
+  const sessionId = `sess_${randomUUID()}`;
+  const argv = [...input.payload.argv];
+  const cwd = input.payload.cwd ?? blueprintWorkingDirectory;
+  const mode = input.payload.mode ?? "pty";
+  // A pipe leader has no terminal: size is meaningless, recorded as 0×0.
+  const cols = mode === "pipe" ? 0 : (input.payload.cols ?? DEFAULT_COLS);
+  const rows = mode === "pipe" ? 0 : (input.payload.rows ?? DEFAULT_ROWS);
+  yield* Effect.annotateCurrentSpan({
+    "sealant.workspace_id": workspace.id,
+    "sealant.session_id": sessionId,
+    "sealant.run_id": runId,
+    "sealant.session.mode": mode,
+  });
 
-    yield* withInternalError(
-      runs.createRun({
-        id: runId,
-        workspaceId: workspace.id,
-        ownerUserId: principal.ownerUserId,
-        harnessId: "session",
-        mode: "interactive",
-        command: { executable: argv[0] ?? "", args: argv.slice(1), cwd },
-        ...(input.payload.metadata === undefined
-          ? {}
-          : { metadata: { ...input.payload.metadata } }),
-        ...(user === undefined ? {} : { processUser: user }),
-      }),
-      "Failed to create session run.",
-    );
-    yield* withInternalError(
-      sessions.createSession({
-        id: sessionId,
-        workspaceId: workspace.id,
-        runId,
-        ownerUserId: principal.ownerUserId,
-        argv,
+  yield* withInternalError(
+    runs.createRun({
+      id: runId,
+      workspaceId: workspace.id,
+      ownerUserId: principal.ownerUserId,
+      harnessId: "session",
+      mode: "interactive",
+      command: { executable: argv[0] ?? "", args: argv.slice(1), cwd },
+      ...(input.payload.metadata === undefined ? {} : { metadata: { ...input.payload.metadata } }),
+      ...(user === undefined ? {} : { processUser: user }),
+    }),
+    "Failed to create session run.",
+  );
+  yield* withInternalError(
+    sessions.createSession({
+      id: sessionId,
+      workspaceId: workspace.id,
+      runId,
+      ownerUserId: principal.ownerUserId,
+      argv,
+      cwd,
+      cols,
+      rows,
+      mode,
+      ...(input.payload.metadata === undefined ? {} : { metadata: { ...input.payload.metadata } }),
+    }),
+    "Failed to create session.",
+  );
+  // `running` is what the telemetry worker polls for — flipping it starts the recorder.
+  yield* withInternalError(runs.markRunRunning({ id: runId }), "Failed to start session run.");
+
+  yield* waitForRecorder(runId, sessionId);
+
+  const opened = yield* withDaemon(target, (daemon) =>
+    Effect.gen(function* () {
+      // A session as a user: the daemon this connection reached is asked again, whatever the
+      // kept answer said, so a daemon without `exec.user` (which would ignore `user` and open
+      // the session as root) is never asked to open it.
+      if (user !== undefined) {
+        const capabilities = yield* daemon.capabilities;
+        if (!capabilities.supports.includes(PROCESS_USER_CAPABILITY)) return undefined;
+      }
+      return yield* daemon.openSession({
+        executionId: runId,
+        shell: argv[0] ?? "/bin/bash",
+        args: argv.slice(1),
         cwd,
+        ...(input.payload.env === undefined ? {} : { env: input.payload.env }),
         cols,
         rows,
+        term: input.payload.term ?? DEFAULT_TERM,
         mode,
-        ...(input.payload.metadata === undefined
-          ? {}
-          : { metadata: { ...input.payload.metadata } }),
-      }),
-      "Failed to create session.",
-    );
-    // `running` is what the telemetry worker polls for — flipping it starts the recorder.
-    yield* withInternalError(runs.markRunRunning({ id: runId }), "Failed to start session run.");
-
-    // Wait for the recorder before opening the session: the daemon telemetry protocol is live-tail
-    // (no replay), so output emitted before the ingester attaches would be unrecoverable.
-    const deadline = Date.now() + EPOCH_WAIT_TIMEOUT_MS;
-    for (;;) {
-      const recording = yield* withInternalError(
-        query.hasEpoch(runId),
-        "Failed to check session recording status.",
-      );
-      if (recording) {
-        break;
-      }
-      if (Date.now() > deadline) {
-        yield* withInternalError(
-          runs.markRunFailed({
-            id: runId,
-            errorMessage: "Telemetry ingester never attached; is the worker running?",
-          }),
-          "Failed to settle session run.",
-        ).pipe(Effect.ignore);
-        yield* withInternalError(
-          sessions.markSessionEnded({
-            id: sessionId,
-            status: "failed",
-            errorMessage: "Telemetry ingester never attached; is the worker running?",
-          }),
-          "Failed to settle session.",
-        ).pipe(Effect.ignore);
-        return yield* new SessionBadGatewayError({
-          message:
-            "The session recorder did not attach in time (is the worker running?). No PTY was opened.",
-        });
-      }
-      yield* delay(EPOCH_WAIT_INTERVAL_MS);
-    }
-
-    const opened = yield* withDaemon(target, (daemon) =>
-      Effect.gen(function* () {
-        // A session as a user: the daemon this connection reached is asked again, whatever the
-        // kept answer said, so a daemon without `exec.user` (which would ignore `user` and open
-        // the session as root) is never asked to open it.
-        if (user !== undefined) {
-          const capabilities = yield* daemon.capabilities;
-          if (!capabilities.supports.includes(PROCESS_USER_CAPABILITY)) return undefined;
-        }
-        return yield* daemon.openSession({
-          executionId: runId,
-          shell: argv[0] ?? "/bin/bash",
-          args: argv.slice(1),
-          cwd,
-          ...(input.payload.env === undefined ? {} : { env: input.payload.env }),
-          cols,
-          rows,
-          term: input.payload.term ?? DEFAULT_TERM,
-          mode,
-          ...(user === undefined ? {} : { user }),
-        });
-      }),
-    ).pipe(
-      // The run and the session exist by now. A daemon that refused to start the leader (a spawn
-      // error, `E2BIG`) settles both. Any other failure (a dropped connection, a lost answer) says
-      // nothing about whether the leader runs, so the daemon is asked again before anything is
-      // settled: a leader it reports is the session's, and one it does not report never started.
-      Effect.catch((error) => {
-        const message = `Failed to open the ${mode} session: ${toErrorMessage(error, "daemon error")}`;
-        const settle = Effect.all(
-          [
-            runs.markRunFailed({ id: runId, errorMessage: message }),
-            sessions.markSessionEnded({ id: sessionId, status: "failed", errorMessage: message }),
-          ],
-          { discard: true },
-        ).pipe(Effect.ignore, Effect.andThen(Effect.fail(new SessionBadGatewayError({ message }))));
-        if (error instanceof SealantControlError) return settle;
-        return findOpenedLeader(target, runId).pipe(
-          Effect.flatMap((found) => {
-            if (found.kind === "found") return Effect.succeed(found.leader);
-            if (found.kind === "absent") return settle;
-            // Neither answer: the run keeps recording and the session stays open, so a later
-            // close finds the leader by its run and stops it.
-            return Effect.fail(
-              new SessionBadGatewayError({
-                message: `${message}. Whether it started is unknown (${found.reason}); session ${sessionId} stays open, and closing it stops the program if it runs.`,
-              }),
-            );
-          }),
-        );
-      }),
-    );
-    if (opened === undefined) {
-      const message = processUserRefusalMessage(workspace.id, user ?? "", {
-        reason: "sealantd-unsupported",
-        detail: `its sealantd does not report ${PROCESS_USER_CAPABILITY}`,
+        ...(user === undefined ? {} : { user }),
       });
-      yield* Effect.all(
+    }),
+  ).pipe(
+    // The run and the session exist by now. A daemon that refused to start the leader (a spawn
+    // error, `E2BIG`) settles both. Any other failure (a dropped connection, a lost answer) says
+    // nothing about whether the leader runs, so the daemon is asked again before anything is
+    // settled: a leader it reports is the session's, and one it does not report never started.
+    Effect.catch((error) => {
+      const message = `Failed to open the ${mode} session: ${toErrorMessage(error, "daemon error")}`;
+      const settle = Effect.all(
         [
           runs.markRunFailed({ id: runId, errorMessage: message }),
           sessions.markSessionEnded({ id: sessionId, status: "failed", errorMessage: message }),
         ],
         { discard: true },
-      ).pipe(Effect.ignore);
-      return yield* new SessionConflictError({ message, code: PROCESS_USER_UNSUPPORTED_CODE });
-    }
+      ).pipe(Effect.ignore, Effect.andThen(Effect.fail(new SessionBadGatewayError({ message }))));
+      if (error instanceof SealantControlError) return settle;
+      return findOpenedLeader(target, runId).pipe(
+        Effect.flatMap((found) => {
+          if (found.kind === "found") return Effect.succeed(found.leader);
+          if (found.kind === "absent") return settle;
+          // Neither answer: the run keeps recording and the session stays open, so a later
+          // close finds the leader by its run and stops it.
+          return Effect.fail(
+            new SessionBadGatewayError({
+              message: `${message}. Whether it started is unknown (${found.reason}); session ${sessionId} stays open, and closing it stops the program if it runs.`,
+            }),
+          );
+        }),
+      );
+    }),
+  );
+  if (opened === undefined) {
+    const message = processUserRefusalMessage(workspace.id, user ?? "", {
+      reason: "sealantd-unsupported",
+      detail: `its sealantd does not report ${PROCESS_USER_CAPABILITY}`,
+    });
+    yield* Effect.all(
+      [
+        runs.markRunFailed({ id: runId, errorMessage: message }),
+        sessions.markSessionEnded({ id: sessionId, status: "failed", errorMessage: message }),
+      ],
+      { discard: true },
+    ).pipe(Effect.ignore);
+    return yield* new SessionConflictError({ message, code: PROCESS_USER_UNSUPPORTED_CODE });
+  }
 
-    const running = yield* withInternalError(
-      sessions.markSessionRunning({
-        id: sessionId,
-        daemonSessionId: opened.sessionId,
-        daemonProcessId: opened.processId,
-      }),
-      "Failed to record session start.",
-    );
-    if (running === null) {
-      return yield* new SessionInternalServerError({
-        message: "Session row vanished during creation.",
-      });
-    }
-    return mapSession(running, 0n);
-  });
+  const running = yield* withInternalError(
+    sessions.markSessionRunning({
+      id: sessionId,
+      daemonSessionId: opened.sessionId,
+      daemonProcessId: opened.processId,
+    }),
+    "Failed to record session start.",
+  );
+  if (running === null) {
+    return yield* new SessionInternalServerError({
+      message: "Session row vanished during creation.",
+    });
+  }
+  return mapSession(running, 0n);
+});
 
-export const getSession = (input: {
+export const getSession = Effect.fn("sealant.session.get")(function* (input: {
   readonly sessionId: string;
   readonly headers: SessionAuthorizationHeaders;
   readonly ownerUserId: string | undefined;
-}) =>
-  Effect.gen(function* () {
-    const principal = yield* authorize({
-      headers: input.headers,
-      requiredScope: "session:read",
-      assertedOwnerUserId: input.ownerUserId,
-    });
-    const session = yield* requireSession(input.sessionId, principal);
-    const reconciled = yield* reconcileSession(session);
-    return yield* sessionWithHighWater(reconciled);
+}) {
+  const principal = yield* authorize({
+    headers: input.headers,
+    requiredScope: "session:read",
+    assertedOwnerUserId: input.ownerUserId,
   });
+  const session = yield* requireSession(input.sessionId, principal);
+  const reconciled = yield* reconcileSession(session);
+  return yield* sessionWithHighWater(reconciled);
+});
 
-export const listSessions = (input: {
+export const listSessions = Effect.fn("sealant.session.list")(function* (input: {
   readonly query: ListSessionsQuery;
   readonly headers: SessionAuthorizationHeaders;
-}) =>
-  Effect.gen(function* () {
-    const principal = yield* authorize({
-      headers: input.headers,
-      requiredScope: "session:read",
-      assertedOwnerUserId: input.query.ownerUserId,
-    });
-    const limitRaw = input.query.limit;
-    const limit = limitRaw === undefined ? 50 : Number.parseInt(limitRaw, 10);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
-      return yield* new SessionBadRequestError({
-        message: "limit must be an integer between 1 and 200.",
-      });
-    }
-    const sessions = yield* WorkspaceSessionRepo;
-    const rows = yield* withInternalError(
-      sessions.listSessions({
-        ownerUserId: principal.ownerUserId,
-        ...(principal.workspaceId !== undefined
-          ? { workspaceId: principal.workspaceId }
-          : input.query.workspaceId === undefined
-            ? {}
-            : { workspaceId: input.query.workspaceId }),
-        ...(input.query.status === undefined ? {} : { statuses: [input.query.status] }),
-        limit,
-      }),
-      "Failed to list sessions.",
-    );
-    const items = yield* Effect.forEach(rows, (row) => sessionWithHighWater(row));
-    return { items } satisfies ListSessionsResponse;
+}) {
+  const principal = yield* authorize({
+    headers: input.headers,
+    requiredScope: "session:read",
+    assertedOwnerUserId: input.query.ownerUserId,
   });
+  const limitRaw = input.query.limit;
+  const limit = limitRaw === undefined ? 50 : Number.parseInt(limitRaw, 10);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+    return yield* new SessionBadRequestError({
+      message: "limit must be an integer between 1 and 200.",
+    });
+  }
+  const sessions = yield* WorkspaceSessionRepo;
+  const rows = yield* withInternalError(
+    sessions.listSessions({
+      ownerUserId: principal.ownerUserId,
+      ...(principal.workspaceId !== undefined
+        ? { workspaceId: principal.workspaceId }
+        : input.query.workspaceId === undefined
+          ? {}
+          : { workspaceId: input.query.workspaceId }),
+      ...(input.query.status === undefined ? {} : { statuses: [input.query.status] }),
+      limit,
+    }),
+    "Failed to list sessions.",
+  );
+  const items = yield* Effect.forEach(rows, (row) => sessionWithHighWater(row));
+  return { items } satisfies ListSessionsResponse;
+});
 
 const parseSequence = (raw: string | undefined, field: string) => {
   if (raw === undefined) {
@@ -764,52 +777,51 @@ const parseSequence = (raw: string | undefined, field: string) => {
   }
 };
 
-export const getSessionOutput = (input: {
+export const getSessionOutput = Effect.fn("sealant.session.get_output")(function* (input: {
   readonly sessionId: string;
   readonly headers: SessionAuthorizationHeaders;
   readonly query: GetSessionOutputQuery;
-}) =>
-  Effect.gen(function* () {
-    const principal = yield* authorize({
-      headers: input.headers,
-      requiredScope: "session:read",
-      assertedOwnerUserId: input.query.ownerUserId,
-    });
-    const session = yield* requireSession(input.sessionId, principal);
-    const from = yield* parseSequence(input.query.from, "from");
-    const limitRaw = input.query.limit;
-    const limit = limitRaw === undefined ? 2000 : Number.parseInt(limitRaw, 10);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) {
-      return yield* new SessionBadRequestError({
-        message: "limit must be an integer between 1 and 10000.",
-      });
-    }
-
-    const query = yield* TelemetryQuery;
-    const chunks = yield* withInternalError(
-      query.scrollbackChunks(session.runId, SESSION_OUTPUT_STREAM_KINDS, {
-        // Null before the daemon session opened — nothing is recorded yet, unscoped is exact.
-        ...(session.daemonSessionId === null ? {} : { sessionId: session.daemonSessionId }),
-        ...(from === undefined ? {} : { fromSequence: from }),
-        limit,
-      }),
-      "Failed to read session output.",
-    );
-
-    const reconciled = yield* reconcileSession(session);
-    const last = chunks[chunks.length - 1];
-    const nextFrom = last === undefined ? (from ?? 0n) : last.sequence + 1n;
-
-    return {
-      sessionId: session.id,
-      chunks: chunks.map((chunk) => ({
-        sequence: chunk.sequence.toString(),
-        dataBase64: Buffer.from(chunk.bytes).toString("base64"),
-      })),
-      nextFrom: nextFrom.toString(),
-      status: reconciled.status,
-    } satisfies SessionOutputResponse;
+}) {
+  const principal = yield* authorize({
+    headers: input.headers,
+    requiredScope: "session:read",
+    assertedOwnerUserId: input.query.ownerUserId,
   });
+  const session = yield* requireSession(input.sessionId, principal);
+  const from = yield* parseSequence(input.query.from, "from");
+  const limitRaw = input.query.limit;
+  const limit = limitRaw === undefined ? 2000 : Number.parseInt(limitRaw, 10);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) {
+    return yield* new SessionBadRequestError({
+      message: "limit must be an integer between 1 and 10000.",
+    });
+  }
+
+  const query = yield* TelemetryQuery;
+  const chunks = yield* withInternalError(
+    query.scrollbackChunks(session.runId, SESSION_OUTPUT_STREAM_KINDS, {
+      // Null before the daemon session opened — nothing is recorded yet, unscoped is exact.
+      ...(session.daemonSessionId === null ? {} : { sessionId: session.daemonSessionId }),
+      ...(from === undefined ? {} : { fromSequence: from }),
+      limit,
+    }),
+    "Failed to read session output.",
+  );
+
+  const reconciled = yield* reconcileSession(session);
+  const last = chunks[chunks.length - 1];
+  const nextFrom = last === undefined ? (from ?? 0n) : last.sequence + 1n;
+
+  return {
+    sessionId: session.id,
+    chunks: chunks.map((chunk) => ({
+      sequence: chunk.sequence.toString(),
+      dataBase64: Buffer.from(chunk.bytes).toString("base64"),
+    })),
+    nextFrom: nextFrom.toString(),
+    status: reconciled.status,
+  } satisfies SessionOutputResponse;
+});
 
 /** Shared body for the input/resize/signal verbs: authorize, load, require live, run on daemon. */
 const withLiveSession = <A, E>(
@@ -869,157 +881,153 @@ const withLiveSession = <A, E>(
     );
   });
 
-export const sendSessionInput = (input: {
+export const sendSessionInput = Effect.fn("sealant.session.send_input")(function* (input: {
   readonly sessionId: string;
   readonly headers: SessionAuthorizationHeaders;
   readonly payload: SessionInputRequest;
-}) =>
-  Effect.gen(function* () {
-    const data = Buffer.from(input.payload.dataBase64, "base64");
-    yield* withLiveSession(
-      {
-        sessionId: input.sessionId,
-        headers: input.headers,
-        assertedOwnerUserId: input.payload.ownerUserId,
-        requiredScope: "session:input",
-      },
-      (daemon, session) => daemon.writeSessionInput(session.daemonSessionId, new Uint8Array(data)),
-    );
-    return { ok: true };
-  });
+}) {
+  const data = Buffer.from(input.payload.dataBase64, "base64");
+  yield* withLiveSession(
+    {
+      sessionId: input.sessionId,
+      headers: input.headers,
+      assertedOwnerUserId: input.payload.ownerUserId,
+      requiredScope: "session:input",
+    },
+    (daemon, session) => daemon.writeSessionInput(session.daemonSessionId, new Uint8Array(data)),
+  );
+  return { ok: true };
+});
 
-export const resizeSession = (input: {
+export const resizeSession = Effect.fn("sealant.session.resize")(function* (input: {
   readonly sessionId: string;
   readonly headers: SessionAuthorizationHeaders;
   readonly payload: SessionResizeRequest;
-}) =>
-  Effect.gen(function* () {
-    yield* withLiveSession(
-      {
-        sessionId: input.sessionId,
-        headers: input.headers,
-        assertedOwnerUserId: input.payload.ownerUserId,
-        requiredScope: "session:input",
-      },
-      (daemon, session) =>
-        Effect.gen(function* () {
-          if (session.mode === "pipe") {
-            return yield* new SessionBadRequestError({
-              message: "A pipe-mode session has no terminal to resize.",
-            });
-          }
-          yield* daemon.resizePty(session.daemonSessionId, input.payload.cols, input.payload.rows);
-        }),
-    );
-    const sessions = yield* WorkspaceSessionRepo;
-    yield* withInternalError(
-      sessions.updateSessionSize({
-        id: input.sessionId,
-        cols: input.payload.cols,
-        rows: input.payload.rows,
+}) {
+  yield* withLiveSession(
+    {
+      sessionId: input.sessionId,
+      headers: input.headers,
+      assertedOwnerUserId: input.payload.ownerUserId,
+      requiredScope: "session:input",
+    },
+    (daemon, session) =>
+      Effect.gen(function* () {
+        if (session.mode === "pipe") {
+          return yield* new SessionBadRequestError({
+            message: "A pipe-mode session has no terminal to resize.",
+          });
+        }
+        yield* daemon.resizePty(session.daemonSessionId, input.payload.cols, input.payload.rows);
       }),
-      "Failed to record the session size.",
-    );
-    return { ok: true };
-  });
+  );
+  const sessions = yield* WorkspaceSessionRepo;
+  yield* withInternalError(
+    sessions.updateSessionSize({
+      id: input.sessionId,
+      cols: input.payload.cols,
+      rows: input.payload.rows,
+    }),
+    "Failed to record the session size.",
+  );
+  return { ok: true };
+});
 
-export const signalSession = (input: {
+export const signalSession = Effect.fn("sealant.session.signal")(function* (input: {
   readonly sessionId: string;
   readonly headers: SessionAuthorizationHeaders;
   readonly payload: SessionSignalRequest;
-}) =>
-  Effect.gen(function* () {
-    yield* withLiveSession(
-      {
-        sessionId: input.sessionId,
-        headers: input.headers,
-        assertedOwnerUserId: input.payload.ownerUserId,
-        requiredScope: "session:input",
-      },
-      (daemon, session) => daemon.signalProcess(session.daemonProcessId, input.payload.signal),
-    );
-    return { ok: true };
-  });
+}) {
+  yield* withLiveSession(
+    {
+      sessionId: input.sessionId,
+      headers: input.headers,
+      assertedOwnerUserId: input.payload.ownerUserId,
+      requiredScope: "session:input",
+    },
+    (daemon, session) => daemon.signalProcess(session.daemonProcessId, input.payload.signal),
+  );
+  return { ok: true };
+});
 
-export const closeSession = (input: {
+export const closeSession = Effect.fn("sealant.session.close")(function* (input: {
   readonly sessionId: string;
   readonly headers: SessionAuthorizationHeaders;
   readonly payload: CloseSessionRequest;
-}) =>
-  Effect.gen(function* () {
-    const principal = yield* authorize({
-      headers: input.headers,
-      requiredScope: "workspace:exec",
-      assertedOwnerUserId: input.payload.ownerUserId,
-    });
-    const session = yield* requireSession(input.sessionId, principal);
-    if (session.status === "exited" || session.status === "failed") {
-      return yield* sessionWithHighWater(session);
-    }
-
-    const target = yield* resolveDaemonTarget(session.workspaceId);
-    // An open whose answer was lost left no daemon ids: the leader, if it runs, is found by its run
-    // and recorded first, so it is stopped here and its exit is recognised below.
-    let current = session;
-    if (target !== undefined && current.daemonSessionId === null) {
-      const found = yield* findOpenedLeader(target, current.runId);
-      // The daemon cannot say whether a leader runs: nothing is settled, so the session keeps
-      // recording and a later close can still find and stop it.
-      if (found.kind === "unknown") {
-        return yield* new SessionBadGatewayError({
-          message: `Could not close session ${current.id}: whether its program runs is unknown (${found.reason}). Nothing was changed; close it again.`,
-        });
-      }
-      if (found.kind === "found") {
-        const sessions = yield* WorkspaceSessionRepo;
-        const recorded = yield* withInternalError(
-          sessions.markSessionRunning({
-            id: current.id,
-            daemonSessionId: found.leader.sessionId,
-            daemonProcessId: found.leader.processId,
-          }),
-          "Failed to record the session's leader.",
-        );
-        current = recorded ?? current;
-      }
-    }
-    if (target !== undefined && current.daemonSessionId !== null) {
-      const daemonSessionId = current.daemonSessionId;
-      yield* withDaemon(target, (daemon) => daemon.closeSession(daemonSessionId)).pipe(
-        // Already gone daemon-side is success for a close.
-        Effect.catchIf(isDaemonSessionGone, () => Effect.void),
-        Effect.mapError(
-          (error) =>
-            new SessionBadGatewayError({
-              message: `Failed to close the PTY session: ${toErrorMessage(error, "daemon error")}`,
-            }),
-        ),
-      );
-    }
-
-    // Wait for the settle evidence to be ingested: `processExited` arriving guarantees every
-    // prior output byte is durably recorded (the log is ordered), so a reader that reattaches
-    // after close still sees byte-exact history.
-    const deadline = Date.now() + EXIT_WAIT_TIMEOUT_MS;
-    for (;;) {
-      const reconciled = yield* reconcileSession(current);
-      if (reconciled.status === "exited" || reconciled.status === "failed") {
-        return yield* sessionWithHighWater(reconciled);
-      }
-      if (Date.now() > deadline) {
-        // Best-effort settle: the evidence never arrived; mark the session closed anyway.
-        const sessions = yield* WorkspaceSessionRepo;
-        const runs = yield* RunRepo;
-        const updated = yield* withInternalError(
-          sessions.markSessionEnded({ id: current.id, status: "exited" }),
-          "Failed to settle session.",
-        );
-        yield* withInternalError(
-          runs.markRunCompleted({ id: current.runId, exitCode: 0 }),
-          "Failed to settle session run.",
-        );
-        return yield* sessionWithHighWater(updated ?? current);
-      }
-      yield* delay(EXIT_WAIT_INTERVAL_MS);
-    }
+}) {
+  const principal = yield* authorize({
+    headers: input.headers,
+    requiredScope: "workspace:exec",
+    assertedOwnerUserId: input.payload.ownerUserId,
   });
+  const session = yield* requireSession(input.sessionId, principal);
+  if (session.status === "exited" || session.status === "failed") {
+    return yield* sessionWithHighWater(session);
+  }
+
+  const target = yield* resolveDaemonTarget(session.workspaceId);
+  // An open whose answer was lost left no daemon ids: the leader, if it runs, is found by its run
+  // and recorded first, so it is stopped here and its exit is recognised below.
+  let current = session;
+  if (target !== undefined && current.daemonSessionId === null) {
+    const found = yield* findOpenedLeader(target, current.runId);
+    // The daemon cannot say whether a leader runs: nothing is settled, so the session keeps
+    // recording and a later close can still find and stop it.
+    if (found.kind === "unknown") {
+      return yield* new SessionBadGatewayError({
+        message: `Could not close session ${current.id}: whether its program runs is unknown (${found.reason}). Nothing was changed; close it again.`,
+      });
+    }
+    if (found.kind === "found") {
+      const sessions = yield* WorkspaceSessionRepo;
+      const recorded = yield* withInternalError(
+        sessions.markSessionRunning({
+          id: current.id,
+          daemonSessionId: found.leader.sessionId,
+          daemonProcessId: found.leader.processId,
+        }),
+        "Failed to record the session's leader.",
+      );
+      current = recorded ?? current;
+    }
+  }
+  if (target !== undefined && current.daemonSessionId !== null) {
+    const daemonSessionId = current.daemonSessionId;
+    yield* withDaemon(target, (daemon) => daemon.closeSession(daemonSessionId)).pipe(
+      // Already gone daemon-side is success for a close.
+      Effect.catchIf(isDaemonSessionGone, () => Effect.void),
+      Effect.mapError(
+        (error) =>
+          new SessionBadGatewayError({
+            message: `Failed to close the PTY session: ${toErrorMessage(error, "daemon error")}`,
+          }),
+      ),
+    );
+  }
+
+  // Wait for the settle evidence to be ingested: `processExited` arriving guarantees every
+  // prior output byte is durably recorded (the log is ordered), so a reader that reattaches
+  // after close still sees byte-exact history.
+  const deadline = Date.now() + EXIT_WAIT_TIMEOUT_MS;
+  for (;;) {
+    const reconciled = yield* reconcileSession(current);
+    if (reconciled.status === "exited" || reconciled.status === "failed") {
+      return yield* sessionWithHighWater(reconciled);
+    }
+    if (Date.now() > deadline) {
+      // Best-effort settle: the evidence never arrived; mark the session closed anyway.
+      const sessions = yield* WorkspaceSessionRepo;
+      const runs = yield* RunRepo;
+      const updated = yield* withInternalError(
+        sessions.markSessionEnded({ id: current.id, status: "exited" }),
+        "Failed to settle session.",
+      );
+      yield* withInternalError(
+        runs.markRunCompleted({ id: current.runId, exitCode: 0 }),
+        "Failed to settle session run.",
+      );
+      return yield* sessionWithHighWater(updated ?? current);
+    }
+    yield* delay(EXIT_WAIT_INTERVAL_MS);
+  }
+});

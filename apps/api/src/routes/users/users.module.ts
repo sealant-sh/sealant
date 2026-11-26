@@ -42,37 +42,35 @@ const mapUser = (user: UserRecord): UserWire => ({
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+$/;
 
-export const ensureUser = (payload: EnsureUserRequest) =>
-  Effect.gen(function* () {
-    if (!EMAIL_PATTERN.test(payload.email)) {
-      return yield* new UserBadRequestError({ message: "email must be an address." });
-    }
-    if (payload.userId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(payload.userId)) {
-      return yield* new UserBadRequestError({
-        message: "userId may only contain letters, digits, '_' and '-' (max 128).",
-      });
-    }
-    const users = yield* UserRepo;
-    const result = yield* withInternalError(
-      users.ensureUser({
-        email: payload.email,
-        name: payload.name,
-        ...(payload.userId === undefined ? {} : { id: payload.userId }),
-      }),
-      "Failed to ensure user.",
-    );
-    return { ...mapUser(result.user), created: result.created } satisfies EnsureUserResponse;
-  });
+export const ensureUser = Effect.fn("sealant.user.ensure")(function* (payload: EnsureUserRequest) {
+  if (!EMAIL_PATTERN.test(payload.email)) {
+    return yield* new UserBadRequestError({ message: "email must be an address." });
+  }
+  if (payload.userId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(payload.userId)) {
+    return yield* new UserBadRequestError({
+      message: "userId may only contain letters, digits, '_' and '-' (max 128).",
+    });
+  }
+  const users = yield* UserRepo;
+  const result = yield* withInternalError(
+    users.ensureUser({
+      email: payload.email,
+      name: payload.name,
+      ...(payload.userId === undefined ? {} : { id: payload.userId }),
+    }),
+    "Failed to ensure user.",
+  );
+  return { ...mapUser(result.user), created: result.created } satisfies EnsureUserResponse;
+});
 
-export const getUser = (userId: string) =>
-  Effect.gen(function* () {
-    const users = yield* UserRepo;
-    const user = yield* withInternalError(users.getUserById(userId), "Failed to load user.");
-    if (user === undefined) {
-      return yield* new UserNotFoundError({ message: `User not found: ${userId}` });
-    }
-    return mapUser(user);
-  });
+export const getUser = Effect.fn("sealant.user.get")(function* (userId: string) {
+  const users = yield* UserRepo;
+  const user = yield* withInternalError(users.getUserById(userId), "Failed to load user.");
+  if (user === undefined) {
+    return yield* new UserNotFoundError({ message: `User not found: ${userId}` });
+  }
+  return mapUser(user);
+});
 
 /**
  * Why a person binding is refused before anything is written: an id that cannot name an owner-map
@@ -115,38 +113,40 @@ export const personBindingProblem = (
  * operator who must change one deletes the user's `user_person_binding` row (an audited change in
  * the database) before binding again.
  */
-export const bindUserPerson = (userId: string, person: PersonBindingWire) =>
-  Effect.gen(function* () {
-    const problem = personBindingProblem(person);
-    if (problem !== undefined) {
-      return yield* new UserBadRequestError({ message: problem });
-    }
-    const users = yield* UserRepo;
-    const user = yield* withInternalError(users.getUserById(userId), "Failed to load user.");
-    if (user === undefined) {
-      return yield* new UserNotFoundError({ message: `User not found: ${userId}` });
-    }
-    const result = yield* withInternalError(
-      users.bindPerson(userId, { personId: person.id, uid: person.uid, home: person.home }),
-      "Failed to bind the user's person.",
+export const bindUserPerson = Effect.fn("sealant.user.bind_person")(function* (
+  userId: string,
+  person: PersonBindingWire,
+) {
+  const problem = personBindingProblem(person);
+  if (problem !== undefined) {
+    return yield* new UserBadRequestError({ message: problem });
+  }
+  const users = yield* UserRepo;
+  const user = yield* withInternalError(users.getUserById(userId), "Failed to load user.");
+  if (user === undefined) {
+    return yield* new UserNotFoundError({ message: `User not found: ${userId}` });
+  }
+  const result = yield* withInternalError(
+    users.bindPerson(userId, { personId: person.id, uid: person.uid, home: person.home }),
+    "Failed to bind the user's person.",
+  );
+  if (result.kind === "differs") {
+    return yield* new UserPersonConflictError({
+      code: "person-binding-differs",
+      message: `User ${userId} is bound to another person, and a binding is never changed through the API. An operator clears it (the user's user_person_binding row) before it is bound again.`,
+    });
+  }
+  if (result.kind === "taken") {
+    return yield* new UserPersonConflictError({
+      code: "person-taken",
+      message: `That person ${result.by === "uid" ? "uid" : "id"} is bound to another user.`,
+    });
+  }
+  if (result.created) {
+    // The audit line: who is bound to which person, never anyone's home.
+    yield* Effect.logInfo("users: person bound").pipe(
+      Effect.annotateLogs({ userId, personId: person.id, uid: person.uid }),
     );
-    if (result.kind === "differs") {
-      return yield* new UserPersonConflictError({
-        code: "person-binding-differs",
-        message: `User ${userId} is bound to another person, and a binding is never changed through the API. An operator clears it (the user's user_person_binding row) before it is bound again.`,
-      });
-    }
-    if (result.kind === "taken") {
-      return yield* new UserPersonConflictError({
-        code: "person-taken",
-        message: `That person ${result.by === "uid" ? "uid" : "id"} is bound to another user.`,
-      });
-    }
-    if (result.created) {
-      // The audit line: who is bound to which person, never anyone's home.
-      yield* Effect.logInfo("users: person bound").pipe(
-        Effect.annotateLogs({ userId, personId: person.id, uid: person.uid }),
-      );
-    }
-    return { userId, person, created: result.created } satisfies BindUserPersonResponse;
-  });
+  }
+  return { userId, person, created: result.created } satisfies BindUserPersonResponse;
+});

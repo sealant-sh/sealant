@@ -528,11 +528,8 @@ const sealSecretEnv = (
  * credential key, which must be configured when there is anything to seal. No secrets yields
  * undefined. Refusals never echo a value.
  */
-export const sealBrokeredSecretValues = (
-  brokeredSecrets: readonly BrokeredSecret[],
-  values: Readonly<Record<string, string>>,
-) =>
-  Effect.gen(function* () {
+export const sealBrokeredSecretValues = Effect.fn("sealant.workspace.seal_brokered_secret_values")(
+  function* (brokeredSecrets: readonly BrokeredSecret[], values: Readonly<Record<string, string>>) {
     const problems = brokeredSecretValuesProblems(brokeredSecrets, values);
     if (problems.length > 0) {
       return yield* new WorkspaceBadRequestError({ message: problems.join("; ") });
@@ -552,7 +549,8 @@ export const sealBrokeredSecretValues = (
           }),
       ),
     );
-  });
+  },
+);
 
 /**
  * A brokered secret's variable that `secretEnv` sets too would be ambiguous in the workspace,
@@ -1140,92 +1138,92 @@ const launchRefusal = (account: ConnectedAccount) =>
  * Nothing is placed here — the worker decrypts just before launch; a Claude or Codex account is
  * read only to refuse early a key a launch cannot carry.
  */
-export const resolveWorkspaceCredentialRefs = (input: {
+export const resolveWorkspaceCredentialRefs = Effect.fn(
+  "sealant.workspace.resolve_credential_refs",
+)(function* (input: {
   readonly ownerUserId: string;
   readonly credentials: CreateWorkspaceRequest["credentials"];
-}) => {
-  return Effect.gen(function* () {
-    const credentials = input.credentials;
-    const refs: WorkspaceCredentialRef[] = [];
+}) {
+  const credentials = input.credentials;
+  const refs: WorkspaceCredentialRef[] = [];
 
-    if (credentials === undefined) {
-      return refs;
-    }
-
-    const connectedAccountRepo = yield* ConnectedAccountRepo;
-    const profileBound = new Map<ConnectedAccount["provider"], ConnectedAccount>();
-
-    if (credentials.profileId !== undefined) {
-      const profileRepo = yield* ProfileRepo;
-
-      const profile = yield* withInternalError(
-        profileRepo.getProfileById(credentials.profileId),
-        "Failed to load profile.",
-      );
-
-      // Uniform 404: unknown profile and someone else's profile look identical.
-      if (profile === undefined || profile.ownerUserId !== input.ownerUserId) {
-        return yield* new WorkspaceNotFoundError({
-          message: `Profile not found: ${credentials.profileId}`,
-        });
-      }
-
-      const bindings = yield* withInternalError(
-        connectedAccountRepo.getBindingsForProfileWithAccounts(profile.id),
-        "Failed to load profile credential bindings.",
-      );
-
-      for (const { binding, account } of bindings) {
-        profileBound.set(binding.provider, account);
-      }
-    }
-
-    for (const provider of connectedAccountProviders) {
-      const explicit = credentials[provider];
-      let account: ConnectedAccount | undefined;
-
-      if (explicit === undefined) {
-        const bound = profileBound.get(provider);
-
-        // A binding pointing at an unusable account (archived, invalidated by a 401, or a key a
-        // launch cannot carry) is effectively disconnected — skip it rather than fail every launch
-        // that uses this profile (surfaces show it as "needs reconnect"). Only an explicitly-named
-        // account hard-fails.
-        if (
-          bound === undefined ||
-          bound.archivedAt !== null ||
-          bound.status !== "active" ||
-          (yield* launchRefusal(bound)) !== undefined
-        ) {
-          continue;
-        }
-
-        account = bound;
-      } else {
-        // Explicit selection: uniform 404 for an account the caller cannot name, 409 for a
-        // broken one (shared with the credential switch).
-        account = yield* resolveSelectedConnectedAccount({
-          ownerUserId: input.ownerUserId,
-          provider,
-          selection: explicit,
-        });
-      }
-
-      const refusal = explicit === undefined ? undefined : yield* launchRefusal(account);
-      if (refusal !== undefined) {
-        return yield* new WorkspaceConflictError({
-          message: refusal,
-          code: "connected-account-unsupported",
-          provider,
-        });
-      }
-
-      refs.push({ provider, ref: createConnectedAccountRef(account.id) });
-    }
-
+  if (credentials === undefined) {
     return refs;
-  });
-};
+  }
+
+  const connectedAccountRepo = yield* ConnectedAccountRepo;
+  const profileBound = new Map<ConnectedAccount["provider"], ConnectedAccount>();
+
+  if (credentials.profileId !== undefined) {
+    const profileRepo = yield* ProfileRepo;
+
+    const profile = yield* withInternalError(
+      profileRepo.getProfileById(credentials.profileId),
+      "Failed to load profile.",
+    );
+
+    // Uniform 404: unknown profile and someone else's profile look identical.
+    if (profile === undefined || profile.ownerUserId !== input.ownerUserId) {
+      return yield* new WorkspaceNotFoundError({
+        message: `Profile not found: ${credentials.profileId}`,
+      });
+    }
+
+    const bindings = yield* withInternalError(
+      connectedAccountRepo.getBindingsForProfileWithAccounts(profile.id),
+      "Failed to load profile credential bindings.",
+    );
+
+    for (const { binding, account } of bindings) {
+      profileBound.set(binding.provider, account);
+    }
+  }
+
+  for (const provider of connectedAccountProviders) {
+    const explicit = credentials[provider];
+    let account: ConnectedAccount | undefined;
+
+    if (explicit === undefined) {
+      const bound = profileBound.get(provider);
+
+      // A binding pointing at an unusable account (archived, invalidated by a 401, or a key a
+      // launch cannot carry) is effectively disconnected — skip it rather than fail every launch
+      // that uses this profile (surfaces show it as "needs reconnect"). Only an explicitly-named
+      // account hard-fails.
+      if (
+        bound === undefined ||
+        bound.archivedAt !== null ||
+        bound.status !== "active" ||
+        (yield* launchRefusal(bound)) !== undefined
+      ) {
+        continue;
+      }
+
+      account = bound;
+    } else {
+      // Explicit selection: uniform 404 for an account the caller cannot name, 409 for a
+      // broken one (shared with the credential switch).
+      account = yield* resolveSelectedConnectedAccount({
+        ownerUserId: input.ownerUserId,
+        provider,
+        selection: explicit,
+      });
+    }
+
+    const refusal = explicit === undefined ? undefined : yield* launchRefusal(account);
+    if (refusal !== undefined) {
+      return yield* new WorkspaceConflictError({
+        message: refusal,
+        code: "connected-account-unsupported",
+        provider,
+      });
+    }
+
+    refs.push({ provider, ref: createConnectedAccountRef(account.id) });
+  }
+
+  return refs;
+});
 
 const mapWorkspaceAttemptSummary = (
   link: WorkspaceRunLinkRecord,
@@ -1685,421 +1683,419 @@ const authorizeImageScope = (input: {
     return scope;
   });
 
-export const createWorkspace = (input: {
+export const createWorkspace = Effect.fn("sealant.workspace.create")(function* (input: {
   readonly payload: CreateWorkspaceRequest;
   readonly headers: CreateWorkspaceHeaders;
-}) => {
-  return Effect.gen(function* () {
-    const body = input.payload;
-    const idempotencyKey = body.idempotencyKey ?? readIdempotencyKey(input.headers);
+}) {
+  const body = input.payload;
+  const idempotencyKey = body.idempotencyKey ?? readIdempotencyKey(input.headers);
 
-    // An idempotent create: a committed one replays; a cancelled key refuses; a create from
-    // before creates were atomic that left its workspace half-made is finished (`resuming`). The
-    // key is reserved (`pending`) before anything is written, and committed with everything the
-    // create writes, in one transaction.
-    let resuming: WorkspaceRecord | undefined;
-    const reservations = yield* WorkspaceCreateReservationRepo;
-    if (idempotencyKey !== undefined) {
-      const found = yield* findIdempotentWorkspace(idempotencyKey, body.ownerUserId);
-      if (found !== undefined && "replay" in found) {
-        return found.replay;
-      }
-      resuming = found?.resume;
+  // An idempotent create: a committed one replays; a cancelled key refuses; a create from
+  // before creates were atomic that left its workspace half-made is finished (`resuming`). The
+  // key is reserved (`pending`) before anything is written, and committed with everything the
+  // create writes, in one transaction.
+  let resuming: WorkspaceRecord | undefined;
+  const reservations = yield* WorkspaceCreateReservationRepo;
+  if (idempotencyKey !== undefined) {
+    const found = yield* findIdempotentWorkspace(idempotencyKey, body.ownerUserId);
+    if (found !== undefined && "replay" in found) {
+      return found.replay;
     }
+    resuming = found?.resume;
+  }
 
-    if (body.registryId !== env.REGISTRY_NAME) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Unknown registry: ${body.registryId}`,
-      });
-    }
-    // The image name becomes registry URL segments and `docker` arguments in the worker. Refuse
-    // one outside the OCI grammar here, as a 400, not an hour later as a failed build.
-    if (!isOciRepository(body.repository.trim()) || !isOciTag(body.tag.trim())) {
-      return yield* new WorkspaceBadRequestError({
-        message: `repository ${OCI_REPOSITORY_MESSAGE}; tag must match [A-Za-z0-9_][A-Za-z0-9._-]{0,127}.`,
-      });
-    }
+  if (body.registryId !== env.REGISTRY_NAME) {
+    return yield* new WorkspaceNotFoundError({
+      message: `Unknown registry: ${body.registryId}`,
+    });
+  }
+  // The image name becomes registry URL segments and `docker` arguments in the worker. Refuse
+  // one outside the OCI grammar here, as a 400, not an hour later as a failed build.
+  if (!isOciRepository(body.repository.trim()) || !isOciTag(body.tag.trim())) {
+    return yield* new WorkspaceBadRequestError({
+      message: `repository ${OCI_REPOSITORY_MESSAGE}; tag must match [A-Za-z0-9_][A-Za-z0-9._-]{0,127}.`,
+    });
+  }
 
-    const parsedSpec = yield* parseWorkspaceSpec(body.spec);
-    const imageScope = yield* authorizeImageScope(body);
-    const runtimeFamily =
-      parsedSpec.target.runtime.family === "auto"
-        ? env.DEFAULT_RUNTIME_ADAPTER
-        : parsedSpec.target.runtime.family;
-    // A source selection becomes a git source once it is resolved below.
-    yield* refuseUnsupportedRuntimeRequest(
-      runtimeFamily,
-      body.sourceSelection === undefined
-        ? parsedSpec
-        : { ...parsedSpec, sources: { ...parsedSpec.sources, workspace: { kind: "git" } } },
+  const parsedSpec = yield* parseWorkspaceSpec(body.spec);
+  const imageScope = yield* authorizeImageScope(body);
+  const runtimeFamily =
+    parsedSpec.target.runtime.family === "auto"
+      ? env.DEFAULT_RUNTIME_ADAPTER
+      : parsedSpec.target.runtime.family;
+  // A source selection becomes a git source once it is resolved below.
+  yield* refuseUnsupportedRuntimeRequest(
+    runtimeFamily,
+    body.sourceSelection === undefined
+      ? parsedSpec
+      : { ...parsedSpec, sources: { ...parsedSpec.sources, workspace: { kind: "git" } } },
+  );
+  if (runtimeFamily === BOAT_RUNTIME_ID) yield* requireBoatConfigured;
+  yield* requireBoatAccount(parsedSpec, runtimeFamily);
+  // The brokered secrets' values reach only the egress proxy: checked and sealed before
+  // anything is reserved, stored with the workspace below.
+  const brokeredSecrets = parsedSpec.brokeredSecrets ?? [];
+  yield* brokeredSecretEnvCollision(brokeredSecrets, body.secretEnv);
+  const brokeredValuesSealed = yield* sealBrokeredSecretValues(
+    brokeredSecrets,
+    body.brokeredSecretValues ?? {},
+  );
+  if (idempotencyKey !== undefined) {
+    const reservation = yield* withInternalError(
+      reservations.reserve({
+        ownerUserId: body.ownerUserId,
+        idempotencyKey,
+        ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
+      }),
+      "Failed to reserve the create's idempotency key.",
     );
-    if (runtimeFamily === BOAT_RUNTIME_ID) yield* requireBoatConfigured;
-    yield* requireBoatAccount(parsedSpec, runtimeFamily);
-    // The brokered secrets' values reach only the egress proxy: checked and sealed before
-    // anything is reserved, stored with the workspace below.
-    const brokeredSecrets = parsedSpec.brokeredSecrets ?? [];
-    yield* brokeredSecretEnvCollision(brokeredSecrets, body.secretEnv);
-    const brokeredValuesSealed = yield* sealBrokeredSecretValues(
-      brokeredSecrets,
-      body.brokeredSecretValues ?? {},
-    );
-    if (idempotencyKey !== undefined) {
-      const reservation = yield* withInternalError(
-        reservations.reserve({
-          ownerUserId: body.ownerUserId,
-          idempotencyKey,
-          ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
-        }),
-        "Failed to reserve the create's idempotency key.",
-      );
-      if (reservation.state === "cancelled") {
-        return yield* createCancelledError(idempotencyKey);
-      }
-      if (reservation.state === "created") {
-        // Committed by a create that raced this one past the lookup above.
-        const committed = yield* maybeReturnExistingIdempotentWorkspace(
-          idempotencyKey,
-          body.ownerUserId,
-        );
-        if (committed !== undefined) {
-          return committed;
-        }
-        return yield* new WorkspaceConflictError({
-          message: `The create with idempotency key ${idempotencyKey} finished, and its workspace no longer exists.`,
-        });
-      }
+    if (reservation.state === "cancelled") {
+      return yield* createCancelledError(idempotencyKey);
     }
-
-    // The owner's own Linux user, never one the caller names (Mend ADR 0016, decision 10): the
-    // uid of the home sealant writes and holds the owner's logins in.
-    const sshUser =
-      body.sshAsOwner === true ? yield* ownerSshUser(parsedSpec, body.ownerUserId) : undefined;
-
-    // A managed family installs the catalog's packages only. Refuse an unknown id here, as a 400
-    // naming it, rather than minutes later as a failed build. A custom base image takes any
-    // name its own package manager knows.
-    const unknownPackages =
-      parsedSpec.target.os.family === "custom"
-        ? []
-        : unknownWorkspacePackageIds(parseRequestedPackageIds(parsedSpec));
-    if (unknownPackages.length > 0) {
-      return yield* new WorkspaceBadRequestError({
-        message: new UnknownWorkspacePackageError(unknownPackages).message,
+    if (reservation.state === "created") {
+      // Committed by a create that raced this one past the lookup above.
+      const committed = yield* maybeReturnExistingIdempotentWorkspace(
+        idempotencyKey,
+        body.ownerUserId,
+      );
+      if (committed !== undefined) {
+        return committed;
+      }
+      return yield* new WorkspaceConflictError({
+        message: `The create with idempotency key ${idempotencyKey} finished, and its workspace no longer exists.`,
       });
     }
-    // A package the family installs but cannot run (Fedora's ffmpeg without libx264), refused the
-    // same way, with the catalog's reason.
-    const osFamily = parsedSpec.target.os.family;
-    if (osFamily !== "custom" && osFamily !== "auto") {
-      const unsupportedPackages = unsupportedWorkspacePackages(
-        osFamily,
-        parseRequestedPackageIds(parsedSpec),
-      );
-      if (unsupportedPackages.length > 0) {
-        return yield* new WorkspaceBadRequestError({
-          message: new UnsupportedWorkspacePackageError(osFamily, unsupportedPackages).message,
-        });
-      }
+  }
+
+  // The owner's own Linux user, never one the caller names (Mend ADR 0016, decision 10): the
+  // uid of the home sealant writes and holds the owner's logins in.
+  const sshUser =
+    body.sshAsOwner === true ? yield* ownerSshUser(parsedSpec, body.ownerUserId) : undefined;
+
+  // A managed family installs the catalog's packages only. Refuse an unknown id here, as a 400
+  // naming it, rather than minutes later as a failed build. A custom base image takes any
+  // name its own package manager knows.
+  const unknownPackages =
+    parsedSpec.target.os.family === "custom"
+      ? []
+      : unknownWorkspacePackageIds(parseRequestedPackageIds(parsedSpec));
+  if (unknownPackages.length > 0) {
+    return yield* new WorkspaceBadRequestError({
+      message: new UnknownWorkspacePackageError(unknownPackages).message,
+    });
+  }
+  // A package the family installs but cannot run (Fedora's ffmpeg without libx264), refused the
+  // same way, with the catalog's reason.
+  const osFamily = parsedSpec.target.os.family;
+  if (osFamily !== "custom" && osFamily !== "auto") {
+    const unsupportedPackages = unsupportedWorkspacePackages(
+      osFamily,
+      parseRequestedPackageIds(parsedSpec),
+    );
+    if (unsupportedPackages.length > 0) {
+      return yield* new WorkspaceBadRequestError({
+        message: new UnsupportedWorkspacePackageError(osFamily, unsupportedPackages).message,
+      });
     }
+  }
 
-    // Validate BEFORE the selection resolvers so what we check is exactly what the caller sent;
-    // the refs the resolvers mint afterwards are server-owned.
-    yield* validateClientSuppliedAuthRefs({
-      ownerUserId: body.ownerUserId,
-      spec: parsedSpec,
-    });
+  // Validate BEFORE the selection resolvers so what we check is exactly what the caller sent;
+  // the refs the resolvers mint afterwards are server-owned.
+  yield* validateClientSuppliedAuthRefs({
+    ownerUserId: body.ownerUserId,
+    spec: parsedSpec,
+  });
 
-    yield* validateWorkspaceMounts({
-      spec: parsedSpec,
-      sourceSelection: body.sourceSelection,
-    });
+  yield* validateWorkspaceMounts({
+    spec: parsedSpec,
+    sourceSelection: body.sourceSelection,
+  });
 
-    // The capture token goes to the endpoint the caller names (CORE-05): check the destination
-    // before the token is sealed for a launch.
-    yield* validateCaptureDestination(parsedSpec);
+  // The capture token goes to the endpoint the caller names (CORE-05): check the destination
+  // before the token is sealed for a launch.
+  yield* validateCaptureDestination(parsedSpec);
 
-    const sourceSelectionResult = yield* resolveGitHubSourceSelection({
-      ownerUserId: body.ownerUserId,
-      spec: parsedSpec,
-      sourceSelection: body.sourceSelection,
-    });
+  const sourceSelectionResult = yield* resolveGitHubSourceSelection({
+    ownerUserId: body.ownerUserId,
+    spec: parsedSpec,
+    sourceSelection: body.sourceSelection,
+  });
 
-    const dotfilesSelectionResult = yield* resolveGitHubDotfilesSelection({
-      ownerUserId: body.ownerUserId,
-      spec: sourceSelectionResult.spec,
-      dotfilesSelection: body.dotfilesSelection,
-    });
+  const dotfilesSelectionResult = yield* resolveGitHubDotfilesSelection({
+    ownerUserId: body.ownerUserId,
+    spec: sourceSelectionResult.spec,
+    dotfilesSelection: body.dotfilesSelection,
+  });
 
-    const workspaceId = resuming?.id ?? (yield* randomId);
-    const runId = yield* randomId;
-    const jobId = yield* randomId;
+  const workspaceId = resuming?.id ?? (yield* randomId);
+  const runId = yield* randomId;
+  const jobId = yield* randomId;
 
-    const packageRefusal = packageTargetRefusal(dotfilesSelectionResult.spec);
-    if (packageRefusal !== undefined) {
-      return yield* new WorkspaceBadRequestError({ message: packageRefusal });
-    }
+  const packageRefusal = packageTargetRefusal(dotfilesSelectionResult.spec);
+  if (packageRefusal !== undefined) {
+    return yield* new WorkspaceBadRequestError({ message: packageRefusal });
+  }
 
-    // Budgets last among the refusals (CORE-04): a request that was never going to launch spends
-    // nothing, and nothing has been created yet, so a refusal leaves no effect behind. Two creates
-    // that race past the ceiling together both pass it: the ceiling can be overshot by the
-    // number in flight, never by more.
-    yield* requireLiveWorkspaceRoom(body.ownerUserId);
-    yield* spendOwnerLaunch(body.ownerUserId);
+  // Budgets last among the refusals (CORE-04): a request that was never going to launch spends
+  // nothing, and nothing has been created yet, so a refusal leaves no effect behind. Two creates
+  // that race past the ceiling together both pass it: the ceiling can be overshot by the
+  // number in flight, never by more.
+  yield* requireLiveWorkspaceRoom(body.ownerUserId);
+  yield* spendOwnerLaunch(body.ownerUserId);
 
-    const resolvedSpec = dotfilesSelectionResult.spec;
+  const resolvedSpec = dotfilesSelectionResult.spec;
 
-    // Connected-account selection -> opaque blueprint credentialRefs. The contract-level
-    // `credentials` field wins over one embedded in the spec (newWorkspaceSchema allows both).
-    // Always replace any client-supplied `runtime.credentialRefs`: the only refs that may reach
-    // the worker are ones we just resolved through ownership/status checks. A caller could
-    // otherwise embed `runtime.credentialRefs` pointing at another user's account id and have the
-    // worker decrypt and inject it (the refs are opaque `connected-account:<id>` pointers).
-    const credentialRefs = yield* resolveWorkspaceCredentialRefs({
-      ownerUserId: body.ownerUserId,
-      credentials: body.credentials ?? resolvedSpec.credentials,
-    });
+  // Connected-account selection -> opaque blueprint credentialRefs. The contract-level
+  // `credentials` field wins over one embedded in the spec (newWorkspaceSchema allows both).
+  // Always replace any client-supplied `runtime.credentialRefs`: the only refs that may reach
+  // the worker are ones we just resolved through ownership/status checks. A caller could
+  // otherwise embed `runtime.credentialRefs` pointing at another user's account id and have the
+  // worker decrypt and inject it (the refs are opaque `connected-account:<id>` pointers).
+  const credentialRefs = yield* resolveWorkspaceCredentialRefs({
+    ownerUserId: body.ownerUserId,
+    credentials: body.credentials ?? resolvedSpec.credentials,
+  });
 
-    resolvedSpec.runtime = { ...resolvedSpec.runtime, credentialRefs };
+  resolvedSpec.runtime = { ...resolvedSpec.runtime, credentialRefs };
 
-    // The transient secret channel. Validated with the public policy (same messages the SDK
-    // showed client-side), then SEALED for the job row only: never the spec, never the attempt
-    // snapshot, never a read response. The worker decrypts just before launch and the row is
-    // cleared once the launch phase settles.
-    const captureSecretEnv = yield* resolveCaptureSecretEnv({
-      spec: resolvedSpec,
-      captureToken: body.captureToken,
-    });
-    const secretEnvSealed = yield* sealSecretEnv(body.secretEnv, captureSecretEnv);
-    // The create-payload `credentials` key is now fully lowered into `runtime.credentialRefs` —
-    // strip it before the spec is persisted for the build job: the worker's blueprint schema is
-    // strict, and a spec that keeps the key fails every build at `parseWorkspaceBlueprint`
-    // ("Unrecognized key: credentials" — hit by every mount+credentials create on 0.7.0).
-    delete resolvedSpec.credentials;
+  // The transient secret channel. Validated with the public policy (same messages the SDK
+  // showed client-side), then SEALED for the job row only: never the spec, never the attempt
+  // snapshot, never a read response. The worker decrypts just before launch and the row is
+  // cleared once the launch phase settles.
+  const captureSecretEnv = yield* resolveCaptureSecretEnv({
+    spec: resolvedSpec,
+    captureToken: body.captureToken,
+  });
+  const secretEnvSealed = yield* sealSecretEnv(body.secretEnv, captureSecretEnv);
+  // The create-payload `credentials` key is now fully lowered into `runtime.credentialRefs` —
+  // strip it before the spec is persisted for the build job: the worker's blueprint schema is
+  // strict, and a spec that keeps the key fails every build at `parseWorkspaceBlueprint`
+  // ("Unrecognized key: credentials" — hit by every mount+credentials create on 0.7.0).
+  delete resolvedSpec.credentials;
 
-    const workspaceName =
-      resuming !== undefined
-        ? resolveStoredWorkspaceName(resuming)
-        : body.name === undefined
-          ? inferWorkspaceName({
-              repository: body.repository,
-              tag: body.tag,
-              spec: resolvedSpec,
-              fallbackId: workspaceId,
-            })
-          : sanitizeWorkspaceName(body.name);
+  const workspaceName =
+    resuming !== undefined
+      ? resolveStoredWorkspaceName(resuming)
+      : body.name === undefined
+        ? inferWorkspaceName({
+            repository: body.repository,
+            tag: body.tag,
+            spec: resolvedSpec,
+            fallbackId: workspaceId,
+          })
+        : sanitizeWorkspaceName(body.name);
 
-    const workspaces = yield* WorkspaceRepo;
-    const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
-    const workspaceAttempts = yield* WorkspaceAttemptRepo;
-    const egress = yield* WorkspaceEgressRepo;
-    const transaction = yield* DatabaseTransaction;
+  const workspaces = yield* WorkspaceRepo;
+  const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
+  const workspaceAttempts = yield* WorkspaceAttemptRepo;
+  const egress = yield* WorkspaceEgressRepo;
+  const transaction = yield* DatabaseTransaction;
 
-    // Everything a create writes commits together, with its key's reservation: a create that
-    // dies part-way leaves nothing behind (its key stays `pending`, and a repeat of the create
-    // finishes it), never a workspace with no launch to replay forever.
-    const persistenceResult = yield* Effect.result(
-      Effect.gen(function* () {
-        // TTL: per-create override wins; otherwise the install-wide default (if configured).
-        const ttlSeconds = body.ttlSeconds ?? env.SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS;
+  // Everything a create writes commits together, with its key's reservation: a create that
+  // dies part-way leaves nothing behind (its key stays `pending`, and a repeat of the create
+  // finishes it), never a workspace with no launch to replay forever.
+  const persistenceResult = yield* Effect.result(
+    Effect.gen(function* () {
+      // TTL: per-create override wins; otherwise the install-wide default (if configured).
+      const ttlSeconds = body.ttlSeconds ?? env.SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS;
 
-        const workspace =
-          resuming ??
-          (yield* workspaces.createWorkspace({
-            id: workspaceId,
-            name: workspaceName,
-            ownerUserId: body.ownerUserId,
-            ...(body.sourceSelection === undefined
-              ? {}
-              : { repositoryId: sourceSelectionResult.repositoryId }),
-            requestedByUserId: body.ownerUserId,
-            status: "queued",
-            ...(ttlSeconds === undefined
-              ? {}
-              : { expiresAt: new Date(Date.now() + ttlSeconds * 1000) }),
-            // The workspace row is written first: a racing create with the same key fails here,
-            // on the owner-scoped unique index, before anything else of it exists.
-            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
-            ...(sshUser === undefined ? {} : { sshUser }),
-          }));
-
-        // The pinned policy commits with the workspace, before its launch is published: the
-        // launch reads it. A resumed create writes it again (the same values, replaced).
-        if (resolvedSpec.networkPolicy !== undefined || brokeredSecrets.length > 0) {
-          yield* egress.putPolicy({
-            workspaceId: workspace.id,
-            networkPolicy: resolvedSpec.networkPolicy,
-            brokeredSecrets,
-            brokeredValuesSealed: brokeredValuesSealed?.sealed,
-            encryptionKeyId: brokeredValuesSealed?.keyId,
-          });
-        }
-
-        const attempt = yield* workspaceAttempts.createQueuedAttempt({
-          id: runId,
+      const workspace =
+        resuming ??
+        (yield* workspaces.createWorkspace({
+          id: workspaceId,
+          name: workspaceName,
           ownerUserId: body.ownerUserId,
           ...(body.sourceSelection === undefined
             ? {}
             : { repositoryId: sourceSelectionResult.repositoryId }),
-          triggerType: "api",
           requestedByUserId: body.ownerUserId,
-          ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
-          ...(body.controlScope === undefined ? {} : { controlScope: body.controlScope }),
-        });
+          status: "queued",
+          ...(ttlSeconds === undefined
+            ? {}
+            : { expiresAt: new Date(Date.now() + ttlSeconds * 1000) }),
+          // The workspace row is written first: a racing create with the same key fails here,
+          // on the owner-scoped unique index, before anything else of it exists.
+          ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          ...(sshUser === undefined ? {} : { sshUser }),
+        }));
 
-        yield* workspaces.linkWorkspaceAttempt({
+      // The pinned policy commits with the workspace, before its launch is published: the
+      // launch reads it. A resumed create writes it again (the same values, replaced).
+      if (resolvedSpec.networkPolicy !== undefined || brokeredSecrets.length > 0) {
+        yield* egress.putPolicy({
           workspaceId: workspace.id,
-          attemptId: attempt.id,
-          relation: "launch",
-        });
-
-        yield* workspaceAttempts.setAttemptSnapshot({
-          runId: attempt.id,
-          specPayload: snapshotSpecOf(resolvedSpec),
-        });
-
-        yield* workspaceBuildJobs.insertQueuedJob({
-          id: jobId,
-          runId: attempt.id,
-          registryId: body.registryId,
-          repository: body.repository,
-          tag: body.tag,
-          requestPayload: resolvedSpec,
-          imageScope,
-          ...(secretEnvSealed === undefined ? {} : { secretEnvSealed }),
-        });
-
-        // The commit point of an idempotent create: only while its key is still pending (not
-        // cancelled, not committed by another create). Otherwise nothing above commits.
-        if (idempotencyKey !== undefined) {
-          const committed = yield* reservations.markCreated({
-            ownerUserId: body.ownerUserId,
-            idempotencyKey,
-            workspaceId: workspace.id,
-          });
-          if (!committed) {
-            return yield* Effect.fail(
-              new CreateReservationLost(
-                `The create's idempotency key ${idempotencyKey} is no longer pending.`,
-              ),
-            );
-          }
-        }
-        if (resuming !== undefined) {
-          // A half-made workspace is finished: it is queued again, like a new one.
-          yield* workspaces.setWorkspaceStatus({ id: workspace.id, status: "queued" });
-        }
-      }).pipe(transaction.run),
-    );
-
-    if (Result.isFailure(persistenceResult)) {
-      const persistenceError = persistenceResult.failure;
-
-      if (idempotencyKey !== undefined && persistenceError instanceof CreateReservationLost) {
-        // Cancelled, or committed by another create, while this one was writing.
-        const standing = yield* withInternalError(
-          reservations.get({ ownerUserId: body.ownerUserId, idempotencyKey }),
-          "Failed to read the create's idempotency key.",
-        );
-        if (standing?.state === "cancelled") {
-          return yield* createCancelledError(idempotencyKey);
-        }
-        const committed = yield* maybeReturnExistingIdempotentWorkspace(
-          idempotencyKey,
-          body.ownerUserId,
-        );
-        if (committed !== undefined) {
-          return committed;
-        }
-      }
-
-      if (isForeignKeyConstraintError(persistenceError)) {
-        return yield* new WorkspaceNotFoundError({
-          message: `Unknown owner user: ${body.ownerUserId}`,
+          networkPolicy: resolvedSpec.networkPolicy,
+          brokeredSecrets,
+          brokeredValuesSealed: brokeredValuesSealed?.sealed,
+          encryptionKeyId: brokeredValuesSealed?.keyId,
         });
       }
 
-      if (persistenceError instanceof WorkspaceControlScopeTakenError) {
-        return yield* new WorkspaceConflictError({
-          code: "control-scope-taken",
-          message: `The control scope ${persistenceError.controlScope} is another executor's; name a scope no executor has held.`,
-        });
-      }
-
-      if (idempotencyKey !== undefined && isUniqueConstraintError(persistenceError)) {
-        const existing = yield* maybeReturnExistingIdempotentWorkspace(
-          idempotencyKey,
-          body.ownerUserId,
-        );
-
-        if (existing !== undefined) {
-          return existing;
-        }
-      }
-
-      return yield* new WorkspaceInternalServerError({
-        message: toErrorMessage(persistenceError, "Failed to create workspace."),
+      const attempt = yield* workspaceAttempts.createQueuedAttempt({
+        id: runId,
+        ownerUserId: body.ownerUserId,
+        ...(body.sourceSelection === undefined
+          ? {}
+          : { repositoryId: sourceSelectionResult.repositoryId }),
+        triggerType: "api",
+        requestedByUserId: body.ownerUserId,
+        ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
+        ...(body.controlScope === undefined ? {} : { controlScope: body.controlScope }),
       });
-    }
 
-    const workspaceBuildJobPublisher = yield* WorkspaceBuildJobPublisherService;
-    const requestTrace = yield* currentTraceCarrier;
+      yield* workspaces.linkWorkspaceAttempt({
+        workspaceId: workspace.id,
+        attemptId: attempt.id,
+        relation: "launch",
+      });
 
-    yield* Effect.tryPromise({
-      try: () =>
-        workspaceBuildJobPublisher.publishRequested({
-          jobId,
-          trace: requestTrace,
-        }),
-      catch: (error) => error,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.gen(function* () {
-          yield* Effect.all(
-            [
-              workspaceBuildJobs.markJobFailed({
-                id: jobId,
-                errorCode: "queue_publish_failed",
-                errorMessage: toErrorMessage(error, "Failed to enqueue workspace build job."),
-              }),
-              workspaceAttempts.markAttemptFailed({
-                id: runId,
-              }),
-              workspaces.setWorkspaceStatus({
-                id: workspaceId,
-                status: "failed",
-              }),
-            ],
-            {
-              concurrency: "unbounded",
-            },
-          ).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning(
-                `Workspace ${workspaceId} rollback writes failed after queue publish failure; state may be inconsistent.`,
-                cause,
-              ),
-            ),
-          );
+      yield* workspaceAttempts.setAttemptSnapshot({
+        runId: attempt.id,
+        specPayload: snapshotSpecOf(resolvedSpec),
+      });
 
-          return yield* new WorkspaceBadGatewayError({
-            message: `Workspace ${workspaceId} was recorded but could not be queued.`,
-          });
-        }),
-      ),
-    );
-
-    return {
-      ...acceptedWorkspaceResponse(workspaceId, workspaceName, {
+      yield* workspaceBuildJobs.insertQueuedJob({
+        id: jobId,
+        runId: attempt.id,
         registryId: body.registryId,
         repository: body.repository,
         tag: body.tag,
+        requestPayload: resolvedSpec,
+        imageScope,
+        ...(secretEnvSealed === undefined ? {} : { secretEnvSealed }),
+      });
+
+      // The commit point of an idempotent create: only while its key is still pending (not
+      // cancelled, not committed by another create). Otherwise nothing above commits.
+      if (idempotencyKey !== undefined) {
+        const committed = yield* reservations.markCreated({
+          ownerUserId: body.ownerUserId,
+          idempotencyKey,
+          workspaceId: workspace.id,
+        });
+        if (!committed) {
+          return yield* Effect.fail(
+            new CreateReservationLost(
+              `The create's idempotency key ${idempotencyKey} is no longer pending.`,
+            ),
+          );
+        }
+      }
+      if (resuming !== undefined) {
+        // A half-made workspace is finished: it is queued again, like a new one.
+        yield* workspaces.setWorkspaceStatus({ id: workspace.id, status: "queued" });
+      }
+    }).pipe(transaction.run),
+  );
+
+  if (Result.isFailure(persistenceResult)) {
+    const persistenceError = persistenceResult.failure;
+
+    if (idempotencyKey !== undefined && persistenceError instanceof CreateReservationLost) {
+      // Cancelled, or committed by another create, while this one was writing.
+      const standing = yield* withInternalError(
+        reservations.get({ ownerUserId: body.ownerUserId, idempotencyKey }),
+        "Failed to read the create's idempotency key.",
+      );
+      if (standing?.state === "cancelled") {
+        return yield* createCancelledError(idempotencyKey);
+      }
+      const committed = yield* maybeReturnExistingIdempotentWorkspace(
+        idempotencyKey,
+        body.ownerUserId,
+      );
+      if (committed !== undefined) {
+        return committed;
+      }
+    }
+
+    if (isForeignKeyConstraintError(persistenceError)) {
+      return yield* new WorkspaceNotFoundError({
+        message: `Unknown owner user: ${body.ownerUserId}`,
+      });
+    }
+
+    if (persistenceError instanceof WorkspaceControlScopeTakenError) {
+      return yield* new WorkspaceConflictError({
+        code: "control-scope-taken",
+        message: `The control scope ${persistenceError.controlScope} is another executor's; name a scope no executor has held.`,
+      });
+    }
+
+    if (idempotencyKey !== undefined && isUniqueConstraintError(persistenceError)) {
+      const existing = yield* maybeReturnExistingIdempotentWorkspace(
+        idempotencyKey,
+        body.ownerUserId,
+      );
+
+      if (existing !== undefined) {
+        return existing;
+      }
+    }
+
+    return yield* new WorkspaceInternalServerError({
+      message: toErrorMessage(persistenceError, "Failed to create workspace."),
+    });
+  }
+
+  const workspaceBuildJobPublisher = yield* WorkspaceBuildJobPublisherService;
+  const requestTrace = yield* currentTraceCarrier;
+
+  yield* Effect.tryPromise({
+    try: () =>
+      workspaceBuildJobPublisher.publishRequested({
+        jobId,
+        trace: requestTrace,
       }),
-      runId,
-      ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
-      ...(body.controlScope === undefined ? {} : { controlScope: body.controlScope }),
-    } satisfies CreateWorkspaceResponse;
-  });
-};
+    catch: (error) => error,
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.gen(function* () {
+        yield* Effect.all(
+          [
+            workspaceBuildJobs.markJobFailed({
+              id: jobId,
+              errorCode: "queue_publish_failed",
+              errorMessage: toErrorMessage(error, "Failed to enqueue workspace build job."),
+            }),
+            workspaceAttempts.markAttemptFailed({
+              id: runId,
+            }),
+            workspaces.setWorkspaceStatus({
+              id: workspaceId,
+              status: "failed",
+            }),
+          ],
+          {
+            concurrency: "unbounded",
+          },
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Workspace ${workspaceId} rollback writes failed after queue publish failure; state may be inconsistent.`,
+              cause,
+            ),
+          ),
+        );
+
+        return yield* new WorkspaceBadGatewayError({
+          message: `Workspace ${workspaceId} was recorded but could not be queued.`,
+        });
+      }),
+    ),
+  );
+
+  return {
+    ...acceptedWorkspaceResponse(workspaceId, workspaceName, {
+      registryId: body.registryId,
+      repository: body.repository,
+      tag: body.tag,
+    }),
+    runId,
+    ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
+    ...(body.controlScope === undefined ? {} : { controlScope: body.controlScope }),
+  } satisfies CreateWorkspaceResponse;
+});
 
 /**
  * The Linux user a workspace's SSH sessions run as, for `sshAsOwner`: its owner's own person, as
@@ -2170,11 +2166,8 @@ const ownerSshUser = (
   });
 
 /** `DELETE /v1/workspaces/:id/ssh-user`: the owner sets the workspace's SSH sessions to root. */
-export const clearWorkspaceSshUser = (input: {
-  readonly workspaceId: string;
-  readonly query: ClearWorkspaceSshUserQuery;
-}) => {
-  return Effect.gen(function* () {
+export const clearWorkspaceSshUser = Effect.fn("sealant.workspace.clear_ssh_user")(
+  function* (input: { readonly workspaceId: string; readonly query: ClearWorkspaceSshUserQuery }) {
     yield* requireScopedWorkspace(input.workspaceId, input.query.ownerUserId);
     const workspace = yield* withInternalError(
       (yield* WorkspaceRepo).setWorkspaceSshUser({ id: input.workspaceId, sshUser: null }),
@@ -2186,145 +2179,142 @@ export const clearWorkspaceSshUser = (input: {
       });
     }
     return { workspaceId: workspace.id, sshUser: null } satisfies ClearWorkspaceSshUserResponse;
-  });
-};
+  },
+);
 
-export const renameWorkspace = (input: {
+export const renameWorkspace = Effect.fn("sealant.workspace.rename")(function* (input: {
   readonly workspaceId: string;
   readonly payload: RenameWorkspaceRequest;
-}) => {
-  return Effect.gen(function* () {
-    // Rename was addressed by id alone: any caller could rename any owner's workspace.
-    yield* requireScopedWorkspace(input.workspaceId, input.payload.ownerUserId);
-    const workspaces = yield* WorkspaceRepo;
-    const workspace = yield* withInternalError(
-      workspaces.setWorkspaceName({
-        id: input.workspaceId,
-        name: sanitizeWorkspaceName(input.payload.name),
-      }),
-      "Failed to rename workspace.",
-    );
+}) {
+  // Rename was addressed by id alone: any caller could rename any owner's workspace.
+  yield* requireScopedWorkspace(input.workspaceId, input.payload.ownerUserId);
+  const workspaces = yield* WorkspaceRepo;
+  const workspace = yield* withInternalError(
+    workspaces.setWorkspaceName({
+      id: input.workspaceId,
+      name: sanitizeWorkspaceName(input.payload.name),
+    }),
+    "Failed to rename workspace.",
+  );
 
-    if (workspace === null) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${input.workspaceId}`,
-      });
-    }
-
-    return {
-      workspaceId: workspace.id,
-      name: resolveStoredWorkspaceName(workspace),
-      updatedAt: workspace.updatedAt.toISOString(),
-    } satisfies RenameWorkspaceResponse;
-  });
-};
-
-export const listWorkspaces = (query: ListWorkspacesQuery) => {
-  return Effect.gen(function* () {
-    const workspaceLimit = yield* parseLimit({
-      raw: query.limit,
-      fallback: 25,
-      max: 100,
-      name: "limit",
+  if (workspace === null) {
+    return yield* new WorkspaceNotFoundError({
+      message: `Workspace not found: ${input.workspaceId}`,
     });
+  }
 
-    const effectiveWorkspaceLimit =
-      query.status === undefined ? workspaceLimit : Math.min(workspaceLimit * 4, 100);
+  return {
+    workspaceId: workspace.id,
+    name: resolveStoredWorkspaceName(workspace),
+    updatedAt: workspace.updatedAt.toISOString(),
+  } satisfies RenameWorkspaceResponse;
+});
 
-    // By idempotency key: the owner's one workspace a create with that key made, or none.
-    const workspaces =
-      query.idempotencyKey === undefined
-        ? yield* withInternalError(
-            (yield* WorkspaceRepo).listWorkspaces({
+export const listWorkspaces = Effect.fn("sealant.workspace.list")(function* (
+  query: ListWorkspacesQuery,
+) {
+  const workspaceLimit = yield* parseLimit({
+    raw: query.limit,
+    fallback: 25,
+    max: 100,
+    name: "limit",
+  });
+
+  const effectiveWorkspaceLimit =
+    query.status === undefined ? workspaceLimit : Math.min(workspaceLimit * 4, 100);
+
+  // By idempotency key: the owner's one workspace a create with that key made, or none.
+  const workspaces =
+    query.idempotencyKey === undefined
+      ? yield* withInternalError(
+          (yield* WorkspaceRepo).listWorkspaces({
+            ownerUserId: query.ownerUserId,
+            limit: effectiveWorkspaceLimit,
+          }),
+          "Failed to list workspaces.",
+        )
+      : yield* withInternalError(
+          (yield* WorkspaceRepo)
+            .getWorkspaceByIdempotencyKey({
               ownerUserId: query.ownerUserId,
-              limit: effectiveWorkspaceLimit,
-            }),
-            "Failed to list workspaces.",
-          )
-        : yield* withInternalError(
-            (yield* WorkspaceRepo)
-              .getWorkspaceByIdempotencyKey({
-                ownerUserId: query.ownerUserId,
-                idempotencyKey: query.idempotencyKey,
-              })
-              .pipe(Effect.map((workspace) => (workspace === undefined ? [] : [workspace]))),
-            "Failed to find the workspace by idempotency key.",
-          );
-
-    const latestRunIds = workspaces.flatMap((workspace) => {
-      return workspace.latestRunId === null ? [] : [workspace.latestRunId];
-    });
-
-    const workspaceAttempts = yield* WorkspaceAttemptRepo;
-    const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
-    const workspaceRuntimeInstances = yield* WorkspaceRuntimeInstanceRepo;
-
-    const attempts = yield* withInternalError(
-      Effect.forEach(latestRunIds, (runId) =>
-        workspaceAttempts.getAttemptById(runId).pipe(
-          Effect.map((attempt): readonly [string, WorkspaceAttemptRecord | undefined] => {
-            return [runId, attempt];
-          }),
-        ),
-      ),
-      "Failed to load workspace attempts.",
-    );
-
-    const attemptsByRunId = new Map(
-      attempts.flatMap(([runId, attempt]) => {
-        if (attempt === undefined) {
-          return [];
-        }
-
-        return [[runId, attempt]];
-      }),
-    );
-
-    const latestJobsByRunId = yield* withInternalError(
-      workspaceBuildJobs.listLatestJobsByRunIds(latestRunIds),
-      "Failed to load latest workspace build jobs.",
-    );
-
-    const runtimeInstancesByRunId = yield* withInternalError(
-      workspaceRuntimeInstances
-        .listRuntimeInstancesByRunIds(latestRunIds)
-        .pipe(Effect.flatMap(currentWorkspaceRuntimes)),
-      "Failed to load workspace runtime instances.",
-    );
-    const drainsByRunId = yield* withInternalError(
-      (yield* WorkspaceCaptureDrainRepo).listByRunIds(latestRunIds),
-      "Failed to load workspace capture drains.",
-    );
-
-    const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
-
-    const items = workspaces
-      .map((workspace) => {
-        const runId = workspace.latestRunId ?? undefined;
-        const runtimeInstance =
-          runId === undefined ? undefined : runtimeInstancesByRunId.get(runId);
-
-        return mapWorkspaceSummary(
-          workspace,
-          runId === undefined ? undefined : attemptsByRunId.get(runId),
-          runId === undefined ? undefined : latestJobsByRunId.get(runId),
-          runtimeInstance,
-          sshGatewayConfig,
-          executorIsRetained({
-            runtimeInstance,
-            retainedAt: runId === undefined ? undefined : drainsByRunId.get(runId)?.retainedAt,
-            captureDrainState: runId === undefined ? undefined : drainsByRunId.get(runId)?.state,
-          }),
+              idempotencyKey: query.idempotencyKey,
+            })
+            .pipe(Effect.map((workspace) => (workspace === undefined ? [] : [workspace]))),
+          "Failed to find the workspace by idempotency key.",
         );
-      })
-      .filter((item) => (query.status === undefined ? true : item.status === query.status))
-      .slice(0, workspaceLimit);
 
-    return {
-      items,
-    } satisfies ListWorkspacesResponse;
+  const latestRunIds = workspaces.flatMap((workspace) => {
+    return workspace.latestRunId === null ? [] : [workspace.latestRunId];
   });
-};
+
+  const workspaceAttempts = yield* WorkspaceAttemptRepo;
+  const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
+  const workspaceRuntimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+
+  const attempts = yield* withInternalError(
+    Effect.forEach(latestRunIds, (runId) =>
+      workspaceAttempts.getAttemptById(runId).pipe(
+        Effect.map((attempt): readonly [string, WorkspaceAttemptRecord | undefined] => {
+          return [runId, attempt];
+        }),
+      ),
+    ),
+    "Failed to load workspace attempts.",
+  );
+
+  const attemptsByRunId = new Map(
+    attempts.flatMap(([runId, attempt]) => {
+      if (attempt === undefined) {
+        return [];
+      }
+
+      return [[runId, attempt]];
+    }),
+  );
+
+  const latestJobsByRunId = yield* withInternalError(
+    workspaceBuildJobs.listLatestJobsByRunIds(latestRunIds),
+    "Failed to load latest workspace build jobs.",
+  );
+
+  const runtimeInstancesByRunId = yield* withInternalError(
+    workspaceRuntimeInstances
+      .listRuntimeInstancesByRunIds(latestRunIds)
+      .pipe(Effect.flatMap(currentWorkspaceRuntimes)),
+    "Failed to load workspace runtime instances.",
+  );
+  const drainsByRunId = yield* withInternalError(
+    (yield* WorkspaceCaptureDrainRepo).listByRunIds(latestRunIds),
+    "Failed to load workspace capture drains.",
+  );
+
+  const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
+
+  const items = workspaces
+    .map((workspace) => {
+      const runId = workspace.latestRunId ?? undefined;
+      const runtimeInstance = runId === undefined ? undefined : runtimeInstancesByRunId.get(runId);
+
+      return mapWorkspaceSummary(
+        workspace,
+        runId === undefined ? undefined : attemptsByRunId.get(runId),
+        runId === undefined ? undefined : latestJobsByRunId.get(runId),
+        runtimeInstance,
+        sshGatewayConfig,
+        executorIsRetained({
+          runtimeInstance,
+          retainedAt: runId === undefined ? undefined : drainsByRunId.get(runId)?.retainedAt,
+          captureDrainState: runId === undefined ? undefined : drainsByRunId.get(runId)?.state,
+        }),
+      );
+    })
+    .filter((item) => (query.status === undefined ? true : item.status === query.status))
+    .slice(0, workspaceLimit);
+
+  return {
+    items,
+  } satisfies ListWorkspacesResponse;
+});
 
 /**
  * The workspace, when it belongs to the owner the caller named (CORE-03). A call that names no
@@ -2352,77 +2342,78 @@ const requireScopedWorkspace = (workspaceId: string, ownerUserId: string | undef
   });
 };
 
-export const getWorkspace = (workspaceId: string, ownerUserId: string | undefined) => {
-  return Effect.gen(function* () {
-    const workspace = yield* requireScopedWorkspace(workspaceId, ownerUserId);
+export const getWorkspace = Effect.fn("sealant.workspace.get")(function* (
+  workspaceId: string,
+  ownerUserId: string | undefined,
+) {
+  const workspace = yield* requireScopedWorkspace(workspaceId, ownerUserId);
 
-    const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
+  const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
 
-    if (workspace.latestRunId === null) {
-      return mapWorkspaceDetails(
-        workspace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        sshGatewayConfig,
-        false,
-      );
-    }
-
-    const workspaceAttemptRepo = yield* WorkspaceAttemptRepo;
-    const workspaceBuildJobRepo = yield* WorkspaceBuildJobRepo;
-    const workspaceRuntimeInstanceRepo = yield* WorkspaceRuntimeInstanceRepo;
-
-    const attempt = yield* withInternalError(
-      workspaceAttemptRepo.getAttemptById(workspace.latestRunId),
-      "Failed to load workspace attempt.",
-    );
-    const attemptSnapshot = yield* withInternalError(
-      workspaceAttemptRepo.getAttemptSnapshotByRunId(workspace.latestRunId),
-      "Failed to load workspace attempt snapshot.",
-    );
-    const latestJob = yield* withInternalError(
-      workspaceBuildJobRepo.getLatestJobByRunId(workspace.latestRunId),
-      "Failed to load latest workspace build job.",
-    );
-    const runtimeInstance = yield* withInternalError(
-      workspaceRuntimeInstanceRepo
-        .getRuntimeInstanceByRunId(workspace.latestRunId)
-        .pipe(Effect.flatMap(currentWorkspaceRuntime)),
-      "Failed to load workspace runtime instance.",
-    );
-    const captureDrain = yield* withInternalError(
-      (yield* WorkspaceCaptureDrainRepo).getByRunId(workspace.latestRunId),
-      "Failed to load workspace capture drain.",
-    );
-
-    const details = mapWorkspaceDetails(
+  if (workspace.latestRunId === null) {
+    return mapWorkspaceDetails(
       workspace,
-      attempt,
-      latestJob,
-      runtimeInstance,
-      attemptSnapshot,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
       sshGatewayConfig,
-      executorIsRetained({
-        runtimeInstance,
-        retainedAt: captureDrain?.retainedAt,
-        captureDrainState: captureDrain?.state,
-      }),
+      false,
     );
-    const observed = mapWorkspaceCaptureDrain(
-      captureDrain,
-      runtimeInstance === undefined
-        ? undefined
-        : {
-            ...runtimeInstance,
-            // The launch identity the create named, recorded on this executor's attempt.
-            launchId: attempt?.id === runtimeInstance.runId ? attempt.launchId : null,
-          },
-    );
-    return observed === undefined ? details : { ...details, captureDrain: observed };
-  });
-};
+  }
+
+  const workspaceAttemptRepo = yield* WorkspaceAttemptRepo;
+  const workspaceBuildJobRepo = yield* WorkspaceBuildJobRepo;
+  const workspaceRuntimeInstanceRepo = yield* WorkspaceRuntimeInstanceRepo;
+
+  const attempt = yield* withInternalError(
+    workspaceAttemptRepo.getAttemptById(workspace.latestRunId),
+    "Failed to load workspace attempt.",
+  );
+  const attemptSnapshot = yield* withInternalError(
+    workspaceAttemptRepo.getAttemptSnapshotByRunId(workspace.latestRunId),
+    "Failed to load workspace attempt snapshot.",
+  );
+  const latestJob = yield* withInternalError(
+    workspaceBuildJobRepo.getLatestJobByRunId(workspace.latestRunId),
+    "Failed to load latest workspace build job.",
+  );
+  const runtimeInstance = yield* withInternalError(
+    workspaceRuntimeInstanceRepo
+      .getRuntimeInstanceByRunId(workspace.latestRunId)
+      .pipe(Effect.flatMap(currentWorkspaceRuntime)),
+    "Failed to load workspace runtime instance.",
+  );
+  const captureDrain = yield* withInternalError(
+    (yield* WorkspaceCaptureDrainRepo).getByRunId(workspace.latestRunId),
+    "Failed to load workspace capture drain.",
+  );
+
+  const details = mapWorkspaceDetails(
+    workspace,
+    attempt,
+    latestJob,
+    runtimeInstance,
+    attemptSnapshot,
+    sshGatewayConfig,
+    executorIsRetained({
+      runtimeInstance,
+      retainedAt: captureDrain?.retainedAt,
+      captureDrainState: captureDrain?.state,
+    }),
+  );
+  const observed = mapWorkspaceCaptureDrain(
+    captureDrain,
+    runtimeInstance === undefined
+      ? undefined
+      : {
+          ...runtimeInstance,
+          // The launch identity the create named, recorded on this executor's attempt.
+          launchId: attempt?.id === runtimeInstance.runId ? attempt.launchId : null,
+        },
+  );
+  return observed === undefined ? details : { ...details, captureDrain: observed };
+});
 
 /**
  * The drain as last observed, for `WorkspaceDetails.captureDrain`: only what the worker
@@ -2516,11 +2507,8 @@ export const mapWorkspaceCaptureDrain = (
   };
 };
 
-export const getWorkspaceSshTarget = (input: {
-  readonly workspaceId: string;
-  readonly headers: WorkspaceGatewayHeaders;
-}) => {
-  return Effect.gen(function* () {
+export const getWorkspaceSshTarget = Effect.fn("sealant.workspace.get_ssh_target")(
+  function* (input: { readonly workspaceId: string; readonly headers: WorkspaceGatewayHeaders }) {
     const expectedGatewayToken = env.WORKSPACE_SSH_GATEWAY_TOKEN?.trim();
 
     if (expectedGatewayToken === undefined || expectedGatewayToken.length === 0) {
@@ -2626,14 +2614,11 @@ export const getWorkspaceSshTarget = (input: {
       sessionUser: workspace.sshUser,
       ...(sshKeyFingerprint === undefined ? {} : { sshKeyFingerprint }),
     } satisfies WorkspaceSshTarget;
-  });
-};
+  },
+);
 
-export const listWorkspaceAttempts = (input: {
-  readonly workspaceId: string;
-  readonly query: ListWorkspaceAttemptsQuery;
-}) => {
-  return Effect.gen(function* () {
+export const listWorkspaceAttempts = Effect.fn("sealant.workspace.list_attempts")(
+  function* (input: { readonly workspaceId: string; readonly query: ListWorkspaceAttemptsQuery }) {
     const limit = yield* parseLimit({
       raw: input.query.limit,
       fallback: 25,
@@ -2716,201 +2701,197 @@ export const listWorkspaceAttempts = (input: {
     return {
       items,
     } satisfies ListWorkspaceAttemptsResponse;
-  });
-};
+  },
+);
 
-export const listWorkspaceEvents = (input: {
+export const listWorkspaceEvents = Effect.fn("sealant.workspace.list_events")(function* (input: {
   readonly workspaceId: string;
   readonly query: ListWorkspaceEventsQuery;
-}) => {
-  return Effect.gen(function* () {
-    const limit = yield* parseLimit({
-      raw: input.query.limit,
-      fallback: 50,
-      max: 200,
-      name: "limit",
-    });
+}) {
+  const limit = yield* parseLimit({
+    raw: input.query.limit,
+    fallback: 50,
+    max: 200,
+    name: "limit",
+  });
 
-    const workspace = yield* requireScopedWorkspace(input.workspaceId, input.query.ownerUserId);
-    const workspaceRepo = yield* WorkspaceRepo;
+  const workspace = yield* requireScopedWorkspace(input.workspaceId, input.query.ownerUserId);
+  const workspaceRepo = yield* WorkspaceRepo;
 
-    const links = yield* withInternalError(
-      workspaceRepo.listWorkspaceAttemptLinks(workspace.id, limit),
-      "Failed to load workspace attempt links.",
-    );
-    const runIds = links.map((link) => link.runId);
+  const links = yield* withInternalError(
+    workspaceRepo.listWorkspaceAttemptLinks(workspace.id, limit),
+    "Failed to load workspace attempt links.",
+  );
+  const runIds = links.map((link) => link.runId);
 
-    const workspaceAttemptRepo = yield* WorkspaceAttemptRepo;
-    const workspaceBuildJobRepo = yield* WorkspaceBuildJobRepo;
-    const workspaceRuntimeInstanceRepo = yield* WorkspaceRuntimeInstanceRepo;
+  const workspaceAttemptRepo = yield* WorkspaceAttemptRepo;
+  const workspaceBuildJobRepo = yield* WorkspaceBuildJobRepo;
+  const workspaceRuntimeInstanceRepo = yield* WorkspaceRuntimeInstanceRepo;
 
-    const attempts = yield* withInternalError(
-      Effect.forEach(runIds, (runId) =>
-        workspaceAttemptRepo.getAttemptById(runId).pipe(
-          Effect.map((attempt): readonly [string, WorkspaceAttemptRecord | undefined] => {
-            return [runId, attempt];
-          }),
-        ),
+  const attempts = yield* withInternalError(
+    Effect.forEach(runIds, (runId) =>
+      workspaceAttemptRepo.getAttemptById(runId).pipe(
+        Effect.map((attempt): readonly [string, WorkspaceAttemptRecord | undefined] => {
+          return [runId, attempt];
+        }),
       ),
-      "Failed to load workspace attempts.",
-    );
-    const attemptsByRunId = new Map(
-      attempts.flatMap(([runId, attempt]) => {
-        if (attempt === undefined) {
-          return [];
-        }
-
-        return [[runId, attempt]];
-      }),
-    );
-    const latestJobsByRunId = yield* withInternalError(
-      workspaceBuildJobRepo.listLatestJobsByRunIds(runIds),
-      "Failed to load latest workspace build jobs.",
-    );
-    const runtimeInstancesByRunId = yield* withInternalError(
-      workspaceRuntimeInstanceRepo.listRuntimeInstancesByRunIds(runIds),
-      "Failed to load workspace runtime instances.",
-    );
-    const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
-
-    const events: WorkspaceEventDraft[] = [
-      {
-        workspaceId: workspace.id,
-        type: "workspace.created",
-        occurredAt: workspace.createdAt,
-        message: "Workspace created.",
-      },
-    ];
-
-    for (const link of links) {
-      const attempt = attemptsByRunId.get(link.runId);
-
+    ),
+    "Failed to load workspace attempts.",
+  );
+  const attemptsByRunId = new Map(
+    attempts.flatMap(([runId, attempt]) => {
       if (attempt === undefined) {
-        continue;
+        return [];
       }
 
-      const latestJob = latestJobsByRunId.get(link.runId);
-      const runtimeInstance = runtimeInstancesByRunId.get(link.runId);
-      const runtimeEndpoint = resolveWorkspaceRuntime(runtimeInstance, {
+      return [[runId, attempt]];
+    }),
+  );
+  const latestJobsByRunId = yield* withInternalError(
+    workspaceBuildJobRepo.listLatestJobsByRunIds(runIds),
+    "Failed to load latest workspace build jobs.",
+  );
+  const runtimeInstancesByRunId = yield* withInternalError(
+    workspaceRuntimeInstanceRepo.listRuntimeInstancesByRunIds(runIds),
+    "Failed to load workspace runtime instances.",
+  );
+  const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
+
+  const events: WorkspaceEventDraft[] = [
+    {
+      workspaceId: workspace.id,
+      type: "workspace.created",
+      occurredAt: workspace.createdAt,
+      message: "Workspace created.",
+    },
+  ];
+
+  for (const link of links) {
+    const attempt = attemptsByRunId.get(link.runId);
+
+    if (attempt === undefined) {
+      continue;
+    }
+
+    const latestJob = latestJobsByRunId.get(link.runId);
+    const runtimeInstance = runtimeInstancesByRunId.get(link.runId);
+    const runtimeEndpoint = resolveWorkspaceRuntime(runtimeInstance, {
+      workspaceId: workspace.id,
+      ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
+    })?.endpoint;
+
+    events.push({
+      workspaceId: workspace.id,
+      attemptId: attempt.id,
+      type: "attempt.queued",
+      occurredAt: attempt.queuedAt,
+      message: "Workspace attempt queued.",
+      data: {
+        relation: link.relation,
+        triggerType: attempt.triggerType,
+      },
+    });
+
+    if (attempt.startedAt !== null) {
+      events.push({
         workspaceId: workspace.id,
-        ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
-      })?.endpoint;
+        attemptId: attempt.id,
+        type: "attempt.running",
+        occurredAt: attempt.startedAt,
+        message: "Workspace attempt started.",
+      });
+    }
+
+    if (
+      latestJob !== undefined &&
+      latestJob.publishedReference !== null &&
+      latestJob.publishedDigestReference !== null &&
+      latestJob.publishedDigest !== null
+    ) {
+      events.push({
+        workspaceId: workspace.id,
+        attemptId: attempt.id,
+        type: "image.published",
+        occurredAt: latestJob.finishedAt ?? latestJob.updatedAt,
+        message: "Workspace image published.",
+        data: {
+          reference: latestJob.publishedReference,
+          digestReference: latestJob.publishedDigestReference,
+          digest: latestJob.publishedDigest,
+        },
+      });
+    }
+
+    if (runtimeInstance !== undefined) {
+      const runtimeOccurredAt =
+        runtimeInstance.status === "running" || runtimeInstance.status === "ready"
+          ? (runtimeInstance.launchedAt ?? runtimeInstance.updatedAt)
+          : runtimeInstance.status === "pending"
+            ? runtimeInstance.createdAt
+            : (runtimeInstance.finishedAt ?? runtimeInstance.updatedAt);
 
       events.push({
         workspaceId: workspace.id,
         attemptId: attempt.id,
-        type: "attempt.queued",
-        occurredAt: attempt.queuedAt,
-        message: "Workspace attempt queued.",
+        type: `runtime.${runtimeInstance.status}`,
+        occurredAt: runtimeOccurredAt,
+        message: `Runtime status updated to ${runtimeInstance.status}.`,
         data: {
-          relation: link.relation,
-          triggerType: attempt.triggerType,
+          ...(runtimeInstance.adapter === null ? {} : { adapter: runtimeInstance.adapter }),
+          ...(runtimeInstance.resourceId === null
+            ? {}
+            : { resourceId: runtimeInstance.resourceId }),
+          ...(runtimeInstance.reference === null ? {} : { reference: runtimeInstance.reference }),
+          ...(runtimeEndpoint === undefined ? {} : { endpoint: runtimeEndpoint }),
+          ...(runtimeInstance.errorCode === null ? {} : { errorCode: runtimeInstance.errorCode }),
+          ...(runtimeInstance.errorMessage === null
+            ? {}
+            : { errorMessage: runtimeInstance.errorMessage }),
         },
       });
-
-      if (attempt.startedAt !== null) {
-        events.push({
-          workspaceId: workspace.id,
-          attemptId: attempt.id,
-          type: "attempt.running",
-          occurredAt: attempt.startedAt,
-          message: "Workspace attempt started.",
-        });
-      }
-
-      if (
-        latestJob !== undefined &&
-        latestJob.publishedReference !== null &&
-        latestJob.publishedDigestReference !== null &&
-        latestJob.publishedDigest !== null
-      ) {
-        events.push({
-          workspaceId: workspace.id,
-          attemptId: attempt.id,
-          type: "image.published",
-          occurredAt: latestJob.finishedAt ?? latestJob.updatedAt,
-          message: "Workspace image published.",
-          data: {
-            reference: latestJob.publishedReference,
-            digestReference: latestJob.publishedDigestReference,
-            digest: latestJob.publishedDigest,
-          },
-        });
-      }
-
-      if (runtimeInstance !== undefined) {
-        const runtimeOccurredAt =
-          runtimeInstance.status === "running" || runtimeInstance.status === "ready"
-            ? (runtimeInstance.launchedAt ?? runtimeInstance.updatedAt)
-            : runtimeInstance.status === "pending"
-              ? runtimeInstance.createdAt
-              : (runtimeInstance.finishedAt ?? runtimeInstance.updatedAt);
-
-        events.push({
-          workspaceId: workspace.id,
-          attemptId: attempt.id,
-          type: `runtime.${runtimeInstance.status}`,
-          occurredAt: runtimeOccurredAt,
-          message: `Runtime status updated to ${runtimeInstance.status}.`,
-          data: {
-            ...(runtimeInstance.adapter === null ? {} : { adapter: runtimeInstance.adapter }),
-            ...(runtimeInstance.resourceId === null
-              ? {}
-              : { resourceId: runtimeInstance.resourceId }),
-            ...(runtimeInstance.reference === null ? {} : { reference: runtimeInstance.reference }),
-            ...(runtimeEndpoint === undefined ? {} : { endpoint: runtimeEndpoint }),
-            ...(runtimeInstance.errorCode === null ? {} : { errorCode: runtimeInstance.errorCode }),
-            ...(runtimeInstance.errorMessage === null
-              ? {}
-              : { errorMessage: runtimeInstance.errorMessage }),
-          },
-        });
-      }
-
-      if (attempt.status === "succeeded" && attempt.finishedAt !== null) {
-        events.push({
-          workspaceId: workspace.id,
-          attemptId: attempt.id,
-          type: "attempt.succeeded",
-          occurredAt: attempt.finishedAt,
-          message: "Workspace attempt completed successfully.",
-        });
-      }
-
-      if (attempt.status === "failed" && attempt.finishedAt !== null) {
-        events.push({
-          workspaceId: workspace.id,
-          attemptId: attempt.id,
-          type: "attempt.failed",
-          occurredAt: attempt.finishedAt,
-          message: "Workspace attempt failed.",
-        });
-      }
-
-      if (attempt.status === "cancelled" && attempt.finishedAt !== null) {
-        events.push({
-          workspaceId: workspace.id,
-          attemptId: attempt.id,
-          type: "attempt.cancelled",
-          occurredAt: attempt.finishedAt,
-          message: "Workspace attempt was cancelled.",
-          ...(attempt.cancelReason === null
-            ? {}
-            : { data: { cancelReason: attempt.cancelReason } }),
-        });
-      }
     }
 
-    const items = [...events]
-      .toSorted((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime())
-      .slice(0, limit)
-      .map(toEventResponse);
+    if (attempt.status === "succeeded" && attempt.finishedAt !== null) {
+      events.push({
+        workspaceId: workspace.id,
+        attemptId: attempt.id,
+        type: "attempt.succeeded",
+        occurredAt: attempt.finishedAt,
+        message: "Workspace attempt completed successfully.",
+      });
+    }
 
-    return {
-      items,
-    } satisfies ListWorkspaceEventsResponse;
-  });
-};
+    if (attempt.status === "failed" && attempt.finishedAt !== null) {
+      events.push({
+        workspaceId: workspace.id,
+        attemptId: attempt.id,
+        type: "attempt.failed",
+        occurredAt: attempt.finishedAt,
+        message: "Workspace attempt failed.",
+      });
+    }
+
+    if (attempt.status === "cancelled" && attempt.finishedAt !== null) {
+      events.push({
+        workspaceId: workspace.id,
+        attemptId: attempt.id,
+        type: "attempt.cancelled",
+        occurredAt: attempt.finishedAt,
+        message: "Workspace attempt was cancelled.",
+        ...(attempt.cancelReason === null ? {} : { data: { cancelReason: attempt.cancelReason } }),
+      });
+    }
+  }
+
+  const items = [...events]
+    .toSorted((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime())
+    .slice(0, limit)
+    .map(toEventResponse);
+
+  return {
+    items,
+  } satisfies ListWorkspaceEventsResponse;
+});
 
 interface ExecWorkspaceInput {
   readonly workspaceId: string;
@@ -3030,48 +3011,48 @@ const execCommands = (payload: ExecWorkspaceRequest) =>
  * `execWorkspaceRequestSchema` for the completed-vs-failed semantics); callers poll
  * `GET /v1/runs/:runId` and read exit codes / output from the run record.
  */
-export const execWorkspace = (input: ExecWorkspaceInput) => {
-  return Effect.gen(function* () {
-    const workspace = yield* admitExec(input);
-    const user = input.payload.user;
-    // A run as a user goes to the as-user queue, never the legacy one.
-    const asUserRun =
-      user === undefined
-        ? undefined
-        : (yield* requireReadyExecutor(workspace.id, user, input.processUserChannel)).asUserRun;
-    const runs = yield* RunRepo;
-    const runId = `run_${yield* randomId}`;
-    const run = yield* withInternalError(
-      runs.createRun({
-        id: runId,
-        workspaceId: workspace.id,
-        ownerUserId: input.payload.ownerUserId,
-        harnessId: execRunHarnessId,
-        mode: "one-shot",
-        ...(asUserRun === undefined ? {} : { processUser: asUserRun.user }),
+export const execWorkspace = Effect.fn("sealant.workspace.exec")(function* (
+  input: ExecWorkspaceInput,
+) {
+  const workspace = yield* admitExec(input);
+  const user = input.payload.user;
+  // A run as a user goes to the as-user queue, never the legacy one.
+  const asUserRun =
+    user === undefined
+      ? undefined
+      : (yield* requireReadyExecutor(workspace.id, user, input.processUserChannel)).asUserRun;
+  const runs = yield* RunRepo;
+  const runId = `run_${yield* randomId}`;
+  const run = yield* withInternalError(
+    runs.createRun({
+      id: runId,
+      workspaceId: workspace.id,
+      ownerUserId: input.payload.ownerUserId,
+      harnessId: execRunHarnessId,
+      mode: "one-shot",
+      ...(asUserRun === undefined ? {} : { processUser: asUserRun.user }),
+    }),
+    "Failed to create the exec run.",
+  );
+
+  const publisher = yield* RunExecPublisherService;
+  const requestTrace = yield* currentTraceCarrier;
+  yield* Effect.tryPromise({
+    try: () =>
+      publisher.publishRequested({
+        runId: run.id,
+        commands: execCommands(input.payload),
+        ...asUserRun,
+        trace: requestTrace,
       }),
-      "Failed to create the exec run.",
-    );
-
-    const publisher = yield* RunExecPublisherService;
-    const requestTrace = yield* currentTraceCarrier;
-    yield* Effect.tryPromise({
-      try: () =>
-        publisher.publishRequested({
-          runId: run.id,
-          commands: execCommands(input.payload),
-          ...asUserRun,
-          trace: requestTrace,
-        }),
-      catch: (error) =>
-        new WorkspaceInternalServerError({
-          message: toErrorMessage(error, "Failed to enqueue the exec run."),
-        }),
-    });
-
-    return mapRun(run);
+    catch: (error) =>
+      new WorkspaceInternalServerError({
+        message: toErrorMessage(error, "Failed to enqueue the exec run."),
+      }),
   });
-};
+
+  return mapRun(run);
+});
 
 /**
  * The bounds of an exec in its request. `admission` bounds the checks before the run exists;
@@ -3092,149 +3073,145 @@ const EXEC_IN_REQUEST_BOUNDS = {
  * away or the API stops, no further command is sent and the run fails; a command already started
  * is not stopped and may still be running.
  */
-export const execWorkspaceInRequest = (
+export const execWorkspaceInRequest = Effect.fn("sealant.workspace.exec_in_request")(function* (
   input: ExecWorkspaceInput & {
     /** For tests; defaults to `EXEC_IN_REQUEST_BOUNDS`. */
     readonly bounds?: Partial<Record<keyof typeof EXEC_IN_REQUEST_BOUNDS, Duration.Input>>;
   },
-) =>
-  Effect.gen(function* () {
-    const bounds = { ...EXEC_IN_REQUEST_BOUNDS, ...input.bounds };
-    const { workspace, executor } = yield* admitExec(input).pipe(
-      Effect.flatMap((admitted) =>
-        requireReadyExecutor(admitted.id, input.payload.user, input.processUserChannel).pipe(
-          Effect.map((ready) => ({ workspace: admitted, executor: ready })),
-        ),
+) {
+  const bounds = { ...EXEC_IN_REQUEST_BOUNDS, ...input.bounds };
+  const { workspace, executor } = yield* admitExec(input).pipe(
+    Effect.flatMap((admitted) =>
+      requireReadyExecutor(admitted.id, input.payload.user, input.processUserChannel).pipe(
+        Effect.map((ready) => ({ workspace: admitted, executor: ready })),
       ),
-      Effect.timeoutOrElse({
-        duration: bounds.admission,
-        orElse: () =>
-          Effect.fail(
-            new WorkspaceBadGatewayError({
-              message: `Workspace ${input.workspaceId} did not answer the exec's checks in time; nothing was started.`,
-            }),
-          ),
-      }),
-    );
-    const asUserRun = executor.asUserRun;
-    const runId = `run_${yield* randomId}`;
-    // As the worker decides: the API always holds a cipher, a zero-key one without the key.
-    const credentialCipher =
-      (env.SEALANT_CREDENTIALS_KEY?.trim() ?? "") === "" ? undefined : yield* CredentialCipher;
-    const run = yield* executeExecRun({
-      run: {
-        id: runId,
-        workspaceId: workspace.id,
-        ownerUserId: input.payload.ownerUserId,
-        harnessId: execRunHarnessId,
-        mode: "one-shot",
-        ...(asUserRun === undefined ? {} : { processUser: asUserRun.user }),
-      },
-      executor: {
-        target: executor.target,
-        attemptId: executor.instance.runId,
-        launchCredentialInjections: executor.instance.launchCredentialInjections ?? [],
-        ...(credentialCipher === undefined ? {} : { credentialCipher }),
-      },
-      commands: execCommands(input.payload),
-      ...(asUserRun === undefined ? {} : { user: asUserRun.user }),
-      budget: bounds.budget,
-      syncBackDeadline: bounds.syncBack,
-    }).pipe(
-      Effect.catchTags({
-        ExecRunNotCreatedError: () =>
-          Effect.fail(
-            new WorkspaceInternalServerError({
-              message:
-                "The exec run could not be created; nothing ran, so it is safe to ask again.",
-            }),
-          ),
-        ExecRunUnsettledError: () =>
-          Effect.fail(
-            new WorkspaceInternalServerError({
-              message: `Exec run ${runId}'s outcome could not be recorded, and its commands may have run; do not run them again.`,
-            }),
-          ),
-        ExecRunUnreadableError: () =>
-          Effect.fail(
-            new WorkspaceInternalServerError({
-              message: `Exec run ${runId} settled but could not be read back; its commands may have run, so read it at GET /v1/runs/${runId} rather than running them again.`,
-            }),
-          ),
-      }),
-    );
-    return mapRun(run);
-  });
+    ),
+    Effect.timeoutOrElse({
+      duration: bounds.admission,
+      orElse: () =>
+        Effect.fail(
+          new WorkspaceBadGatewayError({
+            message: `Workspace ${input.workspaceId} did not answer the exec's checks in time; nothing was started.`,
+          }),
+        ),
+    }),
+  );
+  const asUserRun = executor.asUserRun;
+  const runId = `run_${yield* randomId}`;
+  // As the worker decides: the API always holds a cipher, a zero-key one without the key.
+  const credentialCipher =
+    (env.SEALANT_CREDENTIALS_KEY?.trim() ?? "") === "" ? undefined : yield* CredentialCipher;
+  const run = yield* executeExecRun({
+    run: {
+      id: runId,
+      workspaceId: workspace.id,
+      ownerUserId: input.payload.ownerUserId,
+      harnessId: execRunHarnessId,
+      mode: "one-shot",
+      ...(asUserRun === undefined ? {} : { processUser: asUserRun.user }),
+    },
+    executor: {
+      target: executor.target,
+      attemptId: executor.instance.runId,
+      launchCredentialInjections: executor.instance.launchCredentialInjections ?? [],
+      ...(credentialCipher === undefined ? {} : { credentialCipher }),
+    },
+    commands: execCommands(input.payload),
+    ...(asUserRun === undefined ? {} : { user: asUserRun.user }),
+    budget: bounds.budget,
+    syncBackDeadline: bounds.syncBack,
+  }).pipe(
+    Effect.catchTags({
+      ExecRunNotCreatedError: () =>
+        Effect.fail(
+          new WorkspaceInternalServerError({
+            message: "The exec run could not be created; nothing ran, so it is safe to ask again.",
+          }),
+        ),
+      ExecRunUnsettledError: () =>
+        Effect.fail(
+          new WorkspaceInternalServerError({
+            message: `Exec run ${runId}'s outcome could not be recorded, and its commands may have run; do not run them again.`,
+          }),
+        ),
+      ExecRunUnreadableError: () =>
+        Effect.fail(
+          new WorkspaceInternalServerError({
+            message: `Exec run ${runId} settled but could not be read back; its commands may have run, so read it at GET /v1/runs/${runId} rather than running them again.`,
+          }),
+        ),
+    }),
+  );
+  return mapRun(run);
+});
 
 /**
  * Bind (sealantd ADR-0014): point a standby workspace's working directory, or a bindable extra
  * mount, at one subdirectory of its root. Synchronous over the daemon's control connection; the
  * resulting set of live bindings is recorded on the workspace so every relaunch re-applies it.
  */
-export const bindWorkspace = (input: {
+export const bindWorkspace = Effect.fn("sealant.workspace.bind")(function* (input: {
   readonly workspaceId: string;
   readonly payload: BindWorkspaceRequest;
-}) => {
-  return Effect.gen(function* () {
-    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
-    if (workspace.latestRunId === null) {
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} has no launched runtime to bind in yet; wait for it to become ready.`,
-      });
-    }
-    const spec = yield* loadRecordedSpec(workspace.id, workspace.latestRunId);
-    const mountPath = input.payload.mountPath ?? spec.runtime.workingDirectory;
-    const bindable =
-      (spec.sources.workspace.kind === "standby" && mountPath === spec.runtime.workingDirectory) ||
-      spec.sources.mounts.some((mount) => mount.bindable && mount.mountPath === mountPath);
-    if (!bindable) {
+}) {
+  const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+  if (workspace.latestRunId === null) {
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} has no launched runtime to bind in yet; wait for it to become ready.`,
+    });
+  }
+  const spec = yield* loadRecordedSpec(workspace.id, workspace.latestRunId);
+  const mountPath = input.payload.mountPath ?? spec.runtime.workingDirectory;
+  const bindable =
+    (spec.sources.workspace.kind === "standby" && mountPath === spec.runtime.workingDirectory) ||
+    spec.sources.mounts.some((mount) => mount.bindable && mount.mountPath === mountPath);
+  if (!bindable) {
+    return yield* new WorkspaceBadRequestError({
+      message: `${mountPath} is not a bindable mount of workspace ${input.workspaceId}: only a standby working directory or a mount declared bindable can be bound.`,
+    });
+  }
+  const subpath = input.payload.subpath.trim();
+  if (subpath !== "") {
+    const parsed = workspaceBindSchema.safeParse({ mountPath, subpath });
+    if (!parsed.success) {
       return yield* new WorkspaceBadRequestError({
-        message: `${mountPath} is not a bindable mount of workspace ${input.workspaceId}: only a standby working directory or a mount declared bindable can be bound.`,
+        message: `Invalid bind: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`,
       });
     }
-    const subpath = input.payload.subpath.trim();
-    if (subpath !== "") {
-      const parsed = workspaceBindSchema.safeParse({ mountPath, subpath });
-      if (!parsed.success) {
-        return yield* new WorkspaceBadRequestError({
-          message: `Invalid bind: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`,
-        });
-      }
-    }
-    const target = yield* resolveDaemonTarget(workspace.id).pipe(
-      Effect.catch(() => Effect.succeed(undefined)),
-    );
-    if (target === undefined) {
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} has no ready runtime to bind in.`,
-      });
-    }
-    const runtime = yield* SealantRuntime;
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const daemon = yield* runtime.connect(target);
-        yield* daemon.bindMount(mountPath, subpath);
-      }),
-    ).pipe(
-      Effect.mapError(
-        (error) =>
-          new WorkspaceConflictError({
-            message: `The workspace runtime refused the bind: ${error.message}`,
-          }),
-      ),
-    );
-    const binds = [
-      ...workspace.binds.filter((bind) => bind.mountPath !== mountPath),
-      ...(subpath === "" ? [] : [{ mountPath, subpath }]),
-    ];
-    const workspaces = yield* WorkspaceRepo;
-    yield* withInternalError(
-      workspaces.setWorkspaceBinds({ id: workspace.id, binds }),
-      "Failed to record the workspace bindings.",
-    );
-    return { binds };
-  });
-};
+  }
+  const target = yield* resolveDaemonTarget(workspace.id).pipe(
+    Effect.catch(() => Effect.succeed(undefined)),
+  );
+  if (target === undefined) {
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} has no ready runtime to bind in.`,
+    });
+  }
+  const runtime = yield* SealantRuntime;
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const daemon = yield* runtime.connect(target);
+      yield* daemon.bindMount(mountPath, subpath);
+    }),
+  ).pipe(
+    Effect.mapError(
+      (error) =>
+        new WorkspaceConflictError({
+          message: `The workspace runtime refused the bind: ${error.message}`,
+        }),
+    ),
+  );
+  const binds = [
+    ...workspace.binds.filter((bind) => bind.mountPath !== mountPath),
+    ...(subpath === "" ? [] : [{ mountPath, subpath }]),
+  ];
+  const workspaces = yield* WorkspaceRepo;
+  yield* withInternalError(
+    workspaces.setWorkspaceBinds({ id: workspace.id, binds }),
+    "Failed to record the workspace bindings.",
+  );
+  return { binds };
+});
 
 /**
  * Flush captures (sealantd ADR-0015): a capture, then ship and register everything staged.
@@ -3372,11 +3349,11 @@ export const getWorkspaceCaptureStatus = (input: {
  * plan with no worktree named, delta-materialises it, and captures under the answered worktree
  * and epoch from then on. Synchronous over the daemon's control connection; idempotent.
  */
-export const replanWorkspaceCapture = (input: {
-  readonly workspaceId: string;
-  readonly payload: ReplanWorkspaceCaptureRequest;
-}) =>
-  Effect.gen(function* () {
+export const replanWorkspaceCapture = Effect.fn("sealant.workspace.replan_capture")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly payload: ReplanWorkspaceCaptureRequest;
+  }) {
     const expected = input.payload.expectedOwnerMap;
     if (expected !== undefined) {
       yield* requireLaunchOwnerMap({
@@ -3407,7 +3384,8 @@ export const replanWorkspaceCapture = (input: {
       (daemon) => daemon.captureReplan(),
     );
     return controlScope === null ? replanned : { ...replanned, controlScope };
-  });
+  },
+);
 
 /**
  * A claim (re-plan) that names the owner map it needs runs only on an executor launched with
@@ -3510,45 +3488,47 @@ const withCaptureTarget = <A, R = never>(
 };
 
 /** The spec a workspace last launched from: the attempt snapshot, else the build job's request. */
-export const loadRecordedSpec = (workspaceId: string, runId: string) => {
-  return Effect.gen(function* () {
-    const workspaceAttempts = yield* WorkspaceAttemptRepo;
-    const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
-    const previousJob = yield* withInternalError(
-      workspaceBuildJobs.getLatestJobByRunId(runId),
-      "Failed to load the latest workspace build job.",
-    );
-    const snapshot = yield* withInternalError(
-      workspaceAttempts.getAttemptSnapshotByRunId(runId),
-      "Failed to load the workspace attempt snapshot.",
-    );
-    const specPayload =
-      snapshot?.resolvedSpecPayload ?? snapshot?.userSpecPayload ?? previousJob?.requestPayload;
-    if (specPayload === undefined) {
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${workspaceId} has no recorded spec.`,
-      });
-    }
-    return yield* parseWorkspaceSpec(specPayload);
-  });
-};
+export const loadRecordedSpec = Effect.fn("sealant.workspace.load_recorded_spec")(function* (
+  workspaceId: string,
+  runId: string,
+) {
+  const workspaceAttempts = yield* WorkspaceAttemptRepo;
+  const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
+  const previousJob = yield* withInternalError(
+    workspaceBuildJobs.getLatestJobByRunId(runId),
+    "Failed to load the latest workspace build job.",
+  );
+  const snapshot = yield* withInternalError(
+    workspaceAttempts.getAttemptSnapshotByRunId(runId),
+    "Failed to load the workspace attempt snapshot.",
+  );
+  const specPayload =
+    snapshot?.resolvedSpecPayload ?? snapshot?.userSpecPayload ?? previousJob?.requestPayload;
+  if (specPayload === undefined) {
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${workspaceId} has no recorded spec.`,
+    });
+  }
+  return yield* parseWorkspaceSpec(specPayload);
+});
 
 /** Load an owner-scoped workspace with the uniform-404 idiom (existence is not leaked). */
-export const requireOwnedWorkspace = (workspaceId: string, ownerUserId: string) => {
-  return Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
-    const workspace = yield* withInternalError(
-      workspaces.getWorkspaceById(workspaceId),
-      "Failed to load workspace.",
-    );
-    if (workspace === undefined || workspace.ownerUserId !== ownerUserId) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${workspaceId}`,
-      });
-    }
-    return workspace;
-  });
-};
+export const requireOwnedWorkspace = Effect.fn("sealant.workspace.require_owned")(function* (
+  workspaceId: string,
+  ownerUserId: string,
+) {
+  const workspaces = yield* WorkspaceRepo;
+  const workspace = yield* withInternalError(
+    workspaces.getWorkspaceById(workspaceId),
+    "Failed to load workspace.",
+  );
+  if (workspace === undefined || workspace.ownerUserId !== ownerUserId) {
+    return yield* new WorkspaceNotFoundError({
+      message: `Workspace not found: ${workspaceId}`,
+    });
+  }
+  return workspace;
+});
 
 /**
  * Whether a completion attestation names THIS executor's launch (decision 5: a seal names the
@@ -3643,11 +3623,11 @@ export const getWorkspaceCreate = (input: {
  * key never commits. A pending or unknown key becomes `cancelled` for good (a delayed request
  * with it is refused); a committed one answers `found`, and the caller stops that workspace.
  */
-export const cancelWorkspaceCreate = (input: {
-  readonly idempotencyKey: string;
-  readonly payload: CancelWorkspaceCreateRequest;
-}) =>
-  Effect.gen(function* () {
+export const cancelWorkspaceCreate = Effect.fn("sealant.workspace.cancel_create")(
+  function* (input: {
+    readonly idempotencyKey: string;
+    readonly payload: CancelWorkspaceCreateRequest;
+  }) {
     const ownerUserId = input.payload.ownerUserId;
     const idempotencyKey = input.idempotencyKey;
     // A committed create stays committed: cancelling it would refuse its own replays.
@@ -3670,221 +3650,220 @@ export const cancelWorkspaceCreate = (input: {
       ownerUserId,
       idempotencyKey,
     )) satisfies WorkspaceCreateState;
-  });
+  },
+);
 
 /**
  * Async stop (202): record the stop intent, then enqueue the teardown for the worker, which
  * removes the container via the runtime adapter and records the terminal "stopped" state.
  * Idempotent: stopping a workspace that is already stopped is a no-op 202.
  */
-export const stopWorkspace = (input: {
+export const stopWorkspace = Effect.fn("sealant.workspace.stop")(function* (input: {
   readonly workspaceId: string;
   readonly payload: StopWorkspaceRequest;
-}) => {
-  return Effect.gen(function* () {
-    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
-    const discard = input.payload.discardUnsaved === true;
-    const attestation = input.payload.completion;
+}) {
+  const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+  const discard = input.payload.discardUnsaved === true;
+  const attestation = input.payload.completion;
 
-    // A discard, or a completion attestation, is accepted on a workspace whose stop was already
-    // recorded: that is exactly the workspace a drain keeps because its work is not confirmed
-    // saved (the stop is enqueued again so the worker reconsiders it at once).
-    if (workspace.status === "stopped" && !discard && attestation === undefined) {
-      const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "stopped" };
+  // A discard, or a completion attestation, is accepted on a workspace whose stop was already
+  // recorded: that is exactly the workspace a drain keeps because its work is not confirmed
+  // saved (the stop is enqueued again so the worker reconsiders it at once).
+  if (workspace.status === "stopped" && !discard && attestation === undefined) {
+    const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "stopped" };
+    return response;
+  }
+
+  const latestRunId = workspace.latestRunId;
+  if (latestRunId === null) {
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} has no launched runtime to stop yet.`,
+    });
+  }
+
+  // Stop targets a live runtime. Before its image is built there is none: the launch's build
+  // job is cancelled instead (the worker building it stops at its next progress write, and its
+  // fenced success can no longer land), and the run ends `cancelled`. After a failed build
+  // there is nothing to stop, and the stop answers so. Between a build that succeeded and the
+  // runtime's first row there is still nothing to stop: that is refused, as the launch would
+  // race a recorded stop.
+  const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+  const instance = yield* withInternalError(
+    runtimeInstances
+      .getRuntimeInstanceByRunId(latestRunId)
+      .pipe(Effect.flatMap(currentWorkspaceRuntime)),
+    "Failed to load the workspace runtime.",
+  );
+  if (instance === undefined) {
+    const jobs = yield* WorkspaceBuildJobRepo;
+    const latestJob = yield* withInternalError(
+      jobs.getLatestJobByRunId(latestRunId),
+      "Failed to load the workspace build job.",
+    );
+    const cancelled =
+      latestJob === undefined || (latestJob.status !== "queued" && latestJob.status !== "running")
+        ? null
+        : yield* withInternalError(
+            jobs.cancelUnbuiltJob({
+              id: latestJob.id,
+              errorCode: "launch-stopped",
+              errorMessage:
+                "The workspace was stopped before its image was built; nothing was launched.",
+            }),
+            "Failed to cancel the workspace build job.",
+          );
+    if (cancelled !== null) {
+      yield* withInternalError(
+        (yield* WorkspaceAttemptRepo).markAttemptCancelled({
+          id: latestRunId,
+          cancelReason: "stopped before its image was built",
+        }),
+        "Failed to record the cancelled launch.",
+      );
+      yield* Effect.logInfo(
+        `Workspace ${workspace.id}: ${input.payload.ownerUserId} stopped run ${latestRunId} before its image was built; its build job ${cancelled.id} was cancelled and nothing launches.`,
+      );
+      const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "cancelled" };
       return response;
     }
-
-    const latestRunId = workspace.latestRunId;
-    if (latestRunId === null) {
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} has no launched runtime to stop yet.`,
-      });
+    // A launch whose build failed (or was cancelled by an earlier stop) ended before any
+    // runtime: nothing runs and nothing will, so the stop has nothing to do. Refusing it as
+    // "still launching" left a caller retrying a stop that could never be accepted.
+    if (latestJob?.status === "failed") {
+      const response: StopWorkspaceResponse = {
+        workspaceId: workspace.id,
+        status: latestJob.errorCode === "launch-stopped" ? "cancelled" : "failed",
+      };
+      return response;
     }
-
-    // Stop targets a live runtime. Before its image is built there is none: the launch's build
-    // job is cancelled instead (the worker building it stops at its next progress write, and its
-    // fenced success can no longer land), and the run ends `cancelled`. After a failed build
-    // there is nothing to stop, and the stop answers so. Between a build that succeeded and the
-    // runtime's first row there is still nothing to stop: that is refused, as the launch would
-    // race a recorded stop.
-    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
-    const instance = yield* withInternalError(
-      runtimeInstances
-        .getRuntimeInstanceByRunId(latestRunId)
-        .pipe(Effect.flatMap(currentWorkspaceRuntime)),
-      "Failed to load the workspace runtime.",
-    );
-    if (instance === undefined) {
-      const jobs = yield* WorkspaceBuildJobRepo;
-      const latestJob = yield* withInternalError(
-        jobs.getLatestJobByRunId(latestRunId),
-        "Failed to load the workspace build job.",
-      );
-      const cancelled =
-        latestJob === undefined || (latestJob.status !== "queued" && latestJob.status !== "running")
-          ? null
-          : yield* withInternalError(
-              jobs.cancelUnbuiltJob({
-                id: latestJob.id,
-                errorCode: "launch-stopped",
-                errorMessage:
-                  "The workspace was stopped before its image was built; nothing was launched.",
-              }),
-              "Failed to cancel the workspace build job.",
-            );
-      if (cancelled !== null) {
-        yield* withInternalError(
-          (yield* WorkspaceAttemptRepo).markAttemptCancelled({
-            id: latestRunId,
-            cancelReason: "stopped before its image was built",
-          }),
-          "Failed to record the cancelled launch.",
-        );
-        yield* Effect.logInfo(
-          `Workspace ${workspace.id}: ${input.payload.ownerUserId} stopped run ${latestRunId} before its image was built; its build job ${cancelled.id} was cancelled and nothing launches.`,
-        );
-        const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "cancelled" };
-        return response;
-      }
-      // A launch whose build failed (or was cancelled by an earlier stop) ended before any
-      // runtime: nothing runs and nothing will, so the stop has nothing to do. Refusing it as
-      // "still launching" left a caller retrying a stop that could never be accepted.
-      if (latestJob?.status === "failed") {
-        const response: StopWorkspaceResponse = {
-          workspaceId: workspace.id,
-          status: latestJob.errorCode === "launch-stopped" ? "cancelled" : "failed",
-        };
-        return response;
-      }
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} is still launching; stop it once the runtime is up.`,
-      });
-    }
-
-    // The control plane that owns the capture store attests a sealed FINAL of the executor:
-    // recorded only when it names THIS executor and nothing sealant observed from it contradicts it
-    // (an older epoch, a later capture, or a report that its work is not saved made after the
-    // seal: received evidence beats stored evidence), and then it lets that executor's disk go
-    // once it has ended.
-    let completion: StopWorkspaceResponse["completion"];
-    if (attestation !== undefined) {
-      const drains = yield* WorkspaceCaptureDrainRepo;
-      const existing = yield* withInternalError(
-        drains.getByRunId(latestRunId),
-        "Failed to load workspace capture drain.",
-      );
-      const attempt = yield* withInternalError(
-        (yield* WorkspaceAttemptRepo).getAttemptById(latestRunId),
-        "Failed to load the workspace attempt.",
-      );
-      const sealedAtMs =
-        attestation.sealedAt === undefined ? undefined : Date.parse(attestation.sealedAt);
-      const covers =
-        sealedAtMs !== undefined && Number.isNaN(sealedAtMs)
-          ? {
-              covers: false as const,
-              reason: `the attestation's seal time (${attestation.sealedAt ?? ""}) is not a time`,
-            }
-          : attestationCoversLaunch(
-              attestation,
-              attempt?.launchId ?? null,
-              // The seal must cover every unsaved answer on record no later one covers, not
-              // only the latest (review 9 #4).
-              attestationCoversObservations(
-                {
-                  executorId: attestation.executorId,
-                  epoch: attestation.epoch,
-                  captureN: attestation.captureN,
-                  sealedAtMs,
-                  origin: attestation.origin,
-                },
-                {
-                  runId: latestRunId,
-                  resourceId: instance.resourceId,
-                  reference: instance.reference,
-                },
-                observedCaptureFromStored(existing?.lastStatus, existing?.lastStatusAt?.getTime()),
-                (existing?.unsavedStatuses ?? []).map((member) =>
-                  observedCaptureFromStored(member.status, undefined),
-                ),
-              ),
-            );
-      if (covers.covers) {
-        yield* withInternalError(
-          drains.attestCompletion({
-            runId: latestRunId,
-            executorId: attestation.executorId,
-            epoch: attestation.epoch,
-            captureN: attestation.captureN,
-            attestedBy: input.payload.ownerUserId,
-            ...(attestation.launchId === undefined ? {} : { launchId: attestation.launchId }),
-            ...(sealedAtMs === undefined ? {} : { sealedAt: new Date(sealedAtMs) }),
-            ...(attestation.origin === undefined ? {} : { origin: { ...attestation.origin } }),
-          }),
-          "Failed to record the completion attestation.",
-        );
-        completion = { outcome: "accepted" };
-        yield* Effect.logInfo(
-          `Workspace ${workspace.id}: ${input.payload.ownerUserId} attested a sealed final capture of run ${latestRunId}'s executor ${attestation.executorId} (epoch ${String(attestation.epoch)}, capture ${String(attestation.captureN)}); recorded.`,
-        );
-      } else {
-        completion = { outcome: "ignored", detail: covers.reason };
-        yield* Effect.logWarning(
-          `Workspace ${workspace.id}: a completion attestation for run ${latestRunId} was ignored: ${covers.reason}. The executor is kept until its work is confirmed saved.`,
-        );
-      }
-    }
-
-    if (discard) {
-      // The audit, and the durable intent every stop path honours (the lifecycle stop, and the
-      // reaper that re-drives a lost one): the owner asked to discard this runtime's unsaved
-      // captures. This is the request; the worker records the termination once it happened.
-      const drains = yield* WorkspaceCaptureDrainRepo;
-      yield* withInternalError(
-        drains.requestDiscard({ runId: latestRunId, requestedBy: input.payload.ownerUserId }),
-        "Failed to record the discard of the workspace's unsaved captures.",
-      );
-      yield* Effect.logWarning(
-        `Workspace ${workspace.id}: owner ${input.payload.ownerUserId} requested that the unsaved captures of run ${latestRunId} be discarded (discard requested); the stop is enqueued, and the worker ends the runtime without a drain.`,
-      );
-    }
-
-    // Durable stop intent BEFORE the enqueue: the stored "stopped" status is the reaper's
-    // convergence anchor. If the queue message is lost or dead-letters, the expiry reaper sees a
-    // live container on a stopped workspace and re-drives the teardown — the container can never
-    // outlive an acknowledged stop.
-    const workspaces = yield* WorkspaceRepo;
-    yield* withInternalError(
-      workspaces.setWorkspaceStatus({ id: workspace.id, status: "stopped" }),
-      "Failed to record the workspace stop.",
-    );
-
-    const publisher = yield* WorkspaceLifecyclePublisherService;
-    const requestTrace = yield* currentTraceCarrier;
-    yield* Effect.tryPromise({
-      try: () =>
-        publisher.publishStopRequested({
-          workspaceId: workspace.id,
-          runId: latestRunId,
-          stopReason: "user",
-          trace: requestTrace,
-        }),
-      catch: (error) =>
-        // The intent is already recorded, so even on 502 the reaper converges the container;
-        // the error still surfaces because the broker being down is worth knowing about.
-        new WorkspaceBadGatewayError({
-          message: toErrorMessage(error, "Failed to enqueue the workspace stop."),
-        }),
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} is still launching; stop it once the runtime is up.`,
     });
+  }
 
-    const response: StopWorkspaceResponse = {
-      workspaceId: workspace.id,
-      status: mapStoredWorkspaceStatus(workspace.status),
-      ...(completion === undefined ? {} : { completion }),
-    };
-    return response;
+  // The control plane that owns the capture store attests a sealed FINAL of the executor:
+  // recorded only when it names THIS executor and nothing sealant observed from it contradicts it
+  // (an older epoch, a later capture, or a report that its work is not saved made after the
+  // seal: received evidence beats stored evidence), and then it lets that executor's disk go
+  // once it has ended.
+  let completion: StopWorkspaceResponse["completion"];
+  if (attestation !== undefined) {
+    const drains = yield* WorkspaceCaptureDrainRepo;
+    const existing = yield* withInternalError(
+      drains.getByRunId(latestRunId),
+      "Failed to load workspace capture drain.",
+    );
+    const attempt = yield* withInternalError(
+      (yield* WorkspaceAttemptRepo).getAttemptById(latestRunId),
+      "Failed to load the workspace attempt.",
+    );
+    const sealedAtMs =
+      attestation.sealedAt === undefined ? undefined : Date.parse(attestation.sealedAt);
+    const covers =
+      sealedAtMs !== undefined && Number.isNaN(sealedAtMs)
+        ? {
+            covers: false as const,
+            reason: `the attestation's seal time (${attestation.sealedAt ?? ""}) is not a time`,
+          }
+        : attestationCoversLaunch(
+            attestation,
+            attempt?.launchId ?? null,
+            // The seal must cover every unsaved answer on record no later one covers, not
+            // only the latest (review 9 #4).
+            attestationCoversObservations(
+              {
+                executorId: attestation.executorId,
+                epoch: attestation.epoch,
+                captureN: attestation.captureN,
+                sealedAtMs,
+                origin: attestation.origin,
+              },
+              {
+                runId: latestRunId,
+                resourceId: instance.resourceId,
+                reference: instance.reference,
+              },
+              observedCaptureFromStored(existing?.lastStatus, existing?.lastStatusAt?.getTime()),
+              (existing?.unsavedStatuses ?? []).map((member) =>
+                observedCaptureFromStored(member.status, undefined),
+              ),
+            ),
+          );
+    if (covers.covers) {
+      yield* withInternalError(
+        drains.attestCompletion({
+          runId: latestRunId,
+          executorId: attestation.executorId,
+          epoch: attestation.epoch,
+          captureN: attestation.captureN,
+          attestedBy: input.payload.ownerUserId,
+          ...(attestation.launchId === undefined ? {} : { launchId: attestation.launchId }),
+          ...(sealedAtMs === undefined ? {} : { sealedAt: new Date(sealedAtMs) }),
+          ...(attestation.origin === undefined ? {} : { origin: { ...attestation.origin } }),
+        }),
+        "Failed to record the completion attestation.",
+      );
+      completion = { outcome: "accepted" };
+      yield* Effect.logInfo(
+        `Workspace ${workspace.id}: ${input.payload.ownerUserId} attested a sealed final capture of run ${latestRunId}'s executor ${attestation.executorId} (epoch ${String(attestation.epoch)}, capture ${String(attestation.captureN)}); recorded.`,
+      );
+    } else {
+      completion = { outcome: "ignored", detail: covers.reason };
+      yield* Effect.logWarning(
+        `Workspace ${workspace.id}: a completion attestation for run ${latestRunId} was ignored: ${covers.reason}. The executor is kept until its work is confirmed saved.`,
+      );
+    }
+  }
+
+  if (discard) {
+    // The audit, and the durable intent every stop path honours (the lifecycle stop, and the
+    // reaper that re-drives a lost one): the owner asked to discard this runtime's unsaved
+    // captures. This is the request; the worker records the termination once it happened.
+    const drains = yield* WorkspaceCaptureDrainRepo;
+    yield* withInternalError(
+      drains.requestDiscard({ runId: latestRunId, requestedBy: input.payload.ownerUserId }),
+      "Failed to record the discard of the workspace's unsaved captures.",
+    );
+    yield* Effect.logWarning(
+      `Workspace ${workspace.id}: owner ${input.payload.ownerUserId} requested that the unsaved captures of run ${latestRunId} be discarded (discard requested); the stop is enqueued, and the worker ends the runtime without a drain.`,
+    );
+  }
+
+  // Durable stop intent BEFORE the enqueue: the stored "stopped" status is the reaper's
+  // convergence anchor. If the queue message is lost or dead-letters, the expiry reaper sees a
+  // live container on a stopped workspace and re-drives the teardown — the container can never
+  // outlive an acknowledged stop.
+  const workspaces = yield* WorkspaceRepo;
+  yield* withInternalError(
+    workspaces.setWorkspaceStatus({ id: workspace.id, status: "stopped" }),
+    "Failed to record the workspace stop.",
+  );
+
+  const publisher = yield* WorkspaceLifecyclePublisherService;
+  const requestTrace = yield* currentTraceCarrier;
+  yield* Effect.tryPromise({
+    try: () =>
+      publisher.publishStopRequested({
+        workspaceId: workspace.id,
+        runId: latestRunId,
+        stopReason: "user",
+        trace: requestTrace,
+      }),
+    catch: (error) =>
+      // The intent is already recorded, so even on 502 the reaper converges the container;
+      // the error still surfaces because the broker being down is worth knowing about.
+      new WorkspaceBadGatewayError({
+        message: toErrorMessage(error, "Failed to enqueue the workspace stop."),
+      }),
   });
-};
+
+  const response: StopWorkspaceResponse = {
+    workspaceId: workspace.id,
+    status: mapStoredWorkspaceStatus(workspace.status),
+    ...(completion === undefined ? {} : { completion }),
+  };
+  return response;
+});
 
 /**
  * Async recover (202): make a recovery attempt of the workspace's RETAINED executor due now (its
@@ -3892,53 +3871,51 @@ export const stopWorkspace = (input: {
  * can (Docker), drains it with a FINAL flush and only then removes it; elsewhere it reports what
  * can be done. Nothing retained for the current run = `not-retained`, nothing done.
  */
-export const recoverWorkspace = (input: {
+export const recoverWorkspace = Effect.fn("sealant.workspace.recover")(function* (input: {
   readonly workspaceId: string;
   readonly payload: RecoverWorkspaceRequest;
-}) => {
-  return Effect.gen(function* () {
-    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
-    const latestRunId = workspace.latestRunId;
-    if (latestRunId === null) {
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} has never launched a runtime.`,
-      });
-    }
-    const drains = yield* WorkspaceCaptureDrainRepo;
-    const row = yield* withInternalError(
-      drains.requestRecovery(latestRunId),
-      "Failed to request the recovery of the workspace's retained executor.",
-    );
-    if (row === undefined) {
-      const response: RecoverWorkspaceResponse = {
-        workspaceId: workspace.id,
-        state: "not-retained",
-      };
-      return response;
-    }
-    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
-    const instance = yield* withInternalError(
-      runtimeInstances
-        .getRuntimeInstanceByRunId(latestRunId)
-        .pipe(Effect.flatMap(currentWorkspaceRuntime)),
-      "Failed to load the workspace runtime.",
-    );
-    const recoverable = runtimeRestartsRetainedExecutors(instance?.adapter);
-    // Recorded, or read off the endpoint of an executor launched before it was recorded.
-    const controlScope = recordedControlScope(instance);
-    yield* Effect.logWarning(
-      `Workspace ${workspace.id}: ${input.payload.ownerUserId} asked to recover run ${latestRunId}'s retained executor (${instance?.adapter ?? "unknown runtime"}); a recovery attempt is due now${recoverable ? "" : " (this runtime cannot restart it; it is reported and kept)"}.`,
-    );
+}) {
+  const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+  const latestRunId = workspace.latestRunId;
+  if (latestRunId === null) {
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} has never launched a runtime.`,
+    });
+  }
+  const drains = yield* WorkspaceCaptureDrainRepo;
+  const row = yield* withInternalError(
+    drains.requestRecovery(latestRunId),
+    "Failed to request the recovery of the workspace's retained executor.",
+  );
+  if (row === undefined) {
     const response: RecoverWorkspaceResponse = {
       workspaceId: workspace.id,
-      state: "requested",
-      recoverable,
-      // A recovery boot dials only capture.sock in it.
-      ...(controlScope === undefined ? {} : { controlScope }),
+      state: "not-retained",
     };
     return response;
-  });
-};
+  }
+  const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+  const instance = yield* withInternalError(
+    runtimeInstances
+      .getRuntimeInstanceByRunId(latestRunId)
+      .pipe(Effect.flatMap(currentWorkspaceRuntime)),
+    "Failed to load the workspace runtime.",
+  );
+  const recoverable = runtimeRestartsRetainedExecutors(instance?.adapter);
+  // Recorded, or read off the endpoint of an executor launched before it was recorded.
+  const controlScope = recordedControlScope(instance);
+  yield* Effect.logWarning(
+    `Workspace ${workspace.id}: ${input.payload.ownerUserId} asked to recover run ${latestRunId}'s retained executor (${instance?.adapter ?? "unknown runtime"}); a recovery attempt is due now${recoverable ? "" : " (this runtime cannot restart it; it is reported and kept)"}.`,
+  );
+  const response: RecoverWorkspaceResponse = {
+    workspaceId: workspace.id,
+    state: "requested",
+    recoverable,
+    // A recovery boot dials only capture.sock in it.
+    ...(controlScope === undefined ? {} : { controlScope }),
+  };
+  return response;
+});
 
 /**
  * Async restart (202): stop the current runtime (if any) and drive a fresh launch from the same
@@ -3946,286 +3923,280 @@ export const recoverWorkspace = (input: {
  * FIRST so a failure leaves the workspace untouched; a failure after it leaves the workspace
  * stopped (honest state, retryable), never two live containers.
  */
-export const restartWorkspace = (input: {
+export const restartWorkspace = Effect.fn("sealant.workspace.restart")(function* (input: {
   readonly workspaceId: string;
   readonly payload: RestartWorkspaceRequest;
-}) => {
-  return Effect.gen(function* () {
-    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+}) {
+  const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
 
-    if (workspace.latestRunId === null) {
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} has never launched; there is no recorded spec to relaunch from.`,
-      });
-    }
-    const previousRunId = workspace.latestRunId;
-
-    const workspaces = yield* WorkspaceRepo;
-    const workspaceAttempts = yield* WorkspaceAttemptRepo;
-    const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
-
-    const previousAttempt = yield* withInternalError(
-      workspaceAttempts.getAttemptById(previousRunId),
-      "Failed to load the latest workspace attempt.",
-    );
-    if (previousAttempt?.status === "queued" || previousAttempt?.status === "running") {
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} is mid-launch; wait for the current attempt to finish before restarting.`,
-      });
-    }
-
-    const previousJob = yield* withInternalError(
-      workspaceBuildJobs.getLatestJobByRunId(previousRunId),
-      "Failed to load the latest workspace build job.",
-    );
-    const snapshot = yield* withInternalError(
-      workspaceAttempts.getAttemptSnapshotByRunId(previousRunId),
-      "Failed to load the workspace attempt snapshot.",
-    );
-
-    const specPayload =
-      snapshot?.resolvedSpecPayload ?? snapshot?.userSpecPayload ?? previousJob?.requestPayload;
-    if (previousJob === undefined || specPayload === undefined) {
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} has no recorded spec to relaunch from.`,
-      });
-    }
-    const recordedSpec = yield* parseWorkspaceSpec(specPayload);
-    const previousScope = previousJob.imageScope;
-    const imageScope = yield* authorizeImageScope({
-      ownerUserId: input.payload.ownerUserId,
-      ...(previousScope?.kind === "resource-domain"
-        ? { imageScopeId: previousScope.domainId }
-        : {}),
+  if (workspace.latestRunId === null) {
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} has never launched; there is no recorded spec to relaunch from.`,
     });
-    if (previousScope?.kind === "owner" && previousScope.ownerUserId !== input.payload.ownerUserId)
-      return yield* new WorkspaceNotFoundError({ message: "Image scope not found." });
-    const runtimeFamily =
-      recordedSpec.target.runtime.family === "auto"
-        ? env.DEFAULT_RUNTIME_ADAPTER
-        : recordedSpec.target.runtime.family;
-    // The worker launches the recorded spec under the workspace's pinned policy ("Apply updated
-    // policy" replaces it), so that effective spec is what the runtime table judges. Stored host
-    // revocations need a proxy as well: only a proxy refuses a host. All before a launch is spent
-    // or the old executor is stopped.
-    const egress = yield* WorkspaceEgressRepo;
-    const pinnedPolicy = yield* withInternalError(
-      egress.getPolicy(workspace.id),
-      "Failed to load the workspace's network policy.",
-    );
-    const launchedSpec = yield* Effect.try({
-      try: () => withPinnedEgressPolicy(recordedSpec, pinnedPolicy),
-      catch: (error) =>
-        new WorkspaceInternalServerError({
-          message: toErrorMessage(error, "The workspace's stored network policy does not parse."),
-        }),
+  }
+  const previousRunId = workspace.latestRunId;
+
+  const workspaces = yield* WorkspaceRepo;
+  const workspaceAttempts = yield* WorkspaceAttemptRepo;
+  const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
+
+  const previousAttempt = yield* withInternalError(
+    workspaceAttempts.getAttemptById(previousRunId),
+    "Failed to load the latest workspace attempt.",
+  );
+  if (previousAttempt?.status === "queued" || previousAttempt?.status === "running") {
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} is mid-launch; wait for the current attempt to finish before restarting.`,
     });
-    yield* refuseUnsupportedRuntimeRequest(runtimeFamily, launchedSpec);
-    const tombstones = yield* withInternalError(
-      egress.tombstones(workspace.id),
-      "Failed to load the workspace's revocations.",
-    );
-    const hostRefusal =
-      tombstones.revokedHosts.length > 0
-        ? hostRevocationRefusal(runtimeFamily, launchedSpec)
-        : undefined;
-    if (hostRefusal !== undefined) {
-      return yield* new WorkspaceRuntimeRequirementUnsupportedError({
-        message: `Workspace ${input.workspaceId} holds revoked hosts (${tombstones.revokedHosts.join(", ")}). ${hostRefusal}`,
-        code: "runtime-requirement-unsupported",
-      });
-    }
-    if (runtimeFamily === BOAT_RUNTIME_ID) yield* requireBoatConfigured;
-    // A restart runs in the account the workspace was created in: one removed since is refused.
-    yield* requireBoatAccount(recordedSpec, runtimeFamily);
+  }
 
-    // The snapshot never carries the dotfiles archive payloads (`snapshotSpecOf`); the previous
-    // build job does. Relaunch with them, so the restarted workspace applies the same dotfiles
-    // and its image plan keeps the managers they need (tar, chezmoi, stow).
-    const dotfilesArchives =
-      recordedSpec.runtime.dotfilesArchives.length > 0
-        ? recordedSpec.runtime.dotfilesArchives
-        : yield* recordedDotfilesArchives(workspace.id, previousJob.requestPayload);
-    const spec: NewWorkspace = {
-      ...recordedSpec,
-      runtime: { ...recordedSpec.runtime, dotfilesArchives },
-    };
-    // A relaunch mints credentials again from the recorded spec, so the recorded spec is checked
-    // like a submitted one. A spec stored before refs were bound to their URL (CORE-05) may name a
-    // destination the ref was never issued for; it is refused here, not relaunched.
-    yield* validateClientSuppliedAuthRefs({ ownerUserId: input.payload.ownerUserId, spec }).pipe(
-      Effect.catchTags({
-        WorkspaceForbiddenError: (error) =>
-          Effect.fail(
-            new WorkspaceConflictError({
-              message: `Workspace ${input.workspaceId} cannot be restarted from its recorded spec: ${error.message}`,
-            }),
-          ),
-      }),
-    );
-    if (spec.sources.workspace.kind === "capture") {
-      // The session credential was sealed for the launch and cleared once it settled; a relaunch
-      // would boot with no channel credential. Replacement is a new workspace with a fresh token.
-      return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} is capture-sourced and cannot be restarted in place: its session credential is not retained. Create a replacement workspace with a fresh captureToken.`,
-      });
-    }
+  const previousJob = yield* withInternalError(
+    workspaceBuildJobs.getLatestJobByRunId(previousRunId),
+    "Failed to load the latest workspace build job.",
+  );
+  const snapshot = yield* withInternalError(
+    workspaceAttempts.getAttemptSnapshotByRunId(previousRunId),
+    "Failed to load the workspace attempt snapshot.",
+  );
 
-    // Budgets last among the refusals, as in create. A restart brings a settled workspace back to life: it needs room and spends a launch.
-    if (
-      workspace.status !== "queued" &&
-      workspace.status !== "running" &&
-      workspace.status !== "ready"
-    ) {
-      yield* requireLiveWorkspaceRoom(input.payload.ownerUserId);
-    }
-    yield* spendOwnerLaunch(input.payload.ownerUserId);
-
-    // Stop the old runtime first (idempotent in the worker even if it already stopped/failed).
-    const lifecyclePublisher = yield* WorkspaceLifecyclePublisherService;
-    const requestTrace = yield* currentTraceCarrier;
-    yield* Effect.tryPromise({
-      try: () =>
-        lifecyclePublisher.publishStopRequested({
-          workspaceId: workspace.id,
-          runId: previousRunId,
-          stopReason: "user",
-          trace: requestTrace,
-        }),
-      catch: (error) =>
-        new WorkspaceBadGatewayError({
-          message: toErrorMessage(error, "Failed to enqueue the workspace stop for restart."),
-        }),
+  const specPayload =
+    snapshot?.resolvedSpecPayload ?? snapshot?.userSpecPayload ?? previousJob?.requestPayload;
+  if (previousJob === undefined || specPayload === undefined) {
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} has no recorded spec to relaunch from.`,
     });
-
-    const runId = yield* randomId;
-    const jobId = yield* randomId;
-    // A fresh tag per rebuild: re-pushing the previous tag would make the prior attempt's recorded
-    // `publishedReference` resolve to a different digest than its recorded `publishedDigest`,
-    // quietly corrupting that run's audit trail. Restarts of restarts replace the suffix instead
-    // of compounding it.
-    const restartTag = `${previousJob.tag.replace(/-r-[0-9a-f]{8}$/, "")}-r-${runId.slice(0, 8)}`;
-    // Restart resets the TTL clock like a fresh create (otherwise restarting an EXPIRED workspace
-    // hands the reaper a runtime that is already past its expiry and it dies on the next tick).
-    const ttlSeconds = env.SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS;
-    const expiresAt = ttlSeconds === undefined ? null : new Date(Date.now() + ttlSeconds * 1000);
-
-    const persistenceResult = yield* Effect.result(
-      Effect.gen(function* () {
-        const attempt = yield* workspaceAttempts.createQueuedAttempt({
-          id: runId,
-          ownerUserId: workspace.ownerUserId,
-          ...(workspace.repositoryId === null ? {} : { repositoryId: workspace.repositoryId }),
-          triggerType: "api",
-          requestedByUserId: input.payload.ownerUserId,
-        });
-
-        yield* workspaces.linkWorkspaceAttempt({
-          workspaceId: workspace.id,
-          attemptId: attempt.id,
-          relation: "rebuild",
-        });
-
-        yield* workspaceAttempts.setAttemptSnapshot({
-          runId: attempt.id,
-          specPayload: snapshotSpecOf(spec),
-        });
-
-        yield* workspaceBuildJobs.insertQueuedJob({
-          id: jobId,
-          runId: attempt.id,
-          registryId: previousJob.registryId,
-          imageScope,
-          repository: previousJob.repository,
-          tag: restartTag,
-          requestPayload: spec,
-        });
-
-        yield* workspaces.setWorkspaceExpiry({ id: workspace.id, expiresAt });
-        yield* workspaces.setWorkspaceStatus({ id: workspace.id, status: "queued" });
-      }),
-    );
-
-    if (Result.isFailure(persistenceResult)) {
-      return yield* new WorkspaceInternalServerError({
-        message: toErrorMessage(persistenceResult.failure, "Failed to record the restart."),
-      });
-    }
-
-    const workspaceBuildJobPublisher = yield* WorkspaceBuildJobPublisherService;
-    // The restart's stop half (above) and its new build share this request's trace.
-    const buildTrace = yield* currentTraceCarrier;
-    yield* Effect.tryPromise({
-      try: () => workspaceBuildJobPublisher.publishRequested({ jobId, trace: buildTrace }),
-      catch: (error) => error,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.gen(function* () {
-          yield* Effect.all(
-            [
-              workspaceBuildJobs.markJobFailed({
-                id: jobId,
-                errorCode: "queue_publish_failed",
-                errorMessage: toErrorMessage(error, "Failed to enqueue workspace build job."),
-              }),
-              workspaceAttempts.markAttemptFailed({ id: runId }),
-              workspaces.setWorkspaceStatus({ id: workspace.id, status: "failed" }),
-            ],
-            { concurrency: "unbounded" },
-          ).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning(
-                `Workspace ${workspace.id} rollback writes failed after restart publish failure; state may be inconsistent.`,
-                cause,
-              ),
-            ),
-          );
-
-          return yield* new WorkspaceBadGatewayError({
-            message: `Workspace ${workspace.id} restart was recorded but could not be queued.`,
-          });
-        }),
-      ),
-    );
-
-    const response: RestartWorkspaceResponse = {
-      workspaceId: workspace.id,
-      runId,
-      status: "queued",
-    };
-    return response;
+  }
+  const recordedSpec = yield* parseWorkspaceSpec(specPayload);
+  const previousScope = previousJob.imageScope;
+  const imageScope = yield* authorizeImageScope({
+    ownerUserId: input.payload.ownerUserId,
+    ...(previousScope?.kind === "resource-domain" ? { imageScopeId: previousScope.domainId } : {}),
   });
-};
+  if (previousScope?.kind === "owner" && previousScope.ownerUserId !== input.payload.ownerUserId)
+    return yield* new WorkspaceNotFoundError({ message: "Image scope not found." });
+  const runtimeFamily =
+    recordedSpec.target.runtime.family === "auto"
+      ? env.DEFAULT_RUNTIME_ADAPTER
+      : recordedSpec.target.runtime.family;
+  // The worker launches the recorded spec under the workspace's pinned policy ("Apply updated
+  // policy" replaces it), so that effective spec is what the runtime table judges. Stored host
+  // revocations need a proxy as well: only a proxy refuses a host. All before a launch is spent
+  // or the old executor is stopped.
+  const egress = yield* WorkspaceEgressRepo;
+  const pinnedPolicy = yield* withInternalError(
+    egress.getPolicy(workspace.id),
+    "Failed to load the workspace's network policy.",
+  );
+  const launchedSpec = yield* Effect.try({
+    try: () => withPinnedEgressPolicy(recordedSpec, pinnedPolicy),
+    catch: (error) =>
+      new WorkspaceInternalServerError({
+        message: toErrorMessage(error, "The workspace's stored network policy does not parse."),
+      }),
+  });
+  yield* refuseUnsupportedRuntimeRequest(runtimeFamily, launchedSpec);
+  const tombstones = yield* withInternalError(
+    egress.tombstones(workspace.id),
+    "Failed to load the workspace's revocations.",
+  );
+  const hostRefusal =
+    tombstones.revokedHosts.length > 0
+      ? hostRevocationRefusal(runtimeFamily, launchedSpec)
+      : undefined;
+  if (hostRefusal !== undefined) {
+    return yield* new WorkspaceRuntimeRequirementUnsupportedError({
+      message: `Workspace ${input.workspaceId} holds revoked hosts (${tombstones.revokedHosts.join(", ")}). ${hostRefusal}`,
+      code: "runtime-requirement-unsupported",
+    });
+  }
+  if (runtimeFamily === BOAT_RUNTIME_ID) yield* requireBoatConfigured;
+  // A restart runs in the account the workspace was created in: one removed since is refused.
+  yield* requireBoatAccount(recordedSpec, runtimeFamily);
+
+  // The snapshot never carries the dotfiles archive payloads (`snapshotSpecOf`); the previous
+  // build job does. Relaunch with them, so the restarted workspace applies the same dotfiles
+  // and its image plan keeps the managers they need (tar, chezmoi, stow).
+  const dotfilesArchives =
+    recordedSpec.runtime.dotfilesArchives.length > 0
+      ? recordedSpec.runtime.dotfilesArchives
+      : yield* recordedDotfilesArchives(workspace.id, previousJob.requestPayload);
+  const spec: NewWorkspace = {
+    ...recordedSpec,
+    runtime: { ...recordedSpec.runtime, dotfilesArchives },
+  };
+  // A relaunch mints credentials again from the recorded spec, so the recorded spec is checked
+  // like a submitted one. A spec stored before refs were bound to their URL (CORE-05) may name a
+  // destination the ref was never issued for; it is refused here, not relaunched.
+  yield* validateClientSuppliedAuthRefs({ ownerUserId: input.payload.ownerUserId, spec }).pipe(
+    Effect.catchTags({
+      WorkspaceForbiddenError: (error) =>
+        Effect.fail(
+          new WorkspaceConflictError({
+            message: `Workspace ${input.workspaceId} cannot be restarted from its recorded spec: ${error.message}`,
+          }),
+        ),
+    }),
+  );
+  if (spec.sources.workspace.kind === "capture") {
+    // The session credential was sealed for the launch and cleared once it settled; a relaunch
+    // would boot with no channel credential. Replacement is a new workspace with a fresh token.
+    return yield* new WorkspaceConflictError({
+      message: `Workspace ${input.workspaceId} is capture-sourced and cannot be restarted in place: its session credential is not retained. Create a replacement workspace with a fresh captureToken.`,
+    });
+  }
+
+  // Budgets last among the refusals, as in create. A restart brings a settled workspace back to life: it needs room and spends a launch.
+  if (
+    workspace.status !== "queued" &&
+    workspace.status !== "running" &&
+    workspace.status !== "ready"
+  ) {
+    yield* requireLiveWorkspaceRoom(input.payload.ownerUserId);
+  }
+  yield* spendOwnerLaunch(input.payload.ownerUserId);
+
+  // Stop the old runtime first (idempotent in the worker even if it already stopped/failed).
+  const lifecyclePublisher = yield* WorkspaceLifecyclePublisherService;
+  const requestTrace = yield* currentTraceCarrier;
+  yield* Effect.tryPromise({
+    try: () =>
+      lifecyclePublisher.publishStopRequested({
+        workspaceId: workspace.id,
+        runId: previousRunId,
+        stopReason: "user",
+        trace: requestTrace,
+      }),
+    catch: (error) =>
+      new WorkspaceBadGatewayError({
+        message: toErrorMessage(error, "Failed to enqueue the workspace stop for restart."),
+      }),
+  });
+
+  const runId = yield* randomId;
+  const jobId = yield* randomId;
+  // A fresh tag per rebuild: re-pushing the previous tag would make the prior attempt's recorded
+  // `publishedReference` resolve to a different digest than its recorded `publishedDigest`,
+  // quietly corrupting that run's audit trail. Restarts of restarts replace the suffix instead
+  // of compounding it.
+  const restartTag = `${previousJob.tag.replace(/-r-[0-9a-f]{8}$/, "")}-r-${runId.slice(0, 8)}`;
+  // Restart resets the TTL clock like a fresh create (otherwise restarting an EXPIRED workspace
+  // hands the reaper a runtime that is already past its expiry and it dies on the next tick).
+  const ttlSeconds = env.SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS;
+  const expiresAt = ttlSeconds === undefined ? null : new Date(Date.now() + ttlSeconds * 1000);
+
+  const persistenceResult = yield* Effect.result(
+    Effect.gen(function* () {
+      const attempt = yield* workspaceAttempts.createQueuedAttempt({
+        id: runId,
+        ownerUserId: workspace.ownerUserId,
+        ...(workspace.repositoryId === null ? {} : { repositoryId: workspace.repositoryId }),
+        triggerType: "api",
+        requestedByUserId: input.payload.ownerUserId,
+      });
+
+      yield* workspaces.linkWorkspaceAttempt({
+        workspaceId: workspace.id,
+        attemptId: attempt.id,
+        relation: "rebuild",
+      });
+
+      yield* workspaceAttempts.setAttemptSnapshot({
+        runId: attempt.id,
+        specPayload: snapshotSpecOf(spec),
+      });
+
+      yield* workspaceBuildJobs.insertQueuedJob({
+        id: jobId,
+        runId: attempt.id,
+        registryId: previousJob.registryId,
+        imageScope,
+        repository: previousJob.repository,
+        tag: restartTag,
+        requestPayload: spec,
+      });
+
+      yield* workspaces.setWorkspaceExpiry({ id: workspace.id, expiresAt });
+      yield* workspaces.setWorkspaceStatus({ id: workspace.id, status: "queued" });
+    }),
+  );
+
+  if (Result.isFailure(persistenceResult)) {
+    return yield* new WorkspaceInternalServerError({
+      message: toErrorMessage(persistenceResult.failure, "Failed to record the restart."),
+    });
+  }
+
+  const workspaceBuildJobPublisher = yield* WorkspaceBuildJobPublisherService;
+  // The restart's stop half (above) and its new build share this request's trace.
+  const buildTrace = yield* currentTraceCarrier;
+  yield* Effect.tryPromise({
+    try: () => workspaceBuildJobPublisher.publishRequested({ jobId, trace: buildTrace }),
+    catch: (error) => error,
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.gen(function* () {
+        yield* Effect.all(
+          [
+            workspaceBuildJobs.markJobFailed({
+              id: jobId,
+              errorCode: "queue_publish_failed",
+              errorMessage: toErrorMessage(error, "Failed to enqueue workspace build job."),
+            }),
+            workspaceAttempts.markAttemptFailed({ id: runId }),
+            workspaces.setWorkspaceStatus({ id: workspace.id, status: "failed" }),
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Workspace ${workspace.id} rollback writes failed after restart publish failure; state may be inconsistent.`,
+              cause,
+            ),
+          ),
+        );
+
+        return yield* new WorkspaceBadGatewayError({
+          message: `Workspace ${workspace.id} restart was recorded but could not be queued.`,
+        });
+      }),
+    ),
+  );
+
+  const response: RestartWorkspaceResponse = {
+    workspaceId: workspace.id,
+    runId,
+    status: "queued",
+  };
+  return response;
+});
 
 /** Synchronous: set (ttlSeconds from now), clear (null), or trigger (omitted = now) the TTL. */
-export const expireWorkspace = (input: {
+export const expireWorkspace = Effect.fn("sealant.workspace.expire")(function* (input: {
   readonly workspaceId: string;
   readonly payload: ExpireWorkspaceRequest;
-}) => {
-  return Effect.gen(function* () {
-    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+}) {
+  const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
 
-    const ttlSeconds = input.payload.ttlSeconds;
-    const expiresAt =
-      ttlSeconds === null
-        ? null
-        : ttlSeconds === undefined
-          ? new Date()
-          : new Date(Date.now() + ttlSeconds * 1000);
+  const ttlSeconds = input.payload.ttlSeconds;
+  const expiresAt =
+    ttlSeconds === null
+      ? null
+      : ttlSeconds === undefined
+        ? new Date()
+        : new Date(Date.now() + ttlSeconds * 1000);
 
-    const workspaces = yield* WorkspaceRepo;
-    yield* withInternalError(
-      workspaces.setWorkspaceExpiry({ id: workspace.id, expiresAt }),
-      "Failed to set the workspace expiry.",
-    );
+  const workspaces = yield* WorkspaceRepo;
+  yield* withInternalError(
+    workspaces.setWorkspaceExpiry({ id: workspace.id, expiresAt }),
+    "Failed to set the workspace expiry.",
+  );
 
-    const response: ExpireWorkspaceResponse = {
-      workspaceId: workspace.id,
-      expiresAt: expiresAt === null ? null : expiresAt.toISOString(),
-    };
-    return response;
-  });
-};
+  const response: ExpireWorkspaceResponse = {
+    workspaceId: workspace.id,
+    expiresAt: expiresAt === null ? null : expiresAt.toISOString(),
+  };
+  return response;
+});
 
 /**
  * What a create would build, read before the create (Mend ADR 0016): the spec is planned exactly as
@@ -4234,8 +4205,8 @@ export const expireWorkspace = (input: {
  * worker's: its Docker daemon's, which is this machine's where they share a host, or what
  * SEALANT_WORKSPACE_IMAGE_PLATFORM pins for both.
  */
-export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspaceImageRequest }) =>
-  Effect.gen(function* () {
+export const inspectWorkspaceImage = Effect.fn("sealant.workspace.inspect_image")(
+  function* (input: { readonly payload: InspectWorkspaceImageRequest }) {
     const body = input.payload;
     if (body.registryId !== env.REGISTRY_NAME) {
       return yield* new WorkspaceNotFoundError({ message: `Unknown registry: ${body.registryId}` });
@@ -4324,4 +4295,5 @@ export const inspectWorkspaceImage = (input: { readonly payload: InspectWorkspac
           context,
         ),
     } satisfies InspectWorkspaceImageResponse;
-  });
+  },
+);

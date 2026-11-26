@@ -55,27 +55,28 @@ const toWire = (domain: ResourceDomainRecord): ResourceDomainWire => ({
 
 const internal = (message: string) => () => new ResourceDomainInternalServerError({ message });
 
-export const ensureResourceDomain = (payload: EnsureResourceDomainRequest) =>
-  Effect.gen(function* () {
-    yield* requireServiceKey;
-    const repo = yield* ResourceDomainRepo;
-    const ensured = yield* repo
-      .ensure(payload.key, payload.budget, payload.ownerKind)
-      .pipe(Effect.mapError(internal("Failed to ensure the resource domain.")));
-    if (ensured.kind === "owner-differs")
-      return yield* new ResourceDomainOwnerDiffersError({
-        message: "This scope key belongs to another owner kind.",
-      });
-    if (ensured.kind === "budget-differs") {
-      return yield* new ResourceDomainBudgetDiffersError({
-        message:
-          "This resource domain exists with another budget, and ensuring it never changes one: set its budget at its revision.",
-        resourceDomainId: ensured.domain.id,
-        revision: ensured.revision,
-      });
-    }
-    return { ...toWire(ensured.domain), created: ensured.created };
-  });
+export const ensureResourceDomain = Effect.fn("sealant.resource_domain.ensure")(function* (
+  payload: EnsureResourceDomainRequest,
+) {
+  yield* requireServiceKey;
+  const repo = yield* ResourceDomainRepo;
+  const ensured = yield* repo
+    .ensure(payload.key, payload.budget, payload.ownerKind)
+    .pipe(Effect.mapError(internal("Failed to ensure the resource domain.")));
+  if (ensured.kind === "owner-differs")
+    return yield* new ResourceDomainOwnerDiffersError({
+      message: "This scope key belongs to another owner kind.",
+    });
+  if (ensured.kind === "budget-differs") {
+    return yield* new ResourceDomainBudgetDiffersError({
+      message:
+        "This resource domain exists with another budget, and ensuring it never changes one: set its budget at its revision.",
+      resourceDomainId: ensured.domain.id,
+      revision: ensured.revision,
+    });
+  }
+  return { ...toWire(ensured.domain), created: ensured.created };
+});
 
 const loadDomain = (resourceDomainId: string) =>
   Effect.gen(function* () {
@@ -119,42 +120,41 @@ const budgetToWire = ({ budget, revision, charge }: ResourceDomainBudgetRecord) 
   } satisfies ResourceDomainBudgetWire;
 };
 
-export const getResourceDomainBudget = (resourceDomainId: string) =>
-  Effect.gen(function* () {
-    yield* requireServiceKey;
-    const repo = yield* ResourceDomainRepo;
-    const record = yield* repo
-      .getBudget(resourceDomainId)
-      .pipe(Effect.mapError(internal("Failed to read the resource domain's budget.")));
-    if (record === undefined) {
-      return yield* new ResourceDomainNotFoundError({ message: "Resource domain not found." });
-    }
-    return budgetToWire(record);
-  });
+export const getResourceDomainBudget = Effect.fn("sealant.resource_domain.get_budget")(function* (
+  resourceDomainId: string,
+) {
+  yield* requireServiceKey;
+  const repo = yield* ResourceDomainRepo;
+  const record = yield* repo
+    .getBudget(resourceDomainId)
+    .pipe(Effect.mapError(internal("Failed to read the resource domain's budget.")));
+  if (record === undefined) {
+    return yield* new ResourceDomainNotFoundError({ message: "Resource domain not found." });
+  }
+  return budgetToWire(record);
+});
 
-export const setResourceDomainBudget = (
+export const setResourceDomainBudget = Effect.fn("sealant.resource_domain.set_budget")(function* (
   resourceDomainId: string,
   { revision, ...budget }: SetResourceDomainBudgetRequest,
-) =>
-  Effect.gen(function* () {
-    yield* requireServiceKey;
-    const repo = yield* ResourceDomainRepo;
-    const outcome = yield* repo
-      .setBudget({ resourceDomainId, revision, budget })
-      .pipe(Effect.mapError(internal("Failed to set the resource domain's budget.")));
-    switch (outcome.kind) {
-      case "no-such-domain":
-        return yield* new ResourceDomainNotFoundError({ message: "Resource domain not found." });
-      case "stale":
-        return yield* new ResourceDomainBudgetRevisionConflictError({
-          message:
-            "The budget changed since that revision was read, so this change changed nothing.",
-          revision: outcome.revision,
-        });
-      case "set":
-        return budgetToWire(outcome.record);
-    }
-  });
+) {
+  yield* requireServiceKey;
+  const repo = yield* ResourceDomainRepo;
+  const outcome = yield* repo
+    .setBudget({ resourceDomainId, revision, budget })
+    .pipe(Effect.mapError(internal("Failed to set the resource domain's budget.")));
+  switch (outcome.kind) {
+    case "no-such-domain":
+      return yield* new ResourceDomainNotFoundError({ message: "Resource domain not found." });
+    case "stale":
+      return yield* new ResourceDomainBudgetRevisionConflictError({
+        message: "The budget changed since that revision was read, so this change changed nothing.",
+        revision: outcome.revision,
+      });
+    case "set":
+      return budgetToWire(outcome.record);
+  }
+});
 
 const memberToWire = (member: ResourceDomainMemberRecord): ResourceDomainMemberWire => ({
   userId: member.userId,
@@ -163,12 +163,12 @@ const memberToWire = (member: ResourceDomainMemberRecord): ResourceDomainMemberW
   updatedAt: member.updatedAt.toISOString(),
 });
 
-export const decideResourceDomainMember = (
-  params: { readonly resourceDomainId: string; readonly userId: string },
-  state: ResourceDomainMemberRecord["state"],
-  version: number,
-) =>
-  Effect.gen(function* () {
+export const decideResourceDomainMember = Effect.fn("sealant.resource_domain.decide_member")(
+  function* (
+    params: { readonly resourceDomainId: string; readonly userId: string },
+    state: ResourceDomainMemberRecord["state"],
+    version: number,
+  ) {
     yield* loadDomain(params.resourceDomainId);
     const repo = yield* ResourceDomainRepo;
     const outcome = yield* repo
@@ -186,15 +186,13 @@ export const decideResourceDomainMember = (
           current: { state: outcome.current.state, version: outcome.current.version },
         });
     }
-  });
+  },
+);
 
 const noPerson = () => new ResourceDomainPersonNotFoundError({ message: "No person has this id." });
 
-export const getResourceDomainMember = (params: {
-  readonly resourceDomainId: string;
-  readonly userId: string;
-}) =>
-  Effect.gen(function* () {
+export const getResourceDomainMember = Effect.fn("sealant.resource_domain.get_member")(
+  function* (params: { readonly resourceDomainId: string; readonly userId: string }) {
     yield* loadDomain(params.resourceDomainId);
     const repo = yield* ResourceDomainRepo;
     const lookup = yield* repo
@@ -210,13 +208,11 @@ export const getResourceDomainMember = (params: {
           message: "This person has no decision in this resource domain.",
         });
     }
-  });
+  },
+);
 
-export const listResourceDomainMembers = (
-  resourceDomainId: string,
-  query: ListResourceDomainMembersQuery,
-) =>
-  Effect.gen(function* () {
+export const listResourceDomainMembers = Effect.fn("sealant.resource_domain.list_members")(
+  function* (resourceDomainId: string, query: ListResourceDomainMembersQuery) {
     yield* loadDomain(resourceDomainId);
     const repo = yield* ResourceDomainRepo;
     const page = yield* repo
@@ -230,4 +226,5 @@ export const listResourceDomainMembers = (
       items: page.members.map(memberToWire),
       ...(page.next === undefined ? {} : { nextCursor: page.next }),
     };
-  });
+  },
+);

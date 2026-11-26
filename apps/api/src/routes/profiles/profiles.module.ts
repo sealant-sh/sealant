@@ -101,35 +101,32 @@ const credentialBindingsResponse = (profileId: string) => {
   });
 };
 
-export const listProfiles = (input: { readonly ownerUserId: string }) => {
-  return Effect.gen(function* () {
-    const profileRepo = yield* ProfileRepo;
-
-    const items = yield* withInternalError(
-      profileRepo.listProfilesByOwner({ ownerUserId: input.ownerUserId }),
-      "Failed to list profiles.",
-    );
-
-    return { items: items.map(toProfileSummary) } satisfies ListProfilesResponse;
-  });
-};
-
-export const listProfileCredentialBindings = (input: {
-  readonly profileId: string;
+export const listProfiles = Effect.fn("sealant.profile.list")(function* (input: {
   readonly ownerUserId: string;
-}) => {
-  return Effect.gen(function* () {
+}) {
+  const profileRepo = yield* ProfileRepo;
+
+  const items = yield* withInternalError(
+    profileRepo.listProfilesByOwner({ ownerUserId: input.ownerUserId }),
+    "Failed to list profiles.",
+  );
+
+  return { items: items.map(toProfileSummary) } satisfies ListProfilesResponse;
+});
+
+export const listProfileCredentialBindings = Effect.fn("sealant.profile.list_credential_bindings")(
+  function* (input: { readonly profileId: string; readonly ownerUserId: string }) {
     const profile = yield* requireOwnedProfile(input);
 
     return yield* credentialBindingsResponse(profile.id);
-  });
-};
+  },
+);
 
-export const setProfileCredentialBinding = (input: {
-  readonly profileId: string;
-  readonly payload: SetProfileCredentialBindingRequest;
-}) => {
-  return Effect.gen(function* () {
+export const setProfileCredentialBinding = Effect.fn("sealant.profile.set_credential_binding")(
+  function* (input: {
+    readonly profileId: string;
+    readonly payload: SetProfileCredentialBindingRequest;
+  }) {
     const profile = yield* requireOwnedProfile({
       profileId: input.profileId,
       ownerUserId: input.payload.ownerUserId,
@@ -182,5 +179,5 @@ export const setProfileCredentialBinding = (input: {
     );
 
     return yield* credentialBindingsResponse(profile.id);
-  });
-};
+  },
+);

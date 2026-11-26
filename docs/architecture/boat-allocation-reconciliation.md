@@ -92,9 +92,9 @@ persistence, changed boot refusal and pagination. The worker assembly builds aga
 infrastructure. These checks make no new live-provider claim.
 
 The orders the tests do not pin are model-checked: a TLA+ model of the run's row, the launch, the
-sweeps, the removal and Boat (`docs/formal/boat-custody/`, run by the `boat-custody` skill)
-checks that no absence is committed while Boat may hold a VM for the run. Its record lists the
-schedules where main can still break that, and the assumptions it makes about Boat.
+sweeps, the removal and Boat (`docs/formal/boat-custody/`, run by the `boat-custody` skill) checks
+that no absence is committed while Boat may hold a VM for the run. Its record lists the schedules
+where main can still break that, and the assumptions it makes about Boat.
 
 [Worker/resource reconciliation](boat-resource-reconciliation.md) now connects the held execution to
 host and guest network setup. Continue with authenticated readiness, then FINAL close/exclusion and
