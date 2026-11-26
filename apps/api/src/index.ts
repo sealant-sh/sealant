@@ -10,6 +10,7 @@ import {
   observabilitySettingFromEnv,
   observedLive,
   observedMain,
+  UntracedProbesLive,
   withSentryTraceFallback,
 } from "@sealant/observability";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
@@ -401,6 +402,8 @@ const serverLayer = HttpRouter.serve(appLayer, {
   Layer.provide(
     CodexApiKeyConversionLive.pipe(Layer.provide(Layer.merge(databaseLayer, credentialCipher))),
   ),
+  // Health and readiness polls start no trace of their own (one would land in Sentry per poll).
+  Layer.provide(UntracedProbesLive),
   Layer.provide(observedLive(observability)),
 );
 

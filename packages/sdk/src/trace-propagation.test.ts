@@ -158,7 +158,8 @@ describe("SDK calls continue the caller's trace", () => {
     expect(Object.fromEntries(sdkSpan?.attributes ?? [])).toEqual({
       "sealant.workspace_id": "ws_1",
       "sentry.op": "sealant.sdk",
-      "sentry.description": "sealant.sdk.workspaces.get_workspace",
+      "sentry.description": "get workspace",
+      "code.function.name": "sealant.sdk.workspaces.get_workspace",
     });
     // The header names a span the tracer made under the SDK's span, in the caller's trace.
     const wire = traceparentOf(s.received[0]);

@@ -42,6 +42,7 @@ import {
   type WorkspaceLaunchCredentialInjection,
   workspaceCredentialHomeProviderValues,
 } from "@sealant/db";
+import { withProcessObservers } from "@sealant/observability";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import {
   nativeArtifactConsumerSchema,
@@ -55,7 +56,17 @@ import {
   type WorkspaceCredentialsHome,
   type WorkspaceImageProbe,
 } from "@sealant/validators";
-import { Clock, Deferred, Effect, Exit, Layer, Option, Result, Schedule } from "effect";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Result,
+  Schedule,
+  type Tracer,
+} from "effect";
 import { z } from "zod";
 
 import { nativeWorkspaceInstallation } from "../buildkit/buildkit-builder.js";
@@ -193,6 +204,11 @@ export interface ProcessWorkspaceBuildJobOptions {
    * Absent: the sweep's next tick, as always.
    */
   readonly onLaunchRetained?: (runId: string, adapter: RuntimeAdapterId) => void;
+  /**
+   * The delivery's span (`sealant.job.process`): the build, its launch and the daemon's boot are
+   * traced beneath it, so they join the trace of the create or restart that queued the job.
+   */
+  readonly parentSpan?: Tracer.AnySpan;
 }
 
 /** How often a build in progress records what it is doing, when the worker names nothing else. */
@@ -278,7 +294,10 @@ const keepRecoveryCredential = (input: {
   });
 
 /** Options for the Effect-native pipeline: repositories come from context, not `db`. */
-export type ProcessWorkspaceBuildJobEffectOptions = Omit<ProcessWorkspaceBuildJobOptions, "db">;
+export type ProcessWorkspaceBuildJobEffectOptions = Omit<
+  ProcessWorkspaceBuildJobOptions,
+  "db" | "parentSpan"
+>;
 
 type LaunchFields = Omit<RuntimeLaunch<WorkspacePublication>, "publication">;
 interface PreparedPublication {
@@ -668,7 +687,7 @@ const attemptPlanHashReuse = (input: {
  * Both phases share best-effort cleanup (record a failed runtime instance, mark the attempt
  * failed) that never masks the originating error.
  */
-export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJob")(function* (
+export const processWorkspaceBuildJobEffect = Effect.fn("sealant.workspace.build")(function* (
   options: ProcessWorkspaceBuildJobEffectOptions,
 ) {
   const jobs = yield* WorkspaceBuildJobRepo;
@@ -688,8 +707,8 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   }
 
   yield* Effect.annotateCurrentSpan({
-    jobId: job.id,
-    ...(job.runId === null ? {} : { runId: job.runId }),
+    "sealant.job_id": job.id,
+    ...(job.runId === null ? {} : { "sealant.run_id": job.runId }),
   });
 
   // This worker's claim on the job. A build can outlive its claim lease, and another worker then
@@ -1646,6 +1665,15 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   });
 
   yield* Effect.scoped(launchAndRecord).pipe(
+    // The adapter reads this span as the launch's (`withLaunchTelemetry`), so the daemon's boot
+    // continues it.
+    Effect.withSpan("sealant.workspace.launch", {
+      attributes: {
+        "sealant.job_id": job.id,
+        "sealant.runtime.adapter": prepared.adapterId,
+        ...(job.runId === null ? {} : { "sealant.run_id": job.runId }),
+      },
+    }),
     Effect.onInterrupt(() => retainOnInterrupt),
     Effect.tapError(launchFailureCleanup),
     // A successful boot has consumed only the secret file; stop owns the remaining dotfiles cleanup.
@@ -1764,7 +1792,12 @@ export const processWorkspaceBuildJob = (
     DatabaseTransactionLive,
   ).pipe(Layer.provide(dbLayer));
 
+  const program = processWorkspaceBuildJobEffect(options).pipe(Effect.provide(dataAccessLayer));
   return Effect.runPromise(
-    processWorkspaceBuildJobEffect(options).pipe(Effect.provide(dataAccessLayer)),
+    withProcessObservers(
+      options.parentSpan === undefined
+        ? program
+        : Effect.withParentSpan(program, options.parentSpan),
+    ),
   );
 };

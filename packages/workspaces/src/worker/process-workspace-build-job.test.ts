@@ -49,7 +49,18 @@ import {
 } from "@sealant/db/testing/rows";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewWorkspace, WorkspaceBuild, WorkspaceImageProbe } from "@sealant/validators";
-import { Cause, Effect, Exit, Fiber, Layer, Predicate, Result } from "effect";
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Predicate,
+  Result,
+  Tracer,
+} from "effect";
 import { vi } from "vitest";
 
 import { planWorkspaceImageBuild } from "../buildkit/index.js";
@@ -209,6 +220,14 @@ const createRuntimeAdapterStub = (
       })),
   };
 };
+
+/** A span's name; an external span (a remote parent) has none. */
+const spanName = (span: Tracer.AnySpan | undefined): string | undefined =>
+  span !== undefined && "name" in span ? span.name : undefined;
+
+/** The span a local span was started under. */
+const parentOfSpan = (span: Tracer.AnySpan | undefined): Tracer.AnySpan | undefined =>
+  span !== undefined && "parent" in span ? Option.getOrUndefined(span.parent) : undefined;
 
 const probeOf = (supports: readonly string[]): WorkspaceImageProbe => ({
   version: 1,
@@ -1470,6 +1489,65 @@ describe("processWorkspaceBuildJobEffect", () => {
     }).pipe(
       Effect.provide(
         provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect("launches inside the build's span, as its launch, beneath the caller's span", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () =>
+        buildJobRow({
+          id: "job_traced",
+          runId: null,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        }),
+    });
+    // The span current when the adapter's launch starts: the one the daemon's boot continues.
+    let launching: Tracer.AnySpan | undefined;
+    const runtimeAdapter = createRuntimeAdapterStub("docker", {
+      launch: vi.fn(async () => {
+        const fiber = Fiber.getCurrent();
+        launching =
+          fiber === undefined
+            ? undefined
+            : Context.getOrUndefined(fiber.context, Tracer.ParentSpan);
+        return {
+          adapter: "docker" as const,
+          resourceId: "resource_123",
+          reference: "sealant-resource",
+          status: "running" as const,
+        };
+      }),
+    });
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_traced",
+          runtimeAdapters: [runtimeAdapter],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.withSpan("sealant.job.process"));
+
+      const build = parentOfSpan(launching);
+      const delivery = parentOfSpan(build);
+      expect([launching, build, delivery].map(spanName)).toEqual([
+        "sealant.workspace.launch",
+        "sealant.workspace.build",
+        "sealant.job.process",
+      ]);
+      expect(launching?.traceId).toBe(delivery?.traceId);
+    }).pipe(
+      Effect.provide(
+        provideRepos({
+          jobs,
+          runtimeInstances: workspaceRuntimeInstanceRepoStub(),
+          attempts: workspaceAttemptRepoStub(),
+          installations: githubInstallationRepoStub(),
+          installationRepositories: githubInstallationRepositoryCacheStub(),
+        }),
       ),
     );
   });

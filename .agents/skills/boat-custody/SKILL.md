@@ -26,8 +26,8 @@ before you judge a counterexample.
 **Coverage and sync commit: `docs/formal/boat-custody/COVERAGE`.** It lists the covered files and
 the commit the models were last confirmed to describe (`sync`). sealant#648's change since
 (`markReplay` and `recordFirstCreateRefused`, the fix of P1-A) is mirrored in `BoatRunLedger.tla`.
-The hunks sealant#641 made in the covered files (each object's wallet, the `unreachable` absence)
-are not yet read against the models: read them before you move this commit.
+sealant#641's hunks (each object's wallet, the `unreachable` absence) were read against the models
+at SLNT-1377; the record says what they change and why the `unreachable` absence stays out.
 
 ## 1. Does the change touch it?
 
