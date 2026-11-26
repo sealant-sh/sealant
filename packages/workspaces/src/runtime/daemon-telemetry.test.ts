@@ -41,7 +41,7 @@ describe("a launch's daemon telemetry", () => {
   const config = daemonSentryConfigFromEnv({
     SEALANTD_SENTRY_DSN: DSN,
     SEALANTD_SENTRY_ENVIRONMENT: "check",
-    SEALANTD_SENTRY_RELEASE: "sealantd@0.21.0-next.215",
+    SEALANTD_SENTRY_RELEASE: "sealantd@0.21.0-next.217",
   });
 
   it("is the SEALANT_-prefixed names sealantd reads, never the image's own SENTRY_DSN", () => {
@@ -49,7 +49,7 @@ describe("a launch's daemon telemetry", () => {
       ["SEALANT_TRACEPARENT", TRACEPARENT],
       ["SEALANT_SENTRY_DSN", DSN],
       ["SEALANT_SENTRY_ENVIRONMENT", "check"],
-      ["SEALANT_SENTRY_RELEASE", "sealantd@0.21.0-next.215"],
+      ["SEALANT_SENTRY_RELEASE", "sealantd@0.21.0-next.217"],
     ]);
   });
 

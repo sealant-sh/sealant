@@ -40,11 +40,11 @@ import {
 } from "./proxy-admin-client.js";
 
 /**
- * The proxy image (`SEALANT_EGRESS_PROXY_IMAGE` replaces it): sealantd 0.21.0-next.215's
+ * The proxy image (`SEALANT_EGRESS_PROXY_IMAGE` replaces it): sealantd 0.21.0-next.217's
  * multi-arch `egress-proxy-next`, pinned by digest.
  */
 export const DEFAULT_EGRESS_PROXY_IMAGE =
-  "ghcr.io/sealant-sh/egress-proxy-next:0.21.0-next.215@sha256:8c977da64675f307221a4b001a7bcdf83dc93153830be07e86ee81c8e5f6dc0c";
+  "ghcr.io/sealant-sh/egress-proxy-next:0.21.0-next.217@sha256:62d65f7e53c8c4dced9c00ff6896b90509ddf82d410e8e5f3f1af81a52f32da2";
 
 /** The proxy image's user: the admin socket's directory is handed to it. */
 export const EGRESS_PROXY_UID = 65_532;
