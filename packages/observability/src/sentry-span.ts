@@ -225,6 +225,12 @@ export const sentryAttributes = (
   const dbSystem = stringAttribute(attributes, "db.system.name");
   const shaped: Record<string, string> = {};
 
+  if (name === "sql.transaction") {
+    shaped["sentry.op"] = explicitOp ?? "db.sql.transaction";
+    shaped["sentry.description"] = explicitDescription ?? "transaction";
+    return keepExplicit(shaped, attributes);
+  }
+
   if (dbSystem !== undefined) {
     const query = stringAttribute(attributes, "db.query.text");
     const summary = query === undefined ? undefined : summarizeSql(query);
@@ -238,12 +244,6 @@ export const sentryAttributes = (
     }
     shaped["sentry.description"] =
       explicitDescription ?? summary?.summary ?? `${dbSystem} ${name}`.trim();
-    return keepExplicit(shaped, attributes);
-  }
-
-  if (name === "sql.transaction") {
-    shaped["sentry.op"] = explicitOp ?? "db.sql.transaction";
-    shaped["sentry.description"] = explicitDescription ?? "transaction";
     return keepExplicit(shaped, attributes);
   }
 

@@ -177,7 +177,9 @@ describe("sentryAttributes", () => {
   });
 
   it("names a transaction", () => {
-    expect(sentryAttributes("sql.transaction", "client", attrs({}))).toEqual({
+    expect(
+      sentryAttributes("sql.transaction", "client", attrs({ "db.system.name": "postgresql" })),
+    ).toEqual({
       "sentry.op": "db.sql.transaction",
       "sentry.description": "transaction",
     });
