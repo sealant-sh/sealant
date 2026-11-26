@@ -221,6 +221,14 @@ const createRuntimeAdapterStub = (
   };
 };
 
+/** A span's name; an external span (a remote parent) has none. */
+const spanName = (span: Tracer.AnySpan | undefined): string | undefined =>
+  span !== undefined && "name" in span ? span.name : undefined;
+
+/** The span a local span was started under. */
+const parentOfSpan = (span: Tracer.AnySpan | undefined): Tracer.AnySpan | undefined =>
+  span !== undefined && "parent" in span ? Option.getOrUndefined(span.parent) : undefined;
+
 const probeOf = (supports: readonly string[]): WorkspaceImageProbe => ({
   version: 1,
   tools: {
@@ -1513,8 +1521,6 @@ describe("processWorkspaceBuildJobEffect", () => {
         };
       }),
     });
-    const parentName = (span: Tracer.AnySpan | undefined) =>
-      span?._tag === "Span" ? Option.getOrUndefined(span.parent) : undefined;
 
     return Effect.gen(function* () {
       yield* processWorkspaceBuildJobEffect(
@@ -1525,13 +1531,13 @@ describe("processWorkspaceBuildJobEffect", () => {
         }),
       ).pipe(Effect.withSpan("sealant.job.process"));
 
-      const build = parentName(launching);
-      expect(launching?._tag === "Span" ? launching.name : undefined).toBe(
+      const build = parentOfSpan(launching);
+      const delivery = parentOfSpan(build);
+      expect([launching, build, delivery].map(spanName)).toEqual([
         "sealant.workspace.launch",
-      );
-      expect(build?._tag === "Span" ? build.name : undefined).toBe("sealant.workspace.build");
-      const delivery = parentName(build);
-      expect(delivery?._tag === "Span" ? delivery.name : undefined).toBe("sealant.job.process");
+        "sealant.workspace.build",
+        "sealant.job.process",
+      ]);
       expect(launching?.traceId).toBe(delivery?.traceId);
     }).pipe(
       Effect.provide(
