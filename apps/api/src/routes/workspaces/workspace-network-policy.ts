@@ -171,11 +171,11 @@ const reachesWorkspace = (
   });
 };
 
-export const applyWorkspaceNetworkPolicy = (input: {
-  readonly workspaceId: string;
-  readonly payload: ApplyWorkspaceNetworkPolicyRequest;
-}) =>
-  Effect.gen(function* () {
+export const applyWorkspaceNetworkPolicy = Effect.fn("sealant.network_policy.apply_workspace")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly payload: ApplyWorkspaceNetworkPolicyRequest;
+  }) {
     const { payload } = input;
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, payload.ownerUserId);
     const brokeredSecrets = payload.brokeredSecrets ?? [];
@@ -261,13 +261,14 @@ export const applyWorkspaceNetworkPolicy = (input: {
         ? { enforcement: "next-start" as const }
         : outcomeFields(pushed.outcome)),
     } satisfies ApplyWorkspaceNetworkPolicyResponse;
-  });
+  },
+);
 
-export const revokeWorkspaceAccess = (input: {
-  readonly workspaceId: string;
-  readonly payload: RevokeWorkspaceAccessRequest;
-}) =>
-  Effect.gen(function* () {
+export const revokeWorkspaceAccess = Effect.fn("sealant.network_policy.revoke_workspace_access")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly payload: RevokeWorkspaceAccessRequest;
+  }) {
     const { payload } = input;
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, payload.ownerUserId);
     const egress = yield* WorkspaceEgressRepo;
@@ -355,7 +356,8 @@ export const revokeWorkspaceAccess = (input: {
       revocationWatermark,
       ...outcomeFields(outcome),
     } satisfies RevokeWorkspaceAccessResponse;
-  });
+  },
+);
 
 const proxyView = (proxy: WorkspaceEgressProxy): NonNullable<WorkspaceNetworkPolicy["proxy"]> => ({
   runId: proxy.runId,
@@ -365,11 +367,11 @@ const proxyView = (proxy: WorkspaceEgressProxy): NonNullable<WorkspaceNetworkPol
     : { confirmedRevocationWatermark: proxy.confirmedRevocationWatermark }),
 });
 
-export const getWorkspaceNetworkPolicy = (input: {
-  readonly workspaceId: string;
-  readonly query: GetWorkspaceNetworkPolicyQuery;
-}) =>
-  Effect.gen(function* () {
+export const getWorkspaceNetworkPolicy = Effect.fn("sealant.network_policy.get_workspace")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly query: GetWorkspaceNetworkPolicyQuery;
+  }) {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.query.ownerUserId);
     const egress = yield* WorkspaceEgressRepo;
     const policy = yield* withInternalError(
@@ -400,4 +402,5 @@ export const getWorkspaceNetworkPolicy = (input: {
       })),
       ...(proxy === undefined ? {} : { proxy: proxyView(proxy) }),
     } satisfies WorkspaceNetworkPolicy;
-  });
+  },
+);

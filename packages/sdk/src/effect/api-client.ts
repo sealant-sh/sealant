@@ -15,13 +15,15 @@ import { HttpApiClient } from "effect/http-api";
 
 import { resolveRequestPriority, type SealantInternalConfig } from "../internal/config.js";
 import type { RequestPriority } from "../types.js";
-import { CallerTraceState, DirectTraceparent, instrumentClient } from "./trace.js";
+import { CallerTraceState, DirectTraceparent, endpointRoutes, instrumentClient } from "./trace.js";
 
 /** A per-operation priority; providing it never changes concurrent requests. */
 export const CurrentRequestPriority = Context.Reference<RequestPriority | undefined>(
   "@sealant/sdk/CurrentRequestPriority",
   { defaultValue: () => undefined },
 );
+
+const CONTROL_PLANE_ROUTES = endpointRoutes(ControlPlaneAPI);
 
 /** Builds the contract-derived client. Requires an `HttpClient` in context (provided by the layer). */
 const buildControlPlaneClient = (config: SealantInternalConfig) => {
@@ -50,7 +52,7 @@ const buildControlPlaneClient = (config: SealantInternalConfig) => {
           }),
         ),
     }),
-    instrumentClient,
+    (client) => instrumentClient(client, CONTROL_PLANE_ROUTES),
   );
 };
 

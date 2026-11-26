@@ -57,105 +57,97 @@ const registrySendsBasicAuth = (): boolean =>
   (env.REGISTRY_BASE_URL !== undefined &&
     splitUrlUserinfo(env.REGISTRY_BASE_URL).username !== undefined);
 
-export const getRegistry = (registryId: string) => {
-  return Effect.gen(function* () {
-    yield* ensureRegistry(registryId);
+export const getRegistry = Effect.fn("sealant.registry.get")(function* (registryId: string) {
+  yield* ensureRegistry(registryId);
 
-    // No registry configured = the local Docker Engine store: images are tagged, not pushed.
-    return {
-      name: env.REGISTRY_NAME,
-      baseUrl: env.REGISTRY_BASE_URL === undefined ? "" : urlForDisplay(env.REGISTRY_BASE_URL),
-      pushRegistry: env.REGISTRY_PUSH_REGISTRY ?? "docker-engine",
-      hasBasicAuth: registrySendsBasicAuth(),
-    } satisfies RegistrySummary;
-  });
-};
+  // No registry configured = the local Docker Engine store: images are tagged, not pushed.
+  return {
+    name: env.REGISTRY_NAME,
+    baseUrl: env.REGISTRY_BASE_URL === undefined ? "" : urlForDisplay(env.REGISTRY_BASE_URL),
+    pushRegistry: env.REGISTRY_PUSH_REGISTRY ?? "docker-engine",
+    hasBasicAuth: registrySendsBasicAuth(),
+  } satisfies RegistrySummary;
+});
 
-export const pingRegistry = (registryId: string) => {
-  return Effect.gen(function* () {
-    const registryClient = yield* RegistryClientService;
-    yield* ensureRegistry(registryId);
-    yield* withRegistryFailure(
-      Effect.tryPromise({
-        try: () => registryClient.ping(),
-        catch: (error) => error,
-      }),
-    );
+export const pingRegistry = Effect.fn("sealant.registry.ping")(function* (registryId: string) {
+  const registryClient = yield* RegistryClientService;
+  yield* ensureRegistry(registryId);
+  yield* withRegistryFailure(
+    Effect.tryPromise({
+      try: () => registryClient.ping(),
+      catch: (error) => error,
+    }),
+  );
 
-    return {
-      name: env.REGISTRY_NAME,
-      reachable: true,
-    } satisfies RegistryPing;
-  });
-};
+  return {
+    name: env.REGISTRY_NAME,
+    reachable: true,
+  } satisfies RegistryPing;
+});
 
-export const listRegistryExtensions = (registryId: string) => {
-  return Effect.gen(function* () {
-    const registryClient = yield* RegistryClientService;
-    yield* ensureRegistry(registryId);
+export const listRegistryExtensions = Effect.fn("sealant.registry.list_extensions")(function* (
+  registryId: string,
+) {
+  const registryClient = yield* RegistryClientService;
+  yield* ensureRegistry(registryId);
 
-    const extensions = yield* withRegistryFailure(
-      Effect.tryPromise({
-        try: () => registryClient.discoverExtensions(),
-        catch: (error) => error,
-      }),
-    );
+  const extensions = yield* withRegistryFailure(
+    Effect.tryPromise({
+      try: () => registryClient.discoverExtensions(),
+      catch: (error) => error,
+    }),
+  );
 
-    return {
-      extensions,
-    } satisfies RegistryExtensionsResponse;
-  });
-};
+  return {
+    extensions,
+  } satisfies RegistryExtensionsResponse;
+});
 
-export const listRegistryTags = (input: {
+export const listRegistryTags = Effect.fn("sealant.registry.list_tags")(function* (input: {
   readonly registryId: string;
   readonly query: RegistryTagsQuery;
-}) => {
-  return Effect.gen(function* () {
-    const registryClient = yield* RegistryClientService;
-    yield* ensureRegistry(input.registryId);
+}) {
+  const registryClient = yield* RegistryClientService;
+  yield* ensureRegistry(input.registryId);
 
-    const tags = yield* withRegistryFailure(
-      Effect.tryPromise({
-        try: () => registryClient.listTags(input.query.repository),
-        catch: (error) => error,
-      }),
-    );
+  const tags = yield* withRegistryFailure(
+    Effect.tryPromise({
+      try: () => registryClient.listTags(input.query.repository),
+      catch: (error) => error,
+    }),
+  );
 
-    return {
-      repository: input.query.repository,
-      tags,
-    } satisfies RegistryTagsResponse;
-  });
-};
+  return {
+    repository: input.query.repository,
+    tags,
+  } satisfies RegistryTagsResponse;
+});
 
-export const getRegistryManifest = (input: {
+export const getRegistryManifest = Effect.fn("sealant.registry.get_manifest")(function* (input: {
   readonly registryId: string;
   readonly query: RegistryManifestQuery;
-}) => {
-  return Effect.gen(function* () {
-    const registryClient = yield* RegistryClientService;
-    yield* ensureRegistry(input.registryId);
+}) {
+  const registryClient = yield* RegistryClientService;
+  yield* ensureRegistry(input.registryId);
 
-    const manifest = yield* withRegistryFailure(
-      Effect.tryPromise({
-        try: () => registryClient.getManifest(input.query.repository, input.query.reference),
-        catch: (error) => error,
-      }),
-    );
+  const manifest = yield* withRegistryFailure(
+    Effect.tryPromise({
+      try: () => registryClient.getManifest(input.query.repository, input.query.reference),
+      catch: (error) => error,
+    }),
+  );
 
-    if (manifest === null) {
-      return yield* new RegistriesNotFoundError({
-        message: `Manifest not found for ${input.query.repository}:${input.query.reference}`,
-      });
-    }
+  if (manifest === null) {
+    return yield* new RegistriesNotFoundError({
+      message: `Manifest not found for ${input.query.repository}:${input.query.reference}`,
+    });
+  }
 
-    return {
-      repository: input.query.repository,
-      reference: input.query.reference,
-      ...(manifest.digest === undefined ? {} : { digest: manifest.digest }),
-      contentType: manifest.contentType,
-      manifest: manifest.body,
-    } satisfies RegistryManifestResponse;
-  });
-};
+  return {
+    repository: input.query.repository,
+    reference: input.query.reference,
+    ...(manifest.digest === undefined ? {} : { digest: manifest.digest }),
+    contentType: manifest.contentType,
+    manifest: manifest.body,
+  } satisfies RegistryManifestResponse;
+});

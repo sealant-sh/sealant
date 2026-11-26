@@ -238,6 +238,8 @@ describe("applyWorkspaceDotfiles", () => {
             bootstrap: true,
           },
         },
+        // The job continues the apply's trace.
+        trace: { traceparent: expect.stringMatching(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/) },
       },
     ]);
     // Nothing of an archive reaches the job.

@@ -176,32 +176,31 @@ const requireHome = (home: string) => {
 };
 
 /** The owner's workspace and the instance of its latest run (ready or not). */
-export const loadInstance = (input: {
+export const loadInstance = Effect.fn("sealant.credential.load_instance")(function* (input: {
   readonly workspaceId: string;
   readonly ownerUserId: string;
-}) =>
-  Effect.gen(function* () {
-    const workspace = yield* withInternalError(
-      (yield* WorkspaceRepo).getWorkspaceById(input.workspaceId),
-      "Failed to load workspace.",
-    );
-    if (workspace === undefined || workspace.ownerUserId !== input.ownerUserId) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${input.workspaceId}`,
-      });
-    }
-    const runId = workspace.latestRunId;
-    const instance =
-      runId === null
-        ? undefined
-        : yield* withInternalError(
-            (yield* WorkspaceRuntimeInstanceRepo)
-              .getRuntimeInstanceByRunId(runId)
-              .pipe(Effect.flatMap(currentWorkspaceRuntime)),
-            "Failed to load the workspace runtime.",
-          );
-    return { workspace, instance };
-  });
+}) {
+  const workspace = yield* withInternalError(
+    (yield* WorkspaceRepo).getWorkspaceById(input.workspaceId),
+    "Failed to load workspace.",
+  );
+  if (workspace === undefined || workspace.ownerUserId !== input.ownerUserId) {
+    return yield* new WorkspaceNotFoundError({
+      message: `Workspace not found: ${input.workspaceId}`,
+    });
+  }
+  const runId = workspace.latestRunId;
+  const instance =
+    runId === null
+      ? undefined
+      : yield* withInternalError(
+          (yield* WorkspaceRuntimeInstanceRepo)
+            .getRuntimeInstanceByRunId(runId)
+            .pipe(Effect.flatMap(currentWorkspaceRuntime)),
+          "Failed to load the workspace runtime.",
+        );
+  return { workspace, instance };
+});
 
 export const notRunning = (workspaceId: string) =>
   new WorkspaceConflictError({
@@ -209,17 +208,19 @@ export const notRunning = (workspaceId: string) =>
     code: "workspace-not-running",
   });
 
-export const targetFor = (workspaceId: string, instance: WorkspaceRuntimeInstance) =>
-  Effect.gen(function* () {
-    const target = sealantTargetForRuntimeInstance(instance, yield* requestTargetOptions);
-    return yield* target === undefined
-      ? Effect.fail(
-          new WorkspaceServiceUnavailableError({
-            message: `sealant has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime).`,
-          }),
-        )
-      : Effect.succeed(target);
-  });
+export const targetFor = Effect.fn("sealant.credential.target_for")(function* (
+  workspaceId: string,
+  instance: WorkspaceRuntimeInstance,
+) {
+  const target = sealantTargetForRuntimeInstance(instance, yield* requestTargetOptions);
+  return yield* target === undefined
+    ? Effect.fail(
+        new WorkspaceServiceUnavailableError({
+          message: `sealant has no way to reach workspace ${workspaceId}'s executor from here (its control client is not configured for this runtime).`,
+        }),
+      )
+    : Effect.succeed(target);
+});
 
 /**
  * A launch that named no home wrote its own logins at `$HOME`, root's home: that home is the
@@ -459,13 +460,13 @@ const refusedCode = (exitCode: number | undefined) =>
       ? "home-busy"
       : "home-unusable";
 
-export const putWorkspaceCredentials = (input: {
-  readonly workspaceId: string;
-  readonly payload: PutWorkspaceCredentialsRequest;
-  /** For tests; defaults to the live home channel. */
-  readonly homeChannel?: HomeCredentialChannel;
-}) =>
-  Effect.gen(function* () {
+export const putWorkspaceCredentials = Effect.fn("sealant.credential.put_workspace")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly payload: PutWorkspaceCredentialsRequest;
+    /** For tests; defaults to the live home channel. */
+    readonly homeChannel?: HomeCredentialChannel;
+  }) {
     yield* requireServiceKey;
     const payload = input.payload;
     yield* requireHome(payload.home);
@@ -721,7 +722,8 @@ export const putWorkspaceCredentials = (input: {
       home: answer.home,
       ...(payload.partial === true ? { skipped: answer.skipped } : {}),
     } satisfies PutWorkspaceCredentialsResponse;
-  });
+  },
+);
 
 const MAX_PUT_RESOLUTIONS_WHILE_REVISIONS_MOVE = 3;
 
@@ -751,13 +753,13 @@ const accountsMoved = (home: string) =>
     code: "home-busy",
   });
 
-export const releaseWorkspaceCredentials = (input: {
-  readonly workspaceId: string;
-  readonly query: ReleaseWorkspaceCredentialsQuery;
-  /** For tests; defaults to the live home channel. */
-  readonly homeChannel?: HomeCredentialChannel;
-}) =>
-  Effect.gen(function* () {
+export const releaseWorkspaceCredentials = Effect.fn("sealant.credential.release_workspace")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly query: ReleaseWorkspaceCredentialsQuery;
+    /** For tests; defaults to the live home channel. */
+    readonly homeChannel?: HomeCredentialChannel;
+  }) {
     yield* requireServiceKey;
     const { home, ownerUserId } = input.query;
     yield* requireHome(home);
@@ -839,13 +841,14 @@ export const releaseWorkspaceCredentials = (input: {
       home,
       released,
     } satisfies ReleaseWorkspaceCredentialsResponse;
-  });
+  },
+);
 
-export const listWorkspaceCredentials = (input: {
-  readonly workspaceId: string;
-  readonly query: ListWorkspaceCredentialsQuery;
-}) =>
-  Effect.gen(function* () {
+export const listWorkspaceCredentials = Effect.fn("sealant.credential.list_workspace")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly query: ListWorkspaceCredentialsQuery;
+  }) {
     yield* requireServiceKey;
     const { workspace, instance } = yield* loadInstance({
       workspaceId: input.workspaceId,
@@ -871,14 +874,15 @@ export const listWorkspaceCredentials = (input: {
       runId: instance.runId,
       homes,
     } satisfies ListWorkspaceCredentialsResponse;
-  });
+  },
+);
 
-export const pruneWorkspaceCredentials = (input: {
-  readonly workspaceId: string;
-  readonly payload: PruneWorkspaceCredentialsRequest;
-  readonly homeChannel?: HomeCredentialChannel;
-}) =>
-  Effect.gen(function* () {
+export const pruneWorkspaceCredentials = Effect.fn("sealant.credential.prune_workspace")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly payload: PruneWorkspaceCredentialsRequest;
+    readonly homeChannel?: HomeCredentialChannel;
+  }) {
     yield* requireServiceKey;
     const { home, live } = input.payload;
     yield* requireHome(home);
@@ -936,4 +940,5 @@ export const pruneWorkspaceCredentials = (input: {
       runId: instance.runId,
       ...(pruned === undefined ? {} : { home: pruned }),
     } satisfies PruneWorkspaceCredentialsResponse;
-  });
+  },
+);

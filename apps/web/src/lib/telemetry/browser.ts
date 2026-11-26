@@ -23,6 +23,7 @@ import {
   type BrowserTelemetryConfig,
 } from "./runtime-config";
 import { scrubPayload } from "./scrub";
+import { tidyTransaction } from "./tidy";
 
 /** Only this app's own tRPC endpoint, matched on the path of a same-origin request. */
 const TRACE_PROPAGATION_TARGETS = [/^\/api\/trpc(?:\/|$)/];
@@ -67,7 +68,7 @@ export const browserSentryOptions = (
   // `beforeSendSpan` only sees streamed spans; with the static lifecycle the transaction is the
   // payload, spans and all.
   // oxlint-disable-next-line typescript/no-deprecated
-  beforeSendTransaction: (event) => scrubPayload(event),
+  beforeSendTransaction: (event) => tidyTransaction(scrubPayload(event)),
   beforeBreadcrumb: (breadcrumb) =>
     breadcrumb.category === "console" ? null : scrubPayload(breadcrumb),
 });

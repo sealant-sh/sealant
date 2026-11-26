@@ -775,7 +775,17 @@ const withSealantError = <A, R>(
   operation: SealantOperation,
   effect: Effect.Effect<A, unknown, R>,
 ): Effect.Effect<A, SealantError, R> => {
-  return effect.pipe(Effect.mapError((cause) => mapSealantError(connection, operation, cause)));
+  const mapped = effect.pipe(
+    Effect.mapError((cause) => mapSealantError(connection, operation, cause)),
+  );
+  // `connect` only wraps the client around an open stream; its span is the connect's own.
+  return operation === "connect"
+    ? mapped
+    : Effect.withSpan(mapped, `sealant.daemon.${operation}`, {
+        kind: "client",
+        attributes: { "sealantd.method": operation },
+        captureStackTrace: false,
+      });
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1767,23 +1777,28 @@ const refuseUnboundForward = <
 
 const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeService => ({
   connect: (target) =>
-    Effect.gen(function* () {
-      const duplex = yield* transport.open(target);
-      const connection = watchConnection(duplex);
+    Effect.withSpan(
+      Effect.gen(function* () {
+        yield* Effect.annotateCurrentSpan("sealant.daemon.transport", target.kind);
+        const duplex = yield* transport.open(target);
+        const connection = watchConnection(duplex);
 
-      // Acquire the SDK client over the transport; release closes it (and lets the transport
-      // finalizer kill the child). Resource-safe regardless of how the scope unwinds.
-      const client = yield* Effect.acquireRelease(
-        withSealantError(
-          connection,
-          "connect",
-          Effect.sync(() => SealantClient.fromStream(duplex)),
-        ),
-        (c) => Effect.sync(() => c.close()),
-      );
+        // Acquire the SDK client over the transport; release closes it (and lets the transport
+        // finalizer kill the child). Resource-safe regardless of how the scope unwinds.
+        const client = yield* Effect.acquireRelease(
+          withSealantError(
+            connection,
+            "connect",
+            Effect.sync(() => SealantClient.fromStream(duplex)),
+          ),
+          (c) => Effect.sync(() => c.close()),
+        );
 
-      return makeSession(client, connection);
-    }),
+        return makeSession(client, connection);
+      }),
+      "sealant.daemon.connect",
+      { kind: "client", captureStackTrace: false },
+    ),
 
   openForwardConnection: (target, options) =>
     Effect.gen(function* () {

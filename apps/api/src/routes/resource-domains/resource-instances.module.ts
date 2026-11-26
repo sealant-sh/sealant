@@ -189,38 +189,40 @@ const reread = (instance: ResourceInstanceRecord) =>
   });
 
 /** Converge one instance to running, and record what the runtime saw. */
-export const startInstance = (runtime: ResourceRuntime, instance: ResourceInstanceRecord) =>
-  Effect.gen(function* () {
-    const repo = yield* ResourceInstanceRepo;
-    const executors = yield* repo
-      .linkedExecutors(instance.resourceDomainId)
-      .pipe(Effect.mapError(internal("Failed to read the domain's linked workspaces.")));
-    const budgets = yield* ResourceDomainRepo;
-    const accounting = makeResourceAccounting(repo, budgets);
-    const admitted = yield* accounting.admit(instance).pipe(
-      Effect.mapError((error) =>
-        error instanceof ResourceInstanceBudgetError
-          ? error
-          : new ResourceDomainInternalServerError({
-              message: "Failed to reserve the instance budget.",
-            }),
-      ),
-    );
-    const started = yield* docker("start the instance", () =>
-      runtime.up(admitted, desiredAttachments(executors, [admitted])),
-    );
-    if (started.state.kind === "running")
-      yield* accounting
-        .created(admitted)
-        .pipe(Effect.mapError(internal("Failed to confirm the instance budget.")));
-    yield* repo
-      .recordObserved(instance.id, started.state, {
-        ...(started.startedAt === undefined ? {} : { startedAt: started.startedAt }),
-        ...(started.volumes === undefined ? {} : { volumes: started.volumes }),
-      })
-      .pipe(Effect.mapError(internal("Failed to record the instance's state.")));
-    return yield* reread(instance);
-  });
+export const startInstance = Effect.fn("sealant.resource_instance.start")(function* (
+  runtime: ResourceRuntime,
+  instance: ResourceInstanceRecord,
+) {
+  const repo = yield* ResourceInstanceRepo;
+  const executors = yield* repo
+    .linkedExecutors(instance.resourceDomainId)
+    .pipe(Effect.mapError(internal("Failed to read the domain's linked workspaces.")));
+  const budgets = yield* ResourceDomainRepo;
+  const accounting = makeResourceAccounting(repo, budgets);
+  const admitted = yield* accounting.admit(instance).pipe(
+    Effect.mapError((error) =>
+      error instanceof ResourceInstanceBudgetError
+        ? error
+        : new ResourceDomainInternalServerError({
+            message: "Failed to reserve the instance budget.",
+          }),
+    ),
+  );
+  const started = yield* docker("start the instance", () =>
+    runtime.up(admitted, desiredAttachments(executors, [admitted])),
+  );
+  if (started.state.kind === "running")
+    yield* accounting
+      .created(admitted)
+      .pipe(Effect.mapError(internal("Failed to confirm the instance budget.")));
+  yield* repo
+    .recordObserved(instance.id, started.state, {
+      ...(started.startedAt === undefined ? {} : { startedAt: started.startedAt }),
+      ...(started.volumes === undefined ? {} : { volumes: started.volumes }),
+    })
+    .pipe(Effect.mapError(internal("Failed to record the instance's state.")));
+  return yield* reread(instance);
+});
 
 const upResourceInstanceUnlocked = (
   resourceDomainId: string,
@@ -390,20 +392,22 @@ const upResourceInstanceUnlocked = (
     }
   });
 
-export const listResourceInstances = (resourceDomainId: string, archived: boolean) =>
-  Effect.gen(function* () {
-    yield* requireDomain(resourceDomainId);
-    const repo = yield* ResourceInstanceRepo;
-    const instances = yield* repo
-      .list(resourceDomainId, { archived })
-      .pipe(Effect.mapError(internal("Failed to list the resource instances.")));
-    const host = yield* ResourceRuntimeHost;
-    return {
-      items: instances.map((instance) =>
-        toInstanceWire(instance, host.kind === "unsupported" ? undefined : host.runtime),
-      ),
-    };
-  });
+export const listResourceInstances = Effect.fn("sealant.resource_instance.list")(function* (
+  resourceDomainId: string,
+  archived: boolean,
+) {
+  yield* requireDomain(resourceDomainId);
+  const repo = yield* ResourceInstanceRepo;
+  const instances = yield* repo
+    .list(resourceDomainId, { archived })
+    .pipe(Effect.mapError(internal("Failed to list the resource instances.")));
+  const host = yield* ResourceRuntimeHost;
+  return {
+    items: instances.map((instance) =>
+      toInstanceWire(instance, host.kind === "unsupported" ? undefined : host.runtime),
+    ),
+  };
+});
 
 const getResourceInstanceUnlocked = (resourceDomainId: string, key: ResourceInstanceKey) =>
   Effect.gen(function* () {
@@ -460,27 +464,29 @@ const stopResourceInstanceUnlocked = (
   });
 
 /** Archive one instance: its container goes, every volume stays and is listed with its size. */
-export const archiveInstance = (runtime: ResourceRuntime, instance: ResourceInstanceRecord) =>
-  Effect.gen(function* () {
-    const repo = yield* ResourceInstanceRepo;
-    yield* repo
-      .setDesired(instance.id, { kind: "archive" })
-      .pipe(Effect.mapError(internal("Failed to record the archive.")));
-    const volumes = yield* docker("archive the instance", () => runtime.archive(instance));
-    const budgets = yield* ResourceDomainRepo;
-    yield* makeResourceAccounting(repo, budgets)
-      .stopped(instance, true)
-      .pipe(Effect.mapError(internal("Failed to archive instance allocations.")));
-    yield* repo
-      .recordObserved(instance.id, { kind: "archived", at: new Date().toISOString() })
-      .pipe(Effect.mapError(internal("Failed to record the instance's state.")));
-    return {
-      instance: yield* reread(instance),
-      volumes: volumes.map(
-        (volume): ResourceInstanceArchivedVolumeWire => ({ instanceKey: instance.key, ...volume }),
-      ),
-    };
-  });
+export const archiveInstance = Effect.fn("sealant.resource_instance.archive")(function* (
+  runtime: ResourceRuntime,
+  instance: ResourceInstanceRecord,
+) {
+  const repo = yield* ResourceInstanceRepo;
+  yield* repo
+    .setDesired(instance.id, { kind: "archive" })
+    .pipe(Effect.mapError(internal("Failed to record the archive.")));
+  const volumes = yield* docker("archive the instance", () => runtime.archive(instance));
+  const budgets = yield* ResourceDomainRepo;
+  yield* makeResourceAccounting(repo, budgets)
+    .stopped(instance, true)
+    .pipe(Effect.mapError(internal("Failed to archive instance allocations.")));
+  yield* repo
+    .recordObserved(instance.id, { kind: "archived", at: new Date().toISOString() })
+    .pipe(Effect.mapError(internal("Failed to record the instance's state.")));
+  return {
+    instance: yield* reread(instance),
+    volumes: volumes.map(
+      (volume): ResourceInstanceArchivedVolumeWire => ({ instanceKey: instance.key, ...volume }),
+    ),
+  };
+});
 
 const archiveResourceInstanceUnlocked = (resourceDomainId: string, key: ResourceInstanceKey) =>
   Effect.gen(function* () {
@@ -572,13 +578,13 @@ const announceBoatLink = (workspaceId: string) =>
     ),
   );
 
-export const linkResourceWorkspace = (
-  resourceDomainId: string,
-  workspaceId: string,
-  worktreeKey: ResourceWorktreeKey,
-  aliases: ResourceReachAliases | null,
-) =>
-  Effect.gen(function* () {
+export const linkResourceWorkspace = Effect.fn("sealant.resource_instance.link_workspace")(
+  function* (
+    resourceDomainId: string,
+    workspaceId: string,
+    worktreeKey: ResourceWorktreeKey,
+    aliases: ResourceReachAliases | null,
+  ) {
     yield* requireDomain(resourceDomainId);
     const runtime = yield* requireWorkspaceRuntime;
     const repo = yield* ResourceInstanceRepo;
@@ -637,14 +643,15 @@ export const linkResourceWorkspace = (
         } satisfies ResourceWorkspaceLinkWire;
       }
     }
-  });
+  },
+);
 
 /**
  * Fence the domain, archive every instance (volumes kept), detach and unlink every workspace,
  * then mark it archived. A repeat finds nothing live and answers no volume.
  */
-export const archiveResourceDomain = (resourceDomainId: string) =>
-  Effect.gen(function* () {
+export const archiveResourceDomain = Effect.fn("sealant.resource_instance.archive_domain")(
+  function* (resourceDomainId: string) {
     const domain = yield* requireDomain(resourceDomainId);
     const runtime = yield* (domain.ownerKind ?? "project") === "project"
       ? requireWorkspaceRuntime
@@ -672,7 +679,8 @@ export const archiveResourceDomain = (resourceDomainId: string) =>
     }
     yield* repo.setDomainState(resourceDomainId, "archived").pipe(Effect.mapError(failed));
     return { volumes };
-  });
+  },
+);
 
 /** API and reconciler operations use the same installation-wide instance lock. */
 const locked = <A, E, R>(

@@ -561,10 +561,8 @@ const reloadAccount = (id: string) =>
     return account;
   });
 
-export const createConnectedAccount = (input: {
-  readonly payload: CreateConnectedAccountRequest;
-}) => {
-  return Effect.gen(function* () {
+export const createConnectedAccount = Effect.fn("sealant.connected_account.create")(
+  function* (input: { readonly payload: CreateConnectedAccountRequest }) {
     yield* requireCredentialsKey;
     const request = input.payload;
     const requested = yield* parseConnectRequestTarget(request);
@@ -695,35 +693,35 @@ export const createConnectedAccount = (input: {
         return toConnectedAccountSummary(yield* reloadAccount(account.id));
       }),
     );
-  });
-};
+  },
+);
 
-export const listConnectedAccounts = (input: { readonly ownerUserId: string }) => {
-  return Effect.gen(function* () {
-    const connectedAccountRepo = yield* ConnectedAccountRepo;
-
-    const items = yield* withInternalError(
-      connectedAccountRepo.listByOwner(input.ownerUserId),
-      "Failed to list connected accounts.",
-    );
-    const hasApiKeyHistory = yield* withInternalError(
-      connectedAccountRepo.hasApiKeyHistory(input.ownerUserId),
-      "Failed to list connected accounts.",
-    );
-
-    return {
-      items: items.map(toConnectedAccountSummary),
-      hasApiKeyHistory,
-    } satisfies ListConnectedAccountsResponse;
-  });
-};
-
-export const setConnectedAccountDefault = (input: {
+export const listConnectedAccounts = Effect.fn("sealant.connected_account.list")(function* (input: {
   readonly ownerUserId: string;
-  readonly provider: ConnectedAccountProvider;
-  readonly connectedAccountId: string;
-}) => {
-  return Effect.gen(function* () {
+}) {
+  const connectedAccountRepo = yield* ConnectedAccountRepo;
+
+  const items = yield* withInternalError(
+    connectedAccountRepo.listByOwner(input.ownerUserId),
+    "Failed to list connected accounts.",
+  );
+  const hasApiKeyHistory = yield* withInternalError(
+    connectedAccountRepo.hasApiKeyHistory(input.ownerUserId),
+    "Failed to list connected accounts.",
+  );
+
+  return {
+    items: items.map(toConnectedAccountSummary),
+    hasApiKeyHistory,
+  } satisfies ListConnectedAccountsResponse;
+});
+
+export const setConnectedAccountDefault = Effect.fn("sealant.connected_account.set_default")(
+  function* (input: {
+    readonly ownerUserId: string;
+    readonly provider: ConnectedAccountProvider;
+    readonly connectedAccountId: string;
+  }) {
     const connectedAccountRepo = yield* ConnectedAccountRepo;
 
     return yield* withOwnerLock(
@@ -764,14 +762,11 @@ export const setConnectedAccountDefault = (input: {
         return toConnectedAccountSummary({ ...account, isDefault: true });
       }),
     );
-  });
-};
+  },
+);
 
-export const archiveConnectedAccount = (input: {
-  readonly connectedAccountId: string;
-  readonly ownerUserId: string;
-}) => {
-  return Effect.gen(function* () {
+export const archiveConnectedAccount = Effect.fn("sealant.connected_account.archive")(
+  function* (input: { readonly connectedAccountId: string; readonly ownerUserId: string }) {
     const connectedAccountRepo = yield* ConnectedAccountRepo;
 
     return yield* withOwnerLock(
@@ -795,15 +790,15 @@ export const archiveConnectedAccount = (input: {
         return toConnectedAccountSummary({ ...archived, isDefault: false });
       }),
     );
-  });
-};
+  },
+);
 
-export const markConnectedAccountInvalid = (input: {
-  readonly connectedAccountId: string;
-  readonly ownerUserId: string;
-  readonly revision?: number;
-}) => {
-  return Effect.gen(function* () {
+export const markConnectedAccountInvalid = Effect.fn("sealant.connected_account.mark_invalid")(
+  function* (input: {
+    readonly connectedAccountId: string;
+    readonly ownerUserId: string;
+    readonly revision?: number;
+  }) {
     const connectedAccountRepo = yield* ConnectedAccountRepo;
 
     const notFound = new ConnectedAccountNotFoundError({
@@ -844,5 +839,5 @@ export const markConnectedAccountInvalid = (input: {
       ...toConnectedAccountSummary(current),
       outcome: marked === undefined ? "superseded" : "marked",
     } satisfies MarkConnectedAccountInvalidResponse;
-  });
-};
+  },
+);

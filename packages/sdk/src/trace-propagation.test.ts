@@ -157,12 +157,17 @@ describe("SDK calls continue the caller's trace", () => {
     expect(Option.getOrUndefined(sdkSpan?.parent ?? Option.none())?.spanId).toBe(span.spanId);
     expect(Object.fromEntries(sdkSpan?.attributes ?? [])).toEqual({
       "sealant.workspace_id": "ws_1",
+      "sentry.op": "sealant.sdk",
+      "sentry.description": "sealant.sdk.workspaces.get_workspace",
     });
     // The header names a span the tracer made under the SDK's span, in the caller's trace.
     const wire = traceparentOf(s.received[0]);
     const httpSpan = spans.find((made) => made.spanId === wire?.spanId);
     expect(wire?.traceId).toBe(span.traceId);
     expect(Option.getOrUndefined(httpSpan?.parent ?? Option.none())?.spanId).toBe(sdkSpan?.spanId);
+    // Sentry describes the request by the endpoint's route, never by the IDs in its URL.
+    expect(httpSpan?.attributes.get("url.template")).toBe("/v1/workspaces/:workspaceId");
+    expect(httpSpan?.attributes.get("sentry.description")).toBe("GET /v1/workspaces/:workspaceId");
   });
 
   it("hands an exporting tracer no credential or body", async () => {

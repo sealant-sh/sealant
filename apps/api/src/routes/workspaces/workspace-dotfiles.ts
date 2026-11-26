@@ -78,13 +78,13 @@ const repositoryUrlProblem = (url: string): string | undefined => {
   return undefined;
 };
 
-export const applyWorkspaceDotfiles = (input: {
-  readonly workspaceId: string;
-  readonly payload: ApplyWorkspaceDotfilesRequest;
-  /** For tests; defaults to the live stage channel. */
-  readonly stageChannel?: DotfilesStageChannel;
-}) =>
-  Effect.gen(function* () {
+export const applyWorkspaceDotfiles = Effect.fn("sealant.dotfiles.apply_workspace")(
+  function* (input: {
+    readonly workspaceId: string;
+    readonly payload: ApplyWorkspaceDotfilesRequest;
+    /** For tests; defaults to the live stage channel. */
+    readonly stageChannel?: DotfilesStageChannel;
+  }) {
     yield* requireServiceKey;
     const payload = input.payload;
     const urlProblem =
@@ -264,4 +264,5 @@ export const applyWorkspaceDotfiles = (input: {
     );
 
     return mapRun(run);
-  });
+  },
+);

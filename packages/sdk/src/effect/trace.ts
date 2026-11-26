@@ -217,6 +217,42 @@ export function traceHeaders(trace: CallerTrace | undefined): Readonly<Record<st
     : { traceparent, tracestate: trace.tracestate };
 }
 
+/** An endpoint's route as the contract declares it: `GET` and `/v1/sessions/:sessionId/output`. */
+export interface EndpointRoute {
+  readonly method: string;
+  readonly path: string;
+}
+
+/**
+ * `tracer`, giving the one HTTP client span started directly beneath the span `parentSpanId` the
+ * endpoint's route template: Sentry then describes the request as `GET
+ * /v1/sessions/:sessionId/output`, never by its URL and the IDs in it.
+ */
+const routeTemplatingTracer = (
+  tracer: Tracer.Tracer,
+  parentSpanId: string,
+  route: EndpointRoute,
+): Tracer.Tracer =>
+  Tracer.make({
+    ...tracer,
+    span: (options) => {
+      const span = tracer.span(options);
+      const parent = Option.getOrUndefined(options.parent);
+      if (options.kind === "client" && parent?.spanId === parentSpanId) {
+        span.attribute("url.template", route.path);
+        span.attribute("sentry.op", "http.client");
+        span.attribute("sentry.description", `${route.method} ${route.path}`);
+      }
+      return span;
+    },
+  });
+
+/** What Sentry calls an SDK call's span: its operation, and the call's own name. */
+const sdkSpanAttributes = (name: string) => ({
+  "sentry.op": "sealant.sdk",
+  "sentry.description": name,
+});
+
 /**
  * Run one contract call in its client span, and choose what trace header its request carries (see
  * the module comment).
@@ -225,13 +261,22 @@ export const traceCall = <A, E, R>(
   name: string,
   attributes: Readonly<Record<string, string>>,
   effect: Effect.Effect<A, E, R>,
+  route?: EndpointRoute,
 ): Effect.Effect<A, E, R> =>
   Effect.gen(function* () {
     const parent = yield* Effect.serviceOption(Tracer.ParentSpan);
     const tracer = yield* Effect.tracer;
-    const spanned = Effect.withSpan(effect, name, {
+    const templated =
+      route === undefined || tracer === Tracer.nativeTracer
+        ? effect
+        : Effect.flatMap(Effect.currentSpan.pipe(Effect.option), (span) =>
+            Option.isNone(span)
+              ? effect
+              : Effect.withTracer(effect, routeTemplatingTracer(tracer, span.value.spanId, route)),
+          );
+    const spanned = Effect.withSpan(templated, name, {
       kind: "client",
-      attributes,
+      attributes: { ...attributes, ...sdkSpanAttributes(name) },
       captureStackTrace: false,
     });
     if (tracer !== Tracer.nativeTracer) return yield* spanned;
@@ -259,35 +304,56 @@ const idAttributes = (request: unknown): Readonly<Record<string, string>> => {
   return attributes;
 };
 
+/** The routes of a contract's endpoints, by group and endpoint key. */
+export type EndpointRoutes = ReadonlyMap<string, ReadonlyMap<string, EndpointRoute>>;
+
 /** An endpoint function wrapped in {@link traceCall}; any other value is kept as it is. */
-const instrumentValue = (name: string, value: unknown, holder: object): unknown => {
+const instrumentValue = (
+  name: string,
+  value: unknown,
+  holder: object,
+  route: EndpointRoute | undefined,
+): unknown => {
   if (typeof value !== "function") return value;
   return (...args: ReadonlyArray<unknown>): unknown => {
     const result: unknown = Reflect.apply(value, holder, args);
-    return Effect.isEffect(result) ? traceCall(name, idAttributes(args[0]), result) : result;
+    return Effect.isEffect(result) ? traceCall(name, idAttributes(args[0]), result, route) : result;
   };
 };
 
-const instrumentGroup = (prefix: string, group: Record<PropertyKey, unknown>): object => {
+const instrumentGroup = (
+  prefix: string,
+  group: Record<PropertyKey, unknown>,
+  routes: ReadonlyMap<string, EndpointRoute> | undefined,
+): object => {
   const instrumented: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(group)) {
-    instrumented[key] = instrumentValue(`${prefix}.${snakeCase(key)}`, value, group);
+    instrumented[key] = instrumentValue(
+      `${prefix}.${snakeCase(key)}`,
+      value,
+      group,
+      routes?.get(key),
+    );
   }
   return instrumented;
 };
 
 /**
  * The derived control-plane client with every endpoint run through {@link traceCall}, named
- * `sealant.sdk.<group>.<endpoint>` from the contract's own identifiers.
+ * `sealant.sdk.<group>.<endpoint>` from the contract's own identifiers, its HTTP span described by
+ * the endpoint's route in `routes`.
  */
-export function instrumentClient<Client extends object>(client: Client): Client {
+export function instrumentClient<Client extends object>(
+  client: Client,
+  routes: EndpointRoutes = new Map(),
+): Client {
   const instrumented: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(client)) {
     const name = `sealant.sdk.${snakeCase(key)}`;
     instrumented[key] =
       typeof value !== "function" && isRecord(value)
-        ? instrumentGroup(name, value)
-        : instrumentValue(name, value, client);
+        ? instrumentGroup(name, value, routes.get(key))
+        : instrumentValue(name, value, client, undefined);
   }
   // SAFETY: the copy has the client's keys, and each endpoint function is replaced by one taking the
   // same arguments and returning the same effect type (`traceCall` preserves A, E and R). TypeScript
@@ -295,3 +361,28 @@ export function instrumentClient<Client extends object>(client: Client): Client 
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the mapping above keeps the client's type; see SAFETY.
   return instrumented as Client;
 }
+
+/** The route of every endpoint `api` declares, keyed as its derived client is. */
+export const endpointRoutes = (api: {
+  readonly groups: Readonly<
+    Record<
+      string,
+      {
+        readonly endpoints: Readonly<
+          Record<string, { readonly method: string; readonly path: string }>
+        >;
+      }
+    >
+  >;
+}): EndpointRoutes =>
+  new Map(
+    Object.entries(api.groups).map(([groupKey, group]) => [
+      groupKey,
+      new Map(
+        Object.entries(group.endpoints).map(([endpointKey, endpoint]) => [
+          endpointKey,
+          { method: endpoint.method, path: endpoint.path },
+        ]),
+      ),
+    ]),
+  );

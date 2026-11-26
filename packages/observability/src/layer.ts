@@ -24,6 +24,7 @@ import { OtlpLogger, OtlpSerialization, OtlpTracer } from "effect/observability"
 
 import type { ObservabilityConfig, ObservabilitySetting } from "./config.js";
 import { CredentialRedactionLive } from "./redaction.js";
+import { sentryShapedTracer } from "./sentry-span.js";
 import { type CaptureContext, makeSentryErrors, type SentryErrors } from "./sentry.js";
 
 /** How long shutdown waits for the last spans, logs and errors to leave. */
@@ -91,7 +92,9 @@ const exportersLayer = (config: ObservabilityConfig, sentry: SentryErrors): Laye
 
   const sampling = Layer.effect(
     Tracer.Tracer,
-    Effect.map(Effect.tracer, (tracer) => samplingTracer(tracer, config.tracesSampleRate)),
+    Effect.map(Effect.tracer, (tracer) =>
+      samplingTracer(sentryShapedTracer(tracer), config.tracesSampleRate),
+    ),
   );
   const errors = Layer.mergeAll(
     ErrorReporter.layer([sentry.reporter], { mergeWithExisting: true }),
