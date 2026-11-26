@@ -247,10 +247,15 @@ const routeTemplatingTracer = (
     },
   });
 
-/** What Sentry calls an SDK call's span: its operation, and the call's own name. */
+/**
+ * What Sentry calls an SDK call's span: its operation, and in words what the call does, from its
+ * endpoint (`sealant.sdk.sessions.get_session_output` reads `sealant.sdk — get session output`).
+ * The span's name stays in `code.function.name`, so a search for it still finds the call.
+ */
 const sdkSpanAttributes = (name: string) => ({
   "sentry.op": "sealant.sdk",
-  "sentry.description": name,
+  "sentry.description": (name.split(".").at(-1) ?? name).split("_").filter(Boolean).join(" "),
+  "code.function.name": name,
 });
 
 /**

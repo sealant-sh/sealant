@@ -2,6 +2,7 @@ import { Effect, Option, Tracer } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
+  describeSpanName,
   routeIdAttributes,
   sentryAttributes,
   sentryShapedTracer,
@@ -99,10 +100,11 @@ describe("sentryAttributes", () => {
     });
   });
 
-  it("names a contract span's area as its op and its name as its description", () => {
-    expect(sentryAttributes("sealant.session.output", "internal", attrs({}))).toEqual({
-      "sentry.op": "sealant.session",
-      "sentry.description": "sealant.session.output",
+  it("names a contract span's area as its op and says in words what it does", () => {
+    expect(sentryAttributes("sealant.workspace.create", "internal", attrs({}))).toEqual({
+      "sentry.op": "sealant.workspace",
+      "sentry.description": "create workspace",
+      "code.function.name": "sealant.workspace.create",
     });
     expect(sentryAttributes("BoatAccountRepo.launchReports", "internal", attrs({}))).toEqual({
       "sentry.op": "function",
@@ -115,7 +117,11 @@ describe("sentryAttributes", () => {
       sentryAttributes(
         "sealant.sdk.sessions.get_session_output",
         "client",
-        attrs({ "sentry.op": "sealant.sdk", "sentry.description": "sessions.getSessionOutput" }),
+        attrs({
+          "sentry.op": "sealant.sdk",
+          "sentry.description": "get session output",
+          "code.function.name": "sealant.sdk.sessions.get_session_output",
+        }),
       ),
     ).toEqual({});
   });
@@ -208,6 +214,52 @@ const ended = async (effect: Effect.Effect<unknown>): Promise<Tracer.Span[]> => 
   );
   return spans;
 };
+
+describe("describeSpanName", () => {
+  it.each([
+    ["sealant.workspace.create", "sealant.workspace", "create workspace"],
+    ["sealant.workspace.resolve_credential_refs", "sealant.workspace", "resolve credential refs"],
+    ["sealant.workspace.get", "sealant.workspace", "get workspace"],
+    ["sealant.workspace.stop", "sealant.workspace", "stop workspace"],
+    ["sealant.workspace.build", "sealant.workspace", "build workspace"],
+    ["sealant.workspace.launch", "sealant.workspace", "launch workspace"],
+    ["sealant.workspace.exec", "sealant.workspace", "exec in workspace"],
+    ["sealant.workspace.list", "sealant.workspace", "list workspaces"],
+    ["sealant.registry.get", "sealant.registry", "get registry"],
+    ["sealant.profile.list", "sealant.profile", "list profiles"],
+    ["sealant.ssh_key.create", "sealant.ssh_key", "create ssh key"],
+    ["sealant.session.create", "sealant.session", "create session"],
+    ["sealant.session.wait_for_recorder", "sealant.session", "wait for recorder"],
+    ["sealant.session.resolve_daemon_instance", "sealant.session", "resolve daemon instance"],
+    ["sealant.session.get_output", "sealant.session", "get output"],
+    ["sealant.session.reconcile", "sealant.session", "reconcile session"],
+    ["sealant.daemon.connect", "sealant.daemon", "connect"],
+    ["sealant.daemon.open_session", "sealant.daemon", "open session"],
+    ["sealant.daemon.exec", "sealant.daemon", "exec"],
+    ["sealant.daemon.close_session", "sealant.daemon", "close session"],
+    ["sealant.sdk.workspaces.create_workspace", "sealant.sdk", "create workspace"],
+    ["sealant.sdk.sessions.create_session", "sealant.sdk", "create session"],
+    ["sealant.sdk.sessions.get_session_output", "sealant.sdk", "get session output"],
+  ])("describes %s as %s — %s", (name, op, description) => {
+    expect(describeSpanName(name)).toEqual({ op, description });
+  });
+
+  it("leaves a name outside the contract alone", () => {
+    expect(describeSpanName("BoatAccountRepo.launchReports")).toBeUndefined();
+    expect(describeSpanName("sealant.workspace")).toBeUndefined();
+  });
+
+  it("never repeats the op in the description", () => {
+    for (const name of [
+      "sealant.workspace.create",
+      "sealant.session.wait_for_recorder",
+      "sealant.daemon.open_session",
+      "sealant.sdk.workspaces.get_workspace",
+    ]) {
+      expect(describeSpanName(name)?.description).not.toContain("sealant");
+    }
+  });
+});
 
 describe("sentryShapedTracer", () => {
   it("hangs a statement off the code that ran it, past Drizzle's wrapper", async () => {

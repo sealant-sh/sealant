@@ -206,9 +206,56 @@ const stringAttribute = (
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 };
 
-// `sealant.workspace.create` -> `sealant.workspace`: the product and area of a span named by the
-// telemetry contract (`<product>.<area>.<operation>`).
-const CONTRACT_NAME = /^([a-z][a-z0-9_]*\.[a-z][a-z0-9_]*)\.[a-z0-9_.]+$/;
+// `sealant.workspace.create` -> `sealant.workspace` and `create`: the product and area of a span
+// named by the telemetry contract (`<product>.<area>.<operation>`), and its operation.
+const CONTRACT_NAME = /^([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*)\.([a-z0-9_.]+)$/;
+
+/**
+ * Areas named for a part of sealant rather than a record: their operations read on their own
+ * (`sealant.daemon.connect` is "connect"). Every other area is the noun a one-word operation acts
+ * on (`sealant.workspace.create` is "create workspace").
+ */
+const COMPONENT_AREAS: ReadonlySet<string> = new Set(["daemon", "inference", "job", "sdk"]);
+
+/** The word a one-word operation takes before its noun, where English needs one. */
+const PREPOSITIONS: Readonly<Record<string, string>> = { exec: "in" };
+
+const plural = (noun: string): string =>
+  /[^aeiou]y$/.test(noun) ? `${noun.slice(0, -1)}ies` : noun.endsWith("s") ? noun : `${noun}s`;
+
+/** `resolve_credential_refs` -> `resolve credential refs`. */
+const words = (identifier: string): string => identifier.split(/[_.]+/).filter(Boolean).join(" ");
+
+/**
+ * What a contract-named span does, in words, without the op it is shown beside: in Sentry
+ * `sealant.workspace.create` reads `sealant.workspace — create workspace`, and
+ * `sealant.session.wait_for_recorder` reads `sealant.session — wait for recorder`. An SDK call
+ * (`sealant.sdk.<group>.<endpoint>`) is described by its endpoint, which already names its record
+ * (`sealant.sdk.sessions.get_session_output` is "get session output"). `undefined` for a name the
+ * contract does not shape.
+ */
+export const describeSpanName = (
+  name: string,
+): { readonly op: string; readonly description: string } | undefined => {
+  const match = CONTRACT_NAME.exec(name);
+  if (match === null) return undefined;
+  const [, product = "", area = "", operation = ""] = match;
+  const op = `${product}.${area}`;
+  if (area === "sdk") {
+    return { op, description: words(operation.split(".").at(-1) ?? operation) };
+  }
+  const action = words(operation);
+  if (COMPONENT_AREAS.has(area) || action.includes(" ")) return { op, description: action };
+  const noun = words(area);
+  const preposition = PREPOSITIONS[action];
+  return {
+    op,
+    description:
+      action === "list"
+        ? `list ${plural(noun)}`
+        : `${action}${preposition === undefined ? "" : ` ${preposition}`} ${noun}`,
+  };
+};
 
 /**
  * The Sentry attributes for a span that ended with `name`, `kind` and `attributes`. Attributes the
@@ -283,8 +330,11 @@ export const sentryAttributes = (
     return keepExplicit(shaped, attributes);
   }
 
-  shaped["sentry.op"] = explicitOp ?? CONTRACT_NAME.exec(name)?.[1] ?? "function";
-  shaped["sentry.description"] = explicitDescription ?? name;
+  const described = describeSpanName(name);
+  shaped["sentry.op"] = explicitOp ?? described?.op ?? "function";
+  shaped["sentry.description"] = explicitDescription ?? described?.description ?? name;
+  // The span's own name, so code search still finds it from what Sentry shows.
+  if (described !== undefined) shaped["code.function.name"] = name;
   return keepExplicit(shaped, attributes);
 };
 

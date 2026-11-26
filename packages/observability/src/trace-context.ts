@@ -5,8 +5,8 @@
  */
 import type { IncomingMessage, Server } from "node:http";
 
-import { Effect, Option, type Tracer } from "effect";
-import { Headers, HttpTraceContext } from "effect/http";
+import { Effect, Layer, Option, type Tracer } from "effect";
+import { Headers, HttpMiddleware, type HttpServerRequest, HttpTraceContext } from "effect/http";
 
 /** A trace context as it is stored or sent: the W3C fields, `tracestate` when one came. */
 export interface TraceCarrier {
@@ -73,3 +73,28 @@ export const withSentryTraceFallback = <S extends Server>(server: S): S => {
   server.prependListener("upgrade", adoptSentryTrace);
   return server;
 };
+
+/** The paths a load balancer or orchestrator polls to see whether the process is up. */
+const PROBE_PATHS: ReadonlySet<string> = new Set(["/healthz", "/readyz", "/health", "/ready"]);
+
+/**
+ * Whether `request` is a liveness or readiness probe that continues no trace. Such a probe is
+ * polled every few seconds, so tracing it would put a root trace of its own in Sentry for every
+ * poll. A probe that carries a trace (someone following one through) is traced as usual.
+ */
+export const isUntracedProbe = (request: HttpServerRequest.HttpServerRequest): boolean => {
+  const path = request.url.split(/[?#]/, 1)[0] ?? request.url;
+  return (
+    PROBE_PATHS.has(path) &&
+    request.headers["traceparent"] === undefined &&
+    request.headers["sentry-trace"] === undefined
+  );
+};
+
+/**
+ * Turns the request tracer off for {@link isUntracedProbe} requests. A probe's failures are still
+ * reported as errors; only its span is never made.
+ */
+export const UntracedProbesLive: Layer.Layer<never> = Layer.succeed(
+  HttpMiddleware.TracerDisabledWhen,
+)(isUntracedProbe);

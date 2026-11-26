@@ -781,7 +781,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const consumer = await consumeWorkspaceBuildJobs({
     databaseUrl: env.DATABASE_URL,
     concurrency: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
-    onMessage: async ({ message }) => {
+    onMessage: async ({ message, span }) => {
       try {
         await processWorkspaceBuildJob({
           jobId: message.jobId,
@@ -798,6 +798,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
           onLaunchRetained: stopRetainedLaunch,
+          parentSpan: span,
         });
       } catch (error) {
         console.error("Workspace build job failed", {
