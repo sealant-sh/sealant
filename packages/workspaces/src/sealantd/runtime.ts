@@ -770,6 +770,10 @@ const mapSealantError = (
 };
 
 /** Wraps an Effect so any defect is remapped onto the typed `SealantError` channel. */
+/** `openSession` -> `open_session`: span names are lower-case (the telemetry contract). */
+const snakeCaseOperation = (operation: string): string =>
+  operation.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+
 const withSealantError = <A, R>(
   connection: ControlConnection,
   operation: SealantOperation,
@@ -781,7 +785,7 @@ const withSealantError = <A, R>(
   // `connect` only wraps the client around an open stream; its span is the connect's own.
   return operation === "connect"
     ? mapped
-    : Effect.withSpan(mapped, `sealant.daemon.${operation}`, {
+    : Effect.withSpan(mapped, `sealant.daemon.${snakeCaseOperation(operation)}`, {
         kind: "client",
         attributes: { "sealantd.method": operation },
         captureStackTrace: false,
