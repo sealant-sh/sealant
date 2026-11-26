@@ -6,7 +6,11 @@ import { generateExecutorCa } from "./executor-ca.js";
 
 const ca = generateExecutorCa({ executor: "sealant-run-1" });
 
-const documentWith = (host: { mirrorHosts?: string[]; resourceHosts?: string[] }) =>
+const documentWith = (host: {
+  mirrorHosts?: string[];
+  resourceHosts?: string[];
+  telemetryHosts?: string[];
+}) =>
   buildProxyPolicyDocument({
     networkPolicy: {
       mode: "restricted",
@@ -47,5 +51,17 @@ describe("private-address grants in a proxy's policy", () => {
       { name: "db", host: "sealres-db", port: 5432, guestIp: "10.201.0.1" },
     ]);
     expect(documentWith({}).allowResources).toEqual([]);
+  });
+});
+
+describe("the deployment's telemetry in a restricted proxy's policy", () => {
+  it("lets the daemon reach the deployment's Sentry on 443, and nothing else of it", () => {
+    expect(documentWith({ telemetryHosts: ["sentry.example.com"] }).allowHosts).toEqual([
+      { host: "sentry.example.com", ports: [443], inspectTls: false },
+    ]);
+  });
+
+  it("grants nothing when the deployment sets no daemon DSN", () => {
+    expect(documentWith({}).allowHosts).toEqual([]);
   });
 });

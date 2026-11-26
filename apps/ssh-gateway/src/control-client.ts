@@ -2,6 +2,7 @@ import type { Duplex } from "node:stream";
 
 import { SealantClient } from "@sealant/runtime-client";
 import type { Channel } from "@sealant/runtime-client";
+import { effectTraceContext } from "@sealant/runtime-client/effect";
 import {
   AttachMode,
   type CommandResult,
@@ -81,7 +82,7 @@ export class ControlClient {
   /** Open the transport for `target` and build a control client over its framed stream. */
   static open(target: SealantTarget): ControlClient {
     const transport = openControlTransport(target);
-    const client = SealantClient.fromStream(transport.stream);
+    const client = SealantClient.fromStream(transport.stream, { traceContext: effectTraceContext });
     return new ControlClient(transport, client);
   }
 
@@ -96,7 +97,7 @@ export class ControlClient {
         stream.destroy();
       },
     };
-    const client = SealantClient.fromStream(transport.stream);
+    const client = SealantClient.fromStream(transport.stream, { traceContext: effectTraceContext });
     return new ControlClient(transport, client);
   }
 

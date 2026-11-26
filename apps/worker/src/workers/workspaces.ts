@@ -93,6 +93,7 @@ import {
   kubernetesRuntimeConfigFromEnv,
   KubernetesWorkspaceImageBuilder,
   reapStaleWorkspaceBuildJobs,
+  daemonSentryConfigFromEnv,
   reapHostVmBaseImages,
   reapWorkspaceImages,
   reconcileRuntimeExits,
@@ -193,6 +194,13 @@ const dockerImagePlatform = () =>
   });
 
 export const startWorkspaceWorker = async (env: WorkerEnv) => {
+  // Where workspace daemons report (`SEALANTD_SENTRY_DSN`); unset, they export nothing.
+  const daemonTelemetry = daemonSentryConfigFromEnv(process.env);
+  console.log(
+    daemonTelemetry === undefined
+      ? "[worker] workspace daemon telemetry: off (no SEALANTD_SENTRY_DSN)"
+      : `[worker] workspace daemon telemetry: to ${daemonTelemetry.host}`,
+  );
   const db = await createDatabaseFromEnv(env);
   // The job queue lives in the same Postgres database as the control plane (pg-boss); one
   // shared handle per process, closed on shutdown.
@@ -541,16 +549,22 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           captureStopGraceSeconds: env.SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS,
           containerStopTimeoutSeconds: env.SEALANT_DOCKER_CONTAINER_STOP_TIMEOUT_SECONDS,
           memory: dockerMemory,
+          ...(daemonTelemetry === undefined ? {} : { daemonTelemetry }),
           ...(dockerEgress === undefined ? {} : { egress: dockerEgress }),
           // Proxy-backed workspaces (a restricted policy, a brokered secret) need both the egress
           // networks and the control directory; without them such a workspace is refused.
           ...(dockerEgress === undefined || env.WORKSPACE_CONTROL_SOCKET_HOST_DIR === undefined
             ? {}
             : {
-                egressProxy:
-                  env.SEALANT_EGRESS_PROXY_IMAGE === undefined
+                egressProxy: {
+                  ...(env.SEALANT_EGRESS_PROXY_IMAGE === undefined
                     ? {}
-                    : { image: env.SEALANT_EGRESS_PROXY_IMAGE },
+                    : { image: env.SEALANT_EGRESS_PROXY_IMAGE }),
+                  // A restricted workspace's daemon still reaches the deployment's Sentry.
+                  ...(daemonTelemetry === undefined
+                    ? {}
+                    : { telemetryHosts: [daemonTelemetry.host] }),
+                },
               }),
           ...(resourceReconciler === undefined
             ? {}
@@ -612,6 +626,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         ? {}
         : { runnerImage: env.SEALANT_VM_RUNNER_IMAGE }),
       egressProxy: { proxies, hostPolicy: () => docker.egressHostPolicy() },
+      ...(daemonTelemetry === undefined ? {} : { daemonTelemetry }),
       memory: dockerMemory,
       eventStreamOpener: createDefaultEventStreamOpener(env.DOCKER_SOCKET_PATH),
     });

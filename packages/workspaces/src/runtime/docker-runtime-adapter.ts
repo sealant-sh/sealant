@@ -24,6 +24,11 @@ import {
 import { formatCidr, type Cidr } from "./cidr.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
+  type DaemonSentryConfig,
+  daemonTelemetryEnv,
+  withLaunchTelemetry,
+} from "./daemon-telemetry.js";
+import {
   EGRESS_PROXY_BACKED_LABEL,
   egressProxyGateArgs,
   proxiedWorkspaceArgs,
@@ -470,11 +475,18 @@ export interface DockerRuntimeAdapterOptions {
    * and the guard) and `controlSocketHostDir` (the proxy's admin socket lives there). Unset: such
    * a workspace is refused before launch, never run without its proxy.
    */
+  /**
+   * Where each workspace's sealantd reports (`SEALANTD_SENTRY_DSN`); every launch also hands its
+   * daemon the launching span. Absent: daemons join the launch's trace and export nothing.
+   */
+  readonly daemonTelemetry?: DaemonSentryConfig;
   readonly egressProxy?: {
     /** `SEALANT_EGRESS_PROXY_IMAGE`; defaults to `DEFAULT_EGRESS_PROXY_IMAGE`. */
     readonly image?: string;
     /** See `EgressProxyOrchestratorOptions.ownControlDirectory` (tests that do not run as root). */
     readonly ownControlDirectory?: (directory: string) => Promise<void>;
+    /** See `EgressProxyOrchestratorOptions.telemetryHosts`. */
+    readonly telemetryHosts?: ReadonlyArray<string>;
   };
 }
 
@@ -1151,6 +1163,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private readonly executorNetworks: DockerExecutorNetworkHooks | undefined;
   private readonly memoryPolicy: DockerMemoryPolicy | undefined;
   private readonly egress: DockerWorkspaceEgressOptions | undefined;
+  private readonly daemonTelemetry: DaemonSentryConfig | undefined;
   private readonly proxies: EgressProxyOrchestrator | undefined;
   /** Whether the engine makes isolated internal bridges, once proved (`probeIsolatedGatewaySupport`). */
   private isolatedGatewayProved = false;
@@ -1199,6 +1212,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       );
     }
     this.egress = options.egress;
+    this.daemonTelemetry = options.daemonTelemetry;
     if (options.egressProxy !== undefined) {
       const controlDir = options.controlSocketHostDir;
       const egress = options.egress;
@@ -1233,6 +1247,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
                 ),
               ],
         ...(egress.mirrors === undefined ? {} : { mirrors: egress.mirrors }),
+        ...(options.egressProxy.telemetryHosts === undefined
+          ? {}
+          : { telemetryHosts: options.egressProxy.telemetryHosts }),
       });
     } else {
       this.proxies = undefined;
@@ -3215,7 +3232,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     input: RuntimeAdapterLaunchInput,
     hooks?: RuntimeAdapterLaunchHooks,
   ): Promise<RuntimeAdapterLaunchResult> {
-    const parsed = parseRuntimeAdapterLaunchInput(input);
+    // Before the first await: the launching fiber is still current (`withLaunchTelemetry`).
+    const parsed = withLaunchTelemetry(parseRuntimeAdapterLaunchInput(input), this.daemonTelemetry);
     const support = this.supports({
       blueprint: parsed.blueprint,
     });
@@ -3460,6 +3478,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ...workspaceMountArgs(parsed, mountArgsForIntent),
         ...extraMountArgs(parsed, mountArgsForIntent),
         ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots, this.captureStopGraceSeconds),
+        // The daemon's trace and Sentry project, after the blueprint's env so a stored spec cannot
+        // point the daemon's telemetry elsewhere.
+        ...daemonTelemetryEnv(parsed.telemetry).flatMap(([key, value]) => [
+          "-e",
+          `${key}=${value}`,
+        ]),
         ...captureDialArgs,
         // Only a named scope is labelled: without the label, the scope is the container's name.
         ...(parsed.controlScope === undefined

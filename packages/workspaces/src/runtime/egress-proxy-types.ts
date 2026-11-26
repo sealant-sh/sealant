@@ -109,6 +109,8 @@ export interface EgressProxyHostFacts {
   readonly mirrorHosts?: readonly string[];
   /** Resource hosts the workspace may reach through its proxy, from its authorized attachments. */
   readonly resourceHosts?: readonly string[];
+  /** The deployment's telemetry hosts (the daemon's Sentry), reachable on 443 under any policy. */
+  readonly telemetryHosts?: readonly string[];
 }
 
 /**

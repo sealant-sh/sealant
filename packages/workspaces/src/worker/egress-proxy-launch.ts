@@ -106,6 +106,9 @@ export const egressProxyLaunch = (input: {
             // operator mirrors and authorized resources the first one did.
             mirrorHosts: [...(measured.host.mirrorHosts ?? [])],
             resourceHosts: [...(measured.host.resourceHosts ?? [])],
+            ...(measured.host.telemetryHosts === undefined
+              ? {}
+              : { telemetryHosts: [...measured.host.telemetryHosts] }),
           };
           yield* repo.recordProxyNetwork(runId, network);
           // The proxy's policy comes from storage only: without the stored row (its secrets'

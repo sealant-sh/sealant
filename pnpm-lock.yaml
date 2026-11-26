@@ -567,11 +567,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/observability
       '@sealant/runtime-client':
-        specifier: npm:@sealant/runtime-client-next@0.21.0-next.209
-        version: '@sealant/runtime-client-next@0.21.0-next.209'
+        specifier: npm:@sealant/runtime-client-next@0.21.0-next.215
+        version: '@sealant/runtime-client-next@0.21.0-next.215(effect@4.0.5)'
       '@sealant/runtime-protocol':
-        specifier: npm:@sealant/runtime-protocol-next@0.21.0-next.209
-        version: '@sealant/runtime-protocol-next@0.21.0-next.209'
+        specifier: npm:@sealant/runtime-protocol-next@0.21.0-next.215
+        version: '@sealant/runtime-protocol-next@0.21.0-next.215'
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
@@ -940,11 +940,11 @@ importers:
         specifier: workspace:*
         version: link:../db
       '@sealant/runtime-client':
-        specifier: npm:@sealant/runtime-client-next@0.21.0-next.209
-        version: '@sealant/runtime-client-next@0.21.0-next.209'
+        specifier: npm:@sealant/runtime-client-next@0.21.0-next.215
+        version: '@sealant/runtime-client-next@0.21.0-next.215(effect@4.0.5)'
       '@sealant/runtime-protocol':
-        specifier: npm:@sealant/runtime-protocol-next@0.21.0-next.209
-        version: '@sealant/runtime-protocol-next@0.21.0-next.209'
+        specifier: npm:@sealant/runtime-protocol-next@0.21.0-next.215
+        version: '@sealant/runtime-protocol-next@0.21.0-next.215'
       '@sealant/workspaces':
         specifier: workspace:*
         version: link:../workspaces
@@ -1096,11 +1096,11 @@ importers:
         specifier: workspace:*
         version: link:../observability
       '@sealant/runtime-client':
-        specifier: npm:@sealant/runtime-client-next@0.21.0-next.209
-        version: '@sealant/runtime-client-next@0.21.0-next.209'
+        specifier: npm:@sealant/runtime-client-next@0.21.0-next.215
+        version: '@sealant/runtime-client-next@0.21.0-next.215(effect@4.0.5)'
       '@sealant/runtime-protocol':
-        specifier: npm:@sealant/runtime-protocol-next@0.21.0-next.209
-        version: '@sealant/runtime-protocol-next@0.21.0-next.209'
+        specifier: npm:@sealant/runtime-protocol-next@0.21.0-next.215
+        version: '@sealant/runtime-protocol-next@0.21.0-next.215'
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -3698,12 +3698,17 @@ packages:
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-client-next@0.21.0-next.209':
-    resolution: {integrity: sha512-xkcsSTQxK22nzVCBvKVN7l58MfMax6ZQzFMFlBLZY2n9jifQigno+c+JNwn/+d0sUv1h+Qj+vpM9HfZIuOjIJg==}
+  '@sealant/runtime-client-next@0.21.0-next.215':
+    resolution: {integrity: sha512-UFzO82fZGyup/KM3nHtogwRbPGMkM5iWKWXQsEYoLpbU88BOTD/NGzkYcOXOP679MC1uAsZVkHklxuz51lJ/xw==}
     engines: {node: '>=20'}
+    peerDependencies:
+      effect: ^4.0.5
+    peerDependenciesMeta:
+      effect:
+        optional: true
 
-  '@sealant/runtime-protocol-next@0.21.0-next.209':
-    resolution: {integrity: sha512-if/DWIlg9JCNOyq1Gpq6CrFLUAryGRc2J75O6MKUDvaavrjeg4hCsQiegt7KNk6N+AM5gGjjDcYWecDkK0jveg==}
+  '@sealant/runtime-protocol-next@0.21.0-next.215':
+    resolution: {integrity: sha512-DOqwK9PxVMoDcw/atRRG+gkO9UxfEb53jh6Ki2GRnBgyiSUVxEa8fR+EycsxGlEN+hnF+wH9RIlzgqTQ67J5fA==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -10738,12 +10743,14 @@ snapshots:
       type-fest: 5.7.0
       zod: 4.6.7
 
-  '@sealant/runtime-client-next@0.21.0-next.209':
+  '@sealant/runtime-client-next@0.21.0-next.215(effect@4.0.5)':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
-      '@sealant/runtime-protocol': '@sealant/runtime-protocol-next@0.21.0-next.209'
+      '@sealant/runtime-protocol': '@sealant/runtime-protocol-next@0.21.0-next.215'
+    optionalDependencies:
+      effect: 4.0.5
 
-  '@sealant/runtime-protocol-next@0.21.0-next.209':
+  '@sealant/runtime-protocol-next@0.21.0-next.215':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 

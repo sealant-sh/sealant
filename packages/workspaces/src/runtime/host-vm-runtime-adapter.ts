@@ -53,6 +53,11 @@ import {
   type HostVmStorage,
 } from "../images/host-vm-disk.js";
 import {
+  type DaemonSentryConfig,
+  type DaemonTelemetry,
+  withLaunchTelemetry,
+} from "./daemon-telemetry.js";
+import {
   probeIsolatedGatewaySupport,
   type IsolatedGatewaySupport,
 } from "./docker-isolated-network.js";
@@ -120,7 +125,7 @@ const GiB = 1024 * MiB;
  * `sealantd --vm` speak one boot protocol. `SEALANT_VM_RUNNER_IMAGE` replaces it.
  */
 export const DEFAULT_HOST_VM_RUNNER_IMAGE =
-  "ghcr.io/sealant-sh/vm-runner-next:0.21.0-next.209@sha256:94218ada6421707edc7679851ace4d1a0897363640a5b42bcf887c7fe7866b42";
+  "ghcr.io/sealant-sh/vm-runner-next:0.21.0-next.215@sha256:bb9c3dc833d3c98e8336c4e78d619a54c8bc037f15c6b9dc7fa741dccaacd614";
 
 /** Where the runner reads its disks and staged files (`sealant-vm-runner` defaults). */
 export const HOST_VM_IMAGES_TARGET = "/var/lib/sealant/images";
@@ -169,6 +174,8 @@ export interface HostVmStagedLaunch {
   readonly secretEnv: Readonly<Record<string, string>>;
   readonly dockerd: boolean;
   readonly dotfilesArchive?: { readonly files: Readonly<Record<string, string>> };
+  /** The daemon's trace and Sentry project, which the runner hands the guest (sealantd #250). */
+  readonly telemetry?: DaemonTelemetry;
 }
 
 const stagedLaunchSchema = z.object({
@@ -282,6 +289,12 @@ export const hostVmEgressFlags = (
 };
 
 export interface HostVmRuntimeAdapterOptions {
+  /**
+   * Where each guest's sealantd reports (`SEALANTD_SENTRY_DSN`), staged as `boot-env.json`'s
+   * `telemetry` with the launching span. Absent: the guest joins the launch's trace and exports
+   * nothing unless the runner's own `SENTRY_*` says otherwise.
+   */
+  readonly daemonTelemetry?: DaemonSentryConfig;
   readonly storage: HostVmStorage;
   readonly diskRecords: HostVmDiskRecords;
   readonly commandRunner: DockerCommandRunner;
@@ -479,6 +492,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
   readonly #run: DockerCommandRunner;
   readonly #runnerImage: string;
   readonly #egressProxy: HostVmEgressProxyOptions | undefined;
+  readonly #daemonTelemetry: DaemonSentryConfig | undefined;
   #isolatedGatewayProved = false;
   readonly #memoryPolicy: DockerMemoryPolicy;
   readonly #vcpus: number;
@@ -497,6 +511,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     this.#run = options.commandRunner;
     this.#runnerImage = options.runnerImage ?? DEFAULT_HOST_VM_RUNNER_IMAGE;
     this.#egressProxy = options.egressProxy;
+    this.#daemonTelemetry = options.daemonTelemetry;
     this.#memoryPolicy = options.memory ?? AUTO_DOCKER_MEMORY_POLICY;
     this.#vcpus = options.vcpus ?? DEFAULT_VCPUS;
     this.#shutdownGraceSeconds =
@@ -776,7 +791,11 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     input: RuntimeAdapterLaunchInput,
     hooks?: RuntimeAdapterLaunchHooks,
   ): Promise<RuntimeAdapterLaunchResult> {
-    const parsed = parseRuntimeAdapterLaunchInput(input);
+    // Before the first await: the launching fiber is still current (`withLaunchTelemetry`).
+    const parsed = withLaunchTelemetry(
+      parseRuntimeAdapterLaunchInput(input),
+      this.#daemonTelemetry,
+    );
     const support = this.supports({ blueprint: parsed.blueprint });
     if (!support.supported) throw createAdapterError(support.reason, support.message);
     const egressProxy = this.#egressProxy;
@@ -970,20 +989,25 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     readonly recoveryTemplate: HostVmStagedLaunch;
   }> {
     const stopGraceMs = this.#shutdownGraceSeconds * 1000;
-    const bootEnv = nativeBootEnv(parsed, { secretEnvFile: false, dotfiles: false, stopGraceMs });
+    // The telemetry rides the staged file's own `telemetry`, not the boot env: the runner reads it
+    // for its own launch span and hands the guest the rest.
+    const { telemetry, ...untraced } = parsed;
+    const bootEnv = nativeBootEnv(untraced, { secretEnvFile: false, dotfiles: false, stopGraceMs });
     if (dockerService) bootEnv.DOCKER_HOST = GUEST_DOCKER_HOST;
     const {
       workspaceCloneAuth: _cloneAuth,
       platformEnv: _platformEnv,
       credentialEnv: _credentialEnv,
       ...plain
-    } = parsed;
+    } = untraced;
     const recoveryBootEnv = nativeBootEnv(plain, {
       secretEnvFile: false,
       dotfiles: false,
       stopGraceMs,
     });
     const dotfiles = await readDotfilesArchive(parsed.dotfilesArchiveDir);
+    const { traceparent: _traceparent, tracestate: _tracestate, ...reporting } = telemetry ?? {};
+    const recoveryTelemetry = Object.keys(reporting).length === 0 ? undefined : reporting;
     return {
       normal: {
         mode: "normal",
@@ -991,12 +1015,15 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         secretEnv: parsed.secretEnv ?? (await readSecretEnv(parsed.secretEnvDir)),
         dockerd: dockerService,
         ...(dotfiles === undefined ? {} : { dotfilesArchive: dotfiles }),
+        ...(telemetry === undefined ? {} : { telemetry }),
       },
       recoveryTemplate: {
         mode: "recover",
         bootEnv: recoveryBootEnv,
         secretEnv: {},
         dockerd: false,
+        // A recovery is a trace of its own: it keeps where to report, never the launch's span.
+        ...(recoveryTelemetry === undefined ? {} : { telemetry: recoveryTelemetry }),
       },
     };
   }

@@ -71,6 +71,19 @@ export const egressPolicyHash = (
     .digest("hex")}`;
 
 /**
+ * The deployment's telemetry hosts a restricted policy does not already list, each on 443 with
+ * its TLS left alone: the workspace's daemon reports its spans and errors there (SLNT-1349). A
+ * standard policy already reaches every public host, so it gets none.
+ */
+const telemetryGrants = (policy: NetworkPolicy | undefined, hosts: readonly string[]) => {
+  if (policy?.mode !== "restricted") return [];
+  const listed = new Set((policy.allowHosts ?? []).map((entry) => entry.host));
+  return [...new Set(hosts)]
+    .filter((host) => !listed.has(host))
+    .map((host) => ({ host, ports: [443], inspectTls: false }));
+};
+
+/**
  * The `PUT /v1/policy` document. A revoked secret is left out altogether (its value never leaves
  * sealant again), and every tombstone rides along, so the proxy refuses what was revoked whatever
  * the policy lists. Throws `BrokeredSecretValueMissingError` for a live secret with no value.
@@ -89,13 +102,16 @@ export const buildProxyPolicyDocument = (input: EgressProxyPolicyInput): ProxyPo
     operatorAllowedPrivateCidrs: [...input.host.operatorAllowedPrivateCidrs],
     hostPublicIps: [...input.host.hostPublicIps],
     blockedCidrs: [...input.host.blockedCidrs],
-    allowHosts: (policy?.allowHosts ?? []).map((entry) => ({
-      host: entry.host,
-      ...(entry.ports === undefined ? {} : { ports: [...entry.ports] }),
-      inspectTls: entry.inspectTls ?? false,
-      ...(entry.methods === undefined ? {} : { methods: [...entry.methods] }),
-      ...(entry.pathPrefixes === undefined ? {} : { pathPrefixes: [...entry.pathPrefixes] }),
-    })),
+    allowHosts: [
+      ...(policy?.allowHosts ?? []).map((entry) => ({
+        host: entry.host,
+        ...(entry.ports === undefined ? {} : { ports: [...entry.ports] }),
+        inspectTls: entry.inspectTls ?? false,
+        ...(entry.methods === undefined ? {} : { methods: [...entry.methods] }),
+        ...(entry.pathPrefixes === undefined ? {} : { pathPrefixes: [...entry.pathPrefixes] }),
+      })),
+      ...telemetryGrants(policy, input.host.telemetryHosts ?? []),
+    ],
     // A mirror or resource is reached at a private address, which the proxy allows only for the
     // targets granted here: so only the operator's own mirror hosts and the resource hosts the
     // workspace is authorized to reach are granted, never a target the caller named.
