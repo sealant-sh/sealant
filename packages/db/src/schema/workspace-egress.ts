@@ -99,6 +99,8 @@ export interface WorkspaceEgressProxyNetwork {
   readonly mirrorHosts?: readonly string[];
   /** Resource hosts the workspace is authorized to reach through its proxy. */
   readonly resourceHosts?: readonly string[];
+  /** The deployment's telemetry hosts (the daemon's Sentry), granted on 443 under any policy. */
+  readonly telemetryHosts?: readonly string[];
 }
 
 export const workspaceEgressProxies = snakeCase.table(

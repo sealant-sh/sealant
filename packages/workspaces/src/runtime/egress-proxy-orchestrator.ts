@@ -40,11 +40,11 @@ import {
 } from "./proxy-admin-client.js";
 
 /**
- * The proxy image (`SEALANT_EGRESS_PROXY_IMAGE` replaces it): sealantd 0.21.0-next.209's
+ * The proxy image (`SEALANT_EGRESS_PROXY_IMAGE` replaces it): sealantd 0.21.0-next.215's
  * multi-arch `egress-proxy-next`, pinned by digest.
  */
 export const DEFAULT_EGRESS_PROXY_IMAGE =
-  "ghcr.io/sealant-sh/egress-proxy-next:0.21.0-next.209@sha256:107c8b5d13d4433335ab6e50d1f7639db773bb422f7a91f01d6a17021e18a4aa";
+  "ghcr.io/sealant-sh/egress-proxy-next:0.21.0-next.215@sha256:8c977da64675f307221a4b001a7bcdf83dc93153830be07e86ee81c8e5f6dc0c";
 
 /** The proxy image's user: the admin socket's directory is handed to it. */
 export const EGRESS_PROXY_UID = 65_532;
@@ -189,6 +189,12 @@ export interface EgressProxyOrchestratorOptions {
   /** `-v`/`--mount` args putting `<controlDir>/<proxy>` at `/run/sealant` in the proxy. */
   readonly controlMountArgs: (proxyName: string) => ReadonlyArray<string>;
   readonly mirrors?: ReadonlyArray<WorkspaceMirrorContainer>;
+  /**
+   * Hosts the deployment's own telemetry reaches from inside a workspace (the host of
+   * `SEALANTD_SENTRY_DSN`, so its daemon can report): granted on 443 even under a restricted
+   * policy. Empty when the deployment sets no daemon DSN.
+   */
+  readonly telemetryHosts?: ReadonlyArray<string>;
   readonly healthTimeoutMs?: number;
   /** Test seam: the admin client for a socket. */
   readonly adminClient?: (socketPath: string) => ProxyAdminClient;
@@ -275,6 +281,7 @@ export class EgressProxyOrchestrator {
   readonly #controlDir: string;
   readonly #controlMountArgs: (proxyName: string) => ReadonlyArray<string>;
   readonly #mirrors: ReadonlyArray<WorkspaceMirrorContainer>;
+  readonly #telemetryHosts: ReadonlyArray<string>;
   readonly #healthTimeoutMs: number;
   readonly #adminClient: (socketPath: string) => ProxyAdminClient;
   readonly #ownControlDirectory: (directory: string) => Promise<void>;
@@ -286,6 +293,7 @@ export class EgressProxyOrchestrator {
     this.#controlDir = options.controlDir;
     this.#controlMountArgs = options.controlMountArgs;
     this.#mirrors = options.mirrors ?? [];
+    this.#telemetryHosts = options.telemetryHosts ?? [];
     this.#healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
     this.#adminClient = options.adminClient ?? ((socketPath) => createProxyAdminClient(socketPath));
     this.#ownControlDirectory = options.ownControlDirectory ?? ownForProxy;
@@ -522,6 +530,7 @@ export class EgressProxyOrchestrator {
       ],
       mirrorHosts: this.#mirrors.flatMap((mirror) => mirror.aliases),
       resourceHosts: [...(input.resourceHosts ?? [])],
+      ...(this.#telemetryHosts.length === 0 ? {} : { telemetryHosts: [...this.#telemetryHosts] }),
     };
   }
 

@@ -217,6 +217,27 @@ describe("HostVmRuntimeAdapter.launch", () => {
     expect(await exists(joinPath(h.controlDir, name, "boot-env.json"))).toBe(false);
   });
 
+  it("stages the daemon's telemetry for the runner, and leaves the launch's span out of recovery", async () => {
+    const h = await make();
+    const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const sentryDsn = "https://k@sentry.example.com/10";
+    await h.adapter.launch({
+      ...onHostVm(cases.gitSource),
+      telemetry: { traceparent, sentryDsn, environment: "check" },
+    });
+    const staged = h.stagedAtRun[0]?.launch;
+    expect(staged).toMatchObject({ telemetry: { traceparent, sentryDsn, environment: "check" } });
+    // The runner hands the guest what it needs; the boot env itself names no telemetry.
+    expect(JSON.stringify(Reflect.get(staged ?? {}, "bootEnv"))).not.toContain(traceparent);
+    const template = JSON.parse(
+      await readFile(
+        joinPath(h.controlDir, "sealant-vm-run-golden-1", "recovery-env.json"),
+        "utf8",
+      ),
+    );
+    expect(template.telemetry).toEqual({ sentryDsn, environment: "check" });
+  });
+
   it("keeps clone auth, platform and credential env out of the recovery template", async () => {
     const h = await make();
     await h.adapter.launch(onHostVm(cases.gitSource));

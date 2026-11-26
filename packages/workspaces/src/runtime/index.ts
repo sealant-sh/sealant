@@ -441,3 +441,13 @@ export {
   storedProxyPolicyDocument,
   type EgressPushOutcome,
 } from "./egress-proxy-store.js";
+export {
+  DAEMON_TELEMETRY_ENV_NAMES,
+  daemonSentryConfigFromEnv,
+  daemonTelemetryEnv,
+  daemonTelemetryFor,
+  daemonTelemetrySchema,
+  withLaunchTelemetry,
+  type DaemonSentryConfig,
+  type DaemonTelemetry,
+} from "./daemon-telemetry.js";

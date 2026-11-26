@@ -32,6 +32,7 @@ import {
   SealantError as SdkSealantError,
   type Channel,
 } from "@sealant/runtime-client";
+import { effectTraceContext } from "@sealant/runtime-client/effect";
 import {
   CaptureClass as WireCaptureClass,
   CaptureFlushKind as WireCaptureFlushKind,
@@ -1793,7 +1794,11 @@ const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeS
           withSealantError(
             connection,
             "connect",
-            Effect.sync(() => SealantClient.fromStream(duplex)),
+            // Each request carries the span it is made in (`sealant.daemon.<method>`), so the
+            // daemon's `sealantd.control.<method>` span continues this trace.
+            Effect.sync(() =>
+              SealantClient.fromStream(duplex, { traceContext: effectTraceContext }),
+            ),
           ),
           (c) => Effect.sync(() => c.close()),
         );

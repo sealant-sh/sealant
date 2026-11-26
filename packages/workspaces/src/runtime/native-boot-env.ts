@@ -7,6 +7,7 @@ import {
   captureOwnerMapEnv,
   captureSourceEnv,
 } from "./capture-source.js";
+import { daemonTelemetryEnv } from "./daemon-telemetry.js";
 import type { RuntimeLaunch } from "./runtime-adapter.js";
 
 interface BootLifecycleStepJson {
@@ -103,6 +104,9 @@ export const nativeBootEnv = (
     }
     entries.push([key, value]);
   }
+  // The daemon's trace and Sentry project, after the blueprint's env so a stored spec cannot
+  // point the daemon's telemetry elsewhere.
+  entries.push(...daemonTelemetryEnv(input.telemetry));
   if (options.secretEnvFile) {
     entries.push([
       "SEALANT_SECRET_ENV_FILE",

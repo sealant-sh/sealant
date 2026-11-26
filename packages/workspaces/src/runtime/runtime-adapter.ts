@@ -15,6 +15,7 @@ import {
 } from "@sealant/validators";
 import { z } from "zod";
 
+import { daemonTelemetrySchema } from "./daemon-telemetry.js";
 import type { EgressProxyLaunch } from "./egress-proxy-types.js";
 import type { RuntimeAdapterLaunchHooks, RuntimeLaunchIdentity } from "./launch-retention.js";
 
@@ -150,6 +151,11 @@ const runtimeLaunchFields = {
   secretEnv: z.record(z.string(), z.string()).optional(),
   /** Labelling only (never a secret): the workspace this run belongs to. */
   workspaceId: z.string().trim().min(1).optional(),
+  /**
+   * The daemon's telemetry: the span that launched it, and where it reports (`daemon-telemetry.ts`).
+   * Absent: the daemon starts its own trace, and exports nothing unless its image says otherwise.
+   */
+  telemetry: daemonTelemetrySchema.optional(),
   /**
    * The workspace's live bindings (sealantd ADR-0014), re-supplied on every launch so a relaunch
    * boots with `/workspace/repo` (and any bindable mount) pointing where it did.

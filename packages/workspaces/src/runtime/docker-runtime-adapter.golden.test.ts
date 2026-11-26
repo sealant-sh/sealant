@@ -73,6 +73,25 @@ describe("DockerRuntimeAdapter golden argv", () => {
     }
   });
 
+  it("hands the daemon its trace and Sentry project after the blueprint's env", async () => {
+    const { calls, runner } = recordingRunner();
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: runner,
+      runtimeCatalogLoader: catalog,
+    });
+    const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    await adapter.launch({
+      ...cases.gitSource,
+      telemetry: { traceparent, sentryDsn: "https://k@sentry.example.com/10" },
+    });
+
+    const run = calls.find((call) => call[0] === "run") ?? [];
+    const at = (value: string) => run.indexOf(value);
+    expect(at(`SEALANT_TRACEPARENT=${traceparent}`)).toBeGreaterThan(at("NODE_ENV=development"));
+    expect(run).toContain("SEALANT_SENTRY_DSN=https://k@sentry.example.com/10");
+  });
+
   it("git source: every env channel in its documented precedence order", async () => {
     const { calls, runner } = recordingRunner();
     const adapter = new DockerRuntimeAdapter({

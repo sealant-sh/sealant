@@ -435,7 +435,7 @@ const renderBase = (plan: ResolvedImagePlan, platform: WorkspaceImagePlatform): 
  */
 export const sealantdImageReference =
   process.env["SEALANT_SEALANTD_IMAGE"] ??
-  "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.209@sha256:1e0bfcc2a9bee0cac7d735a5a44b9cae86d8839ad508616584137c52a24a0008";
+  "ghcr.io/sealant-sh/sealantd-next:0.21.0-next.215@sha256:e1766fa62454415f2ec39a3fa80260c1e103bf93ffecb4ac3fdd1f86c12840e1";
 const dockerCliImageReference = process.env["SEALANT_DOCKER_CLI_IMAGE"] ?? "docker:27.5.1-cli";
 
 /**
