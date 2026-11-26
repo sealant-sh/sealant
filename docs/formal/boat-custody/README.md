@@ -10,8 +10,18 @@ never-created rules again at sealant#648 (SLNT-825), which fixed P1-A. Read agai
 (SLNT-1318, 2026-11-24): the runtime-instance repository gained two statements over the host VM disk
 columns only (`recordHostVmDisk`, `listHostVmBaseImages`) and one over `capture_claimed_at`
 (`markCaptureClaimed`), plus the runner's egress written with the disks, which no Boat step reads or
-writes; no model change. Run with tlx at the commit `docs/formal/tlx.sh` pins, which gives TLC's
-verdicts and counts on every case ("The checker" below).
+writes; no model change. Read again at `e71c0dcd` (SLNT-1377, 2026-11-26), with sealant#641's hunks
+in the covered files, which no one had read against the models before: #641's run reservation
+refuses two more cases before it inserts the run (the account's wallet unresolved, the image made in
+another wallet), and the full check's `start` now reads the account row `FOR SHARE` in the insert's
+transaction and refuses with `wallet-changed` before anything starts, which is `CStart` with one
+more refusal (it checks the wallet, not the key, so P2-A stays open). The rest of #641 names a
+wallet on each request, below the models' one Boat, or is the `unreachable` absence under "Not
+covered". sealant#701 passes the attempt's control scope through the build job and the
+runtime-instance writes; SLNT-1377 runs the build job under its delivery's span with spans named for
+the build and the launch. Neither changes a guard, an order or a covered column; no model change.
+Run with tlx at the commit `docs/formal/tlx.sh` pins, which gives TLC's verdicts and counts on every
+case ("The checker" below).
 
 ## The two promises
 
@@ -321,10 +331,13 @@ Where the docs say nothing, a constant lets the adversary do either. Main's own 
 - Two runs sharing an account's limits, the install's own key (`default`), a second check of the
   same account (a unique index on unfinished rows prevents it).
 - The `unreachable` absence sealant#641 added (a run made before sealant recorded wallets, whose VM
-  is in no wallet the key can bill) and the wallet each request names. Its hunks in the covered
-  files are not yet read against the models, so the sync commit stays at `dd39b9de`. SLNT-947 keeps
-  that absence only for a key that cannot list its wallets; under a complete list Boat's 404 under
-  every wallet is the run ledger's own `not-found` absence.
+  is in no wallet the key can bill) and the wallet each request names. `recordObjectWallet` records
+  such a run absent, and a full check, image or build recorded unreachable no longer holds the key
+  (`proofOutstanding`, the removal count, `heldImages`). For those rows sealant stops tracking what
+  Boat may still hold in a wallet the key cannot list: a deliberate choice, since sealant can
+  neither reach nor delete it there, and one the models leave out. SLNT-947 keeps that absence only
+  for a key that cannot list its wallets; under a complete list Boat's 404 under every wallet is the
+  run ledger's own `not-found` absence.
 - The TypeScript itself. The models are written by hand; they are as close to the code as the
   coverage record in the skill says, at the commit above.
 
