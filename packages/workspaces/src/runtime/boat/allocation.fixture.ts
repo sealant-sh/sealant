@@ -36,6 +36,13 @@ const secret = (value: string) => {
 export class ProviderFixture {
   state: BoatSandbox["state"] = "running";
   hydrated = true;
+  /** Boat's progress copying the snapshot in, served while `hydrated` is false; null: none. */
+  hydration: {
+    phase: string;
+    entriesDone: number;
+    entriesTotal: number | null;
+    percent: number | null;
+  } | null = null;
   bootId = randomUUID();
   sandboxMissing = false;
   beforeSandboxRead: () => Promise<void> = async () => {};
@@ -95,6 +102,7 @@ export class ProviderFixture {
       snapshots: true,
       monitoring: false,
       hydrated: this.hydrated,
+      hydration: this.hydrated ? null : this.hydration,
     };
   }
   async serve(request: http.IncomingMessage, response: http.ServerResponse) {

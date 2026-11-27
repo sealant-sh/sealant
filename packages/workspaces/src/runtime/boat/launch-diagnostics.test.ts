@@ -222,7 +222,19 @@ describe("Boat launch diagnostics", () => {
       sandboxState: "cloning",
     });
     expect(starting.message).toBe(
-      'Boat runtime: launch-held: Boat was still starting this session\'s VM (it said "cloning") when sealant stopped waiting after 120 s. Nothing ran in it yet, so starting the session again is safe; if it keeps happening, Boat is slow to start VMs right now; diagnostic {"step":"observe-sandbox","errorClass":"TimeoutError","sandboxState":"cloning"}',
+      'Boat runtime: launch-held: Boat was still starting this session\'s VM (it said "cloning") when sealant stopped waiting after 120 s. Nothing ran in it yet, so starting the session again is safe; a second start of the same workspace image is usually quicker; diagnostic {"step":"observe-sandbox","errorClass":"TimeoutError","sandboxState":"cloning"}',
+    );
+    expect(
+      new BoatAdapterError("launch-held", {
+        step: "observe-sandbox",
+        errorClass: "TimeoutError",
+        sandboxState: "idle",
+        hydrated: false,
+        hydration: { phase: "sysdelta", percent: 43 },
+        waitedSeconds: 241,
+      }).message,
+    ).toContain(
+      "launch-held: Boat had started this session's VM but was still copying the workspace image onto it (sysdelta, 43 %) when sealant stopped waiting after 241 s. Nothing ran in it yet",
     );
     expect(
       new BoatAdapterError("launch-held", { step: "create", errorClass: "TimeoutError" }).message,
