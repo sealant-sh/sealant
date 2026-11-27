@@ -159,8 +159,20 @@ const CREATING: ReadonlySet<BoatSandbox["state"]> = new Set([
   "cloning",
 ]);
 
-/** How long a launch's VM preparation may take, every attempt and the waits between them. */
+/**
+ * How long a launch's VM preparation may take, every attempt and the waits between them, unless
+ * Boat is still copying the snapshot onto a VM it reports usable and that copy is moving.
+ */
 const PREPARE_BUDGET_MS = 120_000;
+/**
+ * The longest VM preparation waits for Boat to finish copying a snapshot onto the VM, while the
+ * copy keeps moving (SLNT-1397). A VM from a large or newly built snapshot can take longer than
+ * {@link PREPARE_BUDGET_MS}; the workspace's Docker cannot mount its overlays until the copy ends.
+ * Under the SDK's ten minutes for a whole start, with room for readiness after it.
+ */
+const HYDRATION_LIMIT_MS = 6 * 60_000;
+/** How long Boat's copy may go without progress before preparation stops waiting for it. */
+const HYDRATION_STALL_MS = 90_000;
 
 /** A create whose outcome sealant could not read at all. */
 const uncertainCreate: BoatLaunchDiagnostic = {
@@ -248,16 +260,36 @@ interface PrepareCall {
 
 /** One attempt of a launch's VM preparation: what Boat said of the VM, and the calls it made. */
 interface PrepareAttempt {
-  sandboxState?: string;
+  /** When the attempt began, in ms since the preparation did. */
+  readonly atMs: number;
+  sandboxState?: BoatSandbox["state"];
   hydrated?: boolean;
+  /** Boat's progress copying the snapshot onto the VM, as this attempt read it. */
+  hydration?: { readonly phase: string; readonly percent: number | null };
   readonly calls: PrepareCall[];
 }
 
 /** A launch's VM preparation as it goes, attempt by attempt (SLNT-958). Steps, states, flags and
  * durations only: nothing a request or reply carried. */
 interface PrepareTrace {
+  readonly startedAt: number;
   readonly attempts: PrepareAttempt[];
+  /** The last progress Boat reported copying the snapshot in, and when it changed (ms since start). */
+  progress?: { readonly key: string; readonly atMs: number };
 }
+
+/**
+ * When VM preparation stops waiting, in ms since it started: {@link PREPARE_BUDGET_MS}, or, while
+ * Boat's copy of the snapshot onto a usable VM keeps moving, {@link HYDRATION_STALL_MS} after it
+ * last moved, never past {@link HYDRATION_LIMIT_MS}.
+ */
+const prepareDeadlineMs = (trace: PrepareTrace) =>
+  trace.progress === undefined
+    ? PREPARE_BUDGET_MS
+    : Math.max(
+        PREPARE_BUDGET_MS,
+        Math.min(HYDRATION_LIMIT_MS, trace.progress.atMs + HYDRATION_STALL_MS),
+      );
 
 const CurrentPrepareTrace = Context.Reference<PrepareTrace | undefined>(
   "@sealant/workspaces/boat/CurrentPrepareTrace",
@@ -279,9 +311,16 @@ const traced = <A, E, R>(step: BoatLaunchDiagnostic["step"], effect: Effect.Effe
     );
   });
 
+/** A duration in ms, in seconds to one decimal, for a log line. */
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
 const describeAttempt = (entry: PrepareAttempt, index: number) =>
   `attempt ${index + 1}: VM ${entry.sandboxState ?? "unread"}, hydrated ${
     entry.hydrated === undefined ? "unknown" : String(entry.hydrated)
+  }${
+    entry.hydration === undefined
+      ? ""
+      : ` (${entry.hydration.phase}${entry.hydration.percent === null ? "" : ` ${entry.hydration.percent} %`})`
   }; ${
     entry.calls.length === 0
       ? "no Boat call"
@@ -565,10 +604,18 @@ const make: Effect.Effect<
             ),
       );
     const observed = presence.sandbox;
-    const current = (yield* CurrentPrepareTrace)?.attempts.at(-1);
-    if (current !== undefined) {
+    const trace = yield* CurrentPrepareTrace;
+    const current = trace?.attempts.at(-1);
+    if (trace !== undefined && current !== undefined) {
       current.sandboxState = observed.state;
       if (observed.hydrated !== undefined) current.hydrated = observed.hydrated;
+      const hydration = observed.hydration ?? undefined;
+      if (hydration !== undefined && observed.hydrated === false && !CREATING.has(observed.state)) {
+        current.hydration = { phase: hydration.phase, percent: hydration.percent };
+        // Progress is any change in what Boat reports of the copy: its step, its count, its share.
+        const key = `${hydration.phase}|${hydration.entriesDone}|${hydration.percent ?? ""}`;
+        if (trace.progress?.key !== key) trace.progress = { key, atMs: current.atMs };
+      }
     }
     const observationDiagnostic: BoatLaunchDiagnostic = {
       step: "observe-sandbox",
@@ -589,6 +636,9 @@ const make: Effect.Effect<
         }),
       );
     }
+    // Boat reports a VM usable before every file of its snapshot is on its disk (`hydrated`). The
+    // workspace's own Docker cannot mount overlays on its data root until then (SLNT-1397: the
+    // readiness probe's `docker run` fails with `invalid argument`), so the launch waits for it.
     if (!["ready", "idle", "running"].includes(observed.state) || observed.hydrated === false)
       return yield* Effect.fail(
         new BoatAllocationError("allocation-pending", {
@@ -663,9 +713,10 @@ const make: Effect.Effect<
   const prepared = (input: BoatRunInput) =>
     Effect.gen(function* () {
       const runId = input.consumer.runId;
-      const trace: PrepareTrace = { attempts: [] };
+      const trace: PrepareTrace = { startedAt: yield* Clock.currentTimeMillis, attempts: [] };
       const once = Effect.gen(function* () {
-        trace.attempts.push({ calls: [] });
+        const now = yield* Clock.currentTimeMillis;
+        trace.attempts.push({ atMs: now - trace.startedAt, calls: [] });
         const index = trace.attempts.length - 1;
         return yield* drive(input).pipe(
           Effect.onExit((exit) => {
@@ -680,25 +731,60 @@ const make: Effect.Effect<
           }),
         );
       });
+      // Stops the preparation at its deadline, which moves while Boat's copy of the snapshot onto
+      // a usable VM keeps moving: it sleeps to the deadline it reads, and reads it again on waking.
+      const deadline = Effect.gen(function* () {
+        for (;;) {
+          const elapsed = (yield* Clock.currentTimeMillis) - trace.startedAt;
+          const at = prepareDeadlineMs(trace);
+          if (elapsed >= at) return yield* Effect.fail(new Cause.TimeoutError());
+          yield* Effect.sleep(at - elapsed);
+        }
+      });
       return yield* once.pipe(
         Effect.retry({
-          times: 119,
           schedule: Schedule.spaced("1 second"),
+          // The deadline bounds the attempts; these are the answers worth another one.
           while: (error) =>
             error instanceof BoatAllocationError &&
             error.code === "allocation-pending" &&
             // A create whose outcome is unknown: the next attempt discovers or replays it.
             (error.diagnostic?.step === "create" ||
               (error.diagnostic?.step === "observe-sandbox" &&
-                (["init", "provisioning", "provisioned", "cloning"].includes(
-                  error.diagnostic.sandboxState ?? "",
-                ) ||
+                ((error.diagnostic.sandboxState !== undefined &&
+                  CREATING.has(error.diagnostic.sandboxState)) ||
                   error.diagnostic.hydrated === false))),
         }),
+        // How long Boat took to give a usable VM and to finish copying its snapshot in (SLNT-1397):
+        // one line per launch, so a slow start shows without debug logging.
+        Effect.tap(() =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            const usable = trace.attempts.find(
+              (entry) => entry.sandboxState !== undefined && !CREATING.has(entry.sandboxState),
+            );
+            const copying = trace.attempts.some((entry) => entry.hydrated === false);
+            const copied = trace.attempts.find((entry) => entry.hydrated === true);
+            yield* Effect.logInfo(
+              `Boat launch · run ${runId}: VM prepared in ${seconds(now - trace.startedAt)} over ${trace.attempts.length} attempt${trace.attempts.length === 1 ? "" : "s"}${
+                usable === undefined
+                  ? ""
+                  : `; Boat first reported it ${usable.sandboxState} at ${seconds(usable.atMs)}`
+              }${
+                copied === undefined
+                  ? ""
+                  : copying
+                    ? `, its snapshot copied in at ${seconds(copied.atMs)}`
+                    : ", its snapshot already copied in"
+              }.`,
+            );
+          }),
+        ),
         Effect.provideService(CurrentPrepareTrace, trace),
-        Effect.timeout(PREPARE_BUDGET_MS),
+        Effect.raceFirst(deadline),
         Effect.catchIf(Cause.isTimeoutError, (error) =>
           Effect.gen(function* () {
+            const elapsed = (yield* Clock.currentTimeMillis) - trace.startedAt;
             // The step the budget ran out in: a call still running, or else the last one made
             // (the attempts were waiting a second between them).
             const last = trace.attempts.at(-1);
@@ -716,8 +802,17 @@ const make: Effect.Effect<
                 (worst, next) => (worst === undefined || next.ms > worst.ms ? next : worst),
                 undefined,
               );
+            // What Boat last said of the VM, so the launch's failure can say it in words.
+            const seen = trace.attempts.findLast((entry) => entry.sandboxState !== undefined);
+            const budget = prepareDeadlineMs(trace);
+            const copy =
+              trace.progress === undefined
+                ? ""
+                : budget >= HYDRATION_LIMIT_MS
+                  ? ` (Boat was still copying the snapshot in; ${HYDRATION_LIMIT_MS / 1000} s is the most it waits for that)`
+                  : ` (Boat's copy of the snapshot in made no progress for ${HYDRATION_STALL_MS / 1000} s)`;
             yield* Effect.logWarning(
-              `Boat launch · run ${runId}: VM preparation ran out of its ${PREPARE_BUDGET_MS / 1000} s at ${step}, ${where}; ${trace.attempts.length} attempt${trace.attempts.length === 1 ? "" : "s"}${
+              `Boat launch · run ${runId}: VM preparation ran out of its ${Math.round(budget / 1000)} s at ${step}, ${where}${copy}; ${trace.attempts.length} attempt${trace.attempts.length === 1 ? "" : "s"}${
                 slowest === undefined ? "" : `, slowest call ${slowest.step} ${slowest.ms} ms`
               }. Last attempts: ${trace.attempts
                 .slice(-3)
@@ -727,7 +822,22 @@ const make: Effect.Effect<
                 .join(" | ")}.`,
             );
             return yield* Effect.fail(
-              new BoatAllocationError("allocation-pending", boatLaunchDiagnostic(error, step)),
+              new BoatAllocationError("allocation-pending", {
+                ...boatLaunchDiagnostic(error, step),
+                ...(seen?.sandboxState === undefined ? {} : { sandboxState: seen.sandboxState }),
+                ...(seen?.hydrated === undefined ? {} : { hydrated: seen.hydrated }),
+                ...(seen?.hydration === undefined
+                  ? {}
+                  : {
+                      hydration: {
+                        phase: seen.hydration.phase,
+                        ...(seen.hydration.percent === null
+                          ? {}
+                          : { percent: seen.hydration.percent }),
+                      },
+                    }),
+                waitedSeconds: Math.round(elapsed / 1000),
+              }),
             );
           }),
         ),

@@ -64,10 +64,12 @@ import {
   type BoatRunInput,
 } from "@sealant/validators";
 import {
+  Cause,
   Clock,
   Context,
   Deferred,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Logger,
@@ -1297,6 +1299,144 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         expect(observations).toBeGreaterThanOrEqual(3);
       } finally {
         await f.runtime.dispose();
+      }
+    }));
+  /**
+   * Runs a launch's VM preparation on the test clock, one second at a time, each step once the
+   * preparation's read of the VM it waits on has landed (or a moment has passed), until it ends.
+   * Boat reports the VM idle and still copying its snapshot in; `progress(read)` says what Boat
+   * reports of the copy at each read (null: no progress object), and `copiedAt` the read from
+   * which the copy is done.
+   */
+  const prepareWhileCopying = async (
+    s: AllocationFixture,
+    options: {
+      readonly progress: (read: number) => { entriesDone: number; percent: number } | null;
+      readonly copiedAt?: number;
+    },
+  ) => {
+    const seen = { reads: 0, done: false };
+    s.provider.state = "idle";
+    s.provider.hydrated = false;
+    s.provider.beforeSandboxRead = async () => {
+      seen.reads++;
+      const progress = options.progress(seen.reads);
+      s.provider.hydration =
+        progress === null ? null : { phase: "hydrating", entriesTotal: 1_000, ...progress };
+      if (options.copiedAt !== undefined && seen.reads >= options.copiedAt)
+        s.provider.hydrated = true;
+    };
+    const elapsed = { ms: 0 };
+    const exit = await execute(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(
+          s.allocations.prepare(s.input).pipe(
+            Effect.onExit(() =>
+              Effect.sync(() => {
+                seen.done = true;
+              }),
+            ),
+          ),
+        );
+        while (!seen.done && elapsed.ms < 400_000) {
+          const before = seen.reads;
+          yield* TestClock.adjust(1_000);
+          elapsed.ms += 1_000;
+          for (let wait = 0; wait < 100 && !seen.done && seen.reads === before; wait++)
+            yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
+        }
+        return yield* Fiber.await(fiber);
+      }).pipe(Effect.provide(TestClock.layer()), Effect.provide(logRecorder().recorder)),
+    );
+    return { exit, reads: seen.reads };
+  };
+  it("waits past 120 s while Boat's copy of the snapshot onto a usable VM keeps moving, then binds it (SLNT-1397)", () =>
+    test(async (s) => {
+      // The workspace's Docker cannot mount its overlays until the copy ends, so binding waits for
+      // it; a large or newly built snapshot takes longer than 120 s to copy in.
+      const { exit, reads } = await prepareWhileCopying(s, {
+        progress: (read) => ({ entriesDone: read * 5, percent: Math.min(99, read / 3) | 0 }),
+        copiedAt: 200,
+      });
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(reads).toBeGreaterThanOrEqual(200);
+      expect(s.provider.creates).toHaveLength(1);
+    }));
+  it.each([
+    [
+      "made no progress for 90 s",
+      (read: number) => ({ entriesDone: Math.min(read, 150) * 5, percent: 50 }),
+      240,
+    ],
+    [
+      "kept moving for 6 min, the most it waits",
+      (read: number) => ({ entriesDone: read, percent: 50 }),
+      360,
+    ],
+    ["reported no progress at all, as before", () => null, 120],
+  ] as const)(
+    "stops waiting for a usable VM whose snapshot copy %s, and says so (SLNT-1397)",
+    (_name, progress, waited) =>
+      test(async (s) => {
+        const { exit } = await prepareWhileCopying(s, { progress });
+        expect(Exit.isFailure(exit)).toBe(true);
+        const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+        if (!(failure instanceof BoatAllocationError)) throw failure;
+        expect(failure.diagnostic).toMatchObject({
+          step: "observe-sandbox",
+          errorClass: "TimeoutError",
+          sandboxState: "idle",
+          hydrated: false,
+        });
+        expect(failure.diagnostic?.waitedSeconds).toBeGreaterThanOrEqual(waited - 1);
+        expect(failure.diagnostic?.waitedSeconds).toBeLessThanOrEqual(waited + 2);
+        expect(s.provider.commands).toHaveLength(0);
+        expect(new BoatAdapterError("launch-held", failure.diagnostic).message).toContain(
+          progress(1) === null
+            ? "Boat had started this session's VM but was still copying the workspace image onto it when sealant stopped waiting"
+            : "Boat had started this session's VM but was still copying the workspace image onto it (hydrating, 50 %) when sealant stopped waiting",
+        );
+      }),
+  );
+  it("keeps what Boat last said of the VM when VM preparation runs out of its 120 s (SLNT-1397)", () =>
+    test(async (s) => {
+      const release = Promise.withResolvers<void>();
+      const progress = { reads: 0 };
+      // The first read finds the VM still cloning; the second stalls past the budget.
+      s.provider.state = "cloning";
+      s.provider.hydrated = false;
+      s.provider.beforeSandboxRead = async () => {
+        if (++progress.reads < 2) return;
+        await release.promise;
+      };
+      try {
+        const failure = await execute(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(s.allocations.prepare(s.input));
+            // Step the test clock past the second between attempts until the second read starts.
+            while (progress.reads < 2) {
+              yield* TestClock.adjust(1_000);
+              yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 20)));
+            }
+            yield* TestClock.adjust(120_001);
+            return yield* Fiber.join(fiber).pipe(Effect.flip);
+          }).pipe(Effect.provide(TestClock.layer()), Effect.provide(logRecorder().recorder)),
+        );
+        expect(failure).toMatchObject({
+          code: "allocation-pending",
+          diagnostic: {
+            step: "observe-sandbox",
+            errorClass: "TimeoutError",
+            sandboxState: "cloning",
+            hydrated: false,
+          },
+        });
+        if (!(failure instanceof BoatAllocationError)) throw failure;
+        expect(new BoatAdapterError("launch-held", failure.diagnostic).message).toContain(
+          'Boat was still starting this session\'s VM (it said "cloning")',
+        );
+      } finally {
+        release.resolve();
       }
     }));
   it.each([

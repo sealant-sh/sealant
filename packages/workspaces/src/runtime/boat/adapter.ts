@@ -42,6 +42,7 @@ import { BOAT_AGENT_CLOSE_UNVERIFIED } from "./agent-contract.js";
 import { BoatExecution, BoatExecutionError } from "./execution.js";
 import {
   boatLaunchDiagnostic,
+  boatLaunchReason,
   boatLaunchSummary,
   type BoatLaunchDiagnostic,
 } from "./launch-diagnostics.js";
@@ -86,7 +87,7 @@ export class BoatAdapterError extends Error {
       | "target-mismatch",
     readonly diagnostic?: BoatLaunchDiagnostic,
   ) {
-    super(`Boat runtime: ${code}${boatLaunchSummary(diagnostic)}`);
+    super(`Boat runtime: ${code}${boatLaunchReason(diagnostic)}${boatLaunchSummary(diagnostic)}`);
   }
 }
 

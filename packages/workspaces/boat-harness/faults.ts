@@ -211,7 +211,8 @@ export const scenarios = {
       },
       () =>
         failedLaunch(stack, project, {
-          cause: /allocation|provision|pending|lifetime|hydrat/i,
+          // VM preparation's deadline names what Boat last said of the VM, in words (SLNT-1397).
+          cause: /allocation|provision|pending|lifetime|hydrat|still starting this session's VM/i,
         }),
     );
   },

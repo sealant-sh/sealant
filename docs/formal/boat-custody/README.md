@@ -254,6 +254,15 @@ which gives P2-B its form without a stall.
   the build phase ends (a native snapshot, a reused plan, a fresh build) through one helper that
   carries the scope to the launch; the Boat path's statements are unchanged. No covered statement,
   its order, or a Boat answer it acts on changed, so no action moved, and `sync` stays.
+- SLNT-1397 (Boat sessions that never start), `vm.ts`, `api.ts` and `adapter.ts`: VM preparation
+  still retries a VM Boat reports `hydrated: false`, but its 120 s now runs on, up to 6 minutes, for
+  as long as Boat's `hydration` progress on a usable VM keeps moving. A deadline fiber raced against
+  the retries replaces the flat timeout. The model has no time: `LObserveWrite`'s `creating` answer
+  is already an allocation-pending retry with no bound but `MaxRetries`, and a longer wait is more
+  of the same retry. Each retry is still `drive` from the top, reading the row again, and
+  `runs.seen`'s `created_seen_at` still follows the state alone. The diagnostic's new fields and
+  `BoatAdapterError`'s sentence are neither a statement nor a Boat call. No action moved, and `sync`
+  stays.
 
 ## Each property fails on a broken variant
 

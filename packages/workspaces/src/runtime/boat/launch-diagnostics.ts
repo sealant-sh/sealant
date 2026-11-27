@@ -152,6 +152,18 @@ const diagnosticSchema = z.object({
     ])
     .optional(),
   hydrated: z.boolean().optional(),
+  /** Boat's progress copying the snapshot onto the VM, when it was still at it (SLNT-1397). */
+  hydration: z
+    .object({
+      phase: z
+        .string()
+        .regex(/^[a-z][a-z-]{0,31}$/)
+        .optional(),
+      percent: z.number().int().min(0).max(100).optional(),
+    })
+    .optional(),
+  /** How long VM preparation waited before it stopped, in whole seconds. */
+  waitedSeconds: z.number().int().nonnegative().optional(),
   resourceOperation: z
     .enum([
       "check-authority",
@@ -299,6 +311,47 @@ export const boatLaunchDiagnostic = (
       ? { provider: boatProviderFailureSchema.parse(current) }
       : {}),
   });
+};
+
+/** The steps of a launch's VM preparation, in the words a person reads, by what was waited on. */
+const PREPARATION_WAIT: Partial<Record<BoatLaunchDiagnostic["step"], string>> = {
+  "read-source": "Boat to read the workspace image",
+  create: "Boat to accept the VM",
+  discover: "Boat to list the VM",
+  "observe-sandbox": "Boat to start the VM",
+  "read-boot-id": "the VM's first command",
+  "bind-exchange": "the VM to take its launch",
+};
+const STARTING_STATES: ReadonlySet<string> = new Set([
+  "init",
+  "provisioning",
+  "provisioned",
+  "cloning",
+]);
+
+/**
+ * Why a launch failed, in words a person can act on, for a failure whose cause sealant knows; empty
+ * otherwise. Only VM preparation running out of time is known so far (SLNT-1397): nothing was
+ * started in the VM, so starting again is safe.
+ */
+export const boatLaunchReason = (diagnostic: BoatLaunchDiagnostic | undefined): string => {
+  if (diagnostic?.errorClass !== "TimeoutError") return "";
+  const waitingOn = PREPARATION_WAIT[diagnostic.step];
+  if (waitingOn === undefined) return "";
+  const state = diagnostic.sandboxState;
+  const progress = [
+    diagnostic.hydration?.phase,
+    diagnostic.hydration?.percent === undefined ? undefined : `${diagnostic.hydration.percent} %`,
+  ].filter((part) => part !== undefined);
+  const where =
+    state !== undefined && STARTING_STATES.has(state)
+      ? `Boat was still starting this session's VM (it said "${state}")`
+      : diagnostic.step === "observe-sandbox" && diagnostic.hydrated === false
+        ? `Boat had started this session's VM but was still copying the workspace image onto it${
+            progress.length === 0 ? "" : ` (${progress.join(", ")})`
+          }`
+        : `This session's VM was not ready: sealant was waiting for ${waitingOn}`;
+  return `: ${where} when sealant stopped waiting after ${diagnostic.waitedSeconds ?? 120} s. Nothing ran in it yet, so starting the session again is safe; a second start of the same workspace image is usually quicker`;
 };
 
 /** This serialized allowlist survives the worker's errorMessage projection into the runtime row. */

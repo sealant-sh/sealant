@@ -29,9 +29,26 @@ export type BoatAutoStop =
   | { readonly kind: "scheduled"; readonly at: string }
   | { readonly kind: "unverified" };
 
+/**
+ * Boat's progress copying a snapshot onto a VM, while `hydrated` is false (GET only; null in lists,
+ * once done, or when the VM is slow to answer). A shape Boat changes is read as no progress, never
+ * as a failed read of the VM.
+ */
+const hydrationSchema = z
+  .object({
+    phase: z.string().regex(/^[a-z][a-z-]{0,31}$/),
+    entriesDone: z.number().int().nonnegative(),
+    entriesTotal: z.number().int().nonnegative().nullable(),
+    percent: z.number().int().min(0).max(100).nullable(),
+  })
+  .nullable()
+  .optional()
+  .catch(undefined);
+
 const sandboxSchema = z
   .object({
     hydrated: z.boolean().optional(),
+    hydration: hydrationSchema,
     labels: z.record(z.string(), z.string()).optional(),
     id: boatSandboxIdSchema,
     state: z.enum([
