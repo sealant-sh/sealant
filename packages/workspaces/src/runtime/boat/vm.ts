@@ -248,7 +248,9 @@ interface PrepareCall {
 
 /** One attempt of a launch's VM preparation: what Boat said of the VM, and the calls it made. */
 interface PrepareAttempt {
-  sandboxState?: string;
+  /** When the attempt began, in ms since the preparation did. */
+  readonly atMs: number;
+  sandboxState?: BoatSandbox["state"];
   hydrated?: boolean;
   readonly calls: PrepareCall[];
 }
@@ -256,6 +258,7 @@ interface PrepareAttempt {
 /** A launch's VM preparation as it goes, attempt by attempt (SLNT-958). Steps, states, flags and
  * durations only: nothing a request or reply carried. */
 interface PrepareTrace {
+  readonly startedAt: number;
   readonly attempts: PrepareAttempt[];
 }
 
@@ -589,7 +592,11 @@ const make: Effect.Effect<
         }),
       );
     }
-    if (!["ready", "idle", "running"].includes(observed.state) || observed.hydrated === false)
+    // `hydrated` is not waited for (SLNT-1397). Boat sets it once every file of the snapshot has
+    // been copied onto the VM's disk, but the VM is usable well before that: a read of a file not
+    // yet copied waits for that file and returns its bytes. A VM from a large or newly built
+    // snapshot can take more than this preparation's 120 s to finish copying.
+    if (!["ready", "idle", "running"].includes(observed.state))
       return yield* Effect.fail(
         new BoatAllocationError("allocation-pending", {
           ...observationDiagnostic,
@@ -663,9 +670,10 @@ const make: Effect.Effect<
   const prepared = (input: BoatRunInput) =>
     Effect.gen(function* () {
       const runId = input.consumer.runId;
-      const trace: PrepareTrace = { attempts: [] };
+      const trace: PrepareTrace = { startedAt: yield* Clock.currentTimeMillis, attempts: [] };
       const once = Effect.gen(function* () {
-        trace.attempts.push({ calls: [] });
+        const now = yield* Clock.currentTimeMillis;
+        trace.attempts.push({ atMs: now - trace.startedAt, calls: [] });
         const index = trace.attempts.length - 1;
         return yield* drive(input).pipe(
           Effect.onExit((exit) => {
@@ -690,11 +698,27 @@ const make: Effect.Effect<
             // A create whose outcome is unknown: the next attempt discovers or replays it.
             (error.diagnostic?.step === "create" ||
               (error.diagnostic?.step === "observe-sandbox" &&
-                (["init", "provisioning", "provisioned", "cloning"].includes(
-                  error.diagnostic.sandboxState ?? "",
-                ) ||
-                  error.diagnostic.hydrated === false))),
+                error.diagnostic.sandboxState !== undefined &&
+                CREATING.has(error.diagnostic.sandboxState))),
         }),
+        // How long Boat took to give a usable VM, and whether its snapshot had finished copying in
+        // (SLNT-1397): one line per launch, so a slow start shows without debug logging.
+        Effect.tap(() =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            const usable = trace.attempts.find(
+              (entry) => entry.sandboxState !== undefined && !CREATING.has(entry.sandboxState),
+            );
+            const last = trace.attempts.at(-1);
+            yield* Effect.logInfo(
+              `Boat launch · run ${runId}: VM prepared in ${((now - trace.startedAt) / 1000).toFixed(1)} s over ${trace.attempts.length} attempt${trace.attempts.length === 1 ? "" : "s"}${
+                usable === undefined
+                  ? ""
+                  : `; Boat first reported it ${usable.sandboxState} at ${(usable.atMs / 1000).toFixed(1)} s`
+              }; hydrated ${last?.hydrated === undefined ? "unknown" : String(last.hydrated)} when bound.`,
+            );
+          }),
+        ),
         Effect.provideService(CurrentPrepareTrace, trace),
         Effect.timeout(PREPARE_BUDGET_MS),
         Effect.catchIf(Cause.isTimeoutError, (error) =>
@@ -726,8 +750,14 @@ const make: Effect.Effect<
                 )
                 .join(" | ")}.`,
             );
+            // What Boat last said of the VM, so the launch's failure can say it in words.
+            const seen = trace.attempts.findLast((entry) => entry.sandboxState !== undefined);
             return yield* Effect.fail(
-              new BoatAllocationError("allocation-pending", boatLaunchDiagnostic(error, step)),
+              new BoatAllocationError("allocation-pending", {
+                ...boatLaunchDiagnostic(error, step),
+                ...(seen?.sandboxState === undefined ? {} : { sandboxState: seen.sandboxState }),
+                ...(seen?.hydrated === undefined ? {} : { hydrated: seen.hydrated }),
+              }),
             );
           }),
         ),

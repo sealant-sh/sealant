@@ -254,6 +254,14 @@ which gives P2-B its form without a stall.
   the build phase ends (a native snapshot, a reused plan, a fresh build) through one helper that
   carries the scope to the launch; the Boat path's statements are unchanged. No covered statement,
   its order, or a Boat answer it acts on changed, so no action moved, and `sync` stays.
+- SLNT-1397 (Boat sessions that never start), `vm.ts` and `adapter.ts`: `drive` no longer retries a
+  VM Boat reports `ready`, `idle` or `running` with `hydrated: false`. Boat sets `hydrated` once
+  every file of the snapshot is on the VM's disk, and the VM is usable before that. The model's
+  `ObservedGet` never had hydration: a VM past creation answers `created`, which binds. The code now
+  does what `LObserveWrite` already says, and `runs.seen`'s `created_seen_at` still follows the
+  state alone. The timeout's diagnostic also keeps the last state Boat reported, and
+  `BoatAdapterError`'s message gains a sentence. Neither is a statement or a Boat call. No action
+  moved, and `sync` stays.
 
 ## Each property fails on a broken variant
 

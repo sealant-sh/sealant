@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import { BoatAdapterError } from "./adapter.js";
 import { BoatApiError } from "./config.js";
-import { boatGuestOutput, boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
+import { boatFailureInMessage } from "./failure.js";
+import {
+  boatGuestOutput,
+  boatLaunchDiagnostic,
+  boatLaunchReason,
+  boatLaunchSummary,
+} from "./launch-diagnostics.js";
 import { BoatAllocationError } from "./vm.js";
 
 describe("Boat launch diagnostics", () => {
@@ -207,5 +214,42 @@ describe("Boat launch diagnostics", () => {
       errorClass: "BoatApiError",
       provider: { operation: "unknown", status: 401, causeClass: null },
     });
+  });
+  it("says in words that a launch's VM preparation ran out, and what Boat last said of the VM (SLNT-1397)", () => {
+    const starting = new BoatAdapterError("launch-held", {
+      step: "observe-sandbox",
+      errorClass: "TimeoutError",
+      sandboxState: "cloning",
+    });
+    expect(starting.message).toBe(
+      'Boat runtime: launch-held: Boat was still starting this session\'s VM (it said "cloning") when sealant stopped waiting after 120 s. Nothing ran in it yet, so starting the session again is safe; if it keeps happening, Boat is slow to start VMs right now; diagnostic {"step":"observe-sandbox","errorClass":"TimeoutError","sandboxState":"cloning"}',
+    );
+    expect(
+      new BoatAdapterError("launch-held", { step: "create", errorClass: "TimeoutError" }).message,
+    ).toContain(
+      "This session's VM was not ready: sealant was waiting for Boat to accept the VM when sealant stopped waiting after 120 s.",
+    );
+    // A Boat refusal in the diagnostic is still read back from the message after the words.
+    const refused = new BoatAdapterError("launch-held", {
+      step: "observe-sandbox",
+      errorClass: "TimeoutError",
+      provider: {
+        operation: "get",
+        status: 503,
+        causeClass: null,
+        boat: { kind: "no-answer", retryable: true, operation: "get", status: 503 },
+      },
+    });
+    expect(boatFailureInMessage(refused.message)).toMatchObject({ kind: "no-answer" });
+  });
+  it("adds no words to a failure whose cause it does not know", () => {
+    expect(boatLaunchReason(undefined)).toBe("");
+    expect(boatLaunchReason({ step: "readiness", errorClass: "TimeoutError" })).toBe("");
+    expect(boatLaunchReason({ step: "observe-sandbox", errorClass: "BoatAllocationError" })).toBe(
+      "",
+    );
+    expect(
+      new BoatAdapterError("launch-held", { step: "read-boot-id", errorClass: "Error" }).message,
+    ).toBe('Boat runtime: launch-held; diagnostic {"step":"read-boot-id","errorClass":"Error"}');
   });
 });
