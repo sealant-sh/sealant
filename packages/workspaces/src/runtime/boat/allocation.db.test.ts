@@ -1302,11 +1302,15 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
       }
     }));
   /**
-   * Runs a launch's VM preparation on the test clock, one second at a time, each step once the
-   * preparation's read of the VM it waits on has landed (or a moment has passed), until it ends.
-   * Boat reports the VM idle and still copying its snapshot in; `progress(read)` says what Boat
-   * reports of the copy at each read (null: no progress object), and `copiedAt` the read from
-   * which the copy is done.
+   * Runs a launch's VM preparation on the test clock, one second at a time, until it ends. Boat
+   * reports the VM idle and still copying its snapshot in; `progress(read)` says what Boat reports
+   * of the copy at each read (null: no progress object), and `copiedAt` the read from which the
+   * copy is done.
+   *
+   * The clock moves only while the preparation waits on it: between attempts it holds two sleeps,
+   * its deadline's and the second before the next attempt. An attempt goes on after Boat's read
+   * lands (the reply, then a write of what Boat said), so moving the clock on the read, or after
+   * a moment of real time, starts the next attempt a second late on a slow runner (SLNT-1402).
    */
   const prepareWhileCopying = async (
     s: AllocationFixture,
@@ -1327,23 +1331,49 @@ describe.runIf(databaseUrl !== undefined)("Boat ordinary runtime adapter", () =>
         s.provider.hydrated = true;
     };
     const elapsed = { ms: 0 };
+    const clock = { sleeping: 0, changed: Promise.withResolvers<void>() };
+    const changed = () => {
+      const { resolve } = clock.changed;
+      clock.changed = Promise.withResolvers<void>();
+      resolve();
+    };
     const exit = await execute(
       Effect.gen(function* () {
+        const testClock = yield* Clock.Clock;
+        const counted: Clock.Clock = {
+          ...testClock,
+          sleep: (duration) =>
+            Effect.suspend(() => {
+              clock.sleeping++;
+              changed();
+              return testClock.sleep(duration);
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  clock.sleeping--;
+                  changed();
+                }),
+              ),
+            ),
+        };
         const fiber = yield* Effect.forkChild(
           s.allocations.prepare(s.input).pipe(
+            Effect.provideService(Clock.Clock, counted),
             Effect.onExit(() =>
               Effect.sync(() => {
                 seen.done = true;
+                changed();
               }),
             ),
           ),
         );
         while (!seen.done && elapsed.ms < 400_000) {
-          const before = seen.reads;
+          if (clock.sleeping < 2) {
+            yield* Effect.promise(() => clock.changed.promise);
+            continue;
+          }
           yield* TestClock.adjust(1_000);
           elapsed.ms += 1_000;
-          for (let wait = 0; wait < 100 && !seen.done && seen.reads === before; wait++)
-            yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
         }
         return yield* Fiber.await(fiber);
       }).pipe(Effect.provide(TestClock.layer()), Effect.provide(logRecorder().recorder)),
