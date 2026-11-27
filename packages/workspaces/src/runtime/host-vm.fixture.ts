@@ -204,10 +204,49 @@ export const createHostVmHarness = async (
     }
     if (verb === "create" && args.includes("--name")) {
       const name = args[args.indexOf("--name") + 1] ?? "";
-      proxies.set(name, { running: false });
+      if (name.endsWith("-proxy")) {
+        proxies.set(name, { running: false });
+        networks.get(args[args.indexOf("--network") + 1] ?? "")?.add(name);
+        proxy.started.push(workspaceOf(name));
+        return ok(`${name}-cid\n`);
+      }
+      if (harness.runFails) {
+        harness.runFails = false;
+        throw new Error("docker: Error response from daemon: failed to create task");
+      }
+      if (containers.has(name))
+        throw new Error(`Conflict. The container name "/${name}" is already in use`);
+      const scope = scopeOfRun(args, controlDir) ?? name;
       networks.get(args[args.indexOf("--network") + 1] ?? "")?.add(name);
-      proxy.started.push(workspaceOf(name));
-      return ok(`${name}-cid\n`);
+      containers.set(name, {
+        name,
+        scope,
+        args: [...args],
+        running: false,
+        exitCode: 0,
+        created: true,
+      });
+      return ok(`${name}-id\n`);
+    }
+    if (verb === "start" && !last.endsWith("-proxy")) {
+      const container = containers.get(last);
+      if (container === undefined) throw noSuch(`container: ${last}`);
+      if (harness.runFailsAtStart) {
+        harness.runFailsAtStart = false;
+        container.exitCode = 128;
+        throw new Error("docker: Error response from daemon: failed to start container");
+      }
+      events.push(`run:${last}`);
+      const mode = container.args[container.args.indexOf("--mode") + 1] ?? "";
+      const launchFile = mode === "recover" ? "recovery-env.json" : "boot-env.json";
+      const launch = await readFile(joinPath(controlDir, container.scope, launchFile), "utf8").then(
+        (text): unknown => JSON.parse(text),
+        () => undefined,
+      );
+      stagedAtRun.push({ mode, launch });
+      container.running = true;
+      container.created = false;
+      return ok(`${last}\n`);
     }
     if (last.endsWith("-proxy")) {
       const state = proxies.get(last);
