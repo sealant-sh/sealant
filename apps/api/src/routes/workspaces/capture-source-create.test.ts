@@ -774,6 +774,8 @@ describe("createWorkspace · idempotency key", () => {
     captureClaimedAt: null,
     hostVmRunnerEgress: null,
     controlScope: null,
+    launchTraceparent: null,
+    launchTracestate: null,
     removedAt: null,
     sourceKind: "capture",
     createdAt: now,

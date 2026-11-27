@@ -29,6 +29,8 @@ export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly endpoint?: string;
   /** The control scope the executor mounted at `/run/sealant` (see the column). */
   readonly controlScope?: string;
+  /** The launching span's W3C context (`launch_traceparent`, `launch_tracestate`). */
+  readonly launchTrace?: { readonly traceparent: string; readonly tracestate?: string | undefined };
   readonly errorCode?: string;
   readonly errorMessage?: string;
   /** Launch-time record of how each connected-account credential was injected (env vs file). */
@@ -515,6 +517,12 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               ...(input.reference === undefined ? {} : { reference: input.reference }),
               ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
               ...(input.controlScope === undefined ? {} : { controlScope: input.controlScope }),
+              ...(input.launchTrace === undefined
+                ? {}
+                : {
+                    launchTraceparent: input.launchTrace.traceparent,
+                    launchTracestate: input.launchTrace.tracestate ?? null,
+                  }),
               ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
               ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
               ...(input.launchCredentialInjections === undefined

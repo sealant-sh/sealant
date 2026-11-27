@@ -39,6 +39,7 @@ import { Effect } from "effect";
 import type { RuntimeLaunchIdentity } from "../runtime/launch-retention.js";
 import type { RuntimeAdapterLifecycle } from "../runtime/runtime-adapter.js";
 import { runIsCaptureSourced, type CaptureDrainLedger } from "./capture-drain.js";
+import { asLaunchFollowUp } from "./launch-trace.js";
 
 export interface AdoptStrandedLaunchesOptions {
   readonly runtimeAdapters: readonly RuntimeAdapterLifecycle[];
@@ -154,6 +155,9 @@ const identifyUnrecordedExecutors = (
             cause,
           ),
         ),
+        asLaunchFollowUp("sealant.workspace.find_stranded_executor", instance, {
+          "sealant.run_id": runId,
+        }),
       );
     }
   });
@@ -244,6 +248,9 @@ export const adoptStrandedLaunchesEffect = Effect.fn("adoptStrandedLaunches")(fu
           cause,
         ).pipe(Effect.as(false)),
       ),
+      asLaunchFollowUp("sealant.workspace.adopt_stranded_launch", instance, {
+        "sealant.run_id": runId,
+      }),
     );
     if (done) {
       adopted.push(runId);

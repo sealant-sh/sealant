@@ -44,6 +44,8 @@ const runtimeInstance = (
   captureClaimedAt: null,
   hostVmRunnerEgress: null,
   controlScope: null,
+  launchTraceparent: null,
+  launchTracestate: null,
   removedAt: null,
   createdAt: new Date("2026-06-21T00:00:00.000Z"),
   updatedAt: new Date("2026-06-21T00:00:00.000Z"),

@@ -379,11 +379,12 @@ export class Sealant {
    */
   readonly inference: InferenceNamespace = {
     respond: async (options) => {
+      const trace = captureTrace(this.#ctx);
       if ("allowedLogin" in options && options.allowedLogin === "subscription") {
-        await requireInferenceAllowedLogin(this.#ctx);
+        await withCallerTrace(trace, () => requireInferenceAllowedLogin(this.#ctx));
       }
       const payload = buildInferenceRespondRequest(options, this.#ctx.config.hostLocal.ownerUserId);
-      const wire = await this.#runtime.run(inferenceRespondOp(payload));
+      const wire = await this.#runtime.run(inferenceRespondOp(payload), trace);
       return mapInferenceResponse(wire);
     },
   };
@@ -473,14 +474,15 @@ export class Sealant {
       };
     },
     connect: async (options) => {
+      const trace = captureTrace(this.#ctx);
       if (options.accountId !== undefined || options.makeDefault !== undefined) {
-        await requireConnectedAccountDefaults(this.#ctx);
+        await withCallerTrace(trace, () => requireConnectedAccountDefaults(this.#ctx));
       }
       if (options.login !== undefined) {
-        await requireConnectedAccountLoginClass(this.#ctx);
+        await withCallerTrace(trace, () => requireConnectedAccountLoginClass(this.#ctx));
       }
       if (options.endpoint !== undefined) {
-        await requireConnectedAccountEndpoints(this.#ctx);
+        await withCallerTrace(trace, () => requireConnectedAccountEndpoints(this.#ctx));
       }
       const wire = await this.#runtime.run(
         createConnectedAccountOp({
@@ -493,6 +495,7 @@ export class Sealant {
           ...(options.login === undefined ? {} : { login: options.login }),
           ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
         }),
+        trace,
       );
       return mapConnectedAccount(wire);
     },
@@ -503,24 +506,28 @@ export class Sealant {
       return mapConnectedAccount(wire);
     },
     setDefault: async (options) => {
-      await requireConnectedAccountDefaults(this.#ctx);
+      const trace = captureTrace(this.#ctx);
+      await withCallerTrace(trace, () => requireConnectedAccountDefaults(this.#ctx));
       const wire = await this.#runtime.run(
         setConnectedAccountDefaultOp(options.provider, {
           ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
           connectedAccountId: options.accountId,
         }),
+        trace,
       );
       return mapConnectedAccount(wire);
     },
     markInvalid: async (connectedAccountId, options) => {
+      const trace = captureTrace(this.#ctx);
       if (options?.revision !== undefined) {
-        await requireConnectedAccountDefaults(this.#ctx);
+        await withCallerTrace(trace, () => requireConnectedAccountDefaults(this.#ctx));
       }
       const wire = await this.#runtime.run(
         markConnectedAccountInvalidOp(connectedAccountId, {
           ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
           ...(options?.revision === undefined ? {} : { revision: options.revision }),
         }),
+        trace,
       );
       return { outcome: wire.outcome ?? "marked", account: mapConnectedAccount(wire) };
     },

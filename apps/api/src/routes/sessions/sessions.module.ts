@@ -199,8 +199,12 @@ export const authorize = (input: {
 // Shared lookups
 // ---------------------------------------------------------------------------------------------
 
+// The lookups and the settle check below run on every poll of a session or its output stream and
+// each takes well under a millisecond, so they make no span of their own: their queries sit
+// directly under the request. Only a settle that writes gets one (`sealant.session.settle`).
+
 /** Uniform 404 on owner or token-workspace mismatch — existence is not leaked. */
-export const requireSession = Effect.fn("sealant.session.require")(function* (
+export const requireSession = Effect.fnUntraced(function* (
   sessionId: string,
   principal: SessionPrincipal,
 ) {
@@ -227,32 +231,30 @@ export const resolveDaemonTarget = (workspaceId: string) =>
  * The workspace's ready executor and how to reach its daemon (`target` undefined when this process
  * has no way to); `undefined` when there is no ready executor.
  */
-export const resolveDaemonInstance = Effect.fn("sealant.session.resolve_daemon_instance")(
-  function* (workspaceId: string) {
-    const workspaces = yield* WorkspaceRepo;
-    const instances = yield* WorkspaceRuntimeInstanceRepo;
-    const workspace = yield* withInternalError(
-      workspaces.getWorkspaceById(workspaceId),
-      "Failed to load workspace.",
-    );
-    if (workspace === undefined || workspace.latestRunId === null) {
-      return undefined;
-    }
-    const instance = yield* withInternalError(
-      instances
-        .getRuntimeInstanceByRunId(workspace.latestRunId)
-        .pipe(Effect.flatMap(currentWorkspaceRuntime)),
-      "Failed to load workspace runtime.",
-    );
-    if (instance === undefined || instance.status !== "ready") {
-      return undefined;
-    }
-    return {
-      instance,
-      target: sealantTargetForRuntimeInstance(instance, yield* requestTargetOptions),
-    };
-  },
-);
+export const resolveDaemonInstance = Effect.fnUntraced(function* (workspaceId: string) {
+  const workspaces = yield* WorkspaceRepo;
+  const instances = yield* WorkspaceRuntimeInstanceRepo;
+  const workspace = yield* withInternalError(
+    workspaces.getWorkspaceById(workspaceId),
+    "Failed to load workspace.",
+  );
+  if (workspace === undefined || workspace.latestRunId === null) {
+    return undefined;
+  }
+  const instance = yield* withInternalError(
+    instances
+      .getRuntimeInstanceByRunId(workspace.latestRunId)
+      .pipe(Effect.flatMap(currentWorkspaceRuntime)),
+    "Failed to load workspace runtime.",
+  );
+  if (instance === undefined || instance.status !== "ready") {
+    return undefined;
+  }
+  return {
+    instance,
+    target: sealantTargetForRuntimeInstance(instance, yield* requestTargetOptions),
+  };
+});
 
 /** Run `f` over a short-lived daemon connection (scoped: the bridge is torn down after). */
 const withDaemon = <A, E>(
@@ -317,9 +319,7 @@ interface ExitEvidence {
 }
 
 /** Look for the ingested `processExited` event of the session's PTY process. */
-const findExitEvidence = Effect.fn("sealant.session.find_exit_evidence")(function* (
-  session: WorkspaceSession,
-) {
+const findExitEvidence = Effect.fnUntraced(function* (session: WorkspaceSession) {
   if (session.daemonProcessId === null) {
     return undefined;
   }
@@ -351,9 +351,7 @@ const findExitEvidence = Effect.fn("sealant.session.find_exit_evidence")(functio
  * prior output is durably recorded (the log is ordered). A dead runtime with no exit evidence
  * settles as `failed`.
  */
-export const reconcileSession = Effect.fn("sealant.session.reconcile")(function* (
-  session: WorkspaceSession,
-) {
+export const reconcileSession = Effect.fnUntraced(function* (session: WorkspaceSession) {
   if (session.status !== "starting" && session.status !== "running") {
     return session;
   }
@@ -362,44 +360,72 @@ export const reconcileSession = Effect.fn("sealant.session.reconcile")(function*
 
   const evidence = yield* findExitEvidence(session);
   if (evidence !== undefined) {
-    const updated = yield* withInternalError(
-      sessions.markSessionEnded({
-        id: session.id,
-        status: "exited",
-        ...(evidence.exitCode === undefined ? {} : { exitCode: evidence.exitCode }),
-        ...(evidence.exitSignal === undefined ? {} : { exitSignal: evidence.exitSignal }),
+    return yield* settleSession(
+      session,
+      "exited",
+      Effect.gen(function* () {
+        const updated = yield* withInternalError(
+          sessions.markSessionEnded({
+            id: session.id,
+            status: "exited",
+            ...(evidence.exitCode === undefined ? {} : { exitCode: evidence.exitCode }),
+            ...(evidence.exitSignal === undefined ? {} : { exitSignal: evidence.exitSignal }),
+          }),
+          "Failed to settle session.",
+        );
+        yield* withInternalError(
+          runs.markRunCompleted({ id: session.runId, exitCode: evidence.exitCode ?? 0 }),
+          "Failed to settle session run.",
+        );
+        return updated ?? session;
       }),
-      "Failed to settle session.",
     );
-    yield* withInternalError(
-      runs.markRunCompleted({ id: session.runId, exitCode: evidence.exitCode ?? 0 }),
-      "Failed to settle session run.",
-    );
-    return updated ?? session;
   }
 
   const target = yield* resolveDaemonTarget(session.workspaceId);
   if (target === undefined) {
-    const updated = yield* withInternalError(
-      sessions.markSessionEnded({
-        id: session.id,
-        status: "failed",
-        errorMessage: "Workspace runtime is gone; the session did not settle cleanly.",
+    return yield* settleSession(
+      session,
+      "failed",
+      Effect.gen(function* () {
+        const updated = yield* withInternalError(
+          sessions.markSessionEnded({
+            id: session.id,
+            status: "failed",
+            errorMessage: "Workspace runtime is gone; the session did not settle cleanly.",
+          }),
+          "Failed to settle session.",
+        );
+        yield* withInternalError(
+          runs.markRunFailed({
+            id: session.runId,
+            errorMessage: "Workspace runtime is gone; interactive session did not settle cleanly.",
+          }),
+          "Failed to settle session run.",
+        );
+        return updated ?? session;
       }),
-      "Failed to settle session.",
     );
-    yield* withInternalError(
-      runs.markRunFailed({
-        id: session.runId,
-        errorMessage: "Workspace runtime is gone; interactive session did not settle cleanly.",
-      }),
-      "Failed to settle session run.",
-    );
-    return updated ?? session;
   }
 
   return session;
 });
+
+/** `write`, the writes that settle `session` as `status`, in a span of their own. */
+const settleSession = <A, E, R>(
+  session: WorkspaceSession,
+  status: "exited" | "failed",
+  write: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  write.pipe(
+    Effect.withSpan("sealant.session.settle", {
+      attributes: {
+        "sealant.session_id": session.id,
+        "sealant.run_id": session.runId,
+        "sealant.session.status": status,
+      },
+    }),
+  );
 
 // ---------------------------------------------------------------------------------------------
 // Wire mapping
@@ -427,9 +453,7 @@ const mapSession = (session: WorkspaceSession, outputHighWater: bigint): Session
   ...(session.endedAt === null ? {} : { endedAt: session.endedAt.toISOString() }),
 });
 
-const sessionWithHighWater = Effect.fn("sealant.session.with_high_water")(function* (
-  session: WorkspaceSession,
-) {
+const sessionWithHighWater = Effect.fnUntraced(function* (session: WorkspaceSession) {
   const query = yield* TelemetryQuery;
   const highWater = yield* withInternalError(
     query.maxSequence(session.runId),

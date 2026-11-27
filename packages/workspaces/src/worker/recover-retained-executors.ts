@@ -60,6 +60,7 @@ import {
   type DB,
   type WorkspaceCaptureDrain,
 } from "@sealant/db";
+import { withProcessObservers } from "@sealant/observability";
 import { Effect, Layer, Option } from "effect";
 import { z } from "zod";
 
@@ -100,6 +101,7 @@ import {
   type DeletionTicket,
   type RecoveryTicket,
 } from "./capture-drain.js";
+import { asLaunchFollowUp } from "./launch-trace.js";
 
 export interface RecoveryBackoff {
   /** The delay after the first failed attempt; doubles with each one after. */
@@ -240,25 +242,32 @@ export const recoverRetainedExecutorsEffect = Effect.fn("recoverRetainedExecutor
   });
   // The runtime that ends soonest first (review 9 #8): its platform deadline, as the launch
   // recorded it; none recorded, after every one that has one.
-  const deadlines = yield* Effect.forEach(
+  const instances = yield* Effect.forEach(
     due,
     (row) =>
-      runtimeInstances.getRuntimeInstanceByRunId(row.runId).pipe(
-        Effect.map((instance) => instance?.runtimeDeadlineAt?.getTime()),
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      ),
+      runtimeInstances
+        .getRuntimeInstanceByRunId(row.runId)
+        .pipe(Effect.catchCause(() => Effect.succeed(undefined))),
     { concurrency: 8 },
   );
   const ordered = due
-    .map((row, index) => ({ row, deadlineMs: deadlines[index] ?? Number.POSITIVE_INFINITY }))
+    .map((row, index) => ({
+      row,
+      instance: instances[index],
+      deadlineMs: instances[index]?.runtimeDeadlineAt?.getTime() ?? Number.POSITIVE_INFINITY,
+    }))
     .toSorted((a, b) => a.deadlineMs - b.deadlineMs);
   const outcomes = new Map<string, RecoveryOutcome>();
   // Independent attempts: one that stalls holds only its own slot, never another executor's.
   yield* Effect.forEach(
     ordered,
-    ({ row }) =>
+    ({ row, instance }) =>
       recoveryAttempt(options, row).pipe(
         Effect.tap((outcome) => Effect.sync(() => outcomes.set(row.runId, outcome))),
+        // Each attempt is a trace of its own, linked to the executor's launch.
+        asLaunchFollowUp("sealant.workspace.recover_executor", instance, {
+          "sealant.run_id": row.runId,
+        }),
       ),
     { concurrency: Math.max(1, options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT), discard: true },
   );
@@ -795,9 +804,13 @@ export const recoverRetainedExecutors = (
     WorkspaceCaptureDrainRepoLive,
     WorkspaceAttemptRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
+  // Each executor the sweep acts on is a trace of its own, linked to its launch; the sweep's own
+  // reads start none (`mayStartTrace`).
   return Effect.runPromise(
-    recoverRetainedExecutorsEffect(effectOptions).pipe(
-      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+    withProcessObservers(
+      recoverRetainedExecutorsEffect(effectOptions).pipe(
+        Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+      ),
     ),
   );
 };

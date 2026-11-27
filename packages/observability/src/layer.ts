@@ -16,6 +16,7 @@ import {
   Exit,
   Layer,
   Option,
+  References,
   Scope,
   Tracer,
 } from "effect";
@@ -35,10 +36,23 @@ const MAX_BATCH = 512;
 /** Span attributes that identify a person rather than the request, never exported. */
 const DROPPED_ATTRIBUTES: ReadonlySet<string> = new Set(["client.address", "user_agent.original"]);
 
+/** A name the telemetry contract shapes: `<product>.<area>.<operation>`, lower snake case. */
+const NAMED_WORK = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z0-9_.]+$/;
+
+/**
+ * Whether a span may start a trace: a request (`server`), a job delivery (`consumer`), or work
+ * named by the contract (a sweep, a timer, a startup task). Anything else as a root (a lone query,
+ * a layer's construction, a function-named helper) is work that ran outside any of those, and a
+ * trace of it alone tells the reader nothing.
+ */
+export const mayStartTrace = (name: string, kind: Tracer.SpanKind): boolean =>
+  kind === "server" || kind === "consumer" || NAMED_WORK.test(name);
+
 /**
  * `tracer`, deciding sampling at `rate` for the traces this process starts (a root span), keeping
  * the decision a parent made (a local parent's, or a remote one's `traceparent` flag), and dropping
- * the attributes in {@link DROPPED_ATTRIBUTES}.
+ * the attributes in {@link DROPPED_ATTRIBUTES}. A root that {@link mayStartTrace} refuses is never
+ * sampled, so neither it nor anything beneath it is exported.
  */
 export const samplingTracer = (
   tracer: Tracer.Tracer,
@@ -51,7 +65,9 @@ export const samplingTracer = (
       const root = options.root || Option.isNone(options.parent);
       const span = tracer.span({
         ...options,
-        sampled: options.sampled && (!root || rate >= 1 || random() < rate),
+        sampled:
+          options.sampled &&
+          (!root || (mayStartTrace(options.name, options.kind) && (rate >= 1 || random() < rate))),
       });
       const attribute = span.attribute.bind(span);
       span.attribute = (key, value) => {
@@ -109,8 +125,18 @@ const exportersLayer = (config: ObservabilityConfig, sentry: SentryErrors): Laye
 };
 
 /**
+ * Telemetry off: no span is made (Effect's tracer hands out placeholders) and no trace context
+ * leaves the process, neither on an HTTP request nor in a carrier (`currentTraceCarrier`).
+ */
+export const TracingOffLive: Layer.Layer<never> = Layer.mergeAll(
+  Layer.succeed(References.TracerEnabled, false),
+  Layer.succeed(Tracer.DisablePropagation, true),
+);
+
+/**
  * The redaction over whatever exporters `setting` turns on: provide it to the program, above every
- * other layer whose observations should be exported. With telemetry off it is the redaction alone.
+ * other layer whose observations should be exported. With telemetry off it is the redaction with
+ * tracing off ({@link TracingOffLive}).
  */
 export const observedLive = (
   setting: ObservabilitySetting,
@@ -120,7 +146,7 @@ export const observedLive = (
 ): Layer.Layer<never> =>
   setting.kind === "on" && sentry !== undefined
     ? CredentialRedactionLive.pipe(Layer.provide(exportersLayer(setting.config, sentry)))
-    : CredentialRedactionLive;
+    : Layer.mergeAll(CredentialRedactionLive, TracingOffLive);
 
 /** One sentence for the process's startup log saying where its telemetry goes. */
 export const describeSetting = (setting: ObservabilitySetting): string => {
@@ -168,7 +194,7 @@ export const installProcessObservability = async (
   const scope = Effect.runSync(Scope.make());
   const context = await Effect.runPromise(
     Layer.buildWithScope(observedLive(setting, sentry), scope).pipe(
-      Effect.orElseSucceed(() => Context.empty()),
+      Effect.catchCause(() => Layer.buildWithScope(TracingOffLive, scope)),
     ),
   );
   const process: ProcessObservability = {

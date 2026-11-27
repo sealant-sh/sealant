@@ -263,6 +263,14 @@ which gives P2-B its form without a stall.
   `runs.seen`'s `created_seen_at` still follows the state alone. The diagnostic's new fields and
   `BoatAdapterError`'s sentence are neither a statement nor a Boat call. No action moved, and `sync`
   stays.
+- SLNT-1387 (a launch's trace, linked from later work), `process-workspace-build-job.ts`,
+  `process-workspace-stop.ts` and `workspace-runtime-instances.ts`: the launch's first
+  `upsertRuntimeInstance` (the `pending` row with its lease) also writes the launching span's W3C
+  context (`launch_traceparent`, `launch_tracestate`), two columns no Boat step reads or writes. The
+  stop reads nothing new: after its `getRuntimeInstanceByRunId` it adds a span link from the row it
+  already read, and its Promise boundary runs under the delivery's span (or a span of its own) with
+  the process's observers. Spans and links are neither a statement nor a Boat call, and no guard,
+  order or Boat answer changed. No action moved, and `sync` stays.
 
 ## Each property fails on a broken variant
 

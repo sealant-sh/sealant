@@ -15,5 +15,7 @@ export const ConnectedAccountDefaultsBackfillLive: Layer.Layer<never, never, Con
       Effect.catch((error) =>
         Effect.logWarning("[api] connected accounts: the default backfill failed", error),
       ),
+      // A startup task: a trace of its own, named, rather than a lone query.
+      Effect.withSpan("sealant.credential.backfill_account_defaults", { root: true }),
     ),
   );

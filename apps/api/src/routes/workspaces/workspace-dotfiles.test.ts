@@ -30,7 +30,7 @@ import type {
   RunDotfilesApply,
 } from "@sealant/workspaces";
 import { DOTFILES_STAGE_EXIT, dotfilesStagePath } from "@sealant/workspaces";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Layer, Result, Tracer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { RequestPrincipal } from "../../services/service-principals.js";
@@ -164,7 +164,13 @@ const newWorld = (stage: Partial<DotfilesStageResult> | "throw" = {}) => {
             },
             stageChannel: channel,
           })
-          .pipe(Effect.provide(layer), Effect.provideService(CurrentPrincipal, principal)),
+          .pipe(
+            Effect.provide(layer),
+            Effect.provideService(CurrentPrincipal, principal),
+            // A tracer that exports, as the API has with telemetry on: only an exported span is
+            // carried to the job.
+            Effect.withTracer(Tracer.make({ span: (options) => new Tracer.NativeSpan(options) })),
+          ),
       ),
     );
   /** Records `home` as held by `person`, as a credentials put would. */

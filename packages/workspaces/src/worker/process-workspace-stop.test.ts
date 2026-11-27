@@ -64,6 +64,8 @@ const runtimeInstance = (
   captureClaimedAt: null,
   hostVmRunnerEgress: null,
   controlScope: null,
+  launchTraceparent: null,
+  launchTracestate: null,
   removedAt: null,
   // Null = a row that predates the column: the stop path reads the attempt snapshot.
   sourceKind: null,

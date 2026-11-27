@@ -48,6 +48,8 @@ const retainedRow: WorkspaceRuntimeInstance = {
   captureClaimedAt: null,
   hostVmRunnerEgress: null,
   controlScope: null,
+  launchTraceparent: null,
+  launchTracestate: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
   removedAt: null,

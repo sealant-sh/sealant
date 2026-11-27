@@ -70,6 +70,7 @@ import {
   type WorkspaceCaptureDrain,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
+import { withProcessObservers } from "@sealant/observability";
 import { Deferred, Effect, Exit, Fiber, Layer, Option, Semaphore } from "effect";
 
 import type { LaunchMaterialStager } from "../runtime/launch-material.js";
@@ -86,6 +87,7 @@ import {
   type CaptureDrainLedger,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
+import { asLaunchFollowUp } from "./launch-trace.js";
 import {
   processWorkspaceStopEffect,
   type WorkspaceStopOutcome,
@@ -346,87 +348,94 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
         if (plan === undefined) {
           return false;
         }
-        const guarded = <E, R>(effect: Effect.Effect<DriveOutcome, E, R>) =>
-          effect.pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning(
-                `Deadline preservation: run ${plan.instance.runId} could not be driven this sweep.`,
-                cause,
-              ).pipe(Effect.as("not-driven" as const)),
-            ),
-          );
+        // Driven: a trace of its own, linked to the runtime's launch.
+        return yield* Effect.gen(function* () {
+          const guarded = <E, R>(effect: Effect.Effect<DriveOutcome, E, R>) =>
+            effect.pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning(
+                  `Deadline preservation: run ${plan.instance.runId} could not be driven this sweep.`,
+                  cause,
+                ).pipe(Effect.as("not-driven" as const)),
+              ),
+            );
 
-        // 1. Its first FINAL, before anything polls anything: one round trip, under its own
-        // permit, the wait and the trip bounded by the runtime's remaining lifetime (at least
-        // one round trip, so a runtime at its deadline is still asked once). The permit is held
-        // until that FINAL is answered (or the removal it permits begins), never through the
-        // removal (review 8 #6): an executor that answered complete does not hold up another's
-        // first FINAL while its runtime is removed, and that removal goes on past this sweep.
-        let outcome: DriveOutcome = "draining";
-        if (!candidate.finalAnswered) {
-          const lifetimeLeftMs = Math.max(plan.deadlineMs - now(), roundTripMs);
-          const initiated = yield* driveReleasingPermit({
-            permits: initiations,
-            waitMs: lifetimeLeftMs,
-            joinUntilMs: sweepEndsAtMs,
-            now,
-            drive: (onPhase) =>
-              guarded(driveOne(options, plan, { budgetMs: 0, opensWithStatus: false, onPhase })),
-          });
-          outcome = yield* reportInitiation(plan, initiated);
-          if (outcome !== "draining") {
+          // 1. Its first FINAL, before anything polls anything: one round trip, under its own
+          // permit, the wait and the trip bounded by the runtime's remaining lifetime (at least
+          // one round trip, so a runtime at its deadline is still asked once). The permit is held
+          // until that FINAL is answered (or the removal it permits begins), never through the
+          // removal (review 8 #6): an executor that answered complete does not hold up another's
+          // first FINAL while its runtime is removed, and that removal goes on past this sweep.
+          let outcome: DriveOutcome = "draining";
+          if (!candidate.finalAnswered) {
+            const lifetimeLeftMs = Math.max(plan.deadlineMs - now(), roundTripMs);
+            const initiated = yield* driveReleasingPermit({
+              permits: initiations,
+              waitMs: lifetimeLeftMs,
+              joinUntilMs: sweepEndsAtMs,
+              now,
+              drive: (onPhase) =>
+                guarded(driveOne(options, plan, { budgetMs: 0, opensWithStatus: false, onPhase })),
+            });
+            outcome = yield* reportInitiation(plan, initiated);
+            if (outcome !== "draining") {
+              return countsAsDriven(outcome);
+            }
+          }
+
+          // 2. Poll the started drain (status first: its FINAL was answered) and stop it once
+          // complete, under the drive permits, for no longer than the sweep lasts — the permit, too,
+          // only until the drain returns: a removal it permits goes on without it. A runtime just
+          // sent its first FINAL is polled as what that made it (a launch taken from its worker
+          // is a retained launch now), and its start is not announced twice.
+          const leftMs = sweepEndsAtMs - now();
+          if (leftMs <= 0) {
             return countsAsDriven(outcome);
           }
-        }
-
-        // 2. Poll the started drain (status first: its FINAL was answered) and stop it once
-        // complete, under the drive permits, for no longer than the sweep lasts — the permit, too,
-        // only until the drain returns: a removal it permits goes on without it. A runtime just
-        // sent its first FINAL is polled as what that made it (a launch taken from its worker
-        // is a retained launch now), and its start is not announced twice.
-        const leftMs = sweepEndsAtMs - now();
-        if (leftMs <= 0) {
-          return countsAsDriven(outcome);
-        }
-        const current = candidate.finalAnswered
-          ? plan.instance
-          : yield* runtimeInstances.getRuntimeInstanceByRunId(plan.instance.runId);
-        if (current === undefined) {
-          return countsAsDriven(outcome);
-        }
-        const polling: DuePreservation = candidate.finalAnswered
-          ? plan
-          : { ...plan, instance: current, firstStart: false };
-        const polled = yield* driveReleasingPermit({
-          permits: drives,
-          // The drain's own budget ends with the sweep; the bound adds the one round trip it
-          // may be in when its budget runs out.
-          waitMs: leftMs + roundTripMs,
-          joinUntilMs: sweepEndsAtMs + roundTripMs,
-          now,
-          drive: (onPhase) =>
-            Effect.suspend(() => {
-              const remainingMs = sweepEndsAtMs - now();
-              return remainingMs <= 0
-                ? Effect.succeed<DriveOutcome>("draining")
-                : guarded(
-                    driveOne(options, polling, {
-                      budgetMs: remainingMs,
-                      opensWithStatus: true,
-                      onPhase,
-                    }),
-                  );
-            }),
-        });
-        if (polled.kind === "removal-continues") {
-          yield* logRemovalContinues(plan, polled.drain);
-          return countsAsDriven("removing");
-        }
-        if (polled.kind === "deciding") {
-          yield* logStopContinues(plan, polled.drain);
-          return countsAsDriven("draining");
-        }
-        return countsAsDriven(polled.kind === "done" ? polled.outcome : "draining");
+          const current = candidate.finalAnswered
+            ? plan.instance
+            : yield* runtimeInstances.getRuntimeInstanceByRunId(plan.instance.runId);
+          if (current === undefined) {
+            return countsAsDriven(outcome);
+          }
+          const polling: DuePreservation = candidate.finalAnswered
+            ? plan
+            : { ...plan, instance: current, firstStart: false };
+          const polled = yield* driveReleasingPermit({
+            permits: drives,
+            // The drain's own budget ends with the sweep; the bound adds the one round trip it
+            // may be in when its budget runs out.
+            waitMs: leftMs + roundTripMs,
+            joinUntilMs: sweepEndsAtMs + roundTripMs,
+            now,
+            drive: (onPhase) =>
+              Effect.suspend(() => {
+                const remainingMs = sweepEndsAtMs - now();
+                return remainingMs <= 0
+                  ? Effect.succeed<DriveOutcome>("draining")
+                  : guarded(
+                      driveOne(options, polling, {
+                        budgetMs: remainingMs,
+                        opensWithStatus: true,
+                        onPhase,
+                      }),
+                    );
+              }),
+          });
+          if (polled.kind === "removal-continues") {
+            yield* logRemovalContinues(plan, polled.drain);
+            return countsAsDriven("removing");
+          }
+          if (polled.kind === "deciding") {
+            yield* logStopContinues(plan, polled.drain);
+            return countsAsDriven("draining");
+          }
+          return countsAsDriven(polled.kind === "done" ? polled.outcome : "draining");
+        }).pipe(
+          asLaunchFollowUp("sealant.workspace.preserve_before_deadline", plan.instance, {
+            "sealant.run_id": plan.instance.runId,
+          }),
+        );
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
@@ -951,9 +960,13 @@ export const preserveBeforeDeadline = (
     ConnectedAccountRepoLive,
     WorkspaceCaptureDrainRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
+  // Each executor the sweep acts on is a trace of its own, linked to its launch; the sweep's own
+  // reads start none (`mayStartTrace`).
   return Effect.runPromise(
-    preserveBeforeDeadlineEffect(effectOptions).pipe(
-      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+    withProcessObservers(
+      preserveBeforeDeadlineEffect(effectOptions).pipe(
+        Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+      ),
     ),
   );
 };

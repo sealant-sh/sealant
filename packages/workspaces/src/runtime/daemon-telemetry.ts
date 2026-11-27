@@ -6,7 +6,9 @@
  *
  * The deployment opts in with `SEALANTD_SENTRY_DSN` on the worker; with it unset a workspace's
  * daemon exports nothing and makes no network call for telemetry. The launching span travels
- * whether or not a DSN is set, so a daemon given its DSN another way still joins the trace.
+ * whether or not a DSN is set, so a daemon given its DSN another way still joins the trace, but
+ * only when the worker exports it (`callingFiberTraceCarrier`): with the worker's telemetry off,
+ * the boot starts a trace of its own.
  *
  * sealantd reads `SEALANT_`-prefixed names, so a workspace image's own `SENTRY_DSN` stays the
  * user's, and keeps them out of the harness's environment (sealantd SLNT-1351):
@@ -15,7 +17,7 @@
  * - a `host-vm` boot: the `telemetry` object of the staged `boot-env.json`, which the runner hands
  *   the guest.
  */
-import { Context, Fiber, Tracer } from "effect";
+import { callingFiberTraceCarrier } from "@sealant/observability";
 import { z } from "zod";
 
 /** The daemon's telemetry for one launch. */
@@ -112,23 +114,6 @@ export const DAEMON_TELEMETRY_ENV_NAMES: ReadonlySet<string> = new Set([
   "SEALANT_SENTRY_ENVIRONMENT",
   "SEALANT_SENTRY_RELEASE",
 ]);
-
-/**
- * The calling Effect fiber's current span as a W3C carrier, or `undefined` outside a fiber or a
- * span, or when the fiber's tracer exports nothing (Effect's native tracer): a daemon handed a span
- * no exporter records would hang its boot off a parent that never arrives. Synchronous: an
- * adapter's `launch`, called from `Effect.tryPromise`, reads it in its first synchronous step,
- * while the launching fiber is still current.
- */
-export const callingFiberTraceCarrier = (): { readonly traceparent: string } | undefined => {
-  const fiber = Fiber.getCurrent();
-  if (fiber === undefined || fiber.getRef(Tracer.Tracer) === Tracer.nativeTracer) return undefined;
-  const span = Context.getOrUndefined(fiber.context, Tracer.ParentSpan);
-  if (span === undefined) return undefined;
-  return {
-    traceparent: `00-${span.traceId.padStart(32, "0")}-${span.spanId}-${span.sampled ? "01" : "00"}`,
-  };
-};
 
 /**
  * `launch` with its daemon telemetry: what the launch names itself, else the calling fiber's span

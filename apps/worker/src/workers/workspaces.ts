@@ -875,9 +875,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const lifecycleConsumer = await consumeWorkspaceLifecycleJobs({
     databaseUrl: env.DATABASE_URL,
     concurrency: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
-    onMessage: async ({ message }) => {
+    onMessage: async ({ message, span }) => {
       try {
         const outcome = await processWorkspaceStop({
+          parentSpan: span,
           workspaceId: message.workspaceId,
           runId: message.runId,
           stopReason: message.stopReason,

@@ -42,7 +42,7 @@ import {
   type WorkspaceLaunchCredentialInjection,
   workspaceCredentialHomeProviderValues,
 } from "@sealant/db";
-import { withProcessObservers } from "@sealant/observability";
+import { currentTraceCarrier, withProcessObservers } from "@sealant/observability";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import {
   nativeArtifactConsumerSchema,
@@ -1302,12 +1302,16 @@ export const processWorkspaceBuildJobEffect = Effect.fn("sealant.workspace.build
     );
     if (job.runId !== null) {
       const runId = job.runId;
+      // This span is the launch's (`sealant.workspace.launch`): what acts on the executor later
+      // (a stop, a sweep, a recovery) links to it.
+      const launchTrace = yield* currentTraceCarrier;
       yield* runtimeInstances
         .upsertRuntimeInstance({
           runId,
           status: "pending",
           adapter: prepared.adapterId,
           publication,
+          ...(launchTrace === undefined ? {} : { launchTrace }),
           ...(scope === null ? {} : { imageScope: scope }),
           sourceKind,
           launchOwner,

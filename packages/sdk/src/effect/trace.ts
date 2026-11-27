@@ -9,15 +9,21 @@
  *   3. the active OpenTelemetry context, read through `@opentelemetry/api`'s global registration,
  *      so the SDK imports and depends on no tracing package.
  *
+ * A span of the calling fiber counts only when something exports it: a span made by an exporting
+ * tracer (anything but Effect's native one, with tracing on), or an external span the caller set as
+ * its parent. A span of Effect's native tracer is never exported, so a caller with telemetry off
+ * sends no trace context and its requests start their own traces.
+ *
  * Each contract call runs in a client span `sealant.sdk.<group>.<endpoint>` carrying only the IDs
  * from its path. When the caller's Effect tracer exports spans, the SDK's spans are made on that
- * tracer and the request carries the SDK's HTTP span. When nothing exports them, the request carries
- * the parent's own `traceparent`, so the server's span hangs off a span that exists. With no parent
- * and no exporting tracer the request carries no trace header at all.
+ * tracer and the request carries the SDK's HTTP span. When nothing exports them, the SDK makes no
+ * spans and the request carries the parent's own `traceparent` (an external one), so the server's
+ * span hangs off a span that exists. With no such parent the request carries no trace header.
  *
  * A caller that turned tracing off (`References.TracerEnabled`) or propagation off
- * (`Tracer.DisablePropagation`) is continued by nothing: its requests carry no trace header, and a
- * disabled span, whose IDs read `noop`, is never sent as a parent.
+ * (`Tracer.DisablePropagation`) is continued by nothing, not even an external parent or the
+ * fallbacks: its requests carry no trace header, and a disabled span, whose IDs read `noop`, is
+ * never sent as a parent.
  */
 import { Context, Effect, Fiber, Option, References, Tracer } from "effect";
 import { HttpClient } from "effect/http";
@@ -116,6 +122,31 @@ export function activeOpenTelemetryContext(): SealantTraceContext | undefined {
   }
 }
 
+/**
+ * Whether `fiber`'s spans are exported: tracing is on and its tracer is not Effect's native one,
+ * which keeps spans in memory only.
+ */
+const exportsSpans = (fiber: Fiber.Fiber<unknown, unknown>): boolean =>
+  fiber.getRef(References.TracerEnabled) &&
+  !fiber.getRef(Tracer.DisablePropagation) &&
+  fiber.getRef(Tracer.Tracer) !== Tracer.nativeTracer;
+
+/**
+ * `span` when a request may name it as its parent: an external span the caller handed in, or a span
+ * an exporting tracer made. A native or disabled span never reaches Sentry, so naming it would give
+ * the server's span a parent that does not exist.
+ */
+const forwardable = (span: Tracer.AnySpan, exported: boolean): Tracer.AnySpan | undefined => {
+  // An external span (it has no name: no tracer here made it) is a remote parent the caller named.
+  if (!("name" in span)) return span;
+  if (!exported || Context.get(span.annotations, Tracer.DisablePropagation)) return undefined;
+  return span;
+};
+
+/** Whether the fiber turned tracing or propagation off: then nothing continues its trace. */
+const propagationOff = (fiber: Fiber.Fiber<unknown, unknown>): boolean =>
+  !fiber.getRef(References.TracerEnabled) || fiber.getRef(Tracer.DisablePropagation);
+
 /** Whether `span` names a span a `traceparent` can carry: not a disabled one (`noop`). */
 const isPropagatable = (span: Tracer.AnySpan): boolean =>
   parseTraceparent(formatTraceparent(span)) !== undefined;
@@ -134,14 +165,14 @@ const fromCallingFiber = ():
   try {
     const fiber = Fiber.getCurrent();
     if (fiber === undefined) return undefined;
-    if (!fiber.getRef(References.TracerEnabled) || fiber.getRef(Tracer.DisablePropagation)) {
+    if (propagationOff(fiber))
       return { parent: undefined, tracer: undefined, propagationOff: true };
-    }
-    const tracer = fiber.getRef(Tracer.Tracer);
+    const exported = exportsSpans(fiber);
     const parent = Option.getOrUndefined(Context.getOption(fiber.context, Tracer.ParentSpan));
+    const kept = parent === undefined ? undefined : forwardable(parent, exported);
     return {
-      parent: parent !== undefined && isPropagatable(parent) ? parent : undefined,
-      tracer: tracer === Tracer.nativeTracer ? undefined : tracer,
+      parent: kept !== undefined && isPropagatable(kept) ? kept : undefined,
+      tracer: exported ? fiber.getRef(Tracer.Tracer) : undefined,
       propagationOff: false,
     };
   } catch {
@@ -290,34 +321,39 @@ export const traceCall = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   route?: EndpointRoute,
 ): Effect.Effect<A, E, R> =>
-  Effect.gen(function* () {
-    // A caller with tracing or propagation off: no span of the SDK's, and no trace header.
-    if (!(yield* References.TracerEnabled) || (yield* Tracer.DisablePropagation)) {
-      return yield* Effect.provideService(effect, HttpClient.TracerPropagationEnabled, false);
+  Effect.withFiber((fiber) => {
+    const exported = exportsSpans(fiber);
+    if (!exported) {
+      // Nothing would export the SDK's spans: make none, and let the request name only a parent
+      // that exists elsewhere, unless the caller turned propagation off.
+      const parent = propagationOff(fiber)
+        ? undefined
+        : Option.getOrUndefined(Context.getOption(fiber.context, Tracer.ParentSpan));
+      const forwarded = parent === undefined ? undefined : forwardable(parent, false);
+      const direct = forwarded !== undefined && isPropagatable(forwarded) ? forwarded : undefined;
+      const untraced = effect.pipe(
+        Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+        Effect.provideService(Tracer.DisablePropagation, true),
+        Effect.withTracerEnabled(false),
+      );
+      return direct === undefined
+        ? untraced
+        : Effect.provideService(untraced, DirectTraceparent, formatTraceparent(direct));
     }
-    const parent = yield* Effect.serviceOption(Tracer.ParentSpan);
-    const tracer = yield* Effect.tracer;
+    const tracer = fiber.getRef(Tracer.Tracer);
     const templated =
-      route === undefined || tracer === Tracer.nativeTracer
+      route === undefined
         ? effect
         : Effect.flatMap(Effect.currentSpan.pipe(Effect.option), (span) =>
             Option.isNone(span)
               ? effect
               : Effect.withTracer(effect, routeTemplatingTracer(tracer, span.value.spanId, route)),
           );
-    const spanned = Effect.withSpan(templated, name, {
+    return Effect.withSpan(templated, name, {
       kind: "client",
       attributes: { ...attributes, ...sdkSpanAttributes(name) },
       captureStackTrace: false,
     });
-    if (tracer !== Tracer.nativeTracer) return yield* spanned;
-    const unpropagated = Effect.provideService(spanned, HttpClient.TracerPropagationEnabled, false);
-    if (Option.isNone(parent) || !isPropagatable(parent.value)) return yield* unpropagated;
-    return yield* Effect.provideService(
-      unpropagated,
-      DirectTraceparent,
-      formatTraceparent(parent.value),
-    );
   });
 
 const snakeCase = (identifier: string): string =>
