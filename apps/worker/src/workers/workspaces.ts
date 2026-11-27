@@ -68,6 +68,7 @@ import {
   DockerRuntimeAdapter,
   hostVmDirectoryFor,
   HostVmRuntimeAdapter,
+  probeMacVmdHealth,
   HostVmStorage,
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
@@ -608,12 +609,40 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     }
     const commandRunner = createDockerCommandRunner(env.DOCKER_SOCKET_PATH);
     const mappings = dockerVolumeMappings ?? [];
+    const macVmd =
+      env.SEALANT_HOST_VM_BACKEND === "mac-vmd" &&
+      env.SEALANT_MAC_VMD_PORT !== undefined &&
+      env.SEALANT_MAC_VMD_TOKEN_FILE !== undefined &&
+      env.SEALANT_MAC_VMD_TOKEN_HOST_PATH !== undefined
+        ? {
+            host: env.SEALANT_MAC_VMD_HOST,
+            port: env.SEALANT_MAC_VMD_PORT,
+            tokenPath: env.SEALANT_MAC_VMD_TOKEN_FILE,
+            tokenHostPath: env.SEALANT_MAC_VMD_TOKEN_HOST_PATH,
+            vmdLinkNetwork: env.SEALANT_MAC_VMD_NETWORK,
+          }
+        : undefined;
+    const hostVmMappings = [
+      ...mappings,
+      ...(env.SEALANT_HOST_VM_IMAGE_HOST_PATH === undefined
+        ? []
+        : [{ logicalRoot: imagesDir, hostPath: env.SEALANT_HOST_VM_IMAGE_HOST_PATH }]),
+      ...(env.SEALANT_HOST_VM_DATA_HOST_PATH === undefined
+        ? []
+        : [{ logicalRoot: dataDir, hostPath: env.SEALANT_HOST_VM_DATA_HOST_PATH }]),
+    ];
     const storage = new HostVmStorage({
-      imagesDir: hostVmDirectoryFor(imagesDir, mappings),
-      dataDir: hostVmDirectoryFor(dataDir, mappings),
+      imagesDir: hostVmDirectoryFor(imagesDir, hostVmMappings),
+      dataDir: hostVmDirectoryFor(dataDir, hostVmMappings),
       controlDir: hostVmDirectoryFor(controlDir, mappings),
       commandRunner,
       pipeRunner: createDockerPipeRunner(env.DOCKER_SOCKET_PATH),
+      ...(macVmd === undefined
+        ? {}
+        : {
+            requireDataSentinel: true,
+            freeBytes: async () => (await probeMacVmdHealth(macVmd)).diskAvailableImportantBytes,
+          }),
       ...(env.SEALANT_VM_DISK_TOOLS_IMAGE === undefined
         ? {}
         : { toolsImage: env.SEALANT_VM_DISK_TOOLS_IMAGE }),
@@ -625,6 +654,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ...(env.SEALANT_VM_RUNNER_IMAGE === undefined
         ? {}
         : { runnerImage: env.SEALANT_VM_RUNNER_IMAGE }),
+      ...(macVmd === undefined ? {} : { macVmd }),
       egressProxy: { proxies, hostPolicy: () => docker.egressHostPolicy() },
       ...(daemonTelemetry === undefined ? {} : { daemonTelemetry }),
       memory: dockerMemory,

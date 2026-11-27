@@ -13,8 +13,10 @@ import {
 } from "../runtime/host-vm.fixture.js";
 import {
   baseDiskBuildMiB,
+  HOST_VM_DATA_SENTINEL,
   hostVmBaseImageKey,
   hostVmDigestOfKey,
+  hostVmDirectoryFor,
   hostVmMountArgs,
   HostVmStorage,
   parseInspectedImage,
@@ -72,6 +74,20 @@ describe("base disk names", () => {
         false,
       ),
     ).toEqual(["--mount", "type=bind,source=/srv/mend/vm-data,target=/data"]);
+    expect(
+      hostVmDirectoryFor("/var/lib/mend/vm-data/nested", [
+        {
+          logicalRoot: "/var/lib/mend/vm-data",
+          hostPath: "/Users/me/Library/Application Support/mend/vm/data",
+        },
+      ]),
+    ).toEqual({
+      path: "/var/lib/mend/vm-data/nested",
+      mount: {
+        kind: "bind",
+        hostPath: "/Users/me/Library/Application Support/mend/vm/data/nested",
+      },
+    });
   });
 });
 
@@ -224,6 +240,37 @@ describe("HostVmStorage.prepareExecutor", () => {
     await expect(
       h.storage.prepareExecutor({ containerName: "../escape", baseImageDigest: HOST_VM_DIGEST }),
     ).rejects.toThrow(/not a host VM runner container name/);
+  });
+
+  it("skips data-disk chown for host bind mounts and enforces the macOS data sentinel", async () => {
+    const h = await make();
+    const bindCalls: string[][] = [];
+    const storage = new HostVmStorage({
+      imagesDir: { path: h.imagesDir, mount: { kind: "bind", hostPath: "/host/images" } },
+      dataDir: { path: h.dataDir, mount: { kind: "bind", hostPath: "/host/data" } },
+      controlDir: { path: h.controlDir },
+      requireDataSentinel: true,
+      commandRunner: async (_command, args) => {
+        bindCalls.push([...args]);
+        if (args[0] === "image") return { stdout: "sha256:tools\n", stderr: "" };
+        return { stdout: "created\n", stderr: "" };
+      },
+      pipeRunner: async () => ({ stdout: "", stderr: "" }),
+      toolsImage: "tools",
+    });
+
+    await expect(storage.dataDiskExists("sealant-vm-run-1")).rejects.toThrow(/sentinel/);
+    await writeFile(joinPath(h.dataDir, HOST_VM_DATA_SENTINEL), "");
+    expect(await storage.dataDiskExists("sealant-vm-run-1")).toBe(false);
+
+    await storage.prepareExecutor({
+      containerName: "sealant-vm-run-1",
+      baseImageDigest: HOST_VM_DIGEST,
+    });
+    const tools = bindCalls.find((args) => args[0] === "run" && args.includes("--rm")) ?? [];
+    const positional = tools.slice(tools.indexOf("-c") + 3);
+    // $6 = "1": skip Linux chown on host-mounted macOS APFS data dir.
+    expect(positional[5]).toBe("1");
   });
 });
 

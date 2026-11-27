@@ -792,6 +792,18 @@ export const workerRuntimeEnvSchema = z.object({
   // which turns an image into a base disk. Unset: built on this Docker host from Debian on first
   // use.
   SEALANT_VM_DISK_TOOLS_IMAGE: z.string().trim().min(1).optional(),
+  // Host VM VMM backend (`cloud-hypervisor` on Linux KVM, `mac-vmd` on Apple Silicon macOS).
+  SEALANT_HOST_VM_BACKEND: z.enum(["cloud-hypervisor", "mac-vmd"]).default("cloud-hypervisor"),
+  // Optional host filesystem bind paths for VM base/data disks (macOS APFS directories under
+  // `~/Library/Application Support/Mend/vm/<installId>/{images,data}`).
+  SEALANT_HOST_VM_IMAGE_HOST_PATH: z.string().trim().startsWith("/").optional(),
+  SEALANT_HOST_VM_DATA_HOST_PATH: z.string().trim().startsWith("/").optional(),
+  // macOS `sealant-vmd` loopback endpoint and bearer token paths (required when backend=mac-vmd).
+  SEALANT_MAC_VMD_HOST: z.string().trim().min(1).default("host.docker.internal"),
+  SEALANT_MAC_VMD_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+  SEALANT_MAC_VMD_TOKEN_FILE: z.string().trim().startsWith("/").optional(),
+  SEALANT_MAC_VMD_TOKEN_HOST_PATH: z.string().trim().startsWith("/").optional(),
+  SEALANT_MAC_VMD_NETWORK: z.string().trim().min(1).default("mend-vmd-link"),
 });
 
 /**
@@ -802,6 +814,12 @@ const addHostVmIssues = (
   input: {
     readonly SEALANT_HOST_VM_IMAGE_DIR?: string | undefined;
     readonly SEALANT_HOST_VM_DATA_DIR?: string | undefined;
+    readonly SEALANT_HOST_VM_BACKEND?: "cloud-hypervisor" | "mac-vmd" | undefined;
+    readonly SEALANT_HOST_VM_IMAGE_HOST_PATH?: string | undefined;
+    readonly SEALANT_HOST_VM_DATA_HOST_PATH?: string | undefined;
+    readonly SEALANT_MAC_VMD_PORT?: number | undefined;
+    readonly SEALANT_MAC_VMD_TOKEN_FILE?: string | undefined;
+    readonly SEALANT_MAC_VMD_TOKEN_HOST_PATH?: string | undefined;
     readonly DEFAULT_RUNTIME_ADAPTER: string;
     readonly DOCKER_RUNTIME_ENABLED: boolean;
     readonly SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS?: string | undefined;
@@ -848,6 +866,28 @@ const addHostVmIssues = (
       path: ["SEALANT_HOST_VM_IMAGE_DIR"],
       message: `Host VM workspaces boot only behind their own egress proxy, which needs ${missing.join(", ")}.`,
     });
+  }
+  if (input.SEALANT_HOST_VM_BACKEND === "mac-vmd") {
+    const missingMac = [
+      ...(input.SEALANT_HOST_VM_IMAGE_HOST_PATH === undefined
+        ? ["SEALANT_HOST_VM_IMAGE_HOST_PATH"]
+        : []),
+      ...(input.SEALANT_HOST_VM_DATA_HOST_PATH === undefined
+        ? ["SEALANT_HOST_VM_DATA_HOST_PATH"]
+        : []),
+      ...(input.SEALANT_MAC_VMD_PORT === undefined ? ["SEALANT_MAC_VMD_PORT"] : []),
+      ...(input.SEALANT_MAC_VMD_TOKEN_FILE === undefined ? ["SEALANT_MAC_VMD_TOKEN_FILE"] : []),
+      ...(input.SEALANT_MAC_VMD_TOKEN_HOST_PATH === undefined
+        ? ["SEALANT_MAC_VMD_TOKEN_HOST_PATH"]
+        : []),
+    ];
+    if (missingMac.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEALANT_HOST_VM_BACKEND"],
+        message: `SEALANT_HOST_VM_BACKEND=mac-vmd requires ${missingMac.join(", ")}.`,
+      });
+    }
   }
 };
 

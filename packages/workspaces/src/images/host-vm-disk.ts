@@ -35,6 +35,8 @@ const GiB = 1024 * MiB;
 
 /** The uid and gid `sealant-vm-runner` drops to; it owns the data disk and the control directory. */
 export const HOST_VM_RUNNER_UID = 65532;
+/** Sentinel file `mend server setup` writes in a macOS host bind-mounted VM data directory. */
+export const HOST_VM_DATA_SENTINEL = ".mend-vm-data";
 
 /** The default logical size of a data disk: sparse, so it takes only what the guest writes. */
 export const DEFAULT_HOST_VM_DATA_DISK_BYTES = 20 * GiB;
@@ -126,22 +128,34 @@ export interface HostVmDirectory {
  */
 export const hostVmDirectoryFor = (
   directory: string,
-  mappings: ReadonlyArray<{ readonly logicalRoot: string; readonly volumeName: string }> = [],
+  mappings: ReadonlyArray<
+    | { readonly logicalRoot: string; readonly volumeName: string }
+    | { readonly logicalRoot: string; readonly hostPath: string }
+  > = [],
 ): HostVmDirectory => {
   for (const mapping of mappings) {
-    if (directory === mapping.logicalRoot) {
-      return { path: directory, mount: { kind: "volume", volume: mapping.volumeName } };
-    }
-    if (directory.startsWith(`${mapping.logicalRoot}/`)) {
+    const exact = directory === mapping.logicalRoot;
+    const nested = directory.startsWith(`${mapping.logicalRoot}/`);
+    if (!exact && !nested) continue;
+    const subpath = nested ? directory.slice(mapping.logicalRoot.length + 1) : undefined;
+    if ("hostPath" in mapping) {
       return {
         path: directory,
         mount: {
-          kind: "volume",
-          volume: mapping.volumeName,
-          subpath: directory.slice(mapping.logicalRoot.length + 1),
+          kind: "bind",
+          hostPath:
+            subpath === undefined ? mapping.hostPath : posix.join(mapping.hostPath, subpath),
         },
       };
     }
+    return {
+      path: directory,
+      mount: {
+        kind: "volume",
+        volume: mapping.volumeName,
+        ...(subpath === undefined ? {} : { subpath }),
+      },
+    };
   }
   return { path: directory };
 };
@@ -310,13 +324,13 @@ const CONVERT_SCRIPT = [
  */
 const PREPARE_SCRIPT = [
   "set -eu",
-  'd="/data/$1"; c="/control/$5"',
+  'd="/data/$1"; c="/control/$5"; skip_data_chown="${6:-0}"',
   'if [ -L "$c" ]; then echo "the control scope $5 is a link" >&2; exit 1; fi',
   'mkdir -p "$d" "$c"',
   'if [ ! -e "$d/data.img" ]; then',
   '  truncate -s "$2" "$d/data.img.tmp"',
   '  mkfs.ext4 -q -F -E lazy_itable_init=1,lazy_journal_init=1 "$d/data.img.tmp"',
-  `  chown ${String(HOST_VM_RUNNER_UID)}:${String(HOST_VM_RUNNER_UID)} "$d/data.img.tmp"`,
+  `  if [ "$skip_data_chown" != "1" ]; then chown ${String(HOST_VM_RUNNER_UID)}:${String(HOST_VM_RUNNER_UID)} "$d/data.img.tmp"; fi`,
   '  chmod 0600 "$d/data.img.tmp"',
   '  printf "%s\\n" "$3" > "$d/base-image-digest"',
   '  mv "$d/data.img.tmp" "$d/data.img"',
@@ -326,7 +340,7 @@ const PREPARE_SCRIPT = [
   // Which control scope the runner mounts, beside its disk: a recovery or a removal, whichever
   // worker runs it, finds it there.
   'printf "%s\\n" "$5" > "$d/control-scope"',
-  `chown ${String(HOST_VM_RUNNER_UID)}:${String(HOST_VM_RUNNER_UID)} "$d"`,
+  `if [ "$skip_data_chown" != "1" ]; then chown ${String(HOST_VM_RUNNER_UID)}:${String(HOST_VM_RUNNER_UID)} "$d"; fi`,
   'chmod 0755 "$d"',
   // The runner binds control.sock here as 65532; the setgid bit gives the socket the directory's
   // group, the one the worker shares, so the worker can connect.
@@ -401,6 +415,8 @@ export interface HostVmStorageOptions {
   readonly controlGroupId?: number;
   /** How long one conversion may take before it is killed. Defaults to 30 minutes. */
   readonly convertTimeoutMs?: number;
+  /** Require `.mend-vm-data` sentinel inside `dataDir` before reporting a disk absent (macOS bind mounts). */
+  readonly requireDataSentinel?: boolean;
   /** Test seam: free bytes on the filesystem holding `path`. */
   readonly freeBytes?: (path: string) => Promise<number>;
 }
@@ -518,6 +534,17 @@ export class HostVmStorage {
       throw Object.assign(
         new Error(
           `The host VM data directory ${this.#options.dataDir.path} is missing; is its volume mounted? Nothing can be said of any data disk until it is back.`,
+        ),
+        { code: "adapter-unavailable" },
+      );
+    }
+    if (
+      this.#options.requireDataSentinel === true &&
+      !(await fileExists(joinPath(this.#options.dataDir.path, HOST_VM_DATA_SENTINEL)))
+    ) {
+      throw Object.assign(
+        new Error(
+          `The host VM data directory ${this.#options.dataDir.path} is missing its ${HOST_VM_DATA_SENTINEL} sentinel; is the macOS host directory mounted? Nothing can be said of any data disk until it is back.`,
         ),
         { code: "adapter-unavailable" },
       );
@@ -670,12 +697,14 @@ export class HostVmStorage {
     await mkdir(this.#options.dataDir.path, { recursive: true });
     await mkdir(this.#options.controlDir.path, { recursive: true });
     const group = this.#options.controlGroupId ?? (await stat(this.#options.controlDir.path)).gid;
+    const skipDataChown = this.#options.dataDir.mount?.kind === "bind" ? "1" : "0";
     const output = await this.#runTools(PREPARE_SCRIPT, [
       name,
       String(this.#options.dataDiskBytes ?? DEFAULT_HOST_VM_DATA_DISK_BYTES),
       input.baseImageDigest,
       String(group),
       scope,
+      skipDataChown,
     ]);
     return {
       dataDiskPath: this.dataDiskPath(name),

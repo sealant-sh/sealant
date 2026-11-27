@@ -131,6 +131,81 @@ export const DEFAULT_HOST_VM_RUNNER_IMAGE =
 export const HOST_VM_IMAGES_TARGET = "/var/lib/sealant/images";
 export const HOST_VM_DATA_TARGET = "/var/lib/sealant/data";
 export const HOST_VM_CONTROL_TARGET = "/run/sealant";
+const HOST_VM_MAC_VMD_TOKEN_TARGET = "/run/sealant-vmd/token";
+
+const macVmdHealthSchema = z.object({
+  protocolVersion: z.number().int(),
+  version: z.string(),
+  instanceNonce: z.string(),
+  hostIps: z.object({
+    ipv4: z.array(z.string()),
+    ipv6: z.array(z.string()),
+  }),
+  memoryBytes: z.number().nonnegative(),
+  availableMemoryBytes: z.number().nonnegative(),
+  memoryPressure: z.enum(["normal", "warning", "critical"]),
+  diskAvailableImportantBytes: z.number().nonnegative(),
+  workersRunning: z.number().int().nonnegative(),
+});
+
+/** Health snapshot returned by macOS `sealant-vmd`'s `GET /v1/health`. */
+export type HostVmMacVmdHealth = z.infer<typeof macVmdHealthSchema>;
+
+/** Configuration for `--vmm-backend mac-vmd` (native Apple Silicon `Virtualization.framework`). */
+export interface HostVmMacVmdOptions {
+  /** Hostname inside Docker for `sealant-vmd` (default `host.docker.internal`). */
+  readonly host: string;
+  /** Loopback port `sealant-vmd` listens on. */
+  readonly port: number;
+  /** Path to `vmd-token` readable by this worker container (for `GET /v1/health` auth). */
+  readonly tokenPath: string;
+  /** Host path to `vmd-token` bind-mounted read-only into `sealant-vm-runner`. */
+  readonly tokenHostPath: string;
+  /** Dedicated `enable_icc=false` Docker bridge giving `sealant-vm-runner` a route to `sealant-vmd`. */
+  readonly vmdLinkNetwork: string;
+  /** Optional guest `eth0` / `tap0` MTU override (defaults to `65520` on mac-vmd). */
+  readonly mtu?: number;
+  /** Test seam: fetches `GET /v1/health` from `sealant-vmd`. */
+  readonly probeHealth?: () => Promise<HostVmMacVmdHealth>;
+}
+
+/** Fetches and validates `GET /v1/health` from macOS `sealant-vmd`. */
+export const probeMacVmdHealth = async (options: {
+  readonly host: string;
+  readonly port: number;
+  readonly tokenPath: string;
+}): Promise<HostVmMacVmdHealth> => {
+  const token = (await readFile(options.tokenPath, "utf8")).trim();
+  const url = `http://${options.host}:${String(options.port)}/v1/health`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Host: `${options.host}:${String(options.port)}`,
+    },
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok) {
+    throw createAdapterError(
+      "adapter-unavailable",
+      `macOS sealant-vmd health check failed at ${url} (HTTP ${String(response.status)}).`,
+    );
+  }
+  return macVmdHealthSchema.parse(await response.json());
+};
+
+const mergeHostPublicIps = (
+  existing: readonly string[],
+  macIps: HostVmMacVmdHealth["hostIps"],
+): string[] => {
+  const merged = new Set<string>(existing);
+  for (const ip of macIps.ipv4) {
+    merged.add(ip.includes("/") ? ip : `${ip}/32`);
+  }
+  for (const ip of macIps.ipv6) {
+    merged.add(ip.includes("/") ? ip : `${ip}/128`);
+  }
+  return [...merged];
+};
 
 /** The runner's own default; how long the guest has to power off after SIGTERM. */
 export const DEFAULT_HOST_VM_SHUTDOWN_GRACE_SECONDS = 20;
@@ -309,6 +384,8 @@ export interface HostVmRuntimeAdapterOptions {
   readonly stopTimeoutSeconds?: number;
   /** `/dev/kvm`'s group, when the runner cannot read it from the device (`--kvm-gid`). */
   readonly kvmGid?: number;
+  /** Present on Apple Silicon macOS installs using `--vmm-backend mac-vmd`. */
+  readonly macVmd?: HostVmMacVmdOptions;
   readonly containerNamePrefix?: string;
   readonly readinessTimeoutMs?: number;
   /** Test seam: the control channel (health, credential files). */
@@ -480,6 +557,18 @@ const containerStateSchema = z.object({
   Error: z.string().optional(),
 });
 
+/** Inputs for launching a `sealant-vm-runner` container. */
+interface HostVmRunnerStartInput {
+  readonly name: string;
+  readonly controlScope: string;
+  readonly mode: HostVmBootMode;
+  readonly baseImageDigest: string;
+  readonly guestMib: number;
+  readonly containerBytes: number;
+  readonly runId?: string;
+  readonly egress?: HostVmEgressAttachment;
+}
+
 export class HostVmRuntimeAdapter implements RuntimeAdapter {
   public readonly id = "host-vm" as const;
   /** An ended runner leaves its data disk (and its stopped container) for the remove phase. */
@@ -499,6 +588,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
   readonly #shutdownGraceSeconds: number;
   readonly #stopTimeoutSeconds: number;
   readonly #kvmGid: number | undefined;
+  readonly #macVmd: HostVmMacVmdOptions | undefined;
   readonly #prefix: string;
   readonly #readinessTimeoutMs: number;
   readonly #control: ControlChannel;
@@ -524,6 +614,7 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       );
     }
     this.#kvmGid = options.kvmGid;
+    this.#macVmd = options.macVmd;
     this.#prefix = options.containerNamePrefix ?? DEFAULT_CONTAINER_PREFIX;
     this.#readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
     this.#control = options.controlChannel ?? liveControlChannel;
@@ -657,19 +748,99 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
-  /** The `docker run` argv of a runner container. */
-  #runArgs(input: {
-    readonly name: string;
-    readonly controlScope: string;
-    readonly mode: HostVmBootMode;
-    readonly baseImageDigest: string;
-    readonly guestMib: number;
-    readonly containerBytes: number;
-    readonly runId?: string;
-    readonly egress?: HostVmEgressAttachment;
-  }): string[] {
+  /** The `docker run` (Linux KVM) or `docker create` (macOS `mac-vmd`) argv of a runner container. */
+  #runArgs(input: HostVmRunnerStartInput): string[] {
     const key = hostVmBaseImageKey(input.baseImageDigest);
     const tmpfs = `rw,nosuid,nodev,noexec,uid=${String(HOST_VM_RUNNER_UID)},gid=${String(HOST_VM_RUNNER_UID)}`;
+    const macVmd = this.#macVmd;
+    if (macVmd !== undefined) {
+      const vmdIface = input.mode === "normal" ? "eth1" : "eth0";
+      return [
+        "create",
+        "--name",
+        input.name,
+        "--label",
+        `${HOST_VM_LABEL}=1`,
+        "--label",
+        `${HOST_VM_BASE_IMAGE_LABEL}=${input.baseImageDigest}`,
+        "--label",
+        `${HOST_VM_MODE_LABEL}=${input.mode}`,
+        ...(input.runId === undefined ? [] : ["--label", `sealant.run=${input.runId}`]),
+        "--stop-timeout",
+        String(this.#stopTimeoutSeconds),
+        "--cap-drop",
+        "ALL",
+        "--cap-add",
+        "NET_ADMIN",
+        "--cap-add",
+        "SETUID",
+        "--cap-add",
+        "SETGID",
+        "--cap-add",
+        "SETPCAP",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--device",
+        "/dev/net/tun:/dev/net/tun",
+        "--read-only",
+        "--tmpfs",
+        `/tmp:${tmpfs}`,
+        "--tmpfs",
+        `/run/vm:${tmpfs}`,
+        "--pids-limit",
+        "256",
+        "--cpus",
+        String(this.#vcpus),
+        // The guest's RAM lives on macOS inside sealant-vz-worker, not inside the Docker VM;
+        // cap only the runner's own overhead here.
+        ...dockerMemoryArgs(HOST_VM_CONTAINER_OVERHEAD_BYTES),
+        // Normal mode starts on `<name>-isolated` (`eth0`) and connects `vmdLinkNetwork` (`eth1`)
+        // before `docker start`; recovery mode connects only `vmdLinkNetwork` (`eth0`).
+        "--network",
+        input.egress?.network ?? macVmd.vmdLinkNetwork,
+        "--mount",
+        `type=bind,source=${macVmd.tokenHostPath},target=${HOST_VM_MAC_VMD_TOKEN_TARGET},readonly`,
+        ...hostVmMountArgs(
+          this.#storage.controlDir,
+          input.controlScope,
+          HOST_VM_CONTROL_TARGET,
+          false,
+        ),
+        this.#runnerImage,
+        "--vmm-backend",
+        "mac-vmd",
+        "--vmd-host",
+        macVmd.host,
+        "--vmd-port",
+        String(macVmd.port),
+        "--vmd-token-file",
+        HOST_VM_MAC_VMD_TOKEN_TARGET,
+        "--vmd-interface",
+        vmdIface,
+        "--vm-name",
+        input.name,
+        ...(macVmd.mtu === undefined ? [] : ["--mtu", String(macVmd.mtu)]),
+        "--mode",
+        input.mode,
+        "--image-digest",
+        key,
+        "--vcpus",
+        String(this.#vcpus),
+        "--memory-mib",
+        String(input.guestMib),
+        "--shutdown-grace-secs",
+        String(this.#shutdownGraceSeconds),
+        ...(input.egress === undefined
+          ? []
+          : [
+              "--proxy-ip",
+              input.egress.proxyIp,
+              "--egress",
+              input.egress.egress,
+              ...input.egress.allowTcpPorts.flatMap((port) => ["--allow-tcp-port", String(port)]),
+            ]),
+      ];
+    }
     return [
       "run",
       "-d",
@@ -748,6 +919,32 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
             ...input.egress.allowTcpPorts.flatMap((port) => ["--allow-tcp-port", String(port)]),
           ]),
     ];
+  }
+
+  async #startRunner(input: HostVmRunnerStartInput): Promise<void> {
+    const args = this.#runArgs(input);
+    const macVmd = this.#macVmd;
+    if (macVmd === undefined) {
+      await this.#run("docker", args);
+      return;
+    }
+    await this.#run("docker", args);
+    if (input.mode === "normal") {
+      await this.#run("docker", ["network", "connect", macVmd.vmdLinkNetwork, input.name]);
+    }
+    await this.#run("docker", ["start", input.name]);
+  }
+
+  async #probeMacVmdHealth(): Promise<HostVmMacVmdHealth | undefined> {
+    const macVmd = this.#macVmd;
+    if (macVmd === undefined) return undefined;
+    return macVmd.probeHealth !== undefined
+      ? macVmd.probeHealth()
+      : probeMacVmdHealth({
+          host: macVmd.host,
+          port: macVmd.port,
+          tokenPath: macVmd.tokenPath,
+        });
   }
 
   /**
@@ -875,13 +1072,24 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
           );
         }
         await this.#assertIsolatedGatewaySupport(egressProxy);
+        const macHealth = await this.#probeMacVmdHealth();
+        if (macHealth?.memoryPressure === "critical") {
+          throw createAdapterError(
+            "adapter-unavailable",
+            "macOS is under critical memory pressure; stop an idle workspace before launching another host VM.",
+          );
+        }
         owned.proxy = (await egressProxy.proxies.state(name)) === undefined;
         const host = await egressProxy.hostPolicy();
+        const hostPublicIps =
+          macHealth === undefined
+            ? host.hostPublicIps
+            : mergeHostPublicIps(host.hostPublicIps, macHealth.hostIps);
         const proxy = await egressProxy.proxies.launchProxy({
           workspaceContainer: name,
           launch,
           operatorAllowedPrivateCidrs: host.operatorAllowedPrivateCidrs,
-          hostPublicIps: host.hostPublicIps,
+          hostPublicIps,
         });
         const egress: HostVmEgressAttachment = {
           network: proxy.networks.isolated.name,
@@ -898,19 +1106,16 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
         });
         const memory = hostVmMemory(await this.#limits(), dockerService);
         try {
-          await this.#run(
-            "docker",
-            this.#runArgs({
-              name,
-              controlScope: scope,
-              mode: "normal",
-              baseImageDigest: digest,
-              guestMib: memory.guestMib,
-              containerBytes: memory.containerBytes,
-              runId,
-              egress,
-            }),
-          );
+          await this.#startRunner({
+            name,
+            controlScope: scope,
+            mode: "normal",
+            baseImageDigest: digest,
+            guestMib: memory.guestMib,
+            containerBytes: memory.containerBytes,
+            runId,
+            egress,
+          });
           owned.container = true;
         } catch (error) {
           // A concurrent launch of the same run created it first: adopt it when it runs. Its
@@ -1095,18 +1300,15 @@ export class HostVmRuntimeAdapter implements RuntimeAdapter {
       await this.#stage(scope, base, {
         launch: { ...template, mode: "recover", secretEnv: input.secretEnv ?? {}, dockerd: false },
       });
-      await this.#run(
-        "docker",
-        this.#runArgs({
-          name,
-          controlScope: scope,
-          mode: "recover",
-          baseImageDigest: record.baseImageDigest,
-          guestMib: memory.guestMib,
-          containerBytes: memory.containerBytes,
-          ...(input.runId === undefined ? {} : { runId: input.runId }),
-        }),
-      );
+      await this.#startRunner({
+        name,
+        controlScope: scope,
+        mode: "recover",
+        baseImageDigest: record.baseImageDigest,
+        guestMib: memory.guestMib,
+        containerBytes: memory.containerBytes,
+        ...(input.runId === undefined ? {} : { runId: input.runId }),
+      });
       await this.#awaitReady(name, scope);
     } catch (error) {
       if (error instanceof HostVmRunnerEnded && error.exitCode === SEALANTD_EXIT_NOTHING_TO_SAVE) {

@@ -41,6 +41,33 @@ describe("parseWorkerEnv · the host VM runtime", () => {
       /DEFAULT_RUNTIME_ADAPTER=host-vm requires SEALANT_HOST_VM_IMAGE_DIR/,
     );
   });
+
+  it("validates mac-vmd host-vm configuration and requires all companion vars", () => {
+    const macComplete = {
+      ...complete,
+      DEFAULT_RUNTIME_ADAPTER: "host-vm",
+      SEALANT_HOST_VM_BACKEND: "mac-vmd",
+      SEALANT_HOST_VM_IMAGE_HOST_PATH: "/Users/dev/Library/Application Support/mend/vm/images",
+      SEALANT_HOST_VM_DATA_HOST_PATH: "/Users/dev/Library/Application Support/mend/vm/data",
+      SEALANT_MAC_VMD_PORT: "7422",
+      SEALANT_MAC_VMD_TOKEN_FILE: "/run/sealant-vmd/token",
+      SEALANT_MAC_VMD_TOKEN_HOST_PATH: "/Users/dev/.config/mend/vmd-token",
+      SEALANT_MAC_VMD_NETWORK: "mend-vmd-link",
+    };
+    const parsed = parseWorkerEnv(macComplete);
+    expect(parsed.SEALANT_HOST_VM_BACKEND).toBe("mac-vmd");
+    expect(parsed.SEALANT_MAC_VMD_HOST).toBe("host.docker.internal");
+    expect(parsed.SEALANT_MAC_VMD_PORT).toBe(7422);
+
+    const {
+      SEALANT_MAC_VMD_PORT: _port,
+      SEALANT_HOST_VM_DATA_HOST_PATH: _dataHost,
+      ...incomplete
+    } = macComplete;
+    expect(() => parseWorkerEnv(incomplete)).toThrow(
+      /SEALANT_HOST_VM_BACKEND=mac-vmd requires .*SEALANT_HOST_VM_DATA_HOST_PATH.*SEALANT_MAC_VMD_PORT/,
+    );
+  });
 });
 
 describe("parseWorkerEnv", () => {

@@ -711,3 +711,138 @@ describe("HostVmRuntimeAdapter · a control scope the caller named (SLNT-1332)",
     expect(await exists(scope)).toBe(false);
   });
 });
+
+const macHealth = (
+  overrides: Partial<{
+    memoryPressure: "normal" | "warning" | "critical";
+    ipv4: string[];
+    ipv6: string[];
+  }> = {},
+) => ({
+  protocolVersion: 1,
+  version: "0.21.0",
+  instanceNonce: "nonce-123",
+  hostIps: {
+    ipv4: overrides.ipv4 ?? ["192.168.1.42"],
+    ipv6: overrides.ipv6 ?? ["2001:db8::42"],
+  },
+  memoryBytes: 24 * GiB,
+  availableMemoryBytes: 16 * GiB,
+  memoryPressure: overrides.memoryPressure ?? "normal",
+  diskAvailableImportantBytes: 100 * GiB,
+  workersRunning: 0,
+});
+
+const macOptions = (health = macHealth()) => ({
+  host: "host.docker.internal",
+  port: 7422,
+  tokenPath: "/run/sealant-vmd/token",
+  tokenHostPath: "/Users/dev/.config/mend/vmd-token",
+  vmdLinkNetwork: "mend-vmd-link",
+  probeHealth: async () => health,
+});
+
+describe("HostVmRuntimeAdapter · mac-vmd backend (Apple Silicon Virtualization.framework)", () => {
+  it("creates, connects mend-vmd-link, and starts the runner without /dev/kvm, merging Mac hostIps", async () => {
+    const h = await make({ macVmd: macOptions() });
+    h.networks.set("mend-vmd-link", new Set());
+    const result = await h.adapter.launch(onHostVm(cases.gitSource));
+    const name = "sealant-vm-run-golden-1";
+    expect(result).toMatchObject({ adapter: "host-vm", resourceId: name, status: "ready" });
+
+    // Proxy receives both the Docker host's public IPs and the Mac host's IPv4 (/32) + IPv6 (/128).
+    expect(h.policies[0]?.document.hostPublicIps).toEqual([
+      "203.0.113.7/32",
+      "192.168.1.42/32",
+      "2001:db8::42/128",
+    ]);
+
+    const createIndex = h.calls.findIndex(
+      (args) => args[0] === "create" && args.includes("--name") && args.includes(name),
+    );
+    const connectIndex = h.calls.findIndex(
+      (args) =>
+        args[0] === "network" &&
+        args[1] === "connect" &&
+        args[2] === "mend-vmd-link" &&
+        args[3] === name,
+    );
+    const startIndex = h.calls.findIndex((args) => args[0] === "start" && args[1] === name);
+    expect(createIndex).toBeGreaterThan(-1);
+    expect(connectIndex).toBeGreaterThan(createIndex);
+    expect(startIndex).toBeGreaterThan(connectIndex);
+
+    const create = h.calls[createIndex] ?? [];
+    expect(valuesOf(create, "--device")).toEqual(["/dev/net/tun:/dev/net/tun"]);
+    expect(create.join(" ")).not.toContain("/dev/kvm");
+    expect(valuesOf(create, "--memory")).toEqual([String(512 * MiB)]);
+    expect(valuesOf(create, "--network")).toEqual([`${name}-isolated`]);
+    expect(valuesOf(create, "--mount")).toEqual([
+      "type=bind,source=/Users/dev/.config/mend/vmd-token,target=/run/sealant-vmd/token,readonly",
+      `type=bind,source=${joinPath(h.controlDir, name)},target=/run/sealant`,
+    ]);
+
+    const runnerArgs = create.slice(create.indexOf("ghcr.io/sealant-sh/vm-runner:test") + 1);
+    expect(runnerArgs).toEqual([
+      "--vmm-backend",
+      "mac-vmd",
+      "--vmd-host",
+      "host.docker.internal",
+      "--vmd-port",
+      "7422",
+      "--vmd-token-file",
+      "/run/sealant-vmd/token",
+      "--vmd-interface",
+      "eth1",
+      "--vm-name",
+      name,
+      "--mode",
+      "normal",
+      "--image-digest",
+      HOST_VM_KEY,
+      "--vcpus",
+      "2",
+      "--memory-mib",
+      String((8 * GiB) / MiB),
+      "--shutdown-grace-secs",
+      "20",
+      "--proxy-ip",
+      "10.250.1.6",
+      "--egress",
+      "standard",
+    ]);
+  });
+
+  it("refuses launch when macOS reports critical memory pressure before starting proxy or runner", async () => {
+    const h = await make({ macVmd: macOptions(macHealth({ memoryPressure: "critical" })) });
+    await expect(h.adapter.launch(onHostVm(cases.gitSource))).rejects.toThrow(
+      /critical memory pressure/,
+    );
+    expect(h.proxy.started).toEqual([]);
+    expect(h.containers.size).toBe(0);
+  });
+
+  it("recovers on mend-vmd-link only (eth0) without attaching an isolated proxy network", async () => {
+    const h = await make({ macVmd: macOptions() });
+    h.networks.set("mend-vmd-link", new Set());
+    await h.adapter.launch(onHostVm(cases.capture));
+    const name = "sealant-vm-run-golden-4";
+    await h.adapter.stop({ resourceId: name, phase: "end" });
+    h.containers.delete(name);
+    h.calls.length = 0;
+
+    const outcome = await h.adapter.recover({
+      resourceId: name,
+      runId: "run-golden-4",
+      secretEnv: { SEALANT_CAPTURE_TOKEN: "capture-only" },
+    });
+    expect(outcome).toEqual({ outcome: "restarted" });
+    const create =
+      h.calls.find(
+        (args) => args[0] === "create" && args.includes("--name") && args.includes(name),
+      ) ?? [];
+    expect(valuesOf(create, "--network")).toEqual(["mend-vmd-link"]);
+    expect(valuesOf(create, "--vmd-interface")).toEqual(["eth0"]);
+    expect(h.calls.some((args) => args[0] === "network" && args[1] === "connect")).toBe(false);
+  });
+});
