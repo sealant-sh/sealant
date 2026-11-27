@@ -176,7 +176,7 @@ const requireHome = (home: string) => {
 };
 
 /** The owner's workspace and the instance of its latest run (ready or not). */
-export const loadInstance = Effect.fn("sealant.credential.load_instance")(function* (input: {
+export const loadInstance = Effect.fnUntraced(function* (input: {
   readonly workspaceId: string;
   readonly ownerUserId: string;
 }) {
@@ -208,7 +208,7 @@ export const notRunning = (workspaceId: string) =>
     code: "workspace-not-running",
   });
 
-export const targetFor = Effect.fn("sealant.credential.target_for")(function* (
+export const targetFor = Effect.fnUntraced(function* (
   workspaceId: string,
   instance: WorkspaceRuntimeInstance,
 ) {

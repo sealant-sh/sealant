@@ -637,7 +637,7 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
       }),
     );
 
-  const remove = Effect.fn("BoatRemoval.remove")(function* (
+  const remove = Effect.fn("sealant.boat.remove_vm")(function* (
     run: BoatRun,
     options: BoatRemovalOptions = {},
   ) {
@@ -660,7 +660,7 @@ const make: Effect.Effect<BoatRemoval["Service"], never, Dependencies> = Effect.
     );
   });
 
-  const cleanup = Effect.fn("BoatRemoval.cleanup")(function* (run: BoatRun) {
+  const cleanup = Effect.fn("sealant.boat.release_vm_holds")(function* (run: BoatRun) {
     return yield* discharge(run);
   });
 

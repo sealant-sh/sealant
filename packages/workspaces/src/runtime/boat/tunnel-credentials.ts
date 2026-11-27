@@ -94,7 +94,7 @@ const make: Effect.Effect<
 > = Effect.gen(function* () {
   const repo = yield* BoatTunnelRepo;
   const cipher = yield* CredentialCipher;
-  const prepare = Effect.fn("BoatTunnelCredentialsOwner.prepare")(function* (
+  const prepare = Effect.fn("sealant.boat.prepare_tunnel_keys")(function* (
     binding: BoatTunnelBinding,
   ) {
     let record = yield* repo.reserve(binding, randomUUID());

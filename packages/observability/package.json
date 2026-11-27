@@ -20,6 +20,7 @@
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@sealant/typescript": "workspace:*",
+    "oxc-parser": "0.120.0",
     "vitest": "catalog:"
   }
 }

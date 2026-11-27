@@ -102,9 +102,9 @@ export interface PersistCodexAuthJsonIfNewerInput {
  * write it if so. Used by the workspace sync-back and the inference engine's point-of-use
  * refresh. Never fails; every call logs exactly one outcome line and returns the outcome.
  */
-export const persistCodexAuthJsonIfNewer = Effect.fn("persistCodexAuthJsonIfNewer")(function* (
-  input: PersistCodexAuthJsonIfNewerInput,
-) {
+export const persistCodexAuthJsonIfNewer = Effect.fn("sealant.credential.save_refreshed_login", {
+  attributes: { "sealant.credential.provider": "codex" },
+})(function* (input: PersistCodexAuthJsonIfNewerInput) {
   const describe = `Codex auth.json (${input.source}): account ${input.connectedAccountId}`;
 
   const outcome: CodexAuthPersistOutcome = yield* Effect.gen(function* () {
@@ -238,7 +238,7 @@ const warn = (message: string, cause?: unknown): Effect.Effect<void> =>
  * No-ops (fast) when the blueprint has no codex credentialRef. Never fails: every abnormal
  * condition is reported as a log warning so run completion is unaffected.
  */
-export const syncBackCodexAuthJson = Effect.fn("syncBackCodexAuthJson")(function* <R = never>(
+export const syncBackCodexAuthJson = Effect.fnUntraced(function* <R = never>(
   input: SyncBackCodexAuthJsonInput<R>,
 ) {
   const codexRefs = input.blueprint.runtime.credentialRefs.filter(

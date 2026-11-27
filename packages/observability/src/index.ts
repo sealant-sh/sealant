@@ -3,11 +3,12 @@ export * from "./layer.js";
 export * from "./redaction.js";
 export {
   routeIdAttributes,
-  sentryAttributes,
+  shapeSpan,
   sentryShapedTracer,
   summarizeSql,
   templatePath,
 } from "./sentry-span.js";
+export type { ShapedSpan, SpanShapingOptions } from "./sentry-span.js";
 export type { CaptureContext, SentryErrors } from "./sentry.js";
 export { makeSentryErrors } from "./sentry.js";
 export * from "./trace-context.js";

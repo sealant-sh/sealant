@@ -120,7 +120,7 @@ const make: Effect.Effect<BoatControlMaterial["Service"], never, Dependencies> =
         const prepared = yield* Effect.tryPromise({ try: control.prepare, catch: unavailable });
         return { url: control.url, auth: control.auth, headers: prepared.headers ?? {} };
       });
-    const connectMaterial = Effect.fn("BoatControlMaterial.connectMaterial")(function* (
+    const connectMaterial = Effect.fn("sealant.boat.get_control_material")(function* (
       runId: string,
       sandboxId: string,
     ) {
@@ -131,7 +131,7 @@ const make: Effect.Effect<BoatControlMaterial["Service"], never, Dependencies> =
       yield* current(target);
       return material;
     });
-    const drainMaterial = Effect.fn("BoatControlMaterial.drainMaterial")(function* (
+    const drainMaterial = Effect.fn("sealant.boat.get_drain_material")(function* (
       runId: string,
       sandboxId: string,
     ) {

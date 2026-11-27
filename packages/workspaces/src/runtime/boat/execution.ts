@@ -927,7 +927,9 @@ const make: Effect.Effect<
       );
     });
 
-  const exchange = Effect.fn("BoatExecution.exchange")(function* (input: BoatExecutionTarget) {
+  const exchange = Effect.fn("sealant.boat.exchange_binding")(function* (
+    input: BoatExecutionTarget,
+  ) {
     const target = yield* attempt("invalid-input", () => boatExecutionTargetSchema.parse(input));
     let stored = yield* runs.get(target.runId);
     if (stored === undefined) return yield* Effect.fail(new BoatExecutionError("invalid-input"));
@@ -1027,7 +1029,7 @@ const make: Effect.Effect<
     yield* runs.sealControl(run.runId, run.exchangeId, sealedControl);
     return bindingReceiptOf(target, run.exchangeId);
   });
-  const stage = Effect.fn("BoatExecution.stage")(function* (
+  const stage = Effect.fn("sealant.boat.stage_launch")(function* (
     id: string,
     payload: Redacted.Redacted<BoatLaunchMaterial>,
   ) {
@@ -1055,7 +1057,7 @@ const make: Effect.Effect<
       sealedLaunch,
     });
   });
-  const launch = Effect.fn("BoatExecution.launch")(function* (id: string) {
+  const launch = Effect.fn("sealant.boat.push_launch")(function* (id: string) {
     let run = yield* load(id);
     const phase = boatRunLaunchPhase(run);
     if (phase === "held") return yield* Effect.fail(new BoatExecutionError("invocation-held"));
@@ -1089,7 +1091,7 @@ const make: Effect.Effect<
     yield* runs.acceptLaunch(id);
     return "running" as const;
   });
-  const isolate = Effect.fn("BoatExecution.isolate")(function* (
+  const isolate = Effect.fn("sealant.boat.isolate_network")(function* (
     target: BoatExecutionTarget,
     input: BoatGuestNetworkInput,
   ) {
@@ -1152,14 +1154,16 @@ const make: Effect.Effect<
     yield* unchanged(run);
     return receipt;
   });
-  const recordIsolation = Effect.fn("BoatExecution.recordIsolation")(function* (
+  const recordIsolation = Effect.fnUntraced(function* (
     target: BoatExecutionTarget,
     receipts: BoatRunIsolation,
   ) {
     const run = yield* loadTarget(target);
     yield* runs.isolate(run.runId, receipts);
   });
-  const readiness = Effect.fn("BoatExecution.readiness")(function* (target: BoatExecutionTarget) {
+  const readiness = Effect.fn("sealant.boat.check_readiness")(function* (
+    target: BoatExecutionTarget,
+  ) {
     const run = yield* loadTarget(target);
     if (boatRunLaunchPhase(run) !== "running" || run.isolation === null || run.docker === null)
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
@@ -1287,7 +1291,9 @@ const make: Effect.Effect<
     };
   });
 
-  const tunnel = Effect.fn("BoatExecution.tunnel")(function* (target: BoatExecutionTarget) {
+  const tunnel = Effect.fn("sealant.boat.get_tunnel_connection")(function* (
+    target: BoatExecutionTarget,
+  ) {
     const run = yield* loadTarget(target);
     if (
       !["installed", "issued", "running"].includes(boatRunLaunchPhase(run)) ||
@@ -1300,7 +1306,9 @@ const make: Effect.Effect<
       boatTunnelConnection(connection.hosted, connection.bearer),
     );
   });
-  const control = Effect.fn("BoatExecution.control")(function* (target: BoatExecutionTarget) {
+  const control = Effect.fn("sealant.boat.get_control_connection")(function* (
+    target: BoatExecutionTarget,
+  ) {
     const run = yield* loadTarget(target);
     const phase = boatRunLaunchPhase(run);
     if (phase !== "running" && phase !== "held")
@@ -1312,7 +1320,7 @@ const make: Effect.Effect<
       auth: { bearerToken: connection.bearer.reveal() },
     });
   });
-  const hold = Effect.fn("BoatExecution.hold")(function* (target: BoatExecutionTarget) {
+  const hold = Effect.fn("sealant.boat.hold_launch")(function* (target: BoatExecutionTarget) {
     const run = yield* loadTarget(target);
     const phase = boatRunLaunchPhase(run);
     if (phase === "held") return;
@@ -1322,7 +1330,7 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
     yield* runs.fence(run.runId);
   });
-  const recover = Effect.fn("BoatExecution.recover")(function* (
+  const recover = Effect.fn("sealant.boat.recover_executor")(function* (
     target: BoatExecutionTarget,
     secretEnv: Redacted.Redacted<Readonly<Record<string, string>>>,
   ) {
@@ -1360,7 +1368,7 @@ const make: Effect.Effect<
       ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
     };
   });
-  const daemon = Effect.fn("BoatExecution.daemon")(function* (target: BoatExecutionTarget) {
+  const daemon = Effect.fn("sealant.boat.observe_daemon")(function* (target: BoatExecutionTarget) {
     const stored = yield* runs.get(target.runId);
     if (stored === undefined) return yield* Effect.fail(new BoatExecutionError("invalid-input"));
     if (!isDeepStrictEqual(stored.target, target))
@@ -1391,7 +1399,7 @@ const make: Effect.Effect<
     }
     return { kind: observed.booted ? "up" : "not-booted" } as const;
   });
-  const verifyBearer = Effect.fn("BoatExecution.verifyBearer")(function* (runId: string) {
+  const verifyBearer = Effect.fn("sealant.boat.verify_bearer")(function* (runId: string) {
     yield* bearerOf(yield* load(runId));
   });
   return BoatExecution.of({

@@ -1,28 +1,27 @@
 /**
  * How each exported span reads in Sentry.
  *
- * Sentry (Relay 26.11) gives a span received over OTLP its `span.op` from `sentry.op`, or derives
- * one from `http.request.method`, `db.system.name` or `messaging.system`, and otherwise calls it
- * `default`. Its `span.description` comes from `sentry.description`, else from a template per op
- * (for `db` the raw `db.query.text`), else it stays empty. Effect's own spans carry none of these,
- * so without this module every application span arrives as `default` with no description, and a
- * database span's description is a 30-column statement that Relay's default scrubber replaces with
- * `[Filtered]` whenever a column name contains `secret`, `auth` or `token`. (`db.query.text` is
- * scrubbed by default rules; `sentry.description` only by rules a person writes.)
+ * Sentry (Relay 26.11) names a transaction, and lists a span, by the span's own name. It gives a
+ * span received over OTLP its `span.op` from `sentry.op`, or derives one from
+ * `http.request.method`, `db.system.name` or `messaging.system`, and otherwise calls it `default`.
+ * Its `span.description` comes from `sentry.description`, else from a template per op (for `db` the
+ * raw `db.query.text`), else it stays empty. Its `release` comes from a `sentry.release` attribute
+ * on the span itself: the resource's copy is stored as `resource.sentry.release` and fills nothing.
  *
- * {@link sentryAttributes} decides, from a span's name, kind and final attributes, the attributes
- * that make it read as an operation and a short description. {@link sentryShapedTracer} applies
- * them as each span ends, and collapses Drizzle's empty `drizzle.operation` wrapper so a
- * statement's span hangs directly off the code that ran it.
+ * Effect names a request's span by its method alone (the route is matched after the span starts)
+ * and a statement's span by its database (`postgres`), and its own spans carry none of Sentry's
+ * attributes. So {@link shapeSpan} decides, from a span's name, kind and final attributes, the name
+ * it is exported under (`GET /v1/runs/:runId`, `SELECT runs`) and the attributes that make it read
+ * as an operation with a short description. {@link sentryShapedTracer} applies both as each span
+ * ends, adds the release and environment, renames Effect's `sql.transaction`, and passes Drizzle's
+ * empty wrappers through so a statement's span hangs directly off the code that ran it.
+ *
+ * Every other name follows `sealant.<area>.<operation>`; {@link describeSpanName} says what it does
+ * in words, from {@link SPAN_DESCRIPTIONS} where the name's own words would not.
  */
 import { Option, Tracer } from "effect";
 
-/** The attributes Sentry reads for a span's operation and description. */
-export interface SentrySpanAttributes {
-  readonly "sentry.op": string;
-  readonly "sentry.description": string;
-  readonly [key: string]: string;
-}
+import { SPAN_DESCRIPTIONS } from "./span-descriptions.js";
 
 /** What one SQL statement does and to which table, for its span's description. */
 export interface SqlSummary {
@@ -153,16 +152,21 @@ export const summarizeSql = (sql: string): SqlSummary | undefined => {
   };
 };
 
-// A path segment that names one record rather than a route: a prefixed ID (`sess_01J…`,
-// `ws_3f…`), a UUID, a number, or a long run of hex or base64url.
-const ID_SEGMENT =
-  /^(?:[a-z][a-z0-9]{0,15}_[A-Za-z0-9]{6,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d+|[0-9a-f]{16,}|[A-Za-z0-9_-]{24,})$/i;
+/** A segment a route spells out: a lower-case word (`workspaces`, `exec-as-user`) or a version. */
+const ROUTE_WORD = /^(?:v\d+|[a-z]+(?:[-_][a-z]+)*)$/;
 
-/** `path` with each segment that names a record replaced by `*`, as Sentry groups them. */
+/**
+ * `path` with every segment that could name a record or carry a code replaced by `*`: anything but
+ * a lower-case word or a version. A session ID becomes `*`, and so does a login code
+ * (`/api/cli-auth/57TX-M9HG` is `/api/cli-auth/*`). Used for a request no route matched and an
+ * outgoing one with no template, so neither a name nor a description holds an ID.
+ */
 export const templatePath = (path: string): string =>
   path
     .split("/")
-    .map((segment) => (ID_SEGMENT.test(decodeURIComponentSafe(segment)) ? "*" : segment))
+    .map((segment) =>
+      segment === "" || (segment.length <= 32 && ROUTE_WORD.test(segment)) ? segment : "*",
+    )
     .join("/");
 
 const decodeURIComponentSafe = (segment: string): string => {
@@ -206,16 +210,20 @@ const stringAttribute = (
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 };
 
-// `sealant.workspace.create` -> `sealant.workspace` and `create`: the product and area of a span
-// named by the telemetry contract (`<product>.<area>.<operation>`), and its operation.
-const CONTRACT_NAME = /^([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*)\.([a-z0-9_.]+)$/;
+/**
+ * `sealant.workspace.create` -> `sealant`, `workspace` and `create`: the product, area and
+ * operation of a span named by the telemetry contract (`<product>.<area>.<operation>`, lower snake
+ * case). An SDK call's operation is `<group>.<endpoint>`.
+ */
+export const CONTRACT_NAME =
+  /^([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?)$/;
 
 /**
- * Areas named for a part of sealant rather than a record: their operations read on their own
- * (`sealant.daemon.connect` is "connect"). Every other area is the noun a one-word operation acts
- * on (`sealant.workspace.create` is "create workspace").
+ * Areas named for a part of sealant rather than a record: their operations read on their own.
+ * Every other area is the noun a one-word operation acts on (`sealant.workspace.create` is "create
+ * workspace").
  */
-const COMPONENT_AREAS: ReadonlySet<string> = new Set(["daemon", "inference", "job", "sdk"]);
+const COMPONENT_AREAS: ReadonlySet<string> = new Set(["inference", "job", "sdk"]);
 
 /** The word a one-word operation takes before its noun, where English needs one. */
 const PREPOSITIONS: Readonly<Record<string, string>> = { exec: "in" };
@@ -228,11 +236,11 @@ const words = (identifier: string): string => identifier.split(/[_.]+/).filter(B
 
 /**
  * What a contract-named span does, in words, without the op it is shown beside: in Sentry
- * `sealant.workspace.create` reads `sealant.workspace — create workspace`, and
- * `sealant.session.wait_for_recorder` reads `sealant.session — wait for recorder`. An SDK call
- * (`sealant.sdk.<group>.<endpoint>`) is described by its endpoint, which already names its record
- * (`sealant.sdk.sessions.get_session_output` is "get session output"). `undefined` for a name the
- * contract does not shape.
+ * `sealant.workspace.create` reads `sealant.workspace — create workspace`. The description is
+ * {@link SPAN_DESCRIPTIONS}' entry for the name; else, for a one-word operation on a record, the
+ * operation and its noun; else the operation's words. A call to the daemon reads "call daemon:
+ * open session". An SDK call (`sealant.sdk.<group>.<endpoint>`) is described by its endpoint, which
+ * already names its record. `undefined` for a name the contract does not shape.
  */
 export const describeSpanName = (
   name: string,
@@ -241,10 +249,13 @@ export const describeSpanName = (
   if (match === null) return undefined;
   const [, product = "", area = "", operation = ""] = match;
   const op = `${product}.${area}`;
+  const listed = SPAN_DESCRIPTIONS[name];
+  if (listed !== undefined) return { op, description: listed };
   if (area === "sdk") {
     return { op, description: words(operation.split(".").at(-1) ?? operation) };
   }
   const action = words(operation);
+  if (area === "daemon") return { op, description: `call daemon: ${action}` };
   if (COMPONENT_AREAS.has(area) || action.includes(" ")) return { op, description: action };
   const noun = words(area);
   const preposition = PREPOSITIONS[action];
@@ -257,28 +268,40 @@ export const describeSpanName = (
   };
 };
 
+/** How a span is exported: its name, and the attributes it gains. */
+export interface ShapedSpan {
+  /** The span's name in Sentry, which also names the transaction a root span starts. */
+  readonly name: string;
+  /** Sentry's attributes for it; never one the span set itself. */
+  readonly attributes: Readonly<Record<string, string>>;
+}
+
 /**
- * The Sentry attributes for a span that ended with `name`, `kind` and `attributes`. Attributes the
- * span already set itself (an explicit `sentry.op` or `sentry.description`) are kept.
+ * How a span that ended with `name`, `kind` and `attributes` is exported:
+ *
+ * - a request handled: `<METHOD> <route>`, with an unmatched path templated ({@link templatePath});
+ * - a request sent: `<METHOD> <url.template>`, else its templated path, never the host;
+ * - a statement: `<OPERATION> <table>` ({@link summarizeSql});
+ * - a job delivery or enqueue: its own name, described by its queue;
+ * - any other span: its own name, with the op and description {@link describeSpanName} gives it.
+ *
+ * Attributes the span set itself (an explicit `sentry.op` or `sentry.description`) are kept.
  */
-export const sentryAttributes = (
+export const shapeSpan = (
   name: string,
   kind: Tracer.SpanKind,
   attributes: ReadonlyMap<string, unknown>,
-): Record<string, string> => {
+): ShapedSpan => {
   const explicitOp = stringAttribute(attributes, "sentry.op");
   const explicitDescription = stringAttribute(attributes, "sentry.description");
   const method = stringAttribute(attributes, "http.request.method");
   const dbSystem = stringAttribute(attributes, "db.system.name");
+  const described = describeSpanName(name);
   const shaped: Record<string, string> = {};
 
-  if (name === "sql.transaction") {
-    shaped["sentry.op"] = explicitOp ?? "db.sql.transaction";
-    shaped["sentry.description"] = explicitDescription ?? "transaction";
-    return keepExplicit(shaped, attributes);
-  }
-
-  if (dbSystem !== undefined) {
+  // A statement. `sealant.db.transaction` carries the client's `db.system.name` too, and is
+  // shaped by its own name below.
+  if (dbSystem !== undefined && described === undefined) {
     const query = stringAttribute(attributes, "db.query.text");
     const summary = query === undefined ? undefined : summarizeSql(query);
     shaped["sentry.op"] = explicitOp ?? "db";
@@ -289,37 +312,30 @@ export const sentryAttributes = (
       if (summary.collection !== undefined) shaped["db.collection.name"] = summary.collection;
       shaped["db.query.summary"] = summary.summary;
     }
-    shaped["sentry.description"] =
-      explicitDescription ?? summary?.summary ?? `${dbSystem} ${name}`.trim();
-    return keepExplicit(shaped, attributes);
+    const statement = summary?.summary ?? "QUERY";
+    shaped["sentry.description"] = explicitDescription ?? statement;
+    return { name: statement, attributes: keepExplicit(shaped, attributes) };
   }
 
   if (method !== undefined && (kind === "server" || kind === "client")) {
+    const path = stringAttribute(attributes, "url.path");
+    const templated = path === undefined ? "*" : templatePath(path);
     if (kind === "server") {
       const route = stringAttribute(attributes, "http.route");
-      const path = stringAttribute(attributes, "url.path");
+      const request = `${method} ${route ?? templated}`;
       shaped["sentry.op"] = explicitOp ?? "http.server";
-      // An unmatched request has no route: describe it by its templated path, never its IDs.
-      shaped["sentry.description"] =
-        explicitDescription ??
-        `${method} ${route ?? (path === undefined ? "" : templatePath(path))}`.trim();
+      shaped["sentry.description"] = explicitDescription ?? request;
       if (route !== undefined && path !== undefined) {
         Object.assign(shaped, routeIdAttributes(route, path));
       }
-      return keepExplicit(shaped, attributes);
+      return { name: request, attributes: keepExplicit(shaped, attributes) };
     }
+    const template = stringAttribute(attributes, "url.template");
+    const request = `${method} ${template ?? templated}`;
     shaped["sentry.op"] = explicitOp ?? "http.client";
-    if (explicitDescription === undefined) {
-      const template = stringAttribute(attributes, "url.template");
-      const path = stringAttribute(attributes, "url.path");
-      const host = stringAttribute(attributes, "server.address");
-      const where = template ?? (path === undefined ? undefined : templatePath(path)) ?? host ?? "";
-      shaped["sentry.description"] = `${method} ${where}`.trim();
-      if (template === undefined && path !== undefined) {
-        shaped["url.template"] = templatePath(path);
-      }
-    }
-    return keepExplicit(shaped, attributes);
+    shaped["sentry.description"] = explicitDescription ?? request;
+    if (template === undefined && path !== undefined) shaped["url.template"] = templated;
+    return { name: request, attributes: keepExplicit(shaped, attributes) };
   }
 
   const messaging = stringAttribute(attributes, "messaging.system");
@@ -327,15 +343,14 @@ export const sentryAttributes = (
     shaped["sentry.op"] = explicitOp ?? (kind === "consumer" ? "queue.process" : "queue.publish");
     shaped["sentry.description"] =
       explicitDescription ?? stringAttribute(attributes, "messaging.destination.name") ?? name;
-    return keepExplicit(shaped, attributes);
+    return { name, attributes: keepExplicit(shaped, attributes) };
   }
 
-  const described = describeSpanName(name);
   shaped["sentry.op"] = explicitOp ?? described?.op ?? "function";
   shaped["sentry.description"] = explicitDescription ?? described?.description ?? name;
   // The span's own name, so code search still finds it from what Sentry shows.
   if (described !== undefined) shaped["code.function.name"] = name;
-  return keepExplicit(shaped, attributes);
+  return { name, attributes: keepExplicit(shaped, attributes) };
 };
 
 /** `shaped` without the keys the span set itself. */
@@ -345,8 +360,26 @@ const keepExplicit = (
 ): Record<string, string> =>
   Object.fromEntries(Object.entries(shaped).filter(([key]) => !attributes.has(key)));
 
-/** Drizzle's wrapper around each statement it runs: no attributes of its own, never exported. */
-const PASS_THROUGH_SPANS: ReadonlySet<string> = new Set(["drizzle.operation"]);
+/** Effect's span around each SQL transaction, under the name it is exported as. */
+const TRANSACTION_SPAN = "sealant.db.transaction";
+
+/** Library span names, renamed as the span starts. */
+const RENAMED_SPANS: Readonly<Record<string, string>> = {
+  "sql.transaction": TRANSACTION_SPAN,
+  // Drizzle's wrapper around one statement, when no span of ours is above it to stand in for.
+  "drizzle.operation": "sealant.db.query",
+};
+
+/**
+ * Spans Drizzle makes that record nothing a reader needs. Under a parent each stands in for it, so
+ * what runs inside hangs off that parent. Without one, `drizzle.operation` is exported as
+ * `sealant.db.query`, and the others (the client made at startup) start no trace.
+ */
+const PASS_THROUGH_SPANS: ReadonlySet<string> = new Set([
+  "drizzle.operation",
+  "PgDrizzle.make",
+  "EffectLogger.logQuery",
+]);
 
 /**
  * A span that stands in for `parent` and records nothing: a span started beneath it is a child of
@@ -385,26 +418,51 @@ const passThrough = (
   };
 };
 
+/** What every span of the process carries, so Sentry files it under its release. */
+export interface SpanShapingOptions {
+  readonly release?: string | undefined;
+  readonly environment?: string | undefined;
+}
+
 /**
- * `tracer`, setting each span's Sentry attributes ({@link sentryAttributes}) as it ends, and
- * passing Drizzle's `drizzle.operation` wrapper through to its parent.
+ * `tracer`, exporting each span under the name and attributes {@link shapeSpan} gives it, with
+ * `sentry.release` and `sentry.environment` from `options`, and passing Drizzle's empty wrappers
+ * through to their parent.
  */
-export const sentryShapedTracer = (tracer: Tracer.Tracer): Tracer.Tracer =>
-  Tracer.make({
+export const sentryShapedTracer = (
+  tracer: Tracer.Tracer,
+  options: SpanShapingOptions = {},
+): Tracer.Tracer => {
+  const common: Record<string, string> = {
+    ...(options.release === undefined ? {} : { "sentry.release": options.release }),
+    ...(options.environment === undefined ? {} : { "sentry.environment": options.environment }),
+  };
+  return Tracer.make({
     ...tracer,
-    span: (options) => {
-      if (PASS_THROUGH_SPANS.has(options.name) && Option.isSome(options.parent)) {
-        return passThrough(options.name, options.parent.value, options);
+    span: (spanOptions) => {
+      const parent = spanOptions.root ? Option.none() : spanOptions.parent;
+      if (PASS_THROUGH_SPANS.has(spanOptions.name) && Option.isSome(parent)) {
+        return passThrough(spanOptions.name, parent.value, spanOptions);
       }
-      const span = tracer.span(options);
+      const renamed = RENAMED_SPANS[spanOptions.name];
+      const span = tracer.span({
+        ...spanOptions,
+        name: renamed ?? spanOptions.name,
+        sampled:
+          spanOptions.sampled &&
+          (renamed !== undefined || !PASS_THROUGH_SPANS.has(spanOptions.name)),
+      });
       const end = span.end.bind(span);
       span.end = (endTime, exit) => {
         try {
-          for (const [key, value] of Object.entries(
-            sentryAttributes(span.name, span.kind, span.attributes),
-          )) {
-            span.attribute(key, value);
+          const shaped = shapeSpan(span.name, span.kind, span.attributes);
+          for (const [key, value] of Object.entries({ ...common, ...shaped.attributes })) {
+            if (!span.attributes.has(key)) span.attribute(key, value);
           }
+          // SAFETY: Effect's tracers keep a span's name in a plain field that the exporter reads
+          // when the span ends; `readonly` only stops callers from changing it. A span whose name
+          // cannot be set (`Reflect.set` returns false) is exported under the name it started with.
+          if (shaped.name !== span.name) Reflect.set(span, "name", shaped.name);
         } catch {
           // Shaping is presentation only: a span is exported as it is rather than lost.
         }
@@ -413,3 +471,4 @@ export const sentryShapedTracer = (tracer: Tracer.Tracer): Tracer.Tracer =>
       return span;
     },
   });
+};

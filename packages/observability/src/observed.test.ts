@@ -104,6 +104,44 @@ const run = async (env: Record<string, string>) => {
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 
+/** The spans in one OTLP/JSON trace export, with their string attributes. */
+const exportedSpans = (
+  body: string,
+): Array<{ readonly name: string; readonly attributes: Record<string, string> }> => {
+  const parsed: unknown = JSON.parse(body);
+  const spans: Array<{ readonly name: string; readonly attributes: Record<string, string> }> = [];
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (typeof node !== "object" || node === null) return;
+    if ("spanId" in node && "name" in node && typeof node.name === "string") {
+      const attributes: Record<string, string> = {};
+      const list = "attributes" in node && Array.isArray(node.attributes) ? node.attributes : [];
+      for (const attribute of list) {
+        if (typeof attribute !== "object" || attribute === null) continue;
+        const key = "key" in attribute ? attribute.key : undefined;
+        const value = "value" in attribute ? attribute.value : undefined;
+        if (
+          typeof key === "string" &&
+          typeof value === "object" &&
+          value !== null &&
+          "stringValue" in value &&
+          typeof value.stringValue === "string"
+        ) {
+          attributes[key] = value.stringValue;
+        }
+      }
+      spans.push({ name: node.name, attributes });
+      return;
+    }
+    for (const value of Object.values(node)) visit(value);
+  };
+  visit(parsed);
+  return spans;
+};
+
 describe("a server with telemetry on", () => {
   it("sends its trace, logs and error, and the canary reaches none of them", async () => {
     const collector = await startCollector();
@@ -135,6 +173,31 @@ describe("a server with telemetry on", () => {
     expect(logs.map((item) => item.body).join("")).toContain("resolving the workspace");
 
     for (const item of collector.received) expect(item.body).not.toContain(CANARY);
+  });
+
+  it("exports the request's span under its route, and every span under the release", async () => {
+    const collector = await startCollector();
+    const server = await run({
+      SENTRY_DSN: `http://0123456789abcdef@127.0.0.1:${collector.port}/2`,
+      SENTRY_ENVIRONMENT: "test",
+      SENTRY_RELEASE: "sealant-server@1.2.3",
+    });
+    await server.request("/workspaces/wks_1", {});
+    await server.request("/nowhere/57TX-M9HG", {});
+    await server.stop();
+
+    const spans = collector.received
+      .filter((item) => item.path.startsWith("/api/2/integration/otlp/v1/traces"))
+      .flatMap((item) => exportedSpans(item.body));
+    expect(spans.map((span) => span.name).toSorted()).toEqual([
+      "GET /nowhere/*",
+      "GET /workspaces/:id",
+      "sealant.workspace.lookup",
+    ]);
+    for (const span of spans) {
+      expect(span.attributes["sentry.release"]).toBe("sealant-server@1.2.3");
+      expect(span.attributes["sentry.environment"]).toBe("test");
+    }
   });
 
   it("makes no network call when no DSN is set", async () => {

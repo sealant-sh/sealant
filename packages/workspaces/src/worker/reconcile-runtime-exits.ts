@@ -167,7 +167,7 @@ const swallowingFailure = (operation: string, runId: string) =>
  * exited or vanished. Returns how many instances were recorded. Best-effort per adapter and per
  * instance: one failure never aborts the sweep.
  */
-export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(function* (
+export const reconcileRuntimeExitsEffect = Effect.fn("sealant.runtime.record_exits")(function* (
   options: ReconcileRuntimeExitsEffectOptions,
 ) {
   const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;

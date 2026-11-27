@@ -519,7 +519,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
   const one = (rows: readonly BoatAccountRow[]) =>
     rows[0] === undefined ? undefined : record(rows[0]);
 
-  const create = Effect.fn("BoatAccountRepo.create")(function* (
+  const create = Effect.fnUntraced(function* (
     input: Parameters<BoatAccountRepoService["create"]>[0],
   ) {
     const label = input.label.trim();
@@ -541,17 +541,15 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     if (row === undefined) return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
     return record(row);
   });
-  const get = Effect.fn("BoatAccountRepo.get")(function* (id: string) {
+  const get = Effect.fnUntraced(function* (id: string) {
     return one(yield* db.select().from(boatAccounts).where(eq(boatAccounts.id, id)));
   });
-  const getByDeployment = Effect.fn("BoatAccountRepo.getByDeployment")(function* (
-    deploymentId: string,
-  ) {
+  const getByDeployment = Effect.fnUntraced(function* (deploymentId: string) {
     return one(
       yield* db.select().from(boatAccounts).where(eq(boatAccounts.deploymentId, deploymentId)),
     );
   });
-  const list = Effect.fn("BoatAccountRepo.list")(function* () {
+  const list = Effect.fnUntraced(function* () {
     const rows = yield* db
       .select()
       .from(boatAccounts)
@@ -559,7 +557,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       .orderBy(asc(boatAccounts.createdAt), asc(boatAccounts.id));
     return rows.map(record);
   });
-  const sealedKey = Effect.fn("BoatAccountRepo.sealedKey")(function* (id: string) {
+  const sealedKey = Effect.fnUntraced(function* (id: string) {
     const [row] = yield* db
       .select({
         sealedKey: boatAccounts.sealedKey,
@@ -579,14 +577,14 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       keyKind: row.keyKind,
     };
   });
-  const keyRevision = Effect.fn("BoatAccountRepo.keyRevision")(function* (id: string) {
+  const keyRevision = Effect.fnUntraced(function* (id: string) {
     const [row] = yield* db
       .select({ keyRevision: boatAccounts.keyRevision })
       .from(boatAccounts)
       .where(and(eq(boatAccounts.id, id), isNull(boatAccounts.removedAt)));
     return row?.keyRevision;
   });
-  const rotate = Effect.fn("BoatAccountRepo.rotate")(function* (
+  const rotate = Effect.fnUntraced(function* (
     id: string,
     input: Parameters<BoatAccountRepoService["rotate"]>[1],
   ) {
@@ -627,7 +625,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       new BoatAccountStoreError(now.removalRequestedAt === null ? "stale-revision" : "removing"),
     );
   });
-  const liveSandboxes = Effect.fn("BoatAccountRepo.liveSandboxes")(function* (id: string) {
+  const liveSandboxes = Effect.fnUntraced(function* (id: string) {
     const rows = yield* db
       .select({
         runId: boatRuns.runId,
@@ -652,7 +650,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
           ],
     );
   });
-  const heldImages = Effect.fn("BoatAccountRepo.heldImages")(function* (id: string) {
+  const heldImages = Effect.fnUntraced(function* (id: string) {
     const rows = yield* db
       .select({
         name: sql<
@@ -679,7 +677,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         : [{ name: row.name, wallet: row.walletState === "known" ? row.wallet : undefined }],
     );
   });
-  const unresolvedCreates = Effect.fn("BoatAccountRepo.unresolvedCreates")(function* (id: string) {
+  const unresolvedCreates = Effect.fnUntraced(function* (id: string) {
     const [row] = yield* db
       .select({ value: count() })
       .from(boatRuns)
@@ -693,7 +691,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       );
     return row?.value ?? 0;
   });
-  const requestRemoval = Effect.fn("BoatAccountRepo.requestRemoval")(function* (id: string) {
+  const requestRemoval = Effect.fnUntraced(function* (id: string) {
     return yield* db.transaction(() =>
       Effect.gen(function* () {
         // The same row a reservation under the account reads `for share`: one of the two waits.
@@ -776,7 +774,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       return { row: undefined, organization: row.organization, keyKind: row.keyKind } as const;
     });
 
-  const setKeyKind = Effect.fn("BoatAccountRepo.setKeyKind")(function* (
+  const setKeyKind = Effect.fnUntraced(function* (
     id: string,
     keyKind: "personal" | "organization",
   ) {
@@ -790,7 +788,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     yield* db.update(boatAccounts).set({ keyKind }).where(eq(boatAccounts.id, id));
   });
 
-  const changeOrganization = Effect.fn("BoatAccountRepo.changeOrganization")(function* (
+  const changeOrganization = Effect.fnUntraced(function* (
     owner: BoatWalletOwner,
     input: Parameters<BoatAccountRepoService["changeOrganization"]>[1],
   ) {
@@ -844,9 +842,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       return row === undefined ? undefined : createWalletOf(row.organization, row.keyKind);
     });
 
-  const buildsElsewhere = Effect.fn("BoatAccountRepo.buildsElsewhere")(function* (
-    owner: BoatWalletOwner,
-  ) {
+  const buildsElsewhere = Effect.fnUntraced(function* (owner: BoatWalletOwner) {
     const current = yield* ownerWallet(owner);
     if (current === undefined || current.kind === "unresolved") return [];
     const deploymentId = yield* ownerDeployment(owner);
@@ -863,9 +859,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       .orderBy(asc(nativePublications.id));
   });
 
-  const imagesElsewhere = Effect.fn("BoatAccountRepo.imagesElsewhere")(function* (
-    owner: BoatWalletOwner,
-  ) {
+  const imagesElsewhere = Effect.fnUntraced(function* (owner: BoatWalletOwner) {
     const current = yield* ownerWallet(owner);
     if (current === undefined || current.kind === "unresolved") return [];
     const deploymentId = yield* ownerDeployment(owner);
@@ -893,7 +887,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     );
   });
 
-  const unreachable = Effect.fn("BoatAccountRepo.unreachable")(function* (owner: BoatWalletOwner) {
+  const unreachable = Effect.fnUntraced(function* (owner: BoatWalletOwner) {
     const deploymentId = yield* ownerDeployment(owner);
     const images = yield* db
       .select({ id: nativePublications.id, name: publicationName })
@@ -918,7 +912,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     } satisfies BoatUnreachableObjects;
   });
 
-  const installWallet = Effect.fn("BoatAccountRepo.installWallet")(function* () {
+  const installWallet = Effect.fnUntraced(function* () {
     const [row] = yield* db
       .select({ organization: boatInstall.organization, keyKind: boatInstall.keyKind })
       .from(boatInstall)
@@ -927,9 +921,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
   });
 
   /** An owner's objects of unknown wallet that Boat may hold. */
-  const unknownObjects = Effect.fn("BoatAccountRepo.unknownObjects")(function* (
-    owner: BoatWalletOwner,
-  ) {
+  const unknownObjects = Effect.fnUntraced(function* (owner: BoatWalletOwner) {
     const deploymentId = yield* ownerDeployment(owner);
     const runs = yield* db
       .select({ runId: boatRuns.runId, sandboxId: boatRuns.sandboxId })
@@ -1123,10 +1115,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
             : and(image, eq(nativePublications.deploymentId, deploymentId)),
       };
     });
-  const objectWallet = Effect.fn("BoatAccountRepo.objectWallet")(function* (
-    owner: BoatWalletOwner,
-    ref: BoatObjectRef,
-  ) {
+  const objectWallet = Effect.fnUntraced(function* (owner: BoatWalletOwner, ref: BoatObjectRef) {
     const where = yield* objectRows(owner, ref);
     const states: { readonly wallet: string | null; readonly state: string }[] = [
       ...(where.runs === undefined
@@ -1158,7 +1147,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     if (states.length > 0) return { kind: "unreachable" } as const;
     return { kind: "unrecorded" } as const;
   });
-  const recordObjectWallet = Effect.fn("BoatAccountRepo.recordObjectWallet")(function* (
+  const recordObjectWallet = Effect.fnUntraced(function* (
     owner: BoatWalletOwner,
     ref: BoatObjectRef,
     found: { readonly wallet: string | null } | "unreachable" | "gone",
@@ -1211,7 +1200,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     );
   });
 
-  const listUnresolved = Effect.fn("BoatAccountRepo.listUnresolved")(function* () {
+  const listUnresolved = Effect.fnUntraced(function* () {
     const unknownRun = db
       .select({ one: sql`1` })
       .from(boatRuns)
@@ -1278,7 +1267,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     return rows.map(record);
   });
 
-  const resolveWallets = Effect.fn("BoatAccountRepo.resolveWallets")(function* (
+  const resolveWallets = Effect.fnUntraced(function* (
     owner: BoatWalletOwner,
     resolution: BoatWalletResolution,
   ) {
@@ -1400,7 +1389,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       }),
     );
   });
-  const listRemoving = Effect.fn("BoatAccountRepo.listRemoving")(function* () {
+  const listRemoving = Effect.fnUntraced(function* () {
     const rows = yield* db
       .select()
       .from(boatAccounts)
@@ -1408,7 +1397,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       .orderBy(asc(boatAccounts.id));
     return rows.map(record);
   });
-  const listWithRuns = Effect.fn("BoatAccountRepo.listWithRuns")(function* () {
+  const listWithRuns = Effect.fnUntraced(function* () {
     const rows = yield* db
       .select()
       .from(boatAccounts)
@@ -1426,7 +1415,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       .orderBy(asc(boatAccounts.id));
     return rows.map(record);
   });
-  const finishRemoval = Effect.fn("BoatAccountRepo.finishRemoval")(function* (id: string) {
+  const finishRemoval = Effect.fnUntraced(function* (id: string) {
     return yield* db.transaction(() =>
       Effect.gen(function* () {
         // The row a run's or an image's reservation reads `for share`: nothing new can be
@@ -1476,9 +1465,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       }),
     );
   });
-  const saveReport = Effect.fn("BoatAccountRepo.saveReport")(function* (
-    input: BoatKeyReportRecord,
-  ) {
+  const saveReport = Effect.fnUntraced(function* (input: BoatKeyReportRecord) {
     yield* db
       .insert(boatKeyReports)
       .values({ account: input.account, report: input.report, observedAt: input.observedAt })
@@ -1487,13 +1474,11 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
         set: { report: input.report, observedAt: input.observedAt },
       });
   });
-  const reports = Effect.fn("BoatAccountRepo.reports")(function* () {
+  const reports = Effect.fnUntraced(function* () {
     const rows = yield* db.select().from(boatKeyReports);
     return new Map(rows.map((row) => [row.account, row]));
   });
-  const installDeployment = Effect.fn("BoatAccountRepo.installDeployment")(function* (
-    preferred: string | undefined,
-  ) {
+  const installDeployment = Effect.fnUntraced(function* (preferred: string | undefined) {
     const [row] = yield* db
       .insert(boatInstall)
       .values({ id: "install", deploymentId: preferred ?? `sealant-install-${randomUUID()}` })
@@ -1505,9 +1490,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     if (row?.value == null) return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
     return row.value;
   });
-  const installBuilderOwner = Effect.fn("BoatAccountRepo.installBuilderOwner")(function* (
-    preferred: string | undefined,
-  ) {
+  const installBuilderOwner = Effect.fnUntraced(function* (preferred: string | undefined) {
     const [row] = yield* db
       .insert(boatInstall)
       .values({ id: "install", builderOwner: preferred ?? randomUUID() })
@@ -1519,7 +1502,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
     if (row?.value == null) return yield* Effect.fail(new BoatAccountStoreError("unavailable"));
     return row.value;
   });
-  const reportLaunch = Effect.fn("BoatAccountRepo.reportLaunch")(function* (
+  const reportLaunch = Effect.fnUntraced(function* (
     input: Omit<BoatLaunchReportRecord, "observedAt"> & { readonly observedAt?: Date },
   ) {
     const values = {
@@ -1536,7 +1519,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       .delete(boatLaunchReports)
       .where(lt(boatLaunchReports.observedAt, sql`now() - interval '1 day'`));
   });
-  const launchReports = Effect.fn("BoatAccountRepo.launchReports")(function* (withinMs: number) {
+  const launchReports = Effect.fnUntraced(function* (withinMs: number) {
     const rows = yield* db
       .select()
       .from(boatLaunchReports)
@@ -1557,7 +1540,7 @@ const make: Effect.Effect<BoatAccountRepoService, never, SealantDB> = Effect.gen
       }),
     );
   });
-  const reopenQuarantined = Effect.fn("BoatAccountRepo.reopenQuarantined")(function* (input: {
+  const reopenQuarantined = Effect.fnUntraced(function* (input: {
     readonly deploymentId: string;
     readonly at: Date;
     readonly reasons?: readonly (typeof NATIVE_REOPEN_BOAT_FAILURES)[number][];

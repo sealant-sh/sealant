@@ -624,7 +624,7 @@ export const createPackageStandardizer = (
         });
 
   return {
-    resolvePackage: Effect.fn("PackageStandardizer.resolvePackage")(function* (input: {
+    resolvePackage: Effect.fn("sealant.package.resolve")(function* (input: {
       query: string;
       targetOs?: PackageTargetOs;
     }) {

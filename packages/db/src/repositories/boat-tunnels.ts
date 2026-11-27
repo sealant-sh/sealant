@@ -134,10 +134,7 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
   function* () {
     const scope = yield* Effect.scope;
     const db = yield* SealantDB;
-    const get = Effect.fn("BoatTunnelRepo.get")(function* (
-      id: string,
-      connection: Pick<DB, "select"> = db,
-    ) {
+    const get = Effect.fnUntraced(function* (id: string, connection: Pick<DB, "select"> = db) {
       const [row] = yield* connection
         .select()
         .from(boatTunnels)
@@ -154,10 +151,7 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
         return yield* Effect.fail(new BoatTunnelStoreError("invalid-record"));
       return record;
     });
-    const reserve = Effect.fn("BoatTunnelRepo.reserve")(function* (
-      input: BoatTunnelBinding,
-      reservationId: string,
-    ) {
+    const reserve = Effect.fnUntraced(function* (input: BoatTunnelBinding, reservationId: string) {
       return yield* db.transaction(() =>
         Effect.gen(function* () {
           const binding = yield* parse(() => boatTunnelBindingSchema.parse(input));
@@ -274,7 +268,7 @@ const make: Effect.Effect<BoatTunnelRepo["Service"], never, Dependencies> = Effe
       );
       return Effect.flatMap(Effect.forkIn(operation, scope), Fiber.join);
     }
-    const install = Effect.fn("BoatTunnelRepo.install")(function* (
+    const install = Effect.fnUntraced(function* (
       input: BoatTunnelReservation,
       value: BoatTunnelMaterial,
     ) {

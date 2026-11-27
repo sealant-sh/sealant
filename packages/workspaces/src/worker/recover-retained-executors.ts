@@ -228,9 +228,9 @@ export type RecoveryOutcome =
  * One sweep over the retained executors whose next recovery attempt is due. Returns what each
  * concluded, by run id.
  */
-export const recoverRetainedExecutorsEffect = Effect.fn("recoverRetainedExecutors")(function* (
-  options: RecoverRetainedExecutorsOptions,
-) {
+export const recoverRetainedExecutorsEffect = Effect.fn(
+  "sealant.runtime.recover_retained_executors",
+)(function* (options: RecoverRetainedExecutorsOptions) {
   const drains = yield* WorkspaceCaptureDrainRepo;
   if (options.runIds !== undefined && options.runIds.length === 0) {
     return new Map<string, RecoveryOutcome>();

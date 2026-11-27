@@ -650,37 +650,37 @@ export const linkResourceWorkspace = Effect.fn("sealant.resource_instance.link_w
  * Fence the domain, archive every instance (volumes kept), detach and unlink every workspace,
  * then mark it archived. A repeat finds nothing live and answers no volume.
  */
-export const archiveResourceDomain = Effect.fn("sealant.resource_instance.archive_domain")(
-  function* (resourceDomainId: string) {
-    const domain = yield* requireDomain(resourceDomainId);
-    const runtime = yield* (domain.ownerKind ?? "project") === "project"
-      ? requireWorkspaceRuntime
-      : requireDockerRuntime;
-    const repo = yield* ResourceInstanceRepo;
-    const failed = internal("Failed to archive the resource domain.");
-    yield* repo.setDomainState(resourceDomainId, "fenced").pipe(Effect.mapError(failed));
-    const volumes: Array<ResourceInstanceArchivedVolumeWire> = [];
-    for (const instance of yield* repo
-      .list(resourceDomainId, { archived: false })
-      .pipe(Effect.mapError(failed))) {
-      volumes.push(
-        ...(yield* locked(resourceDomainId, instance.key, archiveInstance(runtime, instance)))
-          .volumes,
-      );
-    }
-    for (const { executor } of yield* repo
-      .linkedExecutors(resourceDomainId)
-      .pipe(Effect.mapError(failed))) {
-      yield* docker("detach a workspace", () => runtime.detachExecutor(executor));
-    }
-    for (const link of yield* repo.links(resourceDomainId).pipe(Effect.mapError(failed))) {
-      yield* repo.unlink(link.workspaceId).pipe(Effect.mapError(failed));
-      yield* announceBoatLink(link.workspaceId);
-    }
-    yield* repo.setDomainState(resourceDomainId, "archived").pipe(Effect.mapError(failed));
-    return { volumes };
-  },
-);
+export const archiveResourceDomain = Effect.fn("sealant.resource_domain.archive")(function* (
+  resourceDomainId: string,
+) {
+  const domain = yield* requireDomain(resourceDomainId);
+  const runtime = yield* (domain.ownerKind ?? "project") === "project"
+    ? requireWorkspaceRuntime
+    : requireDockerRuntime;
+  const repo = yield* ResourceInstanceRepo;
+  const failed = internal("Failed to archive the resource domain.");
+  yield* repo.setDomainState(resourceDomainId, "fenced").pipe(Effect.mapError(failed));
+  const volumes: Array<ResourceInstanceArchivedVolumeWire> = [];
+  for (const instance of yield* repo
+    .list(resourceDomainId, { archived: false })
+    .pipe(Effect.mapError(failed))) {
+    volumes.push(
+      ...(yield* locked(resourceDomainId, instance.key, archiveInstance(runtime, instance)))
+        .volumes,
+    );
+  }
+  for (const { executor } of yield* repo
+    .linkedExecutors(resourceDomainId)
+    .pipe(Effect.mapError(failed))) {
+    yield* docker("detach a workspace", () => runtime.detachExecutor(executor));
+  }
+  for (const link of yield* repo.links(resourceDomainId).pipe(Effect.mapError(failed))) {
+    yield* repo.unlink(link.workspaceId).pipe(Effect.mapError(failed));
+    yield* announceBoatLink(link.workspaceId);
+  }
+  yield* repo.setDomainState(resourceDomainId, "archived").pipe(Effect.mapError(failed));
+  return { volumes };
+});
 
 /** API and reconciler operations use the same installation-wide instance lock. */
 const locked = <A, E, R>(

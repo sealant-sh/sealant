@@ -368,7 +368,7 @@ const make: Effect.Effect<
         ),
       );
 
-  const observe = Effect.fn("BoatVm.observe")(function* (given: BoatRun) {
+  const observe = Effect.fn("sealant.boat.observe_vm")(function* (given: BoatRun) {
     const run = (yield* runs.get(given.runId)) ?? given;
     if (run.absentAt !== null) return absence(run);
     if (run.sandboxId === null) return { kind: "unknown", reason: "no-sandbox" } as const;
@@ -401,7 +401,7 @@ const make: Effect.Effect<
    * Resolves the run's create to a VM on record, and returns the run. `launch`: the launch that
    * may issue create; without it create is never issued for the first time.
    */
-  const resolve = Effect.fn("BoatVm.resolve")(function* (
+  const resolve = Effect.fn("sealant.boat.resolve_create")(function* (
     runId: string,
     launch: BoatRunInput | undefined,
   ) {
@@ -573,7 +573,7 @@ const make: Effect.Effect<
   });
 
   /** A launch's drive: the VM on record, read from Boat, bound to its current boot, exchanged. */
-  const drive = Effect.fn("BoatVm.drive")(function* (input: BoatRunInput) {
+  const drive = Effect.fn("sealant.boat.acquire_vm")(function* (input: BoatRunInput) {
     let run = yield* resolve(input.consumer.runId, input);
     if (run.sandboxId === null)
       return yield* Effect.fail(new BoatAllocationError("allocation-pending"));
@@ -843,7 +843,7 @@ const make: Effect.Effect<
         ),
       );
     });
-  const prepare = Effect.fn("BoatVm.prepare")(function* (raw: BoatRunInput) {
+  const prepare = Effect.fn("sealant.boat.prepare_vm")(function* (raw: BoatRunInput) {
     const input = yield* attempt(() => boatRunInputSchema.parse(raw));
     if (!ours({ deploymentId: input.deploymentId, accountId: input.accountId ?? null }))
       return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
@@ -858,7 +858,7 @@ const make: Effect.Effect<
       return yield* Effect.fail(new BoatAllocationError("target-mismatch"));
     return yield* prepared(input);
   });
-  const reconcile = Effect.fn("BoatVm.reconcile")(function* (
+  const reconcile = Effect.fn("sealant.boat.reconcile_creates")(function* (
     input: Parameters<BoatVmService["reconcile"]>[0],
   ) {
     const ids = yield* runs.listUnresolved({

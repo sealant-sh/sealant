@@ -101,7 +101,9 @@ const make: Effect.Effect<
    */
   const withoutResources = (target: BoatExecutionTarget) =>
     runs.get(target.runId).pipe(Effect.map((run) => run?.resources === "none"));
-  const observe = Effect.fn("BoatReadiness.observe")(function* (target: BoatExecutionTarget) {
+  const observe = Effect.fn("sealant.boat.observe_readiness")(function* (
+    target: BoatExecutionTarget,
+  ) {
     yield* current(target);
     if (yield* withoutResources(target)) {
       // No gateway and no tunnel to keep configured: the agent's health, then the daemon's.
@@ -119,7 +121,7 @@ const make: Effect.Effect<
     yield* current(target);
     return receipt;
   });
-  const launch = Effect.fn("BoatReadiness.launch")(function* (
+  const launch = Effect.fn("sealant.boat.launch_run")(function* (
     target: BoatExecutionTarget,
     material: Redacted.Redacted<BoatLaunchMaterial>,
   ) {

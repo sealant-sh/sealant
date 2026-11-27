@@ -300,7 +300,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     });
   const one = (rows: readonly BoatRunRow[]) =>
     rows[0] === undefined ? Effect.succeed(undefined) : parsed(rows[0]);
-  const get = Effect.fn("BoatRunRepo.get")(function* (runId: string) {
+  const get = Effect.fnUntraced(function* (runId: string) {
     return yield* one(yield* db.select().from(boatRuns).where(eq(boatRuns.runId, runId)));
   });
   const required = (runId: string) =>
@@ -335,7 +335,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       ? Effect.void
       : Effect.fail(new BoatRunStoreError("invalid-record"));
 
-  const getBySandbox = Effect.fn("BoatRunRepo.getBySandbox")(function* (
+  const getBySandbox = Effect.fnUntraced(function* (
     input: Parameters<BoatRunRepoService["getBySandbox"]>[0],
   ) {
     return yield* one(
@@ -350,7 +350,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
         ),
     );
   });
-  const locateSandbox = Effect.fn("BoatRunRepo.locateSandbox")(function* (sandboxId: string) {
+  const locateSandbox = Effect.fnUntraced(function* (sandboxId: string) {
     return yield* db
       .select({
         runId: boatRuns.runId,
@@ -361,7 +361,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       .where(eq(boatRuns.sandboxId, sandboxId))
       .limit(2);
   });
-  const list = Effect.fn("BoatRunRepo.list")(function* (
+  const list = Effect.fnUntraced(function* (
     input: Parameters<BoatRunRepoService["list"]>[0],
     ...conditions: Parameters<typeof and>
   ) {
@@ -385,7 +385,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     inArray(workspaceRuntimeInstances.status, ["pending", "running", "ready"]),
     isNull(workspaceRuntimeInstances.stopReason),
   );
-  const listTunnelled = Effect.fn("BoatRunRepo.listTunnelled")(function* (
+  const listTunnelled = Effect.fnUntraced(function* (
     input: Parameters<BoatRunRepoService["listTunnelled"]>[0],
   ) {
     yield* page(input);
@@ -414,7 +414,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       .limit(input.limit);
     return rows.map((row) => row.id);
   });
-  const listUnsettled = Effect.fn("BoatRunRepo.listUnsettled")(function* (
+  const listUnsettled = Effect.fnUntraced(function* (
     input: Parameters<BoatRunRepoService["listUnsettled"]>[0],
   ) {
     yield* page(input);
@@ -490,14 +490,14 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       .limit(input.limit);
     return rows.map((row) => row.id);
   });
-  const isActive = Effect.fn("BoatRunRepo.isActive")(function* (runId: string) {
+  const isActive = Effect.fnUntraced(function* (runId: string) {
     const [row] = yield* db
       .select({ id: workspaceRuntimeInstances.runId })
       .from(workspaceRuntimeInstances)
       .where(and(eq(workspaceRuntimeInstances.runId, runId), active));
     return row !== undefined;
   });
-  const launchInFlight = Effect.fn("BoatRunRepo.launchInFlight")(function* (runId: string) {
+  const launchInFlight = Effect.fnUntraced(function* (runId: string) {
     const [row] = yield* db
       .select({ id: workspaceRuntimeInstances.runId })
       .from(workspaceRuntimeInstances)
@@ -512,7 +512,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       );
     return row !== undefined;
   });
-  const createAgeMs = Effect.fn("BoatRunRepo.createAgeMs")(function* (runId: string) {
+  const createAgeMs = Effect.fnUntraced(function* (runId: string) {
     const [row] = yield* db
       .select({
         age: sql<
@@ -524,10 +524,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     return row?.age == null ? undefined : Number(row.age);
   });
 
-  const reserve = Effect.fn("BoatRunRepo.reserve")(function* (
-    raw: BoatRunInput,
-    manifestDigest: string,
-  ) {
+  const reserve = Effect.fnUntraced(function* (raw: BoatRunInput, manifestDigest: string) {
     const input = yield* Effect.try({
       try: () => boatRunInputSchema.parse(raw),
       catch: () => new BoatRunStoreError("invalid-record"),
@@ -682,10 +679,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       }),
     );
   });
-  const sameLaunch = Effect.fn("BoatRunRepo.sameLaunch")(function* (
-    input: BoatRunInput,
-    manifestDigest: string,
-  ) {
+  const sameLaunch = Effect.fnUntraced(function* (input: BoatRunInput, manifestDigest: string) {
     const { consumer, publication } = input;
     const saved = yield* get(consumer.runId);
     // The publication's whole record, its scope and its source kind were frozen on the run's
@@ -711,7 +705,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       runtime.sourceKind === input.sourceKind
     );
   });
-  const issueCreate = Effect.fn("BoatRunRepo.issueCreate")(function* (runId: string) {
+  const issueCreate = Effect.fnUntraced(function* (runId: string) {
     return yield* db.transaction(() =>
       Effect.gen(function* () {
         const before = yield* required(runId);
@@ -768,7 +762,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       }),
     );
   });
-  const adopt = Effect.fn("BoatRunRepo.adopt")(function* (runId: string, sandboxId: string) {
+  const adopt = Effect.fnUntraced(function* (runId: string, sandboxId: string) {
     return yield* db.transaction(() =>
       Effect.gen(function* () {
         const adopted = yield* one(
@@ -805,7 +799,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       }),
     );
   });
-  const hold = Effect.fn("BoatRunRepo.hold")(function* (
+  const hold = Effect.fnUntraced(function* (
     runId: string,
     reason: NonNullable<BoatRun["heldReason"]>,
     conflictingSandboxes: readonly string[] = [],
@@ -834,11 +828,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     );
     return held ?? (yield* Effect.fail(stale()));
   });
-  const seen = Effect.fn("BoatRunRepo.seen")(function* (
-    runId: string,
-    sandboxId: string,
-    created: boolean,
-  ) {
+  const seen = Effect.fnUntraced(function* (runId: string, sandboxId: string, created: boolean) {
     if (created)
       yield* db
         .update(boatRuns)
@@ -856,10 +846,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       return yield* Effect.fail(new BoatRunStoreError("target-conflict"));
     return run;
   });
-  const recordNotFound = Effect.fn("BoatRunRepo.recordNotFound")(function* (
-    runId: string,
-    sandboxId: string,
-  ) {
+  const recordNotFound = Effect.fnUntraced(function* (runId: string, sandboxId: string) {
     yield* db
       .update(boatRuns)
       .set(absent("not-found"))
@@ -877,7 +864,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       return yield* Effect.fail(new BoatRunStoreError("target-conflict"));
     return run;
   });
-  const recordNeverCreated = Effect.fn("BoatRunRepo.recordNeverCreated")(function* (runId: string) {
+  const recordNeverCreated = Effect.fnUntraced(function* (runId: string) {
     yield* db
       .update(boatRuns)
       .set(absent("never-created"))
@@ -888,9 +875,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
   });
   // The first create's refusal and a replay's mark compete on the row: whichever commits first
   // wins. A marked replay keeps the run tracked; a recorded absence stops the replay.
-  const recordFirstCreateRefused = Effect.fn("BoatRunRepo.recordFirstCreateRefused")(function* (
-    runId: string,
-  ) {
+  const recordFirstCreateRefused = Effect.fnUntraced(function* (runId: string) {
     yield* db
       .update(boatRuns)
       .set(absent("never-created"))
@@ -904,7 +889,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       );
     return yield* required(runId);
   });
-  const markReplay = Effect.fn("BoatRunRepo.markReplay")(function* (runId: string) {
+  const markReplay = Effect.fnUntraced(function* (runId: string) {
     yield* db
       .update(boatRuns)
       .set({ replayIssuedAt: sql`coalesce(${boatRuns.replayIssuedAt}, now())` })
@@ -912,7 +897,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     return yield* required(runId);
   });
 
-  const bind = Effect.fn("BoatRunRepo.bind")(function* (runId: string, raw: BoatExecutionTarget) {
+  const bind = Effect.fnUntraced(function* (runId: string, raw: BoatExecutionTarget) {
     const target = yield* Effect.try({
       try: () => boatExecutionTargetSchema.parse(raw),
       catch: () => new BoatRunStoreError("invalid-record"),
@@ -941,7 +926,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     if (isDeepStrictEqual(saved.target, target)) return saved;
     return yield* Effect.fail(stale());
   });
-  const beginExchange = Effect.fn("BoatRunRepo.beginExchange")(function* (
+  const beginExchange = Effect.fnUntraced(function* (
     target: BoatExecutionTarget,
     exchange: Parameters<BoatRunRepoService["beginExchange"]>[1],
   ) {
@@ -965,7 +950,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       return yield* Effect.fail(new BoatRunStoreError("target-conflict"));
     return saved;
   });
-  const sealControl = Effect.fn("BoatRunRepo.sealControl")(function* (
+  const sealControl = Effect.fnUntraced(function* (
     runId: string,
     exchangeId: string,
     sealedControl: string,
@@ -991,7 +976,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     if (saved.sealedControl === sealedControl) return saved;
     return yield* Effect.fail(stale());
   });
-  const stage = Effect.fn("BoatRunRepo.stage")(function* (
+  const stage = Effect.fnUntraced(function* (
     runId: string,
     admission: Parameters<BoatRunRepoService["stage"]>[1],
   ) {
@@ -1017,10 +1002,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     );
     return staged ?? (yield* Effect.fail(stale()));
   });
-  const isolate = Effect.fn("BoatRunRepo.isolate")(function* (
-    runId: string,
-    raw: BoatRunIsolation,
-  ) {
+  const isolate = Effect.fnUntraced(function* (runId: string, raw: BoatRunIsolation) {
     const isolation = yield* Effect.try({
       try: () => boatRunIsolationSchema.parse(raw),
       catch: () => new BoatRunStoreError("invalid-record"),
@@ -1044,7 +1026,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     if (saved.fencedAt === null && isDeepStrictEqual(saved.isolation, isolation)) return saved;
     return yield* Effect.fail(stale());
   });
-  const issueLaunch = Effect.fn("BoatRunRepo.issueLaunch")(function* (runId: string) {
+  const issueLaunch = Effect.fnUntraced(function* (runId: string) {
     const issued = yield* one(
       yield* db
         .update(boatRuns)
@@ -1062,7 +1044,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     );
     return issued ?? (yield* Effect.fail(stale()));
   });
-  const acceptLaunch = Effect.fn("BoatRunRepo.acceptLaunch")(function* (runId: string) {
+  const acceptLaunch = Effect.fnUntraced(function* (runId: string) {
     const accepted = yield* one(
       yield* db
         .update(boatRuns)
@@ -1082,7 +1064,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     if (saved.launchAcceptedAt !== null && saved.fencedAt === null) return saved;
     return yield* Effect.fail(stale());
   });
-  const fence = Effect.fn("BoatRunRepo.fence")(function* (runId: string) {
+  const fence = Effect.fnUntraced(function* (runId: string) {
     const unlaunched = sql`${boatRuns.launchIssuedAt} is null`;
     const fenced = yield* one(
       yield* db
@@ -1100,10 +1082,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
     return fenced ?? (yield* Effect.fail(stale()));
   });
 
-  const claimDeletion = Effect.fn("BoatRunRepo.claimDeletion")(function* (
-    runId: string,
-    claimMs: number,
-  ) {
+  const claimDeletion = Effect.fnUntraced(function* (runId: string, claimMs: number) {
     const claimed = yield* one(
       yield* db
         .update(boatRuns)
@@ -1143,7 +1122,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
       new BoatRunStoreError(state.startable ? "binding-conflict" : "run-stopped"),
     );
   });
-  const lapseDeletionClaim = Effect.fn("BoatRunRepo.lapseDeletionClaim")(function* (run: BoatRun) {
+  const lapseDeletionClaim = Effect.fnUntraced(function* (run: BoatRun) {
     if (run.deletionClaimedAt === null) return;
     yield* db
       .update(boatRuns)
@@ -1157,7 +1136,7 @@ const make: Effect.Effect<BoatRunRepoService, never, SealantDB> = Effect.gen(fun
         ),
       );
   });
-  const recordDeletion = Effect.fn("BoatRunRepo.recordDeletion")(function* (
+  const recordDeletion = Effect.fnUntraced(function* (
     runId: string,
     operation: Parameters<BoatRunRepoService["recordDeletion"]>[1],
   ) {

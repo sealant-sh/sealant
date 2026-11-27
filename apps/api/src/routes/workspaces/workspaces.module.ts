@@ -529,29 +529,30 @@ const sealSecretEnv = (
  * credential key, which must be configured when there is anything to seal. No secrets yields
  * undefined. Refusals never echo a value.
  */
-export const sealBrokeredSecretValues = Effect.fn("sealant.workspace.seal_brokered_secret_values")(
-  function* (brokeredSecrets: readonly BrokeredSecret[], values: Readonly<Record<string, string>>) {
-    const problems = brokeredSecretValuesProblems(brokeredSecrets, values);
-    if (problems.length > 0) {
-      return yield* new WorkspaceBadRequestError({ message: problems.join("; ") });
-    }
-    if (brokeredSecrets.length === 0) return undefined;
-    if ((env.SEALANT_CREDENTIALS_KEY?.trim() ?? "") === "") {
-      return yield* new WorkspaceServiceUnavailableError({
-        message: "Brokered secrets require SEALANT_CREDENTIALS_KEY to be configured.",
-      });
-    }
-    const cipher = yield* CredentialCipher;
-    return yield* sealBrokeredValues(cipher, values).pipe(
-      Effect.mapError(
-        (error) =>
-          new WorkspaceInternalServerError({
-            message: `Could not seal the brokered secret values: ${error.message}`,
-          }),
-      ),
-    );
-  },
-);
+export const sealBrokeredSecretValues = Effect.fn("sealant.workspace.seal_secrets")(function* (
+  brokeredSecrets: readonly BrokeredSecret[],
+  values: Readonly<Record<string, string>>,
+) {
+  const problems = brokeredSecretValuesProblems(brokeredSecrets, values);
+  if (problems.length > 0) {
+    return yield* new WorkspaceBadRequestError({ message: problems.join("; ") });
+  }
+  if (brokeredSecrets.length === 0) return undefined;
+  if ((env.SEALANT_CREDENTIALS_KEY?.trim() ?? "") === "") {
+    return yield* new WorkspaceServiceUnavailableError({
+      message: "Brokered secrets require SEALANT_CREDENTIALS_KEY to be configured.",
+    });
+  }
+  const cipher = yield* CredentialCipher;
+  return yield* sealBrokeredValues(cipher, values).pipe(
+    Effect.mapError(
+      (error) =>
+        new WorkspaceInternalServerError({
+          message: `Could not seal the brokered secret values: ${error.message}`,
+        }),
+    ),
+  );
+});
 
 /**
  * A brokered secret's variable that `secretEnv` sets too would be ambiguous in the workspace,
@@ -3074,7 +3075,7 @@ const EXEC_IN_REQUEST_BOUNDS = {
  * away or the API stops, no further command is sent and the run fails; a command already started
  * is not stopped and may still be running.
  */
-export const execWorkspaceInRequest = Effect.fn("sealant.workspace.exec_in_request")(function* (
+export const execWorkspaceInRequest = Effect.fn("sealant.workspace.exec_and_wait")(function* (
   input: ExecWorkspaceInput & {
     /** For tests; defaults to `EXEC_IN_REQUEST_BOUNDS`. */
     readonly bounds?: Partial<Record<keyof typeof EXEC_IN_REQUEST_BOUNDS, Duration.Input>>;
@@ -3489,7 +3490,7 @@ const withCaptureTarget = <A, R = never>(
 };
 
 /** The spec a workspace last launched from: the attempt snapshot, else the build job's request. */
-export const loadRecordedSpec = Effect.fn("sealant.workspace.load_recorded_spec")(function* (
+export const loadRecordedSpec = Effect.fn("sealant.workspace.load_spec")(function* (
   workspaceId: string,
   runId: string,
 ) {

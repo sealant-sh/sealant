@@ -269,185 +269,187 @@ interface DuePreservation {
  * in the order runtimes became due. Returns how many due runtimes it drove a stop for (`stopped`
  * or still `draining`). Best-effort per instance: one failure never aborts the sweep.
  */
-export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(function* (
-  options: PreserveBeforeDeadlineOptions,
-) {
-  const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
-  const now = options.now ?? Date.now;
-  // Every runtime with a deadline that may still hold work: `ready`, a launch in progress or
-  // stranded (`pending` with an executor), and a retained one (`failed` with an executor whose
-  // machine may still be up — a retained launch, or a daemon that exited on a VM that runs on).
-  const capped = (yield* runtimeInstances.listPreservationCandidates()).filter(
-    (instance) => instance.runtimeDeadlineAt !== null,
-  );
-
-  // What the records alone say (no daemon is asked): which runtimes are in their watch window,
-  // capture-sourced and still holding work, and which of them are due already.
-  const prepared = (yield* Effect.forEach(
-    capped,
-    (instance) =>
-      prepareOne(options, instance, now).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            `Deadline preservation: run ${instance.runId} could not be planned this sweep.`,
-            cause,
-          ).pipe(Effect.as(undefined)),
-        ),
-      ),
-    { concurrency: PLAN_CONCURRENCY },
-  ))
-    .filter((candidate): candidate is PreparedPreservation => candidate !== undefined)
-    // The most urgent first: every permit below is granted in this order.
-    .toSorted((a, b) => a.latestStartMs - b.latestStartMs || a.deadlineMs - b.deadlineMs);
-
-  // The FINAL round trips queued ahead of each runtime still to be sent one are in its plan:
-  // its rank among them, over the permits, times the round trip's bound (review 7 #6).
-  const initiateConcurrency = Math.max(
-    1,
-    options.initiateConcurrency ?? DEFAULT_INITIATE_CONCURRENCY,
-  );
-  const roundTripMs = Math.max(0, options.captureDrain.settings.requestTimeoutMs);
-  let unstartedRank = 0;
-  const queued = prepared.map((candidate) => {
-    if (candidate.finalAnswered) {
-      return candidate;
-    }
-    const queueAheadMs = Math.floor(unstartedRank / initiateConcurrency) * roundTripMs;
-    unstartedRank += 1;
-    const latestStartMs = Math.min(
-      candidate.latestStartMs,
-      candidate.deadlineMs - options.deadline.leadMs - queueAheadMs,
+export const preserveBeforeDeadlineEffect = Effect.fn("sealant.runtime.preserve_due_captures")(
+  function* (options: PreserveBeforeDeadlineOptions) {
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const now = options.now ?? Date.now;
+    // Every runtime with a deadline that may still hold work: `ready`, a launch in progress or
+    // stranded (`pending` with an executor), and a retained one (`failed` with an executor whose
+    // machine may still be up — a retained launch, or a daemon that exited on a VM that runs on).
+    const capped = (yield* runtimeInstances.listPreservationCandidates()).filter(
+      (instance) => instance.runtimeDeadlineAt !== null,
     );
-    return { ...candidate, queueAheadMs, latestStartMs, dueByRecord: latestStartMs <= now() };
-  });
 
-  const budgetMs = options.captureDrain.budgetMs ?? DEFAULT_DRAIN_BUDGET_PER_TICK_MS;
-  // The sweep ends by then: polling started drains never holds the next tick (and the runtimes
-  // that become due in it) back.
-  const sweepEndsAtMs = now() + budgetMs;
-  const samplers = yield* Semaphore.make(PLAN_CONCURRENCY);
-  const initiations = yield* Semaphore.make(initiateConcurrency);
-  const drives = yield* Semaphore.make(
-    Math.max(1, options.drainConcurrency ?? DEFAULT_DRAIN_CONCURRENCY),
-  );
-  const driven = yield* Effect.forEach(
-    queued,
-    (candidate) =>
-      Effect.gen(function* () {
-        // Due by its record: driven now; its drain's FINAL reads the queue itself. Otherwise
-        // sampled, for no longer than is left before its latest possible start.
-        const sample = candidate.dueByRecord
-          ? undefined
-          : yield* samplers.withPermit(sampleOne(options, candidate, now)).pipe(
-              Effect.timeoutOrElse({
-                duration: Math.max(0, candidate.latestStartMs - now()),
-                orElse: () => Effect.succeed(undefined),
-              }),
-            );
-        const plan = yield* planOne(options, candidate, sample, now);
-        if (plan === undefined) {
-          return false;
-        }
-        // Driven: a trace of its own, linked to the runtime's launch.
-        return yield* Effect.gen(function* () {
-          const guarded = <E, R>(effect: Effect.Effect<DriveOutcome, E, R>) =>
-            effect.pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning(
-                  `Deadline preservation: run ${plan.instance.runId} could not be driven this sweep.`,
-                  cause,
-                ).pipe(Effect.as("not-driven" as const)),
-              ),
-            );
+    // What the records alone say (no daemon is asked): which runtimes are in their watch window,
+    // capture-sourced and still holding work, and which of them are due already.
+    const prepared = (yield* Effect.forEach(
+      capped,
+      (instance) =>
+        prepareOne(options, instance, now).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Deadline preservation: run ${instance.runId} could not be planned this sweep.`,
+              cause,
+            ).pipe(Effect.as(undefined)),
+          ),
+        ),
+      { concurrency: PLAN_CONCURRENCY },
+    ))
+      .filter((candidate): candidate is PreparedPreservation => candidate !== undefined)
+      // The most urgent first: every permit below is granted in this order.
+      .toSorted((a, b) => a.latestStartMs - b.latestStartMs || a.deadlineMs - b.deadlineMs);
 
-          // 1. Its first FINAL, before anything polls anything: one round trip, under its own
-          // permit, the wait and the trip bounded by the runtime's remaining lifetime (at least
-          // one round trip, so a runtime at its deadline is still asked once). The permit is held
-          // until that FINAL is answered (or the removal it permits begins), never through the
-          // removal (review 8 #6): an executor that answered complete does not hold up another's
-          // first FINAL while its runtime is removed, and that removal goes on past this sweep.
-          let outcome: DriveOutcome = "draining";
-          if (!candidate.finalAnswered) {
-            const lifetimeLeftMs = Math.max(plan.deadlineMs - now(), roundTripMs);
-            const initiated = yield* driveReleasingPermit({
-              permits: initiations,
-              waitMs: lifetimeLeftMs,
-              joinUntilMs: sweepEndsAtMs,
-              now,
-              drive: (onPhase) =>
-                guarded(driveOne(options, plan, { budgetMs: 0, opensWithStatus: false, onPhase })),
-            });
-            outcome = yield* reportInitiation(plan, initiated);
-            if (outcome !== "draining") {
+    // The FINAL round trips queued ahead of each runtime still to be sent one are in its plan:
+    // its rank among them, over the permits, times the round trip's bound (review 7 #6).
+    const initiateConcurrency = Math.max(
+      1,
+      options.initiateConcurrency ?? DEFAULT_INITIATE_CONCURRENCY,
+    );
+    const roundTripMs = Math.max(0, options.captureDrain.settings.requestTimeoutMs);
+    let unstartedRank = 0;
+    const queued = prepared.map((candidate) => {
+      if (candidate.finalAnswered) {
+        return candidate;
+      }
+      const queueAheadMs = Math.floor(unstartedRank / initiateConcurrency) * roundTripMs;
+      unstartedRank += 1;
+      const latestStartMs = Math.min(
+        candidate.latestStartMs,
+        candidate.deadlineMs - options.deadline.leadMs - queueAheadMs,
+      );
+      return { ...candidate, queueAheadMs, latestStartMs, dueByRecord: latestStartMs <= now() };
+    });
+
+    const budgetMs = options.captureDrain.budgetMs ?? DEFAULT_DRAIN_BUDGET_PER_TICK_MS;
+    // The sweep ends by then: polling started drains never holds the next tick (and the runtimes
+    // that become due in it) back.
+    const sweepEndsAtMs = now() + budgetMs;
+    const samplers = yield* Semaphore.make(PLAN_CONCURRENCY);
+    const initiations = yield* Semaphore.make(initiateConcurrency);
+    const drives = yield* Semaphore.make(
+      Math.max(1, options.drainConcurrency ?? DEFAULT_DRAIN_CONCURRENCY),
+    );
+    const driven = yield* Effect.forEach(
+      queued,
+      (candidate) =>
+        Effect.gen(function* () {
+          // Due by its record: driven now; its drain's FINAL reads the queue itself. Otherwise
+          // sampled, for no longer than is left before its latest possible start.
+          const sample = candidate.dueByRecord
+            ? undefined
+            : yield* samplers.withPermit(sampleOne(options, candidate, now)).pipe(
+                Effect.timeoutOrElse({
+                  duration: Math.max(0, candidate.latestStartMs - now()),
+                  orElse: () => Effect.succeed(undefined),
+                }),
+              );
+          const plan = yield* planOne(options, candidate, sample, now);
+          if (plan === undefined) {
+            return false;
+          }
+          // Driven: a trace of its own, linked to the runtime's launch.
+          return yield* Effect.gen(function* () {
+            const guarded = <E, R>(effect: Effect.Effect<DriveOutcome, E, R>) =>
+              effect.pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning(
+                    `Deadline preservation: run ${plan.instance.runId} could not be driven this sweep.`,
+                    cause,
+                  ).pipe(Effect.as("not-driven" as const)),
+                ),
+              );
+
+            // 1. Its first FINAL, before anything polls anything: one round trip, under its own
+            // permit, the wait and the trip bounded by the runtime's remaining lifetime (at least
+            // one round trip, so a runtime at its deadline is still asked once). The permit is held
+            // until that FINAL is answered (or the removal it permits begins), never through the
+            // removal (review 8 #6): an executor that answered complete does not hold up another's
+            // first FINAL while its runtime is removed, and that removal goes on past this sweep.
+            let outcome: DriveOutcome = "draining";
+            if (!candidate.finalAnswered) {
+              const lifetimeLeftMs = Math.max(plan.deadlineMs - now(), roundTripMs);
+              const initiated = yield* driveReleasingPermit({
+                permits: initiations,
+                waitMs: lifetimeLeftMs,
+                joinUntilMs: sweepEndsAtMs,
+                now,
+                drive: (onPhase) =>
+                  guarded(
+                    driveOne(options, plan, { budgetMs: 0, opensWithStatus: false, onPhase }),
+                  ),
+              });
+              outcome = yield* reportInitiation(plan, initiated);
+              if (outcome !== "draining") {
+                return countsAsDriven(outcome);
+              }
+            }
+
+            // 2. Poll the started drain (status first: its FINAL was answered) and stop it once
+            // complete, under the drive permits, for no longer than the sweep lasts — the permit, too,
+            // only until the drain returns: a removal it permits goes on without it. A runtime just
+            // sent its first FINAL is polled as what that made it (a launch taken from its worker
+            // is a retained launch now), and its start is not announced twice.
+            const leftMs = sweepEndsAtMs - now();
+            if (leftMs <= 0) {
               return countsAsDriven(outcome);
             }
-          }
-
-          // 2. Poll the started drain (status first: its FINAL was answered) and stop it once
-          // complete, under the drive permits, for no longer than the sweep lasts — the permit, too,
-          // only until the drain returns: a removal it permits goes on without it. A runtime just
-          // sent its first FINAL is polled as what that made it (a launch taken from its worker
-          // is a retained launch now), and its start is not announced twice.
-          const leftMs = sweepEndsAtMs - now();
-          if (leftMs <= 0) {
-            return countsAsDriven(outcome);
-          }
-          const current = candidate.finalAnswered
-            ? plan.instance
-            : yield* runtimeInstances.getRuntimeInstanceByRunId(plan.instance.runId);
-          if (current === undefined) {
-            return countsAsDriven(outcome);
-          }
-          const polling: DuePreservation = candidate.finalAnswered
-            ? plan
-            : { ...plan, instance: current, firstStart: false };
-          const polled = yield* driveReleasingPermit({
-            permits: drives,
-            // The drain's own budget ends with the sweep; the bound adds the one round trip it
-            // may be in when its budget runs out.
-            waitMs: leftMs + roundTripMs,
-            joinUntilMs: sweepEndsAtMs + roundTripMs,
-            now,
-            drive: (onPhase) =>
-              Effect.suspend(() => {
-                const remainingMs = sweepEndsAtMs - now();
-                return remainingMs <= 0
-                  ? Effect.succeed<DriveOutcome>("draining")
-                  : guarded(
-                      driveOne(options, polling, {
-                        budgetMs: remainingMs,
-                        opensWithStatus: true,
-                        onPhase,
-                      }),
-                    );
-              }),
-          });
-          if (polled.kind === "removal-continues") {
-            yield* logRemovalContinues(plan, polled.drain);
-            return countsAsDriven("removing");
-          }
-          if (polled.kind === "deciding") {
-            yield* logStopContinues(plan, polled.drain);
-            return countsAsDriven("draining");
-          }
-          return countsAsDriven(polled.kind === "done" ? polled.outcome : "draining");
+            const current = candidate.finalAnswered
+              ? plan.instance
+              : yield* runtimeInstances.getRuntimeInstanceByRunId(plan.instance.runId);
+            if (current === undefined) {
+              return countsAsDriven(outcome);
+            }
+            const polling: DuePreservation = candidate.finalAnswered
+              ? plan
+              : { ...plan, instance: current, firstStart: false };
+            const polled = yield* driveReleasingPermit({
+              permits: drives,
+              // The drain's own budget ends with the sweep; the bound adds the one round trip it
+              // may be in when its budget runs out.
+              waitMs: leftMs + roundTripMs,
+              joinUntilMs: sweepEndsAtMs + roundTripMs,
+              now,
+              drive: (onPhase) =>
+                Effect.suspend(() => {
+                  const remainingMs = sweepEndsAtMs - now();
+                  return remainingMs <= 0
+                    ? Effect.succeed<DriveOutcome>("draining")
+                    : guarded(
+                        driveOne(options, polling, {
+                          budgetMs: remainingMs,
+                          opensWithStatus: true,
+                          onPhase,
+                        }),
+                      );
+                }),
+            });
+            if (polled.kind === "removal-continues") {
+              yield* logRemovalContinues(plan, polled.drain);
+              return countsAsDriven("removing");
+            }
+            if (polled.kind === "deciding") {
+              yield* logStopContinues(plan, polled.drain);
+              return countsAsDriven("draining");
+            }
+            return countsAsDriven(polled.kind === "done" ? polled.outcome : "draining");
+          }).pipe(
+            asLaunchFollowUp("sealant.workspace.preserve_before_deadline", plan.instance, {
+              "sealant.run_id": plan.instance.runId,
+            }),
+          );
         }).pipe(
-          asLaunchFollowUp("sealant.workspace.preserve_before_deadline", plan.instance, {
-            "sealant.run_id": plan.instance.runId,
-          }),
-        );
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            `Deadline preservation: run ${candidate.instance.runId} could not be planned this sweep.`,
-            cause,
-          ).pipe(Effect.as(false)),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Deadline preservation: run ${candidate.instance.runId} could not be planned this sweep.`,
+              cause,
+            ).pipe(Effect.as(false)),
+          ),
         ),
-      ),
-    { concurrency: "unbounded" },
-  );
-  return driven.filter(Boolean).length;
-});
+      { concurrency: "unbounded" },
+    );
+    return driven.filter(Boolean).length;
+  },
+);
 
 /**
  * What driving a due runtime did: a stop's outcome, its removal under way past the sweep, its

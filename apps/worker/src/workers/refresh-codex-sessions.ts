@@ -187,7 +187,9 @@ const runCodexRefresh = (codexHome: string): Promise<{ readonly refusedForGood: 
  */
 export type CodexSessionRefreshOutcome = "refreshed" | "refused" | "fresh" | "skipped" | "failed";
 
-const refreshOneAccount = Effect.fn("refreshCodexSessionAccount")(function* (input: {
+const refreshOneAccount = Effect.fn("sealant.credential.refresh_login", {
+  attributes: { "sealant.credential.provider": "codex" },
+})(function* (input: {
   readonly account: ConnectedAccount;
   readonly credentialCipher: CredentialCipherService;
   readonly targetOptions: SealantTargetDerivationOptions;

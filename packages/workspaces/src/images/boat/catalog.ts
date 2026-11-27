@@ -246,7 +246,9 @@ const make = (
                   : recorded?.state === "known" && recorded.wallet === wallet,
               ),
             );
-    const acquire = Effect.fn("BoatNativeCatalog.acquire")(function* (input: NativeAcquireInput) {
+    const acquire = Effect.fn("sealant.native_image.acquire")(function* (
+      input: NativeAcquireInput,
+    ) {
       const plan = yield* mechanism(() => builder.plan(input.spec));
       const key = yield* Effect.try({
         try: () =>
@@ -398,7 +400,7 @@ const make = (
       return exact;
     });
 
-    const remove = Effect.fn("BoatNativeCatalog.remove")(function* (
+    const remove = Effect.fn("sealant.native_image.remove")(function* (
       record: NativeCatalogRecord,
       policy?: NativeRetentionPolicy,
     ) {
@@ -423,7 +425,7 @@ const make = (
       yield* repo.removed(claim);
       return "removed";
     });
-    const withdraw = Effect.fn("BoatNativeCatalog.withdraw")(function* (
+    const withdraw = Effect.fn("sealant.native_image.withdraw")(function* (
       ownership: NativeBuildOwnership,
     ) {
       if (ownership.key.deploymentId !== options.deploymentId)
@@ -440,7 +442,9 @@ const make = (
     type Plan = Pick<NativePublicationKey, "recipeHash" | "runtime" | "assetsHash" | "platform">;
     const plans = new Map<string, Plan>();
     /** The keys a workspace that can still start in this account would look up, planned now. */
-    const wantedKeys = Effect.fn("BoatNativeCatalog.wantedKeys")(function* (stoppedSince: Date) {
+    const wantedKeys = Effect.fn("sealant.native_image.plan_wanted_keys")(function* (
+      stoppedSince: Date,
+    ) {
       const wanted: NativePublicationKey[] = [];
       let after: string | undefined;
       for (let page = 0; page < startablePages; page++) {
@@ -478,7 +482,7 @@ const make = (
         new NativeCatalogError("mechanism-failed", undefined, "native-retention-unbounded"),
       );
     });
-    const reap = Effect.fn("BoatNativeCatalog.reap")(function* (
+    const reap = Effect.fn("sealant.native_image.reap")(function* (
       input: Parameters<BoatNativeCatalogService["reap"]>[0],
     ) {
       const policy: NativeRetentionPolicy = {
@@ -512,7 +516,7 @@ const make = (
       return { entries, ...(next === undefined ? {} : { next }) };
     });
 
-    const reconcileRecord = Effect.fn("BoatNativeCatalog.reconcileRecord")(function* (
+    const reconcileRecord = Effect.fn("sealant.native_image.reconcile_publication")(function* (
       ownership: NativeBuildOwnership,
     ) {
       const id = ownership.publicationId;
@@ -629,7 +633,7 @@ const make = (
       yield* repo.publish(claim, exact);
       return "adopted";
     });
-    const reconcile = Effect.fn("BoatNativeCatalog.reconcile")(function* (
+    const reconcile = Effect.fn("sealant.native_image.reconcile")(function* (
       input: Parameters<BoatNativeCatalogService["reconcile"]>[0],
     ) {
       const page = yield* mechanism(() => builder.journals(input));
@@ -661,9 +665,7 @@ const make = (
       }
       return { entries, ...(page.next === undefined ? {} : { next: page.next }) };
     });
-    const reconcilePublication = Effect.fn("BoatNativeCatalog.reconcilePublication")(function* (
-      publicationId: string,
-    ) {
+    const reconcilePublication = Effect.fnUntraced(function* (publicationId: string) {
       const record = yield* repo.get(publicationId);
       if (record === undefined) return undefined;
       return yield* reconcileRecord(record.ownership);
