@@ -125,7 +125,7 @@ const GiB = 1024 * MiB;
  * `sealantd --vm` speak one boot protocol. `SEALANT_VM_RUNNER_IMAGE` replaces it.
  */
 export const DEFAULT_HOST_VM_RUNNER_IMAGE =
-  "ghcr.io/sealant-sh/vm-runner-next:0.21.0-next.217@sha256:5d980937731275b900421366e9df2bb43893d8c33b37634f87dcca8a6f32bd7b";
+  "ghcr.io/sealant-sh/vm-runner-next:0.21.0-next.223@sha256:356c27e4962c449aa93ae308f459022fb4f40cbd06056e8f3f12d705ef90b96f";
 
 /** Where the runner reads its disks and staged files (`sealant-vm-runner` defaults). */
 export const HOST_VM_IMAGES_TARGET = "/var/lib/sealant/images";

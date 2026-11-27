@@ -77,7 +77,7 @@ const daemonVersion = (() => {
       JSON.parse(readFileSync(new URL("../images/boat/runtime-pin.json", import.meta.url), "utf8")),
     );
   if (createHash("sha256").update(readFileSync(SEALANTD_BIN)).digest("hex") === pin.sealantd) {
-    // `ghcr.io/…/sealantd-next:0.21.0-next.217@sha256:…`: the first x.y.z is the tag's.
+    // `ghcr.io/…/sealantd-next:0.21.0-next.223@sha256:…`: the first x.y.z is the tag's.
     return versionIn(pin.source);
   }
   const printed = spawnSync(SEALANTD_BIN, ["--print-capabilities"], {
