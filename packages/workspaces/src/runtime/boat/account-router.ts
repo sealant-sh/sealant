@@ -7,6 +7,7 @@ import {
   type BoatNativeCatalogService,
   type NativeAcquireInput,
 } from "../../images/boat/catalog.js";
+import { withLaunchTelemetry, type DaemonSentryConfig } from "../daemon-telemetry.js";
 import { failLaunch, type RuntimeAdapterLaunchHooks } from "../launch-retention.js";
 import {
   removalRefused,
@@ -84,6 +85,8 @@ export class BoatAccountRouterAdapter implements RuntimeAdapter<NativePublicatio
       readonly stacks: BoatAccountStacks;
       /** Whether this install has a resource gateway: the same for every account. */
       readonly resourceGateway: boolean;
+      /** Where workspace daemons report telemetry, when configured on the worker. */
+      readonly daemonTelemetry?: DaemonSentryConfig;
     },
   ) {}
 
@@ -92,18 +95,20 @@ export class BoatAccountRouterAdapter implements RuntimeAdapter<NativePublicatio
   }
 
   async launch(raw: RuntimeLaunch<NativePublication>, hooks?: RuntimeAdapterLaunchHooks) {
+    // Before the first await: the launching fiber is still current (`withLaunchTelemetry`).
+    const launch = withLaunchTelemetry(raw, this.options.daemonTelemetry);
     const stack = await this.options.stacks
-      .launching(boatAccountOf(raw.blueprint))
+      .launching(boatAccountOf(launch.blueprint))
       .catch(() => undefined);
     // Refused before anything is asked of Boat: no VM exists, and none is made.
     if (stack?.adapter === undefined)
       return failLaunch({
-        blueprint: raw.blueprint,
+        blueprint: launch.blueprint,
         identity: undefined,
         runtime: "running",
         error: accountUnavailable(),
       });
-    return stack.adapter.launch(raw, hooks);
+    return stack.adapter.launch(launch, hooks);
   }
 
   async locate(input: { readonly runId: string }) {

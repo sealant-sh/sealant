@@ -480,6 +480,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     db,
     credentialCipher,
     docker: resourceAssembly,
+    ...(daemonTelemetry === undefined ? {} : { daemonTelemetry }),
   });
   boatResourceReach = boatAssembly?.reach;
   // What this worker does for Boat, written as soon as it knows (before any job consumer starts)
