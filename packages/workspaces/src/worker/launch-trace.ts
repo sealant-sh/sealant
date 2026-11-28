@@ -7,7 +7,7 @@
  */
 import type { WorkspaceRuntimeInstance } from "@sealant/db";
 import { parentOf } from "@sealant/observability";
-import { Effect, Option, type Tracer } from "effect";
+import { Effect, type Tracer } from "effect";
 
 type LaunchRecord = Pick<WorkspaceRuntimeInstance, "launchTraceparent" | "launchTracestate">;
 
@@ -48,8 +48,7 @@ export const linkToLaunch = (instance: LaunchRecord | undefined): Effect.Effect<
   const link = launchLinkOf(instance);
   if (link === undefined) return Effect.void;
   return Effect.currentSpan.pipe(
-    Effect.option,
-    Effect.map(Option.map((span) => span.addLinks([link]))),
-    Effect.asVoid,
+    Effect.tap((span) => Effect.sync(() => span.addLinks([link]))),
+    Effect.ignore,
   );
 };
