@@ -88,7 +88,7 @@ export class ProviderFixture {
   snapshotMismatch = false;
   bootReadUnavailable = false;
   beforeCreateReply: () => Promise<void> = async () => {};
-  /** `POST /sandboxes/:id/host`: each call is a fresh hosted cookie, or Boat's failure. */
+  /** `POST /sandboxes/:id/host` calls: each answers the same hosted cookie, or Boat's failure. */
   hostCalls = 0;
   hostUnavailable = false;
   constructor(readonly input: BoatRunInput) {}

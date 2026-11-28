@@ -2023,7 +2023,7 @@ const namesNoSecret = (value: unknown) => {
 };
 
 describe.runIf(databaseUrl !== undefined)("Boat control material", () => {
-  it("opens a running run's control with a fresh hosted cookie from Boat on every connection", () =>
+  it("opens a running run's control, reusing the hosted cookie Boat gave it within the last minute", () =>
     test(async (s) => {
       const f = await controlFixture(s);
       try {
@@ -2039,11 +2039,12 @@ describe.runIf(databaseUrl !== undefined)("Boat control material", () => {
         expect(
           await execute(f.control.connectMaterial(f.target.runId, f.target.sandboxId)),
         ).toEqual(expected);
-        // No cache: the next connection asks Boat again.
+        // Boat's hosted token is stable (SLNT-1410): the next connection reuses it and asks Boat
+        // nothing. The run's own checks still run on every connection.
         expect(
           await execute(f.control.connectMaterial(f.target.runId, f.target.sandboxId)),
         ).toEqual(expected);
-        expect(s.provider.hostCalls).toBe(2);
+        expect(s.provider.hostCalls).toBe(1);
         // The target derivation's hook resolves the same material.
         expect(await boatConnectMaterial(f.control)(f.target.runId, f.target.sandboxId)).toEqual(
           expected,
@@ -2056,7 +2057,9 @@ describe.runIf(databaseUrl !== undefined)("Boat control material", () => {
         await expect(
           boatConnectMaterial(f.control)(f.target.runId, f.target.sandboxId),
         ).rejects.toThrow("Boat interactive control refused");
-        expect(s.provider.hostCalls).toBe(3);
+        // Still one: the target derivation's hook reused the cookie, and the stopped run is
+        // refused on its own checks before Boat is asked.
+        expect(s.provider.hostCalls).toBe(1);
         expect(s.provider.creates).toHaveLength(1);
       } finally {
         await f.runtime.dispose();
@@ -7571,8 +7574,8 @@ describe.runIf(databaseUrl !== undefined)("Boat control material for the worker'
         // FINAL's daemon is reached after the close held the execution too.
         await execute(s.executor.hold(f.target));
         expect(await boatDrainConnectMaterial(f.control)(runId, sandboxId)).toEqual(opened);
-        // A fresh hosted cookie from Boat for every connection, as the strict method asks.
-        expect(s.provider.hostCalls).toBe(2);
+        // The hosted cookie Boat gave a minute ago is reused, as the strict method does.
+        expect(s.provider.hostCalls).toBe(1);
         expect(await f.failure(runId, sandboxId)).toMatchObject({ reason: "refused" });
       } finally {
         await f.runtime.dispose();

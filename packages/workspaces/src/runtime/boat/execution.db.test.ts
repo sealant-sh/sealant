@@ -17,16 +17,20 @@ import {
   type BoatExecutionTarget,
 } from "@sealant/validators";
 import { Effect, Layer, Redacted } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import type { SealantTarget } from "../../sealantd/runtime.js";
 import { GuestFixture } from "./allocation.fixture.js";
+import { BoatSecret } from "./config.js";
 import {
   BoatExecution,
   BoatExecutionError,
   BoatGuestTransportService,
   boatExecutionLayer,
   boatExecutionRetryable,
+  HOSTED_ACCESS_REUSE_MS,
   type BoatLaunchMaterial,
 } from "./execution.js";
 import { boatLaunchDiagnostic, boatLaunchSummary } from "./launch-diagnostics.js";
@@ -41,6 +45,18 @@ const material = (version = "version-one"): Redacted.Redacted<BoatLaunchMaterial
     pins: { credentialVersions: [{ id: "credential", version }], dotfiles: [] },
     docker: false,
   });
+const secret = (value: string) => {
+  const result = BoatSecret.parse(value);
+  if (!result.ok) throw result.error;
+  return result.value;
+};
+/** The hosted cookie a Boat control target presents on its upgrade. */
+const cookie = (control: Redacted.Redacted<SealantTarget>) => {
+  const connect = Redacted.value(control);
+  if (connect.kind !== "websocket" || connect.prepare === undefined)
+    throw new Error("not a Boat control target");
+  return connect.prepare().then((prepared) => prepared.headers?.["Cookie"]);
+};
 const receipts = { resourceReceipt: "e".repeat(64), tunnelReceipt: "f".repeat(64) };
 const test = async (
   run: (context: {
@@ -136,6 +152,64 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       // Running: nothing is pushed again.
       expect(await execute(executor.launch(target.runId))).toBe("running");
       expect(guest.actions.filter((action) => action === "launch")).toHaveLength(2);
+    }));
+  it("reuses a run's hosted access for its control connections for a minute, and any fresh one after", () =>
+    test(async ({ executor, target, guest }) => {
+      await execute(executor.exchange(target));
+      await execute(executor.stage(target.runId, material()));
+      await execute(executor.recordIsolation(target, receipts));
+      expect(await execute(executor.launch(target.runId))).toBe("running");
+      // Each hosted answer is told apart by its cookie, and counted.
+      let hosts = 0;
+      const hostAnswer = async () => ({
+        origin: "https://fixture-8080.on.boat.dev",
+        cookie: secret(`test-cookie-answer-${++hosts}`),
+      });
+      guest.host = hostAnswer;
+      await execute(
+        Effect.gen(function* () {
+          // Well past what the launch asked: its answer is not reused.
+          yield* TestClock.setTime(Date.now() + 10 * 60_000);
+          const first = yield* executor.control(target);
+          expect(hosts).toBe(1);
+          // Every daemon call opens a connection: within the minute none asks Boat again.
+          yield* TestClock.adjust(HOSTED_ACCESS_REUSE_MS - 1);
+          const second = yield* executor.control(target);
+          expect(hosts).toBe(1);
+          expect(yield* Effect.promise(() => cookie(second))).toBe(
+            yield* Effect.promise(() => cookie(first)),
+          );
+          // Past it, Boat checks the VM's labels and answers the hosted cookie again.
+          yield* TestClock.adjust(1);
+          const third = yield* executor.control(target);
+          expect(hosts).toBe(2);
+          expect(yield* Effect.promise(() => cookie(third))).toBe(
+            "_port_auth=test-cookie-answer-2",
+          );
+          // A fresh answer any other caller gets (here the tunnel's) is what control reuses next.
+          yield* executor.tunnel(target);
+          expect(hosts).toBe(3);
+          const fourth = yield* executor.control(target);
+          expect(hosts).toBe(3);
+          expect(yield* Effect.promise(() => cookie(fourth))).toBe(
+            "_port_auth=test-cookie-answer-3",
+          );
+          // A fresh ask Boat refuses (the VM's labels, Boat's failure) leaves nothing to reuse:
+          // the next control connection asks Boat itself.
+          guest.host = async () => {
+            hosts++;
+            throw new Error("Boat refused the host");
+          };
+          yield* Effect.flip(executor.tunnel(target));
+          expect(hosts).toBe(4);
+          guest.host = hostAnswer;
+          const fifth = yield* executor.control(target);
+          expect(hosts).toBe(5);
+          expect(yield* Effect.promise(() => cookie(fifth))).toBe(
+            "_port_auth=test-cookie-answer-5",
+          );
+        }).pipe(Effect.provide(TestClock.layer())),
+      );
     }));
   it("asks for the Docker service only when the sealed material does", () =>
     test(async ({ executor, target, guest }) => {

@@ -20,7 +20,7 @@ import type { BoatTunnelConnection } from "./execution.js";
 /** What one run's carrier connects: the agent (fresh material per connect) and the gateway. */
 export interface BoatTunnelCarrierInput {
   readonly runId: string;
-  /** Read again for every (re)connect: the hosted cookie may expire. */
+  /** Read again for every (re)connect, so each one carries Boat's hosted cookie as it stands. */
   readonly connection: Effect.Effect<Redacted.Redacted<BoatTunnelConnection>, unknown>;
   /** The gateway's published WireGuard port, as this worker reaches it. */
   readonly gateway: { readonly host: string; readonly port: number };

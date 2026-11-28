@@ -23,7 +23,7 @@ import {
   type BoatRun,
   type BoatRunIsolation,
 } from "@sealant/validators";
-import { Cause, Context, Effect, Layer, Redacted, Schedule } from "effect";
+import { Cause, Clock, Context, Effect, Layer, Redacted, Schedule } from "effect";
 import { z } from "zod";
 
 import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
@@ -71,6 +71,17 @@ import {
   boatLaunchSummary,
   type BoatLaunchDiagnostic,
 } from "./launch-diagnostics.js";
+
+/**
+ * How long a control connection reuses the hosted access a run target was last given
+ * (`BoatExecution.control`, SLNT-1410). Within it a daemon connection asks Boat nothing; past it
+ * Boat checks the VM's labels and answers the hosted cookie again.
+ */
+export const HOSTED_ACCESS_REUSE_MS = 60_000;
+/** Run targets whose hosted access is kept at once; the oldest goes first. */
+const HOSTED_ACCESS_KEPT = 512;
+/** A run target's entry in the hosted access kept: the whole target, so no other run's matches. */
+const hostedKey = (target: BoatExecutionTarget) => JSON.stringify(target);
 
 /** The agent's kill switch for a hung capture flush in its lifecycle hooks; none run on Boat. */
 const BOAT_FLUSH_TIMEOUT_MS = 30_000;
@@ -619,8 +630,8 @@ export interface BoatExecutionService {
   ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
   /**
    * Where sealant's end of the tunnel's WebSocket carrier connects (`/sealant/tunnel` through
-   * Boat's hosted HTTPS, with a fresh hosted cookie and the control token), from network setup
-   * until the launch is held. Read again for every reconnect: the hosted cookie may expire.
+   * Boat's hosted HTTPS, with a hosted cookie Boat answers afresh and the control token), from
+   * network setup until the launch is held. Read again for every reconnect.
    */
   readonly tunnel: (
     target: BoatExecutionTarget,
@@ -849,11 +860,52 @@ const make: Effect.Effect<
         return parsed.value;
       });
     });
+  /**
+   * The hosted access each run target was last verified and given, and when (SLNT-1410). Boat's
+   * hosted token is stable: asking again answers the same token unless the port is hosted
+   * `--public` first, which sealant never does, and a stop and resume keep the URL. So a control
+   * connection reuses a recent answer instead of asking Boat twice (the VM's labels, then the
+   * hosted cookie: ~200 ms) before every daemon call. Every other caller asks afresh and refreshes
+   * the entry. Keyed by the whole target, so another run, attempt or VM never reuses it.
+   */
+  const hostedAccess = new Map<
+    string,
+    { readonly hosted: BoatHostedControl; readonly at: number }
+  >();
+  const hostedOf = (target: BoatExecutionTarget) =>
+    Effect.gen(function* () {
+      const key = hostedKey(target);
+      // A refusal (the VM's labels, Boat's failure) leaves control nothing of this target to reuse.
+      const hosted = yield* io(() => transport.host(target), "host-agent").pipe(
+        Effect.tapError(() => Effect.sync(() => hostedAccess.delete(key))),
+      );
+      const at = yield* Clock.currentTimeMillis;
+      hostedAccess.delete(key);
+      hostedAccess.set(key, { hosted, at });
+      for (const oldest of hostedAccess.keys()) {
+        if (hostedAccess.size <= HOSTED_ACCESS_KEPT) break;
+        hostedAccess.delete(oldest);
+      }
+      return hosted;
+    });
   const access = (run: BoundRun) =>
     Effect.gen(function* () {
       const bearer = yield* bearerOf(run);
-      // Hosted cookies may expire; each request refreshes access without repeating bootstrap.
-      const hosted = yield* io(() => transport.host(run.target), "host-agent");
+      // Asked afresh, so launch, recovery and the tunnel each see Boat's answer as it stands now,
+      // and control reuses it next.
+      const hosted = yield* hostedOf(run.target);
+      return { hosted, bearer };
+    });
+  /** `access` for a control connection: a hosted answer from the last `HOSTED_ACCESS_REUSE_MS`. */
+  const controlAccess = (run: BoundRun) =>
+    Effect.gen(function* () {
+      const bearer = yield* bearerOf(run);
+      const now = yield* Clock.currentTimeMillis;
+      const recent = hostedAccess.get(hostedKey(run.target));
+      const hosted =
+        recent !== undefined && now - recent.at >= 0 && now - recent.at < HOSTED_ACCESS_REUSE_MS
+          ? recent.hosted
+          : yield* hostedOf(run.target);
       return { hosted, bearer };
     });
   /**
@@ -1006,7 +1058,7 @@ const make: Effect.Effect<
       if (!parsed.ok) throw new Error();
       return parsed.value;
     });
-    const hosted = yield* io(() => transport.host(target), "host-agent");
+    const hosted = yield* hostedOf(target);
     // The bearer is proven end to end before it is sealed: the agent answers health to it (503
     // before a launch, as nothing is booted) and refuses any other bearer. Until the agent
     // listens, the proxy answers for it and the proof is tried again (`BIND_PROOF_RETRIES`).
@@ -1313,7 +1365,7 @@ const make: Effect.Effect<
     const phase = boatRunLaunchPhase(run);
     if (phase !== "running" && phase !== "held")
       return yield* Effect.fail(new BoatExecutionError("invocation-held"));
-    const connection = yield* access(run);
+    const connection = yield* controlAccess(run);
     return Redacted.make<SealantTarget>({
       kind: "websocket",
       ...boatControlConnection(connection.hosted, connection.bearer),
