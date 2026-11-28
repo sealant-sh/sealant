@@ -233,7 +233,7 @@ const isCaptureSourcedRun = (runId: string, sourceKind: string | null | undefine
  * call returns `draining` / `kept` and writes nothing — the reaper's next tick (a stored
  * "stopped" workspace is `stranded` to it; a replaced run is `superseded`) comes back.
  */
-export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(function* (
+export const processWorkspaceStopEffect = Effect.fn("sealant.workspace.remove_runtime")(function* (
   options: ProcessWorkspaceStopEffectOptions,
 ) {
   const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;

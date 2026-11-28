@@ -1,6 +1,6 @@
 /**
  * Sentry in the browser: errors caught by React error boundaries, uncaught errors and rejections,
- * and one transaction per page load and per navigation, named by route template. Requests to this
+ * and one transaction per page load and per navigation, named by URL template (`/workspaces/$workspaceId`). Requests to this
  * app's own `/api/trpc` carry W3C `traceparent` (and Sentry's `sentry-trace` and `baggage`), which
  * the web server passes on to sealant's API, so the API's spans join the browser's trace.
  *
@@ -23,7 +23,15 @@ import {
   type BrowserTelemetryConfig,
 } from "./runtime-config";
 import { scrubPayload } from "./scrub";
-import { tidyTransaction } from "./tidy";
+import { nameByUrlTemplate, tidyTransaction, urlTemplate } from "./tidy";
+
+/** A route ID's URL template (`/_auth/login` is `/login`), from the router's own route tree. */
+const urlTemplateOf =
+  (router: AnyRouter) =>
+  (routeId: string): string | undefined => {
+    const fullPath: unknown = router.routesById[routeId]?.fullPath;
+    return typeof fullPath === "string" ? urlTemplate(fullPath) : undefined;
+  };
 
 /** Only this app's own tRPC endpoint, matched on the path of a same-origin request. */
 const TRACE_PROPAGATION_TARGETS = [/^\/api\/trpc(?:\/|$)/];
@@ -68,7 +76,8 @@ export const browserSentryOptions = (
   // `beforeSendSpan` only sees streamed spans; with the static lifecycle the transaction is the
   // payload, spans and all.
   // oxlint-disable-next-line typescript/no-deprecated
-  beforeSendTransaction: (event) => tidyTransaction(scrubPayload(event)),
+  beforeSendTransaction: (event) =>
+    tidyTransaction(nameByUrlTemplate(scrubPayload(event), urlTemplateOf(router))),
   beforeBreadcrumb: (breadcrumb) =>
     breadcrumb.category === "console" ? null : scrubPayload(breadcrumb),
 });

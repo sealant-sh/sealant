@@ -168,156 +168,156 @@ const isUsableAccount = (account: ConnectedAccount): boolean => {
  * failure is actionable. `last_used_at` is stamped best-effort (bookkeeping must never fail a
  * launch). Codex accounts are additionally surfaced for the post-run auth.json sync-back.
  */
-export const resolveCredentialInjections = Effect.fn("resolveCredentialInjections")(function* (
-  input: ResolveCredentialInjectionsInput,
-) {
-  const credentialRefs = input.blueprint.runtime.credentialRefs;
+export const resolveCredentialInjections = Effect.fn("sealant.credential.resolve_injections")(
+  function* (input: ResolveCredentialInjectionsInput) {
+    const credentialRefs = input.blueprint.runtime.credentialRefs;
 
-  if (credentialRefs.length === 0) {
-    const empty: ResolvedCredentialInjections = {
-      credentialVersions: [],
-      injections: [],
-      codexAccounts: [],
-      launchCredentialInjections: [],
-    };
-    return empty;
-  }
+    if (credentialRefs.length === 0) {
+      const empty: ResolvedCredentialInjections = {
+        credentialVersions: [],
+        injections: [],
+        codexAccounts: [],
+        launchCredentialInjections: [],
+      };
+      return empty;
+    }
 
-  if (input.credentialCipher === undefined) {
-    return yield* workspaceBuildJobProcessingError({
-      errorCode: "credentials-key-unconfigured",
-      message:
-        "This workspace requests connected-account credentials, but SEALANT_CREDENTIALS_KEY is not configured on the worker, so they cannot be decrypted. Set SEALANT_CREDENTIALS_KEY (32 random bytes, base64) on the worker and retry.",
-    });
-  }
-
-  const accounts = yield* ConnectedAccountRepo;
-  const injections: CredentialInjection[] = [];
-  const codexAccounts: ResolvedCodexAccount[] = [];
-  const launchCredentialInjections: WorkspaceLaunchCredentialInjection[] = [];
-  const credentialVersions: { id: string; version: string }[] = [];
-
-  for (const credentialRef of credentialRefs) {
-    const connectedAccountId = parseConnectedAccountRef(credentialRef.ref);
-
-    if (connectedAccountId === undefined) {
+    if (input.credentialCipher === undefined) {
       return yield* workspaceBuildJobProcessingError({
-        errorCode: "connected-account-ref-invalid",
-        message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} is not a valid connected-account ref.`,
+        errorCode: "credentials-key-unconfigured",
+        message:
+          "This workspace requests connected-account credentials, but SEALANT_CREDENTIALS_KEY is not configured on the worker, so they cannot be decrypted. Set SEALANT_CREDENTIALS_KEY (32 random bytes, base64) on the worker and retry.",
       });
     }
 
-    const account = yield* accounts
-      .getById(connectedAccountId)
-      .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+    const accounts = yield* ConnectedAccountRepo;
+    const injections: CredentialInjection[] = [];
+    const codexAccounts: ResolvedCodexAccount[] = [];
+    const launchCredentialInjections: WorkspaceLaunchCredentialInjection[] = [];
+    const credentialVersions: { id: string; version: string }[] = [];
 
-    if (account === undefined || !isUsableAccount(account)) {
-      return yield* workspaceBuildJobProcessingError({
-        errorCode: "connected-account-unavailable",
-        message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} does not resolve to an active connected account. Reconnect the account and launch again.`,
+    for (const credentialRef of credentialRefs) {
+      const connectedAccountId = parseConnectedAccountRef(credentialRef.ref);
+
+      if (connectedAccountId === undefined) {
+        return yield* workspaceBuildJobProcessingError({
+          errorCode: "connected-account-ref-invalid",
+          message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} is not a valid connected-account ref.`,
+        });
+      }
+
+      const account = yield* accounts
+        .getById(connectedAccountId)
+        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+
+      if (account === undefined || !isUsableAccount(account)) {
+        return yield* workspaceBuildJobProcessingError({
+          errorCode: "connected-account-unavailable",
+          message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} does not resolve to an active connected account. Reconnect the account and launch again.`,
+        });
+      }
+
+      if (account.provider !== credentialRef.provider) {
+        return yield* workspaceBuildJobProcessingError({
+          errorCode: "connected-account-provider-mismatch",
+          message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} resolves to a '${account.provider}' account; the blueprint expected '${credentialRef.provider}'.`,
+        });
+      }
+
+      if (account.status === "invalid") {
+        return yield* workspaceBuildJobProcessingError({
+          errorCode: "connected-account-invalid",
+          message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} points at a credential that has been marked invalid. Reconnect the '${credentialRef.provider}' account and launch again.`,
+        });
+      }
+
+      const plaintext = yield* input.credentialCipher
+        .decrypt(account.encryptedPayload)
+        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+
+      const credentialsHome = input.blueprint.runtime.credentialsHome;
+      const { credential, plan, placedLogin } = yield* Effect.try({
+        try: () => {
+          const stored = parseStoredCredential(credentialRef.provider, plaintext);
+          return {
+            credential: stored,
+            plan: planLogin(stored, account, credentialsHome),
+            placedLogin: credentialsHome === undefined ? undefined : placedLoginOf(...stored),
+          };
+        },
+        catch: (cause) =>
+          workspaceBuildJobProcessingError({
+            errorCode: "connected-account-payload-invalid",
+            message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} decrypted to an unusable payload. Reconnect the account to store a fresh credential.`,
+            cause,
+          }),
       });
-    }
+      if (plan.kind === "unsupported") {
+        return yield* workspaceBuildJobProcessingError({
+          errorCode: "connected-account-unsupported",
+          message: plan.message,
+        });
+      }
+      const homeLogin =
+        placedLogin === undefined
+          ? undefined
+          : yield* sealPlacedLogin(input.credentialCipher, placedLogin).pipe(
+              Effect.mapError(toWorkspaceBuildJobProcessingError),
+            );
+      const planned = plan.injections;
 
-    if (account.provider !== credentialRef.provider) {
-      return yield* workspaceBuildJobProcessingError({
-        errorCode: "connected-account-provider-mismatch",
-        message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} resolves to a '${account.provider}' account; the blueprint expected '${credentialRef.provider}'.`,
-      });
-    }
-
-    if (account.status === "invalid") {
-      return yield* workspaceBuildJobProcessingError({
-        errorCode: "connected-account-invalid",
-        message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} points at a credential that has been marked invalid. Reconnect the '${credentialRef.provider}' account and launch again.`,
-      });
-    }
-
-    const plaintext = yield* input.credentialCipher
-      .decrypt(account.encryptedPayload)
-      .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
-
-    const credentialsHome = input.blueprint.runtime.credentialsHome;
-    const { credential, plan, placedLogin } = yield* Effect.try({
-      try: () => {
-        const stored = parseStoredCredential(credentialRef.provider, plaintext);
-        return {
-          credential: stored,
-          plan: planLogin(stored, account, credentialsHome),
-          placedLogin: credentialsHome === undefined ? undefined : placedLoginOf(...stored),
-        };
-      },
-      catch: (cause) =>
-        workspaceBuildJobProcessingError({
-          errorCode: "connected-account-payload-invalid",
-          message: `Workspace ${describeRef(credentialRef.provider, credentialRef.ref)} decrypted to an unusable payload. Reconnect the account to store a fresh credential.`,
-          cause,
-        }),
-    });
-    if (plan.kind === "unsupported") {
-      return yield* workspaceBuildJobProcessingError({
-        errorCode: "connected-account-unsupported",
-        message: plan.message,
-      });
-    }
-    const homeLogin =
-      placedLogin === undefined
-        ? undefined
-        : yield* sealPlacedLogin(input.credentialCipher, placedLogin).pipe(
-            Effect.mapError(toWorkspaceBuildJobProcessingError),
-          );
-    const planned = plan.injections;
-
-    injections.push(...planned);
-    credentialVersions.push({ id: account.id, version: String(account.credentialRevision) });
-    const login = loginClassOf(...credential);
-    const fileInjected = planned.some((injection) => injection.kind === "file");
-    const entry = {
-      provider: credentialRef.provider,
-      connectedAccountId: account.id,
-      injection: fileInjected ? ("file" as const) : ("env" as const),
-      // Every Claude/Codex/Antigravity FILE planCredentialInjections writes is a copy that cannot refresh.
-      ...(fileInjected &&
-      (credentialRef.provider === "claude" ||
-        credentialRef.provider === "codex" ||
-        credentialRef.provider === "antigravity")
-        ? { copy: true }
-        : {}),
-      ...(login === undefined ? {} : { login }),
-    };
-    launchCredentialInjections.push(
-      credentialsHome === undefined || homeLogin === undefined
-        ? entry
-        : {
-            ...entry,
-            home: credentialsHome.path,
-            placed: { login: homeLogin, revision: account.credentialRevision },
-          },
-    );
-
-    if (credentialRef.provider === "codex") {
-      codexAccounts.push({
+      injections.push(...planned);
+      credentialVersions.push({ id: account.id, version: String(account.credentialRevision) });
+      const login = loginClassOf(...credential);
+      const fileInjected = planned.some((injection) => injection.kind === "file");
+      const entry = {
+        provider: credentialRef.provider,
         connectedAccountId: account.id,
-        storedLastRefresh: readStoredCodexLastRefresh(account.metadata),
-      });
+        injection: fileInjected ? ("file" as const) : ("env" as const),
+        // Every Claude/Codex/Antigravity FILE planCredentialInjections writes is a copy that cannot refresh.
+        ...(fileInjected &&
+        (credentialRef.provider === "claude" ||
+          credentialRef.provider === "codex" ||
+          credentialRef.provider === "antigravity")
+          ? { copy: true }
+          : {}),
+        ...(login === undefined ? {} : { login }),
+      };
+      launchCredentialInjections.push(
+        credentialsHome === undefined || homeLogin === undefined
+          ? entry
+          : {
+              ...entry,
+              home: credentialsHome.path,
+              placed: { login: homeLogin, revision: account.credentialRevision },
+            },
+      );
+
+      if (credentialRef.provider === "codex") {
+        codexAccounts.push({
+          connectedAccountId: account.id,
+          storedLastRefresh: readStoredCodexLastRefresh(account.metadata),
+        });
+      }
+
+      // Best-effort usage stamp: bookkeeping must never fail a launch.
+      yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Failed to stamp last_used_at for connected account ${account.id}; continuing.`,
+            cause,
+          ),
+        ),
+        Effect.asVoid,
+      );
     }
 
-    // Best-effort usage stamp: bookkeeping must never fail a launch.
-    yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning(
-          `Failed to stamp last_used_at for connected account ${account.id}; continuing.`,
-          cause,
-        ),
-      ),
-      Effect.asVoid,
-    );
-  }
-
-  const resolved: ResolvedCredentialInjections = {
-    credentialVersions,
-    injections,
-    codexAccounts,
-    launchCredentialInjections,
-  };
-  return resolved;
-});
+    const resolved: ResolvedCredentialInjections = {
+      credentialVersions,
+      injections,
+      codexAccounts,
+      launchCredentialInjections,
+    };
+    return resolved;
+  },
+);

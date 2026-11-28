@@ -56,7 +56,7 @@ export interface SyncBackWorkspaceCredentialsInput {
  * newest-wins. Never fails (warnings only) — callers may `yield*` it unconditionally on any
  * teardown path, BEFORE the container is destroyed.
  */
-export const syncBackWorkspaceCredentials = Effect.fn("syncBackWorkspaceCredentials")(
+export const syncBackWorkspaceCredentials = Effect.fn("sealant.credential.sync_back")(
   function* (input: SyncBackWorkspaceCredentialsInput) {
     const attempts = yield* WorkspaceAttemptRepo;
     const snapshot = yield* attempts.getAttemptSnapshotByRunId(input.attemptId);

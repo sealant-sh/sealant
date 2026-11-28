@@ -3,7 +3,8 @@
  * about the page. The hashed static bundle (`/assets/*` scripts, styles and fonts) loads on every
  * page and is served from cache after the first, so a span per file buries the route's own requests
  * under dozens of near-identical rows. A file that took long to load is kept: that is a finding.
- * Outgoing requests are described by their templated path, never the IDs in it.
+ * Outgoing requests are described by their templated path, never the IDs in it. A page load or
+ * navigation is named by its URL template, not its route ID.
  */
 import type { Event } from "@sentry/react";
 
@@ -50,3 +51,34 @@ export const tidyTransaction = <E extends Event>(event: E): E =>
   event.spans === undefined
     ? event
     : { ...event, spans: event.spans.filter((span) => !isQuietAsset(span)).map(tidySpan) };
+
+/** The URL template `fullPath` reads as: `/workspaces/` is `/workspaces`, and `/` stays `/`. */
+export const urlTemplate = (fullPath: string): string =>
+  fullPath.length > 1 && fullPath.endsWith("/") ? fullPath.slice(0, -1) : fullPath;
+
+/**
+ * `event` named by its page's URL template (`/workspaces/$workspaceId`). Sentry's TanStack Router
+ * integration names a page load or navigation by the matched route's ID, which spells out pathless
+ * layouts and index routes (`/_authenticated/workspaces/`) that no one sees in the address bar.
+ * `templateOf` gives a route ID's URL template, or `undefined` for a name that is not a route ID;
+ * such a name is the raw pathname of a page no route matched, and its IDs are templated.
+ */
+export const nameByUrlTemplate = <E extends Event>(
+  event: E,
+  templateOf: (routeId: string) => string | undefined,
+): E => {
+  const trace = event.contexts?.trace;
+  if (trace?.op !== "pageload" && trace?.op !== "navigation") return event;
+  if (event.transaction === undefined) return event;
+  // No route matched: Sentry named it by the raw pathname, which may hold IDs.
+  const template = templateOf(event.transaction) ?? templateUrlPath(event.transaction);
+  if (template === event.transaction) return event;
+  return {
+    ...event,
+    transaction: template,
+    contexts: {
+      ...event.contexts,
+      trace: { ...trace, data: { ...trace.data, "url.template": template } },
+    },
+  };
+};

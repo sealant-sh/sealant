@@ -125,7 +125,7 @@ export const instancesHoldingAccount = (
     ),
   );
 
-export const pushCredentialCopy = Effect.fn("pushCredentialCopy")(function* (
+export const pushCredentialCopy = Effect.fn("sealant.credential.push_copy")(function* (
   input: PushCredentialCopyInput,
 ) {
   const describe = `Credential push (${input.provider}): account ${input.connectedAccountId}`;

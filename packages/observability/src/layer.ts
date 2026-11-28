@@ -109,7 +109,10 @@ const exportersLayer = (config: ObservabilityConfig, sentry: SentryErrors): Laye
   const sampling = Layer.effect(
     Tracer.Tracer,
     Effect.map(Effect.tracer, (tracer) =>
-      samplingTracer(sentryShapedTracer(tracer), config.tracesSampleRate),
+      samplingTracer(
+        sentryShapedTracer(tracer, { release: config.release, environment: config.environment }),
+        config.tracesSampleRate,
+      ),
     ),
   );
   const errors = Layer.mergeAll(

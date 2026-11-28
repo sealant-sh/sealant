@@ -148,7 +148,9 @@ export type ClaudeSessionRefreshOutcome = "refreshed" | "refused" | "fresh" | "s
  * Refresh one account if (and only if) its stored session file is stale. Never fails; the shared
  * persist core logs the per-account outcome line, and abnormal conditions warn here.
  */
-const refreshOneAccount = Effect.fn("refreshClaudeSessionAccount")(function* (input: {
+const refreshOneAccount = Effect.fn("sealant.credential.refresh_login", {
+  attributes: { "sealant.credential.provider": "claude" },
+})(function* (input: {
   readonly account: ConnectedAccount;
   readonly credentialCipher: CredentialCipherService;
   readonly targetOptions: SealantTargetDerivationOptions;

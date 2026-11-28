@@ -84,150 +84,150 @@ export interface PersistClaudeCredentialsIfNewerInput {
  * the workspace sync-backs, the inference engine's point-of-use refresh, and the keep-fresh
  * sweeper. Never fails; every call logs exactly one outcome line and returns the outcome.
  */
-export const persistClaudeCredentialsIfNewer = Effect.fn("persistClaudeCredentialsIfNewer")(
-  function* (input: PersistClaudeCredentialsIfNewerInput) {
-    const describe = `Claude credentials (${input.source}): account ${input.connectedAccountId}`;
-
-    const outcome: ClaudeCredentialsPersistOutcome = yield* Effect.gen(function* () {
-      const parsed = parseClaudeCredentialsJson(input.observedCredentialsJson);
-
-      if (!parsed.valid) {
-        yield* Effect.logWarning(
-          `${describe} skipped-invalid-file: observed .credentials.json is invalid (${parsed.reason}).`,
-        );
-        return "skipped-invalid-file" as const;
-      }
-
-      // A copy (no refresh token) never replaces the store's login: only the store refreshes, and
-      // a copy written back would leave nothing able to refresh it (§6a "One refresher").
-      if (!claudeCredentialsCanRefresh(input.observedCredentialsJson)) {
-        yield* Effect.logWarning(
-          `${describe} skipped-copy: the observed file has no refresh token — a copy, not the login.`,
-        );
-        return "skipped-copy" as const;
-      }
-
-      // Plausibility belt: real session tokens expire within hours; a far-future expiresAt is a
-      // sentinel (fabricated file), and persisting it would freeze out every real rotation after
-      // it.
-      if (
-        parsed.metadata.expiresAt !== undefined &&
-        !isPlausibleClaudeExpiry(parsed.metadata.expiresAt)
-      ) {
-        yield* Effect.logWarning(
-          `${describe} skipped-implausible-expiry: observed expiresAt is more than 30 days in the future — not a live session file.`,
-        );
-        return "skipped-implausible-expiry" as const;
-      }
-
-      const accounts = yield* ConnectedAccountRepo;
-
-      // Re-read the CURRENT stored copy right before deciding — another observer may have
-      // persisted a fresher session since this one was seeded.
-      const account = yield* accounts.getById(input.connectedAccountId);
-
-      if (account === undefined || account.archivedAt !== null) {
-        yield* Effect.logWarning(
-          `${describe} skipped-account-unavailable: the connected account is no longer available.`,
-        );
-        return "skipped-account-unavailable" as const;
-      }
-
-      if (
-        input.sourceRevision !== "unknown" &&
-        account.credentialRevision !== input.sourceRevision
-      ) {
-        yield* Effect.logInfo(
-          `${describe} skipped-superseded: the observed file came from credential revision ${input.sourceRevision}; the account now holds revision ${account.credentialRevision}.`,
-        );
-        return "skipped-superseded" as const;
-      }
-
-      // Shape check on the decrypted STORED payload: only session-file accounts own the file.
-      const storedPlaintext = yield* input.credentialCipher.decrypt(account.encryptedPayload);
-      const storedPayload = parseClaudeCredentialPayload(JSON.parse(storedPlaintext));
-
-      if ("token" in storedPayload) {
-        yield* Effect.logInfo(
-          `${describe} skipped-not-session-file: the stored payload is a setup token, never silently converted.`,
-        );
-        return "skipped-not-session-file" as const;
-      }
-      if ("apiKey" in storedPayload) {
-        yield* Effect.logInfo(
-          `${describe} skipped-api-key: the account holds an API key, which a session file never replaces.`,
-        );
-        return "skipped-api-key" as const;
-      }
-
-      // Freshness marker: the stored FILE's own expiresAt is authoritative; the metadata mirror
-      // only fills in when the stored file carries none.
-      const storedParsed = parseClaudeCredentialsJson(storedPayload.credentialsJson);
-      const storedExpiresAt =
-        (storedParsed.valid ? storedParsed.metadata.expiresAt : undefined) ??
-        readStoredClaudeExpiresAt(account.metadata);
-
-      // NEVER write when equal or older (rotated-session safety, mirrors the codex guard).
-      if (
-        !isNewerClaudeCredentials({ observedExpiresAt: parsed.metadata.expiresAt, storedExpiresAt })
-      ) {
-        yield* Effect.logInfo(
-          `${describe} skipped-not-newer: observed expiresAt ${parsed.metadata.expiresAt ?? "none"} is not strictly newer than stored ${storedExpiresAt ?? "none"}.`,
-        );
-        return "skipped-not-newer" as const;
-      }
-
-      // Narrowed on the way back too. A workspace's Claude Code writes the whole document it
-      // knows how to write, so a rotation can hand back an `mcpOAuth` section that was never
-      // stored — a session authorizing an MCP server would otherwise persist its refresh tokens
-      // into this database (Mend's ADR 0005).
-      const narrowed = narrowClaudeCredentialsJson(input.observedCredentialsJson);
-
-      if (narrowed.dropped.length > 0) {
-        yield* Effect.logInfo(
-          `${describe} narrowed: dropped ${narrowed.dropped.join(", ")} from the rotated file before storing it.`,
-        );
-      }
-
-      const plaintextPayload = JSON.stringify({
-        credentialsJson: narrowed.credentialsJson,
-      });
-      const sealed = yield* input.credentialCipher.encrypt(plaintextPayload);
-
-      const replaced = yield* accounts.replacePayload({
-        id: account.id,
-        expectedRevision: account.credentialRevision,
-        kind: "credentials-json",
-        encryptedPayload: sealed.sealed,
-        encryptionKeyId: sealed.keyId,
-        payloadSha256: sha256Hex(plaintextPayload),
-        metadata: { ...account.metadata, ...parsed.metadata },
-      });
-
-      if (replaced === undefined) {
-        yield* Effect.logInfo(
-          `${describe} skipped-superseded: the stored credential changed while this one was being decided on.`,
-        );
-        return "skipped-superseded" as const;
-      }
-
-      yield* accounts.updateSyncState({ id: account.id, lastSyncedAt: new Date() });
-
-      yield* Effect.logInfo(
-        `${describe} synced: persisted rotated session file (expiresAt ${parsed.metadata.expiresAt ?? "none"}, previously ${storedExpiresAt ?? "none"}).`,
-      );
-      return "synced" as const;
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning(`${describe} failed: persisting the session file crashed.`, cause).pipe(
-          Effect.as("failed" as const),
-        ),
-      ),
-    );
-
-    return outcome;
+export const persistClaudeCredentialsIfNewer = Effect.fn(
+  "sealant.credential.save_refreshed_login",
+  {
+    attributes: { "sealant.credential.provider": "claude" },
   },
-);
+)(function* (input: PersistClaudeCredentialsIfNewerInput) {
+  const describe = `Claude credentials (${input.source}): account ${input.connectedAccountId}`;
+
+  const outcome: ClaudeCredentialsPersistOutcome = yield* Effect.gen(function* () {
+    const parsed = parseClaudeCredentialsJson(input.observedCredentialsJson);
+
+    if (!parsed.valid) {
+      yield* Effect.logWarning(
+        `${describe} skipped-invalid-file: observed .credentials.json is invalid (${parsed.reason}).`,
+      );
+      return "skipped-invalid-file" as const;
+    }
+
+    // A copy (no refresh token) never replaces the store's login: only the store refreshes, and
+    // a copy written back would leave nothing able to refresh it (§6a "One refresher").
+    if (!claudeCredentialsCanRefresh(input.observedCredentialsJson)) {
+      yield* Effect.logWarning(
+        `${describe} skipped-copy: the observed file has no refresh token — a copy, not the login.`,
+      );
+      return "skipped-copy" as const;
+    }
+
+    // Plausibility belt: real session tokens expire within hours; a far-future expiresAt is a
+    // sentinel (fabricated file), and persisting it would freeze out every real rotation after
+    // it.
+    if (
+      parsed.metadata.expiresAt !== undefined &&
+      !isPlausibleClaudeExpiry(parsed.metadata.expiresAt)
+    ) {
+      yield* Effect.logWarning(
+        `${describe} skipped-implausible-expiry: observed expiresAt is more than 30 days in the future — not a live session file.`,
+      );
+      return "skipped-implausible-expiry" as const;
+    }
+
+    const accounts = yield* ConnectedAccountRepo;
+
+    // Re-read the CURRENT stored copy right before deciding — another observer may have
+    // persisted a fresher session since this one was seeded.
+    const account = yield* accounts.getById(input.connectedAccountId);
+
+    if (account === undefined || account.archivedAt !== null) {
+      yield* Effect.logWarning(
+        `${describe} skipped-account-unavailable: the connected account is no longer available.`,
+      );
+      return "skipped-account-unavailable" as const;
+    }
+
+    if (input.sourceRevision !== "unknown" && account.credentialRevision !== input.sourceRevision) {
+      yield* Effect.logInfo(
+        `${describe} skipped-superseded: the observed file came from credential revision ${input.sourceRevision}; the account now holds revision ${account.credentialRevision}.`,
+      );
+      return "skipped-superseded" as const;
+    }
+
+    // Shape check on the decrypted STORED payload: only session-file accounts own the file.
+    const storedPlaintext = yield* input.credentialCipher.decrypt(account.encryptedPayload);
+    const storedPayload = parseClaudeCredentialPayload(JSON.parse(storedPlaintext));
+
+    if ("token" in storedPayload) {
+      yield* Effect.logInfo(
+        `${describe} skipped-not-session-file: the stored payload is a setup token, never silently converted.`,
+      );
+      return "skipped-not-session-file" as const;
+    }
+    if ("apiKey" in storedPayload) {
+      yield* Effect.logInfo(
+        `${describe} skipped-api-key: the account holds an API key, which a session file never replaces.`,
+      );
+      return "skipped-api-key" as const;
+    }
+
+    // Freshness marker: the stored FILE's own expiresAt is authoritative; the metadata mirror
+    // only fills in when the stored file carries none.
+    const storedParsed = parseClaudeCredentialsJson(storedPayload.credentialsJson);
+    const storedExpiresAt =
+      (storedParsed.valid ? storedParsed.metadata.expiresAt : undefined) ??
+      readStoredClaudeExpiresAt(account.metadata);
+
+    // NEVER write when equal or older (rotated-session safety, mirrors the codex guard).
+    if (
+      !isNewerClaudeCredentials({ observedExpiresAt: parsed.metadata.expiresAt, storedExpiresAt })
+    ) {
+      yield* Effect.logInfo(
+        `${describe} skipped-not-newer: observed expiresAt ${parsed.metadata.expiresAt ?? "none"} is not strictly newer than stored ${storedExpiresAt ?? "none"}.`,
+      );
+      return "skipped-not-newer" as const;
+    }
+
+    // Narrowed on the way back too. A workspace's Claude Code writes the whole document it
+    // knows how to write, so a rotation can hand back an `mcpOAuth` section that was never
+    // stored — a session authorizing an MCP server would otherwise persist its refresh tokens
+    // into this database (Mend's ADR 0005).
+    const narrowed = narrowClaudeCredentialsJson(input.observedCredentialsJson);
+
+    if (narrowed.dropped.length > 0) {
+      yield* Effect.logInfo(
+        `${describe} narrowed: dropped ${narrowed.dropped.join(", ")} from the rotated file before storing it.`,
+      );
+    }
+
+    const plaintextPayload = JSON.stringify({
+      credentialsJson: narrowed.credentialsJson,
+    });
+    const sealed = yield* input.credentialCipher.encrypt(plaintextPayload);
+
+    const replaced = yield* accounts.replacePayload({
+      id: account.id,
+      expectedRevision: account.credentialRevision,
+      kind: "credentials-json",
+      encryptedPayload: sealed.sealed,
+      encryptionKeyId: sealed.keyId,
+      payloadSha256: sha256Hex(plaintextPayload),
+      metadata: { ...account.metadata, ...parsed.metadata },
+    });
+
+    if (replaced === undefined) {
+      yield* Effect.logInfo(
+        `${describe} skipped-superseded: the stored credential changed while this one was being decided on.`,
+      );
+      return "skipped-superseded" as const;
+    }
+
+    yield* accounts.updateSyncState({ id: account.id, lastSyncedAt: new Date() });
+
+    yield* Effect.logInfo(
+      `${describe} synced: persisted rotated session file (expiresAt ${parsed.metadata.expiresAt ?? "none"}, previously ${storedExpiresAt ?? "none"}).`,
+    );
+    return "synced" as const;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(`${describe} failed: persisting the session file crashed.`, cause).pipe(
+        Effect.as("failed" as const),
+      ),
+    ),
+  );
+
+  return outcome;
+});
 
 export interface SyncBackClaudeCredentialsInput<R = never> {
   /** The launch blueprint (re-derived from the stored attempt snapshot; carries only refs). */
@@ -260,9 +260,9 @@ const warn = (message: string, cause?: unknown): Effect.Effect<void> =>
  * are touched (decided by decrypting the STORED payload, not the db `kind` column). Never fails:
  * every abnormal condition is reported as a log line so the surrounding job is unaffected.
  */
-export const syncBackClaudeCredentials = Effect.fn("syncBackClaudeCredentials")(function* <
-  R = never,
->(input: SyncBackClaudeCredentialsInput<R>) {
+export const syncBackClaudeCredentials = Effect.fnUntraced(function* <R = never>(
+  input: SyncBackClaudeCredentialsInput<R>,
+) {
   const claudeAccountIds: string[] = [];
 
   for (const credentialRef of input.blueprint.runtime.credentialRefs) {

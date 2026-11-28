@@ -140,7 +140,9 @@ export type AntigravitySessionRefreshOutcome =
   | "skipped"
   | "failed";
 
-const refreshOneAccount = Effect.fn("refreshAntigravitySessionAccount")(function* (input: {
+const refreshOneAccount = Effect.fn("sealant.credential.refresh_login", {
+  attributes: { "sealant.credential.provider": "antigravity" },
+})(function* (input: {
   readonly account: ConnectedAccount;
   readonly credentialCipher: CredentialCipherService;
   readonly targetOptions: SealantTargetDerivationOptions;

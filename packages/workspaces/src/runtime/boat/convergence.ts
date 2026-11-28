@@ -213,7 +213,10 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
       }
     });
 
-    const step = Effect.fn("BoatConvergence.step")(function* (id: string, stop: BoatSharedStop) {
+    const step = Effect.fn("sealant.boat.converge_run")(function* (
+      id: string,
+      stop: BoatSharedStop,
+    ) {
       const found = yield* runs.get(id);
       if (found === undefined || found.deploymentId !== host.deploymentId)
         return "skipped" as const;
@@ -348,7 +351,7 @@ const make: Effect.Effect<BoatConvergence["Service"], never, Dependencies> = Eff
       return "held" as const;
     });
 
-    const reconcile = Effect.fn("BoatConvergence.reconcile")(function* (
+    const reconcile = Effect.fn("sealant.boat.converge_runs")(function* (
       input: Parameters<BoatConvergence["Service"]["reconcile"]>[0],
     ) {
       if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 20)

@@ -2323,7 +2323,7 @@ const observationOf = (outcome: CaptureDrainOutcome): CaptureDrainObservation | 
  * budget is spent, the queue stalls or empties without confirmation, or the daemon stays silent
  * for the silent window (then `runtimeState` decides between kept and gone). Never fails.
  */
-export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(function* (
+export const drainCaptureBeforeStop = Effect.fn("sealant.capture.drain")(function* (
   input: DrainCaptureInput,
 ) {
   const { runId, ledger, settings, label } = input;

@@ -253,7 +253,9 @@ const make: Effect.Effect<
         return yield* Effect.fail(new BoatResourcesError("pending"));
       return { epoch: run.admissionEpoch, operationId: run.admissionOperationId };
     });
-  const prepare = Effect.fn("BoatResources.prepare")(function* (target: BoatExecutionTarget) {
+  const prepare = Effect.fn("sealant.boat.prepare_resources")(function* (
+    target: BoatExecutionTarget,
+  ) {
     // A run launched without resources is never given a gateway, a port or a tunnel, whoever asks.
     const run = yield* boundary(runs.get(target.runId), "check-authority");
     if (run?.resources === "none") return yield* Effect.fail(new BoatResourcesError("held"));
@@ -457,7 +459,7 @@ const make: Effect.Effect<
       );
       return page(ids, input.limit, entries);
     });
-  const reconcile = Effect.fn("BoatResources.reconcile")(function* (
+  const reconcile = Effect.fn("sealant.boat.reconcile_resources")(function* (
     input: Parameters<BoatResources["Service"]["reconcile"]>[0],
   ) {
     const live = input.live === undefined ? undefined : yield* reconcileLive(input.live);
@@ -507,7 +509,7 @@ const make: Effect.Effect<
         return undefined;
       return { target, reservation };
     });
-  const reopenCarriers = Effect.fn("BoatResources.reopenCarriers")(function* () {
+  const reopenCarriers = Effect.fn("sealant.boat.reopen_carriers")(function* () {
     const runIds: string[] = [];
     const gatewayHost = host.gateway;
     if (gatewayHost === undefined) return { runIds };
@@ -546,7 +548,7 @@ const make: Effect.Effect<
     } while (after !== undefined);
     return { runIds };
   });
-  const reach = Effect.fn("BoatResources.reach")(function* () {
+  const reach = Effect.fn("sealant.boat.list_resource_links")(function* () {
     const links: ResourceWorkspaceLink[] = [];
     // No gateway, so no Boat run reaches a resource through this worker.
     if (host.gateway === undefined) return links;
@@ -570,7 +572,7 @@ const make: Effect.Effect<
   return BoatResources.of({
     prepare: (target) => boundary(prepare(target)),
     reconcile: (input) => boundary(reconcile(input)),
-    apply: Effect.fn("BoatResources.apply")((runId: string) => settle(runId)),
+    apply: Effect.fn("sealant.boat.apply_resources")((runId: string) => settle(runId)),
     reopenCarriers: () => boundary(reopenCarriers()),
     reach: () => boundary(reach()),
   });

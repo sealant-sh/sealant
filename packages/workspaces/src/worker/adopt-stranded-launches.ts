@@ -166,95 +166,95 @@ const identifyUnrecordedExecutors = (
  * Adopt every stranded launch as retained. Returns the run ids adopted. Best-effort per launch:
  * one failure never aborts the sweep.
  */
-export const adoptStrandedLaunchesEffect = Effect.fn("adoptStrandedLaunches")(function* (
-  options: AdoptStrandedLaunchesOptions,
-) {
-  const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
-  const attempts = yield* WorkspaceAttemptRepo;
-  const unownedGraceMs = options.unownedGraceMs ?? DEFAULT_UNOWNED_LAUNCH_GRACE_MS;
-  const wanted = options.resourceIds === undefined ? undefined : new Set(options.resourceIds);
+export const adoptStrandedLaunchesEffect = Effect.fn("sealant.runtime.adopt_stranded_launches")(
+  function* (options: AdoptStrandedLaunchesOptions) {
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const attempts = yield* WorkspaceAttemptRepo;
+    const unownedGraceMs = options.unownedGraceMs ?? DEFAULT_UNOWNED_LAUNCH_GRACE_MS;
+    const wanted = options.resourceIds === undefined ? undefined : new Set(options.resourceIds);
 
-  // Launches lost before they recorded their executor: found by their run, or ended as lost.
-  // (Not for an exit event: it names an executor, and these have none recorded.)
-  if (wanted === undefined) {
-    yield* identifyUnrecordedExecutors(options, unownedGraceMs);
-  }
-
-  const stranded = (yield* runtimeInstances.listStrandedLaunches({ unownedGraceMs })).filter(
-    (instance) =>
-      instance.resourceId !== null && (wanted === undefined || wanted.has(instance.resourceId)),
-  );
-
-  const adopted: string[] = [];
-  for (const instance of stranded) {
-    const runId = instance.runId;
-    const done = yield* Effect.gen(function* () {
-      const row = yield* runtimeInstances.adoptStrandedLaunch({
-        runId,
-        unownedGraceMs,
-        errorMessage: `The executor (${describe(instance)}) started, and the worker launching it was lost before the launch finished. It was kept as a retained launch so no work is lost: it is drained and stopped once its work is confirmed saved.`,
-      });
-      if (row === undefined) {
-        // Its launching worker renewed its ownership, or another sweep adopted it first.
-        return false;
-      }
-      yield* attempts
-        .markAttemptFailed({ id: runId })
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning(
-              `Stranded launch: marking run ${runId}'s attempt failed failed.`,
-              cause,
-            ),
-          ),
-        );
-      yield* Effect.logError(
-        `Stranded launch: run ${runId} (${describe(row)}) started and the worker launching it was lost before it was ready; adopted as a retained launch (not saved · retained). It is drained before it is stopped, preserved before its deadline, and recovered if it ended.`,
-      );
-
-      // What the runtime says of it now: an executor that already ended keeps its disk, which
-      // holds work nothing confirmed saved — retained at once, so recovery reaches it.
-      const ledger = options.ledger;
-      const adapter = options.runtimeAdapters.find((candidate) => candidate.id === row.adapter);
-      const inspect = adapter?.inspect;
-      if (ledger === undefined || adapter === undefined || inspect === undefined) {
-        return true;
-      }
-      const captureSourced = yield* runIsCaptureSourced({
-        runId,
-        sourceKind: row.sourceKind,
-        readSnapshotPayload: Effect.suspend(() => attempts.getAttemptSnapshotByRunId(runId)),
-      });
-      if (!captureSourced) {
-        return true;
-      }
-      const state = yield* Effect.tryPromise(() =>
-        inspect.call(adapter, { resourceId: row.resourceId ?? "" }),
-      ).pipe(
-        Effect.map((result) => result.state),
-        Effect.catchCause(() => Effect.succeed("running" as const)),
-      );
-      if (state === "exited") {
-        yield* ledger.markRetained(
-          runId,
-          "its launch was stranded (the launching worker was lost) and the executor ended",
-        );
-      }
-      return true;
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning(
-          `Stranded launch: adopting run ${runId} failed; the next sweep retries.`,
-          cause,
-        ).pipe(Effect.as(false)),
-      ),
-      asLaunchFollowUp("sealant.workspace.adopt_stranded_launch", instance, {
-        "sealant.run_id": runId,
-      }),
-    );
-    if (done) {
-      adopted.push(runId);
+    // Launches lost before they recorded their executor: found by their run, or ended as lost.
+    // (Not for an exit event: it names an executor, and these have none recorded.)
+    if (wanted === undefined) {
+      yield* identifyUnrecordedExecutors(options, unownedGraceMs);
     }
-  }
-  return adopted;
-});
+
+    const stranded = (yield* runtimeInstances.listStrandedLaunches({ unownedGraceMs })).filter(
+      (instance) =>
+        instance.resourceId !== null && (wanted === undefined || wanted.has(instance.resourceId)),
+    );
+
+    const adopted: string[] = [];
+    for (const instance of stranded) {
+      const runId = instance.runId;
+      const done = yield* Effect.gen(function* () {
+        const row = yield* runtimeInstances.adoptStrandedLaunch({
+          runId,
+          unownedGraceMs,
+          errorMessage: `The executor (${describe(instance)}) started, and the worker launching it was lost before the launch finished. It was kept as a retained launch so no work is lost: it is drained and stopped once its work is confirmed saved.`,
+        });
+        if (row === undefined) {
+          // Its launching worker renewed its ownership, or another sweep adopted it first.
+          return false;
+        }
+        yield* attempts
+          .markAttemptFailed({ id: runId })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Stranded launch: marking run ${runId}'s attempt failed failed.`,
+                cause,
+              ),
+            ),
+          );
+        yield* Effect.logError(
+          `Stranded launch: run ${runId} (${describe(row)}) started and the worker launching it was lost before it was ready; adopted as a retained launch (not saved · retained). It is drained before it is stopped, preserved before its deadline, and recovered if it ended.`,
+        );
+
+        // What the runtime says of it now: an executor that already ended keeps its disk, which
+        // holds work nothing confirmed saved — retained at once, so recovery reaches it.
+        const ledger = options.ledger;
+        const adapter = options.runtimeAdapters.find((candidate) => candidate.id === row.adapter);
+        const inspect = adapter?.inspect;
+        if (ledger === undefined || adapter === undefined || inspect === undefined) {
+          return true;
+        }
+        const captureSourced = yield* runIsCaptureSourced({
+          runId,
+          sourceKind: row.sourceKind,
+          readSnapshotPayload: Effect.suspend(() => attempts.getAttemptSnapshotByRunId(runId)),
+        });
+        if (!captureSourced) {
+          return true;
+        }
+        const state = yield* Effect.tryPromise(() =>
+          inspect.call(adapter, { resourceId: row.resourceId ?? "" }),
+        ).pipe(
+          Effect.map((result) => result.state),
+          Effect.catchCause(() => Effect.succeed("running" as const)),
+        );
+        if (state === "exited") {
+          yield* ledger.markRetained(
+            runId,
+            "its launch was stranded (the launching worker was lost) and the executor ended",
+          );
+        }
+        return true;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Stranded launch: adopting run ${runId} failed; the next sweep retries.`,
+            cause,
+          ).pipe(Effect.as(false)),
+        ),
+        asLaunchFollowUp("sealant.workspace.adopt_stranded_launch", instance, {
+          "sealant.run_id": runId,
+        }),
+      );
+      if (done) {
+        adopted.push(runId);
+      }
+    }
+    return adopted;
+  },
+);

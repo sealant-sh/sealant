@@ -4,10 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   describeSpanName,
   routeIdAttributes,
-  sentryAttributes,
   sentryShapedTracer,
+  shapeSpan,
   summarizeSql,
   templatePath,
+  type SpanShapingOptions,
 } from "./sentry-span.js";
 
 const attrs = (entries: Record<string, unknown>): ReadonlyMap<string, unknown> =>
@@ -57,7 +58,7 @@ describe("summarizeSql", () => {
 });
 
 describe("templatePath", () => {
-  it("replaces the segments that name one record", () => {
+  it("replaces every segment that could name a record or carry a code", () => {
     expect(templatePath("/v1/sessions/sess_01JDCE5Q2Z8Y7X6W5V4T3S2R1Q/output")).toBe(
       "/v1/sessions/*/output",
     );
@@ -65,7 +66,11 @@ describe("templatePath", () => {
       "/v1/workspaces/*/exec",
     );
     expect(templatePath("/repos/acme/widgets/pulls/123")).toBe("/repos/acme/widgets/pulls/*");
+    expect(templatePath("/api/me/cli-auth/57TX-M9HG")).toBe("/api/me/cli-auth/*");
+    expect(templatePath("/v1/sandboxes/bx_abcdefgh")).toBe("/v1/sandboxes/*");
+    expect(templatePath("/v1/workspaces/exec-as-user")).toBe("/v1/workspaces/exec-as-user");
     expect(templatePath("/v1/runs")).toBe("/v1/runs");
+    expect(templatePath("/")).toBe("/");
   });
 });
 
@@ -80,41 +85,47 @@ describe("routeIdAttributes", () => {
   });
 });
 
-describe("sentryAttributes", () => {
-  it("gives a database span an operation, a table and a short description", () => {
-    const shaped = sentryAttributes(
-      "postgres",
-      "client",
-      attrs({
-        "db.system.name": "postgresql",
-        "db.query.text": `select "id", "capture_token_sealed" from "workspace_capture_drains" where "run_id" = $1`,
-      }),
-    );
-    expect(shaped).toEqual({
-      "sentry.op": "db",
-      "sentry.description": "SELECT workspace_capture_drains",
-      "db.system": "postgresql",
-      "db.operation.name": "SELECT",
-      "db.collection.name": "workspace_capture_drains",
-      "db.query.summary": "SELECT workspace_capture_drains",
+describe("shapeSpan", () => {
+  it("names a statement by its operation and table", () => {
+    expect(
+      shapeSpan(
+        "postgres",
+        "client",
+        attrs({
+          "db.system.name": "postgresql",
+          "db.query.text": `select "id", "capture_token_sealed" from "workspace_capture_drains" where "run_id" = $1`,
+        }),
+      ),
+    ).toEqual({
+      name: "SELECT workspace_capture_drains",
+      attributes: {
+        "sentry.op": "db",
+        "sentry.description": "SELECT workspace_capture_drains",
+        "db.system": "postgresql",
+        "db.operation.name": "SELECT",
+        "db.collection.name": "workspace_capture_drains",
+        "db.query.summary": "SELECT workspace_capture_drains",
+      },
     });
   });
 
   it("names a contract span's area as its op and says in words what it does", () => {
-    expect(sentryAttributes("sealant.workspace.create", "internal", attrs({}))).toEqual({
-      "sentry.op": "sealant.workspace",
-      "sentry.description": "create workspace",
-      "code.function.name": "sealant.workspace.create",
+    expect(shapeSpan("sealant.workspace.create", "internal", attrs({}))).toEqual({
+      name: "sealant.workspace.create",
+      attributes: {
+        "sentry.op": "sealant.workspace",
+        "sentry.description": "create workspace",
+        "code.function.name": "sealant.workspace.create",
+      },
     });
-    expect(sentryAttributes("BoatAccountRepo.launchReports", "internal", attrs({}))).toEqual({
-      "sentry.op": "function",
-      "sentry.description": "BoatAccountRepo.launchReports",
+    expect(shapeSpan("sealant.run.get_timeline", "internal", attrs({})).attributes).toMatchObject({
+      "sentry.description": "get run timeline",
     });
   });
 
   it("keeps an op and description the span set itself", () => {
     expect(
-      sentryAttributes(
+      shapeSpan(
         "sealant.sdk.sessions.get_session_output",
         "client",
         attrs({
@@ -122,34 +133,42 @@ describe("sentryAttributes", () => {
           "sentry.description": "get session output",
           "code.function.name": "sealant.sdk.sessions.get_session_output",
         }),
-      ),
+      ).attributes,
     ).toEqual({});
   });
 
-  it("describes an outgoing request by its templated path, never its IDs", () => {
-    const shaped = sentryAttributes(
-      "GET",
-      "client",
-      attrs({
-        "http.request.method": "GET",
-        "url.full": "https://api.github.com/repos/acme/widgets/pulls/123",
-        "url.path": "/repos/acme/widgets/pulls/123",
-      }),
-    );
-    expect(shaped["sentry.op"]).toBe("http.client");
-    expect(shaped["sentry.description"]).toBe("GET /repos/acme/widgets/pulls/*");
+  it("names an outgoing request by its template or templated path, never its host or IDs", () => {
     expect(
-      sentryAttributes(
+      shapeSpan(
         "GET",
         "client",
-        attrs({ "http.request.method": "GET", "url.template": "/v1/sessions/:sessionId/output" }),
-      )["sentry.description"],
-    ).toBe("GET /v1/sessions/:sessionId/output");
+        attrs({
+          "http.request.method": "GET",
+          "url.full": "https://api.github.com/repos/acme/widgets/pulls/123",
+          "url.path": "/repos/acme/widgets/pulls/123",
+          "server.address": "api.github.com",
+        }),
+      ),
+    ).toEqual({
+      name: "GET /repos/acme/widgets/pulls/*",
+      attributes: {
+        "sentry.op": "http.client",
+        "sentry.description": "GET /repos/acme/widgets/pulls/*",
+        "url.template": "/repos/acme/widgets/pulls/*",
+      },
+    });
+    expect(
+      shapeSpan(
+        "POST",
+        "client",
+        attrs({ "http.request.method": "POST", "url.template": "/v1/sessions/:sessionId/input" }),
+      ).name,
+    ).toBe("POST /v1/sessions/:sessionId/input");
   });
 
-  it("describes an incoming request by its route and records the IDs it names", () => {
+  it("names a handled request by its route and records the IDs it names", () => {
     expect(
-      sentryAttributes(
+      shapeSpan(
         "GET",
         "server",
         attrs({
@@ -159,41 +178,58 @@ describe("sentryAttributes", () => {
         }),
       ),
     ).toEqual({
-      "sentry.op": "http.server",
-      "sentry.description": "GET /v1/sessions/:sessionId/output",
-      "sealant.session_id": "sess_01JDCE5Q2Z",
+      name: "GET /v1/sessions/:sessionId/output",
+      attributes: {
+        "sentry.op": "http.server",
+        "sentry.description": "GET /v1/sessions/:sessionId/output",
+        "sealant.session_id": "sess_01JDCE5Q2Z",
+      },
     });
-    expect(
-      sentryAttributes(
-        "GET",
-        "server",
-        attrs({ "http.request.method": "GET", "url.path": "/v1/nope/ws_3f9a8b7c6d" }),
-      )["sentry.description"],
-    ).toBe("GET /v1/nope/*");
   });
 
-  it("marks a job delivery as a queue span named for its queue", () => {
+  it("names a request no route matched by its templated path", () => {
+    const unmatched = shapeSpan(
+      "GET",
+      "server",
+      attrs({ "http.request.method": "GET", "url.path": "/api/me/cli-auth/57TX-M9HG" }),
+    );
+    expect(unmatched.name).toBe("GET /api/me/cli-auth/*");
+    expect(unmatched.attributes["sentry.description"]).toBe("GET /api/me/cli-auth/*");
+    expect(shapeSpan("GET", "server", attrs({ "http.request.method": "GET" })).name).toBe("GET *");
+  });
+
+  it("marks a job delivery as a queue span described by its queue", () => {
     expect(
-      sentryAttributes(
+      shapeSpan(
         "sealant.job.process",
         "consumer",
         attrs({ "messaging.system": "pg-boss", "messaging.destination.name": "workspace-build" }),
       ),
-    ).toEqual({ "sentry.op": "queue.process", "sentry.description": "workspace-build" });
+    ).toEqual({
+      name: "sealant.job.process",
+      attributes: { "sentry.op": "queue.process", "sentry.description": "workspace-build" },
+    });
   });
 
-  it("names a transaction", () => {
+  it("describes a transaction by its own name, not as a statement", () => {
     expect(
-      sentryAttributes("sql.transaction", "client", attrs({ "db.system.name": "postgresql" })),
+      shapeSpan("sealant.db.transaction", "internal", attrs({ "db.system.name": "postgresql" })),
     ).toEqual({
-      "sentry.op": "db.sql.transaction",
-      "sentry.description": "transaction",
+      name: "sealant.db.transaction",
+      attributes: {
+        "sentry.op": "sealant.db",
+        "sentry.description": "database transaction",
+        "code.function.name": "sealant.db.transaction",
+      },
     });
   });
 });
 
 /** Runs `effect` under the shaped native tracer and returns every span that ended. */
-const ended = async (effect: Effect.Effect<unknown>): Promise<Tracer.Span[]> => {
+const ended = async (
+  effect: Effect.Effect<unknown>,
+  shaping?: SpanShapingOptions,
+): Promise<Tracer.Span[]> => {
   const spans: Tracer.Span[] = [];
   const recording = Effect.map(Effect.tracer, (tracer) =>
     Tracer.make({
@@ -210,7 +246,9 @@ const ended = async (effect: Effect.Effect<unknown>): Promise<Tracer.Span[]> => 
     }),
   );
   await Effect.runPromise(
-    Effect.flatMap(recording, (tracer) => Effect.withTracer(effect, sentryShapedTracer(tracer))),
+    Effect.flatMap(recording, (tracer) =>
+      Effect.withTracer(effect, sentryShapedTracer(tracer, shaping)),
+    ),
   );
   return spans;
 };
@@ -218,25 +256,29 @@ const ended = async (effect: Effect.Effect<unknown>): Promise<Tracer.Span[]> => 
 describe("describeSpanName", () => {
   it.each([
     ["sealant.workspace.create", "sealant.workspace", "create workspace"],
-    ["sealant.workspace.resolve_credential_refs", "sealant.workspace", "resolve credential refs"],
+    [
+      "sealant.workspace.resolve_credential_refs",
+      "sealant.workspace",
+      "resolve workspace credentials",
+    ],
     ["sealant.workspace.get", "sealant.workspace", "get workspace"],
     ["sealant.workspace.stop", "sealant.workspace", "stop workspace"],
     ["sealant.workspace.build", "sealant.workspace", "build workspace"],
     ["sealant.workspace.launch", "sealant.workspace", "launch workspace"],
     ["sealant.workspace.exec", "sealant.workspace", "exec in workspace"],
     ["sealant.workspace.list", "sealant.workspace", "list workspaces"],
-    ["sealant.registry.get", "sealant.registry", "get registry"],
+    ["sealant.registry.get", "sealant.registry", "get registry settings"],
     ["sealant.profile.list", "sealant.profile", "list profiles"],
     ["sealant.ssh_key.create", "sealant.ssh_key", "create ssh key"],
     ["sealant.session.create", "sealant.session", "create session"],
-    ["sealant.session.wait_for_recorder", "sealant.session", "wait for recorder"],
-    ["sealant.session.resolve_daemon_instance", "sealant.session", "resolve daemon instance"],
-    ["sealant.session.get_output", "sealant.session", "get output"],
+    ["sealant.session.wait_for_recorder", "sealant.session", "wait for output recorder"],
+    ["sealant.github.resolve_clone_auth", "sealant.github", "resolve repository clone token"],
+    ["sealant.session.get_output", "sealant.session", "get session output"],
     ["sealant.session.reconcile", "sealant.session", "reconcile session"],
-    ["sealant.daemon.connect", "sealant.daemon", "connect"],
-    ["sealant.daemon.open_session", "sealant.daemon", "open session"],
-    ["sealant.daemon.exec", "sealant.daemon", "exec"],
-    ["sealant.daemon.close_session", "sealant.daemon", "close session"],
+    ["sealant.daemon.connect", "sealant.daemon", "connect to daemon"],
+    ["sealant.daemon.open_session", "sealant.daemon", "call daemon: open session"],
+    ["sealant.daemon.exec", "sealant.daemon", "call daemon: exec"],
+    ["sealant.daemon.close_session", "sealant.daemon", "call daemon: close session"],
     ["sealant.sdk.workspaces.create_workspace", "sealant.sdk", "create workspace"],
     ["sealant.sdk.sessions.create_session", "sealant.sdk", "create session"],
     ["sealant.sdk.sessions.get_session_output", "sealant.sdk", "get session output"],
@@ -262,7 +304,7 @@ describe("describeSpanName", () => {
 });
 
 describe("sentryShapedTracer", () => {
-  it("hangs a statement off the code that ran it, past Drizzle's wrapper", async () => {
+  it("hangs a statement off the code that ran it, past Drizzle's wrapper, named by its table", async () => {
     const spans = await ended(
       Effect.void.pipe(
         Effect.withSpan("postgres", {
@@ -276,10 +318,54 @@ describe("sentryShapedTracer", () => {
         Effect.withSpan("sealant.run.get"),
       ),
     );
-    expect(spans.map((span) => span.name)).toEqual(["postgres", "sealant.run.get"]);
+    expect(spans.map((span) => span.name)).toEqual(["SELECT runs", "sealant.run.get"]);
     const [statement, handler] = spans;
     expect(statement && Option.getOrUndefined(statement.parent)?.spanId).toBe(handler?.spanId);
     expect(statement?.attributes.get("sentry.description")).toBe("SELECT runs");
     expect(handler?.attributes.get("sentry.op")).toBe("sealant.run");
+  });
+
+  it("names a handled request by the route matched after its span started", async () => {
+    const spans = await ended(
+      Effect.gen(function* () {
+        yield* Effect.annotateCurrentSpan("http.route", "/v1/runs/:runId");
+        yield* Effect.annotateCurrentSpan("url.path", "/v1/runs/run_01JDCE5Q2Z");
+      }).pipe(
+        Effect.withSpan("GET", { kind: "server", attributes: { "http.request.method": "GET" } }),
+      ),
+    );
+    expect(spans.map((span) => span.name)).toEqual(["GET /v1/runs/:runId"]);
+    expect(spans[0]?.attributes.get("sealant.run_id")).toBe("run_01JDCE5Q2Z");
+  });
+
+  it("exports a transaction and a parentless Drizzle wrapper under sealant's names", async () => {
+    const spans = await ended(
+      Effect.all([
+        Effect.void.pipe(
+          Effect.withSpan("sql.transaction", { attributes: { "db.system.name": "postgresql" } }),
+        ),
+        Effect.void.pipe(Effect.withSpan("drizzle.operation")),
+      ]),
+    );
+    expect(spans.map((span) => [span.name, span.attributes.get("sentry.description")])).toEqual([
+      ["sealant.db.transaction", "database transaction"],
+      ["sealant.db.query", "run database query"],
+    ]);
+  });
+
+  it("starts no trace for Drizzle's client being made", async () => {
+    const spans = await ended(Effect.void.pipe(Effect.withSpan("PgDrizzle.make")));
+    expect(spans.map((span) => [span.name, span.sampled])).toEqual([["PgDrizzle.make", false]]);
+  });
+
+  it("puts the release and environment on every span", async () => {
+    const spans = await ended(
+      Effect.void.pipe(Effect.withSpan("sealant.run.get"), Effect.withSpan("GET")),
+      { release: "sealant-server@1.2.3", environment: "test" },
+    );
+    for (const span of spans) {
+      expect(span.attributes.get("sentry.release")).toBe("sealant-server@1.2.3");
+      expect(span.attributes.get("sentry.environment")).toBe("test");
+    }
   });
 });

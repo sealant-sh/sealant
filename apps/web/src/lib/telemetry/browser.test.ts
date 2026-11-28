@@ -59,13 +59,16 @@ const record = (envelope: Envelope): void => {
   }
 };
 
+// A pathless layout above the page, as the app's own `_authenticated` is: the route ID
+// (`/_authenticated/workspaces/$workspaceId/`) is not what the address bar shows.
 const rootRoute = createRootRoute();
+const authenticatedRoute = createRoute({ getParentRoute: () => rootRoute, id: "_authenticated" });
 const workspaceRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/workspaces/$workspaceId",
+  getParentRoute: () => authenticatedRoute,
+  path: "/workspaces/$workspaceId/",
 });
 const router = createRouter({
-  routeTree: rootRoute.addChildren([workspaceRoute]),
+  routeTree: rootRoute.addChildren([authenticatedRoute.addChildren([workspaceRoute])]),
   history: createMemoryHistory({ initialEntries: [CANARY_PATH] }),
 });
 
@@ -115,12 +118,13 @@ describe("browser telemetry", () => {
     expect(other?.headers.has("sentry-trace")).toBe(false);
   });
 
-  it("sends the page load as a transaction named by route template", async () => {
+  it("sends the page load as a transaction named by URL template, not route ID", async () => {
     getActiveSpan()?.end();
     await flush();
 
     const [transaction] = sentOfType("transaction");
     expect(transaction).toContain('"transaction":"/workspaces/$workspaceId"');
+    expect(transaction).not.toContain("_authenticated");
   });
 
   it("reports a caught error once, and skips redirects", async () => {

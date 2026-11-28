@@ -210,7 +210,8 @@ export const makeBoatTunnelCarrierLayer = (
           carriers.clear();
         }),
       );
-      const ensure = Effect.fn("BoatTunnelCarrier.ensure")((input: BoatTunnelCarrierInput) =>
+      // A map lookup each, made on every pass over every run: no span of their own.
+      const ensure = (input: BoatTunnelCarrierInput) =>
         Effect.sync(() => {
           const existing = carriers.get(input.runId);
           if (
@@ -225,17 +226,12 @@ export const makeBoatTunnelCarrierLayer = (
             if (carriers.get(input.runId) === carrier) carriers.delete(input.runId);
           });
           carriers.set(input.runId, carrier);
-        }),
-      );
-      const release = Effect.fn("BoatTunnelCarrier.release")((runId: string) =>
-        Effect.sync(() => carriers.get(runId)?.stop()),
-      );
-      const attached = Effect.fn("BoatTunnelCarrier.attached")((runId: string) =>
-        Effect.sync(() => carriers.get(runId)?.attached() ?? false),
-      );
-      const settled = Effect.fn("BoatTunnelCarrier.settled")((runId: string) =>
-        Effect.promise(() => carriers.get(runId)?.settled ?? Promise.resolve()),
-      );
+        });
+      const release = (runId: string) => Effect.sync(() => carriers.get(runId)?.stop());
+      const attached = (runId: string) =>
+        Effect.sync(() => carriers.get(runId)?.attached() ?? false);
+      const settled = (runId: string) =>
+        Effect.promise(() => carriers.get(runId)?.settled ?? Promise.resolve());
       return BoatTunnelCarrier.of({ ensure, release, attached, settled });
     }),
   );

@@ -325,13 +325,11 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             : new NativeCatalogStoreError(operation, "store-unavailable"),
         ),
       );
-    const get = Effect.fn("NativePublicationRepo.get")(function* (id: string) {
+    const get = Effect.fnUntraced(function* (id: string) {
       const [row] = yield* db.select().from(publications).where(eq(publications.id, id));
       return row === undefined ? undefined : yield* parseRow(row);
     });
-    const getActive = Effect.fn("NativePublicationRepo.getActive")(function* (
-      input: NativePublicationKey,
-    ) {
+    const getActive = Effect.fnUntraced(function* (input: NativePublicationKey) {
       const key = yield* Effect.try({
         try: () => nativePublicationKeySchema.parse(input),
         catch: () => new NativeCatalogStoreError("getActive", "invalid-input"),
@@ -366,7 +364,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         .from(consumers)
         .where(and(eq(consumers.publicationId, id), ne(consumers.state, "released")))
         .limit(1);
-    const reserve = Effect.fn("NativePublicationRepo.reserve")(function* (
+    const reserve = Effect.fnUntraced(function* (
       input: NativePublicationKey,
       consumerInput: NativeArtifactConsumer,
     ) {
@@ -514,7 +512,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         }),
       );
     });
-    const takeClaim = Effect.fn("NativePublicationRepo.claim")(function* (
+    const takeClaim = Effect.fnUntraced(function* (
       id: string,
       purpose: NativeCatalogClaim["purpose"],
       ttlMs: number,
@@ -546,7 +544,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         .returning();
       return row === undefined ? undefined : ((yield* parseRow(row)).claim ?? undefined);
     });
-    const publish = Effect.fn("NativePublicationRepo.publish")(function* (
+    const publish = Effect.fnUntraced(function* (
       claim: NativeCatalogClaim,
       publication: NativePublication,
     ) {
@@ -588,7 +586,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         }),
       );
     });
-    const rejectReady = Effect.fn("NativePublicationRepo.rejectReady")(function* (
+    const rejectReady = Effect.fnUntraced(function* (
       publication: NativePublication,
       reason: string,
     ) {
@@ -613,10 +611,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         }),
       );
     });
-    const quarantine = Effect.fn("NativePublicationRepo.quarantine")(function* (
-      claim: NativeCatalogClaim,
-      reason: string,
-    ) {
+    const quarantine = Effect.fnUntraced(function* (claim: NativeCatalogClaim, reason: string) {
       if (!/^[a-z][a-z0-9_-]{0,127}$/.test(reason))
         return yield* Effect.fail(new NativeCatalogStoreError("quarantine", "invalid-input"));
       const [updated] = yield* db
@@ -708,7 +703,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
             .where(consumerWhere(consumer));
         }),
       );
-    const candidates = Effect.fn("NativePublicationRepo.candidates")(function* (
+    const candidates = Effect.fnUntraced(function* (
       scope: Pick<NativePublicationKey, "deploymentId" | "scope">,
       limit: number,
       after?: string,
@@ -737,10 +732,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         .limit(limit);
       return yield* Effect.forEach(rows, parseRow);
     });
-    const retire = Effect.fn("NativePublicationRepo.retire")(function* (
-      id: string,
-      policy?: NativeRetentionPolicy,
-    ) {
+    const retire = Effect.fnUntraced(function* (id: string, policy?: NativeRetentionPolicy) {
       const parsed = yield* Effect.try({
         try: () =>
           policy === undefined
@@ -825,7 +817,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         }),
       );
     });
-    const images = Effect.fn("NativePublicationRepo.images")(function* (input: {
+    const images = Effect.fnUntraced(function* (input: {
       readonly deploymentId: string;
       readonly limit: number;
       readonly after?: string;
@@ -858,7 +850,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         .limit(input.limit);
       return yield* Effect.forEach(rows, parseRow);
     });
-    const wallet = Effect.fn("NativePublicationRepo.wallet")(function* (id: string) {
+    const wallet = Effect.fnUntraced(function* (id: string) {
       const [row] = yield* db
         .select({ wallet: publications.boatWallet, state: publications.boatWalletState })
         .from(publications)
@@ -870,7 +862,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
           ? ({ state: "unreachable" } as const)
           : ({ state: "unknown" } as const);
     });
-    const startable = Effect.fn("NativePublicationRepo.startable")(function* (input: {
+    const startable = Effect.fnUntraced(function* (input: {
       readonly deploymentId: string;
       readonly stoppedSince: Date;
       readonly limit: number;
@@ -917,9 +909,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         .limit(input.limit);
       return rows;
     });
-    const withdraw = Effect.fn("NativePublicationRepo.withdraw")(function* (
-      ownership: NativeBuildOwnership,
-    ) {
+    const withdraw = Effect.fnUntraced(function* (ownership: NativeBuildOwnership) {
       return yield* db.transaction(() =>
         Effect.gen(function* () {
           const [row] = yield* lock(ownership.publicationId);
@@ -951,9 +941,7 @@ const make: Effect.Effect<NativePublicationRepo["Service"], never, SealantDB> = 
         }),
       );
     });
-    const removed = Effect.fn("NativePublicationRepo.removed")(function* (
-      claim: NativeCatalogClaim,
-    ) {
+    const removed = Effect.fnUntraced(function* (claim: NativeCatalogClaim) {
       return yield* db.transaction(() =>
         Effect.gen(function* () {
           yield* lock(claim.publicationId);

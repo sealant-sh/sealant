@@ -26,7 +26,7 @@ interface ResolveInstallationAccessTokenInput {
  * installation cannot be resolved. The GitHub repositories are taken from context, so a single
  * data-access layer is provided once at the worker boundary.
  */
-const resolveInstallationAccessToken = Effect.fn("resolveInstallationAccessToken")(function* (
+const resolveInstallationAccessToken = Effect.fnUntraced(function* (
   input: ResolveInstallationAccessTokenInput,
 ) {
   const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(input.authRef);
@@ -96,7 +96,7 @@ export interface ResolveWorkspaceAuthInput {
  * Resolve clone auth for the workspace source repository, minting a GitHub installation token when
  * the source is GitHub-backed. Yields `undefined` when no installation auth is required.
  */
-export const resolveWorkspaceCloneAuth = Effect.fn("resolveWorkspaceCloneAuth")(function* (
+export const resolveWorkspaceCloneAuth = Effect.fn("sealant.github.resolve_clone_auth")(function* (
   input: ResolveWorkspaceAuthInput,
 ) {
   // Mount- and standby-sourced workspaces clone nothing, so there is no clone auth to resolve.
@@ -130,32 +130,34 @@ export const resolveWorkspaceCloneAuth = Effect.fn("resolveWorkspaceCloneAuth")(
  * Resolve the runtime environment variables that inject a GitHub installation token for
  * dotfiles config repos applied at runtime. Returns an empty record when no token is required.
  */
-export const resolveDotfilesRuntimeEnv = Effect.fn("resolveDotfilesRuntimeEnv")(function* (
-  input: ResolveWorkspaceAuthInput,
-) {
-  // A disabled apply must not mint a live token: the image carries no
-  // SEALANT_DOTFILES_RUNTIME_APPLY, so an injected token would sit unused in the container env.
-  if (!input.spec.customization.applyDotfiles) {
-    return {};
-  }
-  const dotfilesSource = input.spec.sources.inputs.find((source) => source.purpose === "dotfiles");
+export const resolveDotfilesRuntimeEnv = Effect.fn("sealant.github.resolve_dotfiles_auth")(
+  function* (input: ResolveWorkspaceAuthInput) {
+    // A disabled apply must not mint a live token: the image carries no
+    // SEALANT_DOTFILES_RUNTIME_APPLY, so an injected token would sit unused in the container env.
+    if (!input.spec.customization.applyDotfiles) {
+      return {};
+    }
+    const dotfilesSource = input.spec.sources.inputs.find(
+      (source) => source.purpose === "dotfiles",
+    );
 
-  const token = yield* resolveInstallationAccessToken({
-    authRef: dotfilesSource?.authRef,
-    gitHubSourceIntegration: input.gitHubSourceIntegration,
-    unavailableIntegrationMessage:
-      "GitHub source integration is not configured for GitHub-backed dotfiles config repos.",
-    unavailableRepositoryContext: "dotfiles auth resolution",
-    missingInstallationContext: "dotfiles auth",
-    inactiveInstallationContext: "dotfiles auth resolution",
-  });
+    const token = yield* resolveInstallationAccessToken({
+      authRef: dotfilesSource?.authRef,
+      gitHubSourceIntegration: input.gitHubSourceIntegration,
+      unavailableIntegrationMessage:
+        "GitHub source integration is not configured for GitHub-backed dotfiles config repos.",
+      unavailableRepositoryContext: "dotfiles auth resolution",
+      missingInstallationContext: "dotfiles auth",
+      inactiveInstallationContext: "dotfiles auth resolution",
+    });
 
-  if (token === undefined) {
-    return {};
-  }
+    if (token === undefined) {
+      return {};
+    }
 
-  return {
-    SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
-    SEALANT_DOTFILES_HTTP_TOKEN: token,
-  };
-});
+    return {
+      SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
+      SEALANT_DOTFILES_HTTP_TOKEN: token,
+    };
+  },
+);

@@ -61,77 +61,75 @@ export interface ReapOrphanedKubernetesResourcesOptions {
 
 const DEFAULT_MAX_REAPS_PER_TICK = 10;
 
-export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKubernetesResources")(
-  function* (options: Omit<ReapOrphanedKubernetesResourcesOptions, "db">) {
-    const maxReaps = options.maxReapsPerTick ?? DEFAULT_MAX_REAPS_PER_TICK;
-    const instances = yield* WorkspaceRuntimeInstanceRepo;
-    const managed = yield* Effect.promise(() => options.adapter.listManagedWorkspaces());
-    if (managed.length === 0) {
-      return 0;
+export const reapOrphanedKubernetesResourcesEffect = Effect.fn(
+  "sealant.runtime.reap_orphaned_kubernetes",
+)(function* (options: Omit<ReapOrphanedKubernetesResourcesOptions, "db">) {
+  const maxReaps = options.maxReapsPerTick ?? DEFAULT_MAX_REAPS_PER_TICK;
+  const instances = yield* WorkspaceRuntimeInstanceRepo;
+  const managed = yield* Effect.promise(() => options.adapter.listManagedWorkspaces());
+  if (managed.length === 0) {
+    return 0;
+  }
+  const known = yield* instances.listRuntimeInstancesByRunIds(managed.map((entry) => entry.runId));
+  let reaped = 0;
+  for (const { runId, resourceId } of managed) {
+    if (reaped >= maxReaps) {
+      break;
     }
-    const known = yield* instances.listRuntimeInstancesByRunIds(
-      managed.map((entry) => entry.runId),
+    const instance = known.get(runId);
+    // A capture Pod the policy let go ends its drain record once it is removed (below), under
+    // the ticket holding a removal authorized on recorded evidence (decision 21).
+    let captureRemoval: ExecutorDeletionBasis | undefined;
+    let ticket: DeletionTicket | undefined;
+    if (instance !== undefined) {
+      const wanted = instance.status !== "stopped" && instance.status !== "failed";
+      const retained =
+        instance.errorCode === LAUNCH_RETAINED_ERROR_CODE && instance.status === "failed";
+      if (wanted || retained) {
+        continue;
+      }
+      const mayGo = yield* podMayGo(options, instance, resourceId);
+      if (mayGo === false) {
+        continue;
+      }
+      captureRemoval = mayGo === "not-capture" ? undefined : mayGo.basis;
+      ticket = mayGo === "not-capture" ? undefined : mayGo.ticket;
+    } else {
+      // No row: the launch never recorded this Pod. Stop it only when its snapshot proves it
+      // holds no captures; otherwise record it retained, so it is drained before any stop.
+      const recorded = yield* recordUnrecordedPod(options.adapter, runId);
+      if (recorded !== "not-capture") {
+        continue;
+      }
+    }
+    const ok = yield* removeUnderDeletion({
+      ledger: options.ledger,
+      runId,
+      ticket,
+      remove: Effect.tryPromise(() => options.adapter.stop({ resourceId })),
+    }).pipe(
+      Effect.map((removal) => removal.removed),
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Kubernetes reconciler: removing orphaned resources for run ${runId} failed.`,
+          cause,
+        ).pipe(Effect.as(false)),
+      ),
     );
-    let reaped = 0;
-    for (const { runId, resourceId } of managed) {
-      if (reaped >= maxReaps) {
-        break;
-      }
-      const instance = known.get(runId);
-      // A capture Pod the policy let go ends its drain record once it is removed (below), under
-      // the ticket holding a removal authorized on recorded evidence (decision 21).
-      let captureRemoval: ExecutorDeletionBasis | undefined;
-      let ticket: DeletionTicket | undefined;
-      if (instance !== undefined) {
-        const wanted = instance.status !== "stopped" && instance.status !== "failed";
-        const retained =
-          instance.errorCode === LAUNCH_RETAINED_ERROR_CODE && instance.status === "failed";
-        if (wanted || retained) {
-          continue;
-        }
-        const mayGo = yield* podMayGo(options, instance, resourceId);
-        if (mayGo === false) {
-          continue;
-        }
-        captureRemoval = mayGo === "not-capture" ? undefined : mayGo.basis;
-        ticket = mayGo === "not-capture" ? undefined : mayGo.ticket;
-      } else {
-        // No row: the launch never recorded this Pod. Stop it only when its snapshot proves it
-        // holds no captures; otherwise record it retained, so it is drained before any stop.
-        const recorded = yield* recordUnrecordedPod(options.adapter, runId);
-        if (recorded !== "not-capture") {
-          continue;
-        }
-      }
-      const ok = yield* removeUnderDeletion({
-        ledger: options.ledger,
-        runId,
-        ticket,
-        remove: Effect.tryPromise(() => options.adapter.stop({ resourceId })),
-      }).pipe(
-        Effect.map((removal) => removal.removed),
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            `Kubernetes reconciler: removing orphaned resources for run ${runId} failed.`,
-            cause,
-          ).pipe(Effect.as(false)),
-        ),
-      );
-      if (ok) {
-        reaped += 1;
-        if (captureRemoval !== undefined && options.ledger !== undefined) {
-          // Its retention ends and the sealed capture token kept for its recovery is cleared. On
-          // the owner's discard it reads `discarded`; on every other basis, `stopped`.
-          yield* options.ledger.observe(runId, {
-            state: removalState(captureRemoval),
-            detail: `the ended Pod was removed: ${describeDeletionBasis(captureRemoval)}`,
-          });
-        }
+    if (ok) {
+      reaped += 1;
+      if (captureRemoval !== undefined && options.ledger !== undefined) {
+        // Its retention ends and the sealed capture token kept for its recovery is cleared. On
+        // the owner's discard it reads `discarded`; on every other basis, `stopped`.
+        yield* options.ledger.observe(runId, {
+          state: removalState(captureRemoval),
+          detail: `the ended Pod was removed: ${describeDeletionBasis(captureRemoval)}`,
+        });
       }
     }
-    return reaped;
-  },
-);
+  }
+  return reaped;
+});
 
 /**
  * The one preservation policy, for a Pod whose row says it should not run: its source (the row,
