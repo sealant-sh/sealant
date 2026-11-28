@@ -182,9 +182,10 @@ const credentialCipher = credentialCipherLayer({
  *
  * Built wherever the API can open sealed Boat keys (`SEALANT_CREDENTIALS_KEY`), the way it holds
  * AWS credentials for MicroVM. Each control connection to a Boat run (sessions, credential pushes)
- * reads the run's sealed bearer and uses a hosted cookie Boat gave it in the last minute, or asks
- * Boat for one, with the key of the Boat account the run was created under: the env key for the default account, a stored account's own
- * key otherwise. An install with no env key still reaches its stored accounts' runs.
+ * reads the run's sealed bearer and reuses the hosted cookie Boat gave it in the last minute, or
+ * asks Boat for one, with the key of the Boat account the run was created under: the env key for
+ * the default account, a stored account's own key otherwise. An install with no env key still
+ * reaches its stored accounts' runs.
  */
 const boatProvider = boatProviderFromEnv(env);
 const boatControlLayer =

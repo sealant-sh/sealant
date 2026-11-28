@@ -9,8 +9,8 @@ import { env } from "../runtime-env.js";
 
 /**
  * How this process reaches a run's daemon: the env-derived options (TLS, bearer, MicroVM endpoint
- * tokens), plus Boat when the deployment gave the API its Boat key. Each Boat connection asks Boat
- * for fresh hosted access.
+ * tokens), plus Boat when the deployment gave the API its Boat key. A Boat connection reuses the
+ * hosted access Boat gave the run in the last minute, or asks Boat for it.
  */
 export const requestTargetOptions = Effect.gen(function* () {
   const boat = yield* Effect.serviceOption(BoatControlMaterial);

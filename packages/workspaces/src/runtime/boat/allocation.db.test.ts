@@ -2057,7 +2057,8 @@ describe.runIf(databaseUrl !== undefined)("Boat control material", () => {
         await expect(
           boatConnectMaterial(f.control)(f.target.runId, f.target.sandboxId),
         ).rejects.toThrow("Boat interactive control refused");
-        // Refused on the run's own checks, before Boat is asked.
+        // Still one: the target derivation's hook reused the cookie, and the stopped run is
+        // refused on its own checks before Boat is asked.
         expect(s.provider.hostCalls).toBe(1);
         expect(s.provider.creates).toHaveLength(1);
       } finally {

@@ -630,8 +630,8 @@ export interface BoatExecutionService {
   ) => Effect.Effect<BoatGuestNetworkReceipt, Failure>;
   /**
    * Where sealant's end of the tunnel's WebSocket carrier connects (`/sealant/tunnel` through
-   * Boat's hosted HTTPS, with a fresh hosted cookie and the control token), from network setup
-   * until the launch is held. Read again for every reconnect: the hosted cookie may expire.
+   * Boat's hosted HTTPS, with a hosted cookie Boat answers afresh and the control token), from
+   * network setup until the launch is held. Read again for every reconnect.
    */
   readonly tunnel: (
     target: BoatExecutionTarget,
@@ -874,9 +874,12 @@ const make: Effect.Effect<
   >();
   const hostedOf = (target: BoatExecutionTarget) =>
     Effect.gen(function* () {
-      const hosted = yield* io(() => transport.host(target), "host-agent");
-      const at = yield* Clock.currentTimeMillis;
       const key = hostedKey(target);
+      // A refusal (the VM's labels, Boat's failure) leaves control nothing of this target to reuse.
+      const hosted = yield* io(() => transport.host(target), "host-agent").pipe(
+        Effect.tapError(() => Effect.sync(() => hostedAccess.delete(key))),
+      );
+      const at = yield* Clock.currentTimeMillis;
       hostedAccess.delete(key);
       hostedAccess.set(key, { hosted, at });
       for (const oldest of hostedAccess.keys()) {
@@ -888,7 +891,8 @@ const make: Effect.Effect<
   const access = (run: BoundRun) =>
     Effect.gen(function* () {
       const bearer = yield* bearerOf(run);
-      // Hosted cookies may expire; each request refreshes access without repeating bootstrap.
+      // Asked afresh, so launch, recovery and the tunnel each see Boat's answer as it stands now,
+      // and control reuses it next.
       const hosted = yield* hostedOf(run.target);
       return { hosted, bearer };
     });

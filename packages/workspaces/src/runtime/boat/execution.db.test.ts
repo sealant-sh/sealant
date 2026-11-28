@@ -161,10 +161,11 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
       expect(await execute(executor.launch(target.runId))).toBe("running");
       // Each hosted answer is told apart by its cookie, and counted.
       let hosts = 0;
-      guest.host = async () => ({
+      const hostAnswer = async () => ({
         origin: "https://fixture-8080.on.boat.dev",
         cookie: secret(`test-cookie-answer-${++hosts}`),
       });
+      guest.host = hostAnswer;
       await execute(
         Effect.gen(function* () {
           // Well past what the launch asked: its answer is not reused.
@@ -192,6 +193,20 @@ describe.runIf(databaseUrl !== undefined)("durable Boat worker ownership", () =>
           expect(hosts).toBe(3);
           expect(yield* Effect.promise(() => cookie(fourth))).toBe(
             "_port_auth=test-cookie-answer-3",
+          );
+          // A fresh ask Boat refuses (the VM's labels, Boat's failure) leaves nothing to reuse:
+          // the next control connection asks Boat itself.
+          guest.host = async () => {
+            hosts++;
+            throw new Error("Boat refused the host");
+          };
+          yield* Effect.flip(executor.tunnel(target));
+          expect(hosts).toBe(4);
+          guest.host = hostAnswer;
+          const fifth = yield* executor.control(target);
+          expect(hosts).toBe(5);
+          expect(yield* Effect.promise(() => cookie(fifth))).toBe(
+            "_port_auth=test-cookie-answer-5",
           );
         }).pipe(Effect.provide(TestClock.layer())),
       );
