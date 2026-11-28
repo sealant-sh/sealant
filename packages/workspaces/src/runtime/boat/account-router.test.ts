@@ -1,9 +1,16 @@
 import { BoatRunRepo, WorkspaceCaptureDrainRepo, WorkspaceRuntimeInstanceRepo } from "@sealant/db";
-import { parseWorkspaceBlueprint, type NativePublication } from "@sealant/validators";
+import { fakeService } from "@sealant/db/testing/fake-service";
+import { runtimeInstanceRow } from "@sealant/db/testing/rows";
+import {
+  boatExecutionTargetSchema,
+  nativePublicationSchema,
+  parseWorkspaceBlueprint,
+  type NativePublication,
+} from "@sealant/validators";
 import { Effect, Layer, ManagedRuntime, Redacted, Tracer } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { BoatReadiness } from "../../worker/boat-readiness.js";
+import { BoatReadiness, type BoatReadinessService } from "../../worker/boat-readiness.js";
 import { daemonSentryConfigFromEnv } from "../daemon-telemetry.js";
 import type { RuntimeLaunch } from "../runtime-adapter.js";
 import {
@@ -12,9 +19,9 @@ import {
   type BoatAccountStacks,
 } from "./account-router.js";
 import { BoatRuntimeAdapter, type BoatAdapterServices } from "./adapter.js";
-import { BoatExecution } from "./execution.js";
+import { BoatExecution, type BoatExecutionService } from "./execution.js";
 import { BoatRemoval } from "./removal.js";
-import { BoatVm } from "./vm.js";
+import { BoatVm, type BoatVmService } from "./vm.js";
 
 const DSN = "https://k3y@sentry.example.com/10";
 const HASH = "a".repeat(64);
@@ -22,6 +29,7 @@ const RUN_ID = "11111111-1111-4111-8111-111111111111";
 const PUB_ID = "22222222-2222-4222-8222-222222222222";
 const OWNER_ID = "33333333-3333-4333-8333-333333333333";
 const BUILD_ID = "44444444-4444-4444-8444-444444444444";
+const BOOT_ID = "55555555-5555-4555-8555-555555555555";
 
 const runtimeIdentity = {
   source: `ghcr.io/sealant-sh/sealantd-next:0.21.0-next.223@sha256:${HASH}`,
@@ -31,7 +39,7 @@ const runtimeIdentity = {
   sealantctl: HASH,
 };
 
-const publication: NativePublication = {
+const publication = nativePublicationSchema.parse({
   kind: "boat-native",
   publicationId: PUB_ID,
   snapshot: {
@@ -42,9 +50,8 @@ const publication: NativePublication = {
     receiptHash: HASH,
     runtime: runtimeIdentity,
     identity: {
-      name: "snap-1" as NativePublication["snapshot"]["identity"]["name"],
-      sourceSandboxId:
-        "bx_23456789" as NativePublication["snapshot"]["identity"]["sourceSandboxId"],
+      name: "snap-1",
+      sourceSandboxId: "bx_23456789",
       createdAt: "2026-11-28T00:00:00.000Z",
     },
   },
@@ -78,7 +85,20 @@ const publication: NativePublication = {
     daemonRecovery: "supported",
     executorRecovery: "unverified",
   },
-};
+});
+
+const executionTarget = boatExecutionTargetSchema.parse({
+  deploymentId: "dep_1",
+  workspaceId: "ws_1",
+  runId: RUN_ID,
+  runtimeInstanceId: RUN_ID,
+  launchAttemptId: RUN_ID,
+  sourceId: "snap-1",
+  sandboxId: "bx_23456789",
+  diskLineage: "lineage-1",
+  bootId: BOOT_ID,
+  manifestDigest: HASH,
+});
 
 const blueprint = parseWorkspaceBlueprint({
   harness: { id: "claude-code" },
@@ -118,7 +138,7 @@ const stubStacks = (adapter: BoatRuntimeAdapter): BoatAccountStacks => {
     catalog: async () => undefined,
   };
   return {
-    // Resolves asynchronously on a later tick: callingFiberTraceCarrier() would be undefined after this await.
+    // Resolves asynchronously on a later tick: callingFiberTraceCarrier() is undefined after this await.
     launching: async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       return stack;
@@ -130,6 +150,65 @@ const stubStacks = (adapter: BoatRuntimeAdapter): BoatAccountStacks => {
   };
 };
 
+const makeAdapterRuntime = (onBootEnv: (bootEnv: Readonly<Record<string, string>>) => void) => {
+  const layer: Layer.Layer<BoatAdapterServices> = Layer.mergeAll(
+    Layer.succeed(
+      WorkspaceRuntimeInstanceRepo,
+      fakeService<WorkspaceRuntimeInstanceRepo["Service"]>({
+        getRuntimeInstanceByRunId: () =>
+          Effect.succeed(
+            runtimeInstanceRow({
+              runId: RUN_ID,
+              adapter: "boat",
+              publicationId: publication.publicationId,
+              stopReason: null,
+              imageScope: { kind: "owner", ownerUserId: "user_1" },
+            }),
+          ),
+      }),
+    ),
+    Layer.succeed(
+      BoatVm,
+      fakeService<BoatVmService>({
+        prepare: () => Effect.succeed(executionTarget),
+      }),
+    ),
+    Layer.succeed(
+      BoatReadiness,
+      fakeService<BoatReadinessService>({
+        launch: (_target, material) => {
+          onBootEnv(Redacted.value(material).bootEnv);
+          return Effect.succeed({
+            runtimeId: "bx_23456789",
+            bootId: BOOT_ID,
+            isolationReceipt: HASH,
+            handshake: "none",
+            dns: "none",
+            admission: "held",
+          });
+        },
+      }),
+    ),
+    Layer.succeed(
+      BoatExecution,
+      fakeService<BoatExecutionService>({
+        control: () =>
+          Effect.succeed(
+            Redacted.make({
+              kind: "websocket",
+              url: "wss://boat.example/control",
+              token: "tok",
+            }),
+          ),
+      }),
+    ),
+    Layer.succeed(BoatRemoval, fakeService<BoatRemoval["Service"]>({})),
+    Layer.succeed(BoatRunRepo, fakeService<BoatRunRepo["Service"]>({})),
+    Layer.succeed(WorkspaceCaptureDrainRepo, fakeService<WorkspaceCaptureDrainRepo["Service"]>({})),
+  );
+  return ManagedRuntime.make(layer);
+};
+
 describe("Boat daemon telemetry propagation", () => {
   const daemonTelemetry = daemonSentryConfigFromEnv({
     SEALANTD_SENTRY_DSN: DSN,
@@ -138,100 +217,17 @@ describe("Boat daemon telemetry propagation", () => {
   });
 
   it("captures the launching fiber trace and daemon Sentry config before BoatAccountRouterAdapter awaits account lookup", async () => {
-    const received: Array<RuntimeLaunch<NativePublication>> = [];
-    const inner = {
-      launch: async (launch: RuntimeLaunch<NativePublication>) => {
-        received.push(launch);
-        return {
-          adapter: "boat" as const,
-          resourceId: "bx_1",
-          reference: launch.runId ?? "run_1",
-          status: "ready" as const,
-        };
-      },
-    } as unknown as BoatRuntimeAdapter;
-
-    const router = new BoatAccountRouterAdapter({
-      stacks: stubStacks(inner),
-      resourceGateway: false,
-      ...(daemonTelemetry === undefined ? {} : { daemonTelemetry }),
+    let pushedBootEnv: Readonly<Record<string, string>> | undefined;
+    const runtime = makeAdapterRuntime((bootEnv) => {
+      pushedBootEnv = bootEnv;
     });
-
-    const exporting = Effect.map(Effect.tracer, (tracer) => Tracer.make({ ...tracer }));
-    const span = await Effect.runPromise(
-      Effect.flatMap(exporting, (tracer) =>
-        Effect.gen(function* () {
-          const current = yield* Effect.currentSpan;
-          yield* Effect.promise(() => router.launch(sampleLaunch()));
-          return current;
-        }).pipe(Effect.withSpan("sealant.workspace.launch"), Effect.withTracer(tracer)),
-      ),
-    );
-
-    expect(received).toHaveLength(1);
-    expect(received[0]?.telemetry).toEqual({
-      traceparent: `00-${span.traceId}-${span.spanId}-01`,
-      sentryDsn: DSN,
-      environment: "check-vm",
-      release: "sealantd@0.21.0-next.223",
-    });
-  });
-
-  it("writes SEALANT_TRACEPARENT and SEALANT_SENTRY_* into Boat bootEnv when daemonTelemetry is configured", async () => {
-    let pushedBootEnv: Record<string, string> | undefined;
-    const servicesLayer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        getRuntimeInstanceByRunId: () =>
-          Effect.succeed({
-            adapter: "boat",
-            publicationId: publication.publicationId,
-            stopReason: null,
-            imageScope: { kind: "owner", ownerUserId: "user_1" },
-          }),
-      } as unknown as WorkspaceRuntimeInstanceRepo["Service"]),
-      Layer.succeed(BoatVm, {
-        prepare: () =>
-          Effect.succeed({
-            runId: RUN_ID,
-            sandboxId: "bx_23456789",
-            deploymentId: "dep_1",
-            accountId: null,
-          }),
-      } as unknown as BoatVm["Service"]),
-      Layer.succeed(BoatReadiness, {
-        launch: (
-          _target: unknown,
-          material: Redacted.Redacted<{ readonly bootEnv: Record<string, string> }>,
-        ) => {
-          pushedBootEnv = Redacted.value(material).bootEnv;
-          return Effect.void;
-        },
-      } as unknown as BoatReadiness["Service"]),
-      Layer.succeed(BoatExecution, {
-        control: () =>
-          Effect.succeed(
-            Redacted.make({
-              kind: "websocket" as const,
-              url: "wss://boat.example/control",
-              token: "tok",
-            }),
-          ),
-      } as unknown as BoatExecution["Service"]),
-      Layer.succeed(BoatRemoval, {} as unknown as BoatRemoval["Service"]),
-      Layer.succeed(BoatRunRepo, {} as unknown as BoatRunRepo["Service"]),
-      Layer.succeed(
-        WorkspaceCaptureDrainRepo,
-        {} as unknown as WorkspaceCaptureDrainRepo["Service"],
-      ),
-    ) as unknown as Layer.Layer<BoatAdapterServices>;
-
-    const runtime = ManagedRuntime.make(servicesLayer);
     try {
+      // Only the router receives `daemonTelemetry`, and `stacks.launching` awaits before delegating:
+      // `bootEnv` receives the trace and Sentry config only if the router captured both synchronously.
       const adapter = new BoatRuntimeAdapter({
         deploymentId: "dep_1",
         runtime,
         resourceGateway: false,
-        ...(daemonTelemetry === undefined ? {} : { daemonTelemetry }),
       });
       const router = new BoatAccountRouterAdapter({
         stacks: stubStacks(adapter),
@@ -261,55 +257,46 @@ describe("Boat daemon telemetry propagation", () => {
     }
   });
 
-  it("omits SEALANT_TRACEPARENT and SEALANT_SENTRY_* from Boat bootEnv when telemetry is unconfigured", async () => {
-    let pushedBootEnv: Record<string, string> | undefined;
-    const servicesLayer = Layer.mergeAll(
-      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        getRuntimeInstanceByRunId: () =>
-          Effect.succeed({
-            adapter: "boat",
-            publicationId: publication.publicationId,
-            stopReason: null,
-            imageScope: { kind: "owner", ownerUserId: "user_1" },
-          }),
-      } as unknown as WorkspaceRuntimeInstanceRepo["Service"]),
-      Layer.succeed(BoatVm, {
-        prepare: () =>
-          Effect.succeed({
-            runId: RUN_ID,
-            sandboxId: "bx_23456789",
-            deploymentId: "dep_1",
-            accountId: null,
-          }),
-      } as unknown as BoatVm["Service"]),
-      Layer.succeed(BoatReadiness, {
-        launch: (
-          _target: unknown,
-          material: Redacted.Redacted<{ readonly bootEnv: Record<string, string> }>,
-        ) => {
-          pushedBootEnv = Redacted.value(material).bootEnv;
-          return Effect.void;
-        },
-      } as unknown as BoatReadiness["Service"]),
-      Layer.succeed(BoatExecution, {
-        control: () =>
-          Effect.succeed(
-            Redacted.make({
-              kind: "websocket" as const,
-              url: "wss://boat.example/control",
-              token: "tok",
-            }),
-          ),
-      } as unknown as BoatExecution["Service"]),
-      Layer.succeed(BoatRemoval, {} as unknown as BoatRemoval["Service"]),
-      Layer.succeed(BoatRunRepo, {} as unknown as BoatRunRepo["Service"]),
-      Layer.succeed(
-        WorkspaceCaptureDrainRepo,
-        {} as unknown as WorkspaceCaptureDrainRepo["Service"],
-      ),
-    ) as unknown as Layer.Layer<BoatAdapterServices>;
+  it("writes SEALANT_TRACEPARENT and SEALANT_SENTRY_* into Boat bootEnv when BoatRuntimeAdapter is called directly", async () => {
+    let pushedBootEnv: Readonly<Record<string, string>> | undefined;
+    const runtime = makeAdapterRuntime((bootEnv) => {
+      pushedBootEnv = bootEnv;
+    });
+    try {
+      const adapter = new BoatRuntimeAdapter({
+        deploymentId: "dep_1",
+        runtime,
+        resourceGateway: false,
+        ...(daemonTelemetry === undefined ? {} : { daemonTelemetry }),
+      });
 
-    const runtime = ManagedRuntime.make(servicesLayer);
+      const exporting = Effect.map(Effect.tracer, (tracer) => Tracer.make({ ...tracer }));
+      const span = await Effect.runPromise(
+        Effect.flatMap(exporting, (tracer) =>
+          Effect.gen(function* () {
+            const current = yield* Effect.currentSpan;
+            yield* Effect.promise(() => adapter.launch(sampleLaunch()));
+            return current;
+          }).pipe(Effect.withSpan("sealant.workspace.launch"), Effect.withTracer(tracer)),
+        ),
+      );
+
+      expect(pushedBootEnv).toMatchObject({
+        SEALANT_TRACEPARENT: `00-${span.traceId}-${span.spanId}-01`,
+        SEALANT_SENTRY_DSN: DSN,
+        SEALANT_SENTRY_ENVIRONMENT: "check-vm",
+        SEALANT_SENTRY_RELEASE: "sealantd@0.21.0-next.223",
+      });
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("omits SEALANT_TRACEPARENT and SEALANT_SENTRY_* from Boat bootEnv when telemetry is unconfigured", async () => {
+    let pushedBootEnv: Readonly<Record<string, string>> | undefined;
+    const runtime = makeAdapterRuntime((bootEnv) => {
+      pushedBootEnv = bootEnv;
+    });
     try {
       const adapter = new BoatRuntimeAdapter({
         deploymentId: "dep_1",
