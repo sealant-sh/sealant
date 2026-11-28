@@ -82,11 +82,16 @@ describe("nameByUrlTemplate", () => {
     }
   });
 
-  it("leaves other transactions, and names that are not route IDs, alone", () => {
+  it("leaves other transactions alone", () => {
     const request = transaction("/_auth/login", "http.server");
     expect(nameByUrlTemplate(request, templateOf)).toBe(request);
-    const byUrl = transaction("/workspaces/ws_1", "pageload");
-    expect(nameByUrlTemplate(byUrl, templateOf)).toBe(byUrl);
+  });
+
+  it("templates the raw pathname of a page no route matched", () => {
+    const unmatched = transaction("/workspaces/ws_3f9a8b7c6d/typo", "pageload");
+    expect(nameByUrlTemplate(unmatched, templateOf).transaction).toBe("/workspaces/*/typo");
+    const plain = transaction("/nowhere", "navigation");
+    expect(nameByUrlTemplate(plain, templateOf)).toBe(plain);
   });
 
   it("drops an index route's trailing slash", () => {

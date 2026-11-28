@@ -27,6 +27,7 @@ const NOT_SHIPPED = /\.(?:test|e2e|fixture|spec)\.tsx?$|\.d\.ts$/;
 /** The calls that start a span named by an argument. `Effect.fn` without a name starts none. */
 const SPAN_CALLS: ReadonlySet<string> = new Set([
   "withSpan",
+  "withSpanScoped",
   "useSpan",
   "makeSpan",
   "makeSpanScoped",
@@ -184,8 +185,9 @@ const spanNamesIn = (
         return;
       }
     }
-    // `Effect.fn(function* ...)` names no span.
-    if (isFn) return;
+    // `Effect.fn(function* ...)` names no span; `Effect.fn(name)` with a name from elsewhere does.
+    const first = args[0]?.type;
+    if (isFn && (first === "FunctionExpression" || first === "ArrowFunctionExpression")) return;
     passed.push({ name: "", at });
   });
   return { names, templates, passed };
@@ -314,6 +316,7 @@ describe("the span name check", () => {
       `export const e = Effect.useSpan(\`sealant.daemon.\${op}\`, {}, f);`,
       `export const f = Effect.fn(function* () {});`,
       `export const g = (name) => Effect.withSpan(effect, name);`,
+      `export const h = Effect.fn(IMPORTED_NAME)(function* () {});`,
     ].join("\n");
     const found = spanNamesIn("example.ts", source);
     expect(found.names.map((item) => item.name)).toEqual([
@@ -323,7 +326,7 @@ describe("the span name check", () => {
       "sealant.job.process",
     ]);
     expect(found.templates.map((item) => item.name)).toEqual(["sealant.daemon.${}"]);
-    expect(found.passed).toHaveLength(1);
+    expect(found.passed).toHaveLength(2);
   });
 
   it("refuses names that are code, and descriptions that say nothing", () => {

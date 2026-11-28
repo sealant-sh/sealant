@@ -61,6 +61,8 @@ export const SPAN_DESCRIPTIONS: Readonly<Record<string, string>> = {
   "sealant.github.resolve_dotfiles_auth": "resolve dotfiles repository token",
   "sealant.github.sync_installation": "sync github installation",
   "sealant.inference.respond": "answer inference request",
+  // Sentry shows a delivery's queue (`workspace-run-exec`) instead, as its queue views expect; this
+  // is for one that carries no `messaging.system`.
   "sealant.job.process": "process queued job",
   "sealant.native_image.plan_wanted_keys": "plan wanted image keys",
   "sealant.native_image.reap": "reap unwanted native images",

@@ -154,6 +154,8 @@ export const summarizeSql = (sql: string): SqlSummary | undefined => {
 
 /** A segment a route spells out: a lower-case word (`workspaces`, `exec-as-user`) or a version. */
 const ROUTE_WORD = /^(?:v\d+|[a-z]+(?:[-_][a-z]+)*)$/;
+/** A prefixed ID that happens to be all letters (`bx_abcdefgh`, `ws_qxzvkplm`): a short prefix, `_`. */
+const PREFIXED_ID = /^[a-z]{1,4}_[a-z]+$/;
 
 /**
  * `path` with every segment that could name a record or carry a code replaced by `*`: anything but
@@ -165,7 +167,10 @@ export const templatePath = (path: string): string =>
   path
     .split("/")
     .map((segment) =>
-      segment === "" || (segment.length <= 32 && ROUTE_WORD.test(segment)) ? segment : "*",
+      segment === "" ||
+      (segment.length <= 32 && ROUTE_WORD.test(segment) && !PREFIXED_ID.test(segment))
+        ? segment
+        : "*",
     )
     .join("/");
 

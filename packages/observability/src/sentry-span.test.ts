@@ -67,6 +67,7 @@ describe("templatePath", () => {
     );
     expect(templatePath("/repos/acme/widgets/pulls/123")).toBe("/repos/acme/widgets/pulls/*");
     expect(templatePath("/api/me/cli-auth/57TX-M9HG")).toBe("/api/me/cli-auth/*");
+    expect(templatePath("/v1/sandboxes/bx_abcdefgh")).toBe("/v1/sandboxes/*");
     expect(templatePath("/v1/workspaces/exec-as-user")).toBe("/v1/workspaces/exec-as-user");
     expect(templatePath("/v1/runs")).toBe("/v1/runs");
     expect(templatePath("/")).toBe("/");
