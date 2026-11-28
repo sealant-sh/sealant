@@ -274,7 +274,7 @@ describe("describeSpanName", () => {
     ["sealant.session.wait_for_recorder", "sealant.session", "wait for output recorder"],
     ["sealant.github.resolve_clone_auth", "sealant.github", "resolve repository clone token"],
     ["sealant.session.get_output", "sealant.session", "get session output"],
-    ["sealant.session.reconcile", "sealant.session", "reconcile session state"],
+    ["sealant.session.reconcile", "sealant.session", "reconcile session"],
     ["sealant.daemon.connect", "sealant.daemon", "connect to daemon"],
     ["sealant.daemon.open_session", "sealant.daemon", "call daemon: open session"],
     ["sealant.daemon.exec", "sealant.daemon", "call daemon: exec"],

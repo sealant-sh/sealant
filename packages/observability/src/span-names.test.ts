@@ -70,7 +70,14 @@ const TEMPLATED: Readonly<Record<string, (source: (file: string) => string) => s
  * Span names the source passes in a variable, by file: `@sealant/sdk` names each call's span from
  * the API contract (`sealant.sdk.<group>.<endpoint>`); its own tests hold those names.
  */
-const PASSED_IN: ReadonlySet<string> = new Set(["packages/sdk/src/effect/trace.ts"]);
+const PASSED_IN: ReadonlySet<string> = new Set([
+  "packages/sdk/src/effect/trace.ts",
+  // `asLaunchFollowUp(name, …)`, whose callers' names are read as `SPAN_HELPERS`.
+  "packages/workspaces/src/worker/launch-trace.ts",
+]);
+
+/** sealant's own functions that start a span named by their first argument. */
+const SPAN_HELPERS: ReadonlySet<string> = new Set(["asLaunchFollowUp"]);
 
 interface AstNode {
   readonly type: string;
@@ -155,10 +162,12 @@ const spanNamesIn = (
   walk(program, (node) => {
     if (node.type !== "CallExpression" || !isNode(node.callee)) return;
     const callee = node.callee;
-    if (callee.type !== "MemberExpression" || callee.computed === true) return;
-    const method = identifierName(callee.property);
-    const isFn = method === "fn" && identifierName(callee.object) === "Effect";
-    if (!isFn && (method === undefined || !SPAN_CALLS.has(method))) return;
+    const helper = identifierName(callee);
+    const isHelper = helper !== undefined && SPAN_HELPERS.has(helper);
+    if (!isHelper && (callee.type !== "MemberExpression" || callee.computed === true)) return;
+    const method = isHelper ? helper : identifierName(callee.property);
+    const isFn = !isHelper && method === "fn" && identifierName(callee.object) === "Effect";
+    if (!isHelper && !isFn && (method === undefined || !SPAN_CALLS.has(method))) return;
     const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
     const at = `${file}:${lineOf(node)}`;
     // `withSpan(name, options)` piped, or `withSpan(effect, name, options)` data first.
@@ -317,6 +326,7 @@ describe("the span name check", () => {
       `export const f = Effect.fn(function* () {});`,
       `export const g = (name) => Effect.withSpan(effect, name);`,
       `export const h = Effect.fn(IMPORTED_NAME)(function* () {});`,
+      `export const i = asLaunchFollowUp("adoptOne", instance, {});`,
     ].join("\n");
     const found = spanNamesIn("example.ts", source);
     expect(found.names.map((item) => item.name)).toEqual([
@@ -324,6 +334,7 @@ describe("the span name check", () => {
       "sealant.session.with_high_water",
       "BoatAccountRepo.list",
       "sealant.job.process",
+      "adoptOne",
     ]);
     expect(found.templates.map((item) => item.name)).toEqual(["sealant.daemon.${}"]);
     expect(found.passed).toHaveLength(2);
