@@ -25,8 +25,11 @@ span's trace context with its first runtime-row write, and the stop links to it;
 ("Covered hunks read without a model change"). Read again at `eeafaddb` (SLNT-1406, 2026-11-28): the
 covered files' spans were renamed or dropped (the run and account repositories' methods make no
 span; `vm.ts`, `removal.ts` and `convergence.ts` name theirs `sealant.boat.*`) and nothing else in
-them changed; no model change. Run with tlx at the commit `docs/formal/tlx.sh` pins, which gives
-TLC's verdicts and counts on every case ("The checker" below).
+them changed; no model change. Read again at `f86ab004` (SLNT-1414, 2026-11-28): `boat-assembly.ts`
+passes the worker's `daemonTelemetry` config to `BoatRuntimeAdapter` and `BoatAccountRouterAdapter`,
+and `adapter.ts` calls `withLaunchTelemetry` on launch input before building `bootEnv`; no guard,
+order or covered column changed, so no model change. Run with tlx at the commit `docs/formal/tlx.sh`
+pins, which gives TLC's verdicts and counts on every case ("The checker" below).
 
 ## The two promises
 
