@@ -73,6 +73,7 @@ beforeAll(async () => {
     release: "current",
     requestsPerMinute: 10_000,
   });
+  await warmForwardPath();
 });
 
 afterAll(async () => {
@@ -114,6 +115,23 @@ const echoes = async (forward: Awaited<ReturnType<typeof open>>, text: string) =
   reader.releaseLock();
   writer.releaseLock();
   return echoed;
+};
+
+/**
+ * The first WebSocket a process opens sets up buffers it keeps for its lifetime, such as the
+ * HTTP parser's WASM bytes, about 70 KiB in all. Opening one forward before any test takes its
+ * memory baseline keeps that setup out of what the forward is measured to hold.
+ */
+const warmForwardPath = async () => {
+  const echo = await startTarget({ mode: "echo" });
+  try {
+    const forward = await open(echo.port);
+    await echoes(forward, "warm");
+    forward.close();
+    await echo.connectionClosed;
+  } finally {
+    echo.stop();
+  }
 };
 
 describe.skipIf(!hasSealantd)("/forward/v2 against a real sealantd", () => {
