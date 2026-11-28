@@ -312,9 +312,11 @@ describe("SDK calls continue the caller's trace", () => {
         yield* Effect.promise(() => s.client.workspaces.get("ws_1"));
         yield* getWorkspaceOp("ws_1");
       }).pipe(
-        Effect.withSpan("caller.operation"),
+        // Tracing on, the caller's parent a disabled span (what a disabled region leaves behind).
+        Effect.withParentSpan(
+          Tracer.externalSpan({ traceId: "noop", spanId: "noop", sampled: false }),
+        ),
         Effect.provide(layer),
-        Effect.withTracerEnabled(false),
       ),
     );
     expect(s.received).toHaveLength(2);
