@@ -22,8 +22,11 @@ runtime-instance writes; SLNT-1377 runs the build job under its delivery's span 
 the build and the launch. Neither changes a guard, an order or a covered column; no model change.
 Read again at `393ff282` (SLNT-1387, 2026-11-28), with SLNT-1397's hunks: the launch records its
 span's trace context with its first runtime-row write, and the stop links to it; no model change
-("Covered hunks read without a model change"). Run with tlx at the commit `docs/formal/tlx.sh` pins,
-which gives TLC's verdicts and counts on every case ("The checker" below).
+("Covered hunks read without a model change"). Read again at `eeafaddb` (SLNT-1406, 2026-11-28): the
+covered files' spans were renamed or dropped (the run and account repositories' methods make no
+span; `vm.ts`, `removal.ts` and `convergence.ts` name theirs `sealant.boat.*`) and nothing else in
+them changed; no model change. Run with tlx at the commit `docs/formal/tlx.sh` pins, which gives
+TLC's verdicts and counts on every case ("The checker" below).
 
 ## The two promises
 
