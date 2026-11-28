@@ -179,14 +179,11 @@ describe.skipIf(DATABASE_URL === undefined)("a scope's instances through the SDK
           groups: TESTED_GROUPS,
         }),
         ResourceInstanceExecRoute.pipe(HttpRouter.provideRequest(provides)),
-        // A tracer that exports, as the API has with telemetry on: only an exported span's
-        // trace is carried to a job.
-        Layer.succeed(
-          Tracer.Tracer,
-          Tracer.make({ span: (options) => new Tracer.NativeSpan(options) }),
-        ),
       ),
       SERVICE_KEY,
+      // A tracer that exports, as the API has with telemetry on: only an exported span's trace
+      // is carried to a job.
+      Tracer.make({ span: (options) => new Tracer.NativeSpan(options) }),
     );
     apis.push(api);
     const client = new Sealant({ baseUrl: api.baseUrl, apiKey: SERVICE_KEY });
