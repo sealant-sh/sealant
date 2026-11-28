@@ -10,7 +10,12 @@ Confirmed against the code at `8c2cbd88` (main, 2026-11-15), and against SLNT-97
 drain's `save` (2026-11-21). Read again at `66a93649` (SLNT-1318, 2026-11-24): the recovery sweep
 keeps a host VM whose recovery boot said "nothing to save" unless sealant's records show a standby
 launch nobody claimed, a retry before the removal the model already has, with no ledger write of its
-own; no model change. Run with tlx at the commit `docs/formal/tlx.sh` pins ("The checker" below).
+own; no model change. Read again for SLNT-1387 (2026-11-28), whose hunks in
+`process-workspace-stop.ts`, `recover-retained-executors.ts` and `reconcile-runtime-exits.ts` only
+trace: each recovery attempt and each stop runs in a span of its own linked to the executor's
+launch, from the runtime row the sweep already read, and the sweeps run with the process's
+observers. No ledger transaction, runtime call, guard or order changed; no model change, and `sync`
+moves to `393ff282`. Run with tlx at the commit `docs/formal/tlx.sh` pins ("The checker" below).
 
 ## The promise
 

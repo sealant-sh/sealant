@@ -218,6 +218,15 @@ export const workspaceRuntimeInstances = pgTable(
      * on rows written before it was recorded.
      */
     controlScope: text("control_scope"),
+    /**
+     * The W3C trace context of the span that launched the executor (`sealant.workspace.launch`),
+     * written with the launch's first row. A sweep, reaper, restart or recovery that later acts on
+     * this executor starts a trace of its own with a link to it, so Sentry leads from that work
+     * back to the launch. Null when the launching worker exported no trace (telemetry off), and on
+     * rows written before it was recorded.
+     */
+    launchTraceparent: text("launch_traceparent"),
+    launchTracestate: text("launch_tracestate"),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
     stopReason: text("stop_reason", { enum: workspaceRuntimeInstanceStopReasonValues }),

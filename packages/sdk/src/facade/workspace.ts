@@ -511,7 +511,10 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     // The contract's own rule, checked before anything is asked, with the same value-free reason.
     const refused = sessionArgvIssue(argv);
     if (refused !== undefined) throw new SealantError(refused, { code: "invalid_argv" });
-    if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
+    // Captured before the feature check's await, so the open continues the caller's trace.
+    const trace = captureTrace(ctx);
+    const user = options?.user;
+    if (user !== undefined) await withCallerTrace(trace, () => requireProcessUser(ctx, user));
     const request = {
       workspaceId: init.id,
       ownerUserId: ctx.config.hostLocal.ownerUserId,
@@ -531,6 +534,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         options?.user === undefined
           ? createSessionOp(request)
           : createSessionAsUserOp({ ...request, user: options.user }),
+        trace,
       )
       .catch((error: unknown) => {
         // A control plane with the rule answers a typed 400 with its reason (`RequestRefusedError`
@@ -842,8 +846,12 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     sessions,
 
     exec: async (argv, options) => {
-      if (options?.user !== undefined) await requireProcessUser(ctx, options.user);
-      return execWorkspace(ctx, init, argv, options);
+      // Captured before the feature check's await: the exec and the run reads it makes continue
+      // the caller's trace.
+      const trace = captureTrace(ctx);
+      const user = options?.user;
+      if (user !== undefined) await withCallerTrace(trace, () => requireProcessUser(ctx, user));
+      return execWorkspace(ctx, init, argv, options, trace);
     },
 
     bind: async (options) => {
@@ -1091,7 +1099,10 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     // People's logins, one person per home; the workspace stays the client owner's.
     credentials: {
       put: async (options) => {
-        if (options.live !== undefined) await requireCredentialPlacements(ctx);
+        const trace = captureTrace(ctx);
+        if (options.live !== undefined) {
+          await withCallerTrace(trace, () => requireCredentialPlacements(ctx));
+        }
         const choices = {
           claude: accountChoice(options.claude),
           codex: accountChoice(options.codex),
@@ -1116,6 +1127,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
             ...(options.partial === true ? { partial: true } : {}),
             ...(options.live === undefined ? {} : { live: options.live }),
           }),
+          trace,
         );
         return {
           ...toCredentialHome(answered.home),
@@ -1127,13 +1139,15 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         };
       },
       prune: async (home, live) => {
-        await requireCredentialPlacements(ctx);
+        const trace = captureTrace(ctx);
+        await withCallerTrace(trace, () => requireCredentialPlacements(ctx));
         const answered = await ctx.runtime.run(
           pruneWorkspaceCredentialsOp(init.id, {
             ownerUserId: ctx.config.hostLocal.ownerUserId,
             home,
             live,
           }),
+          trace,
         );
         return answered.home === undefined ? undefined : toCredentialHome(answered.home);
       },

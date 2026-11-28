@@ -26,13 +26,13 @@ import { createConnection } from "node:net";
 import { Duplex } from "node:stream";
 
 import type { ExecutorOrigin } from "@sealant/db";
+import { callingFiberTraceparent } from "@sealant/observability";
 import {
   openForwardConnection,
   SealantClient,
   SealantError as SdkSealantError,
   type Channel,
 } from "@sealant/runtime-client";
-import { effectTraceContext } from "@sealant/runtime-client/effect";
 import {
   CaptureClass as WireCaptureClass,
   CaptureFlushKind as WireCaptureFlushKind,
@@ -1795,9 +1795,10 @@ const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeS
             connection,
             "connect",
             // Each request carries the span it is made in (`sealant.daemon.<method>`), so the
-            // daemon's `sealantd.control.<method>` span continues this trace.
+            // daemon's `sealantd.control.<method>` span continues this trace; with telemetry off,
+            // none.
             Effect.sync(() =>
-              SealantClient.fromStream(duplex, { traceContext: effectTraceContext }),
+              SealantClient.fromStream(duplex, { traceContext: callingFiberTraceparent }),
             ),
           ),
           (c) => Effect.sync(() => c.close()),

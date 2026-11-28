@@ -5,7 +5,7 @@
  */
 import type { IncomingMessage, Server } from "node:http";
 
-import { Effect, Layer, Option, type Tracer } from "effect";
+import { Context, Effect, Fiber, Layer, Option, References, Tracer } from "effect";
 import { Headers, HttpMiddleware, type HttpServerRequest, HttpTraceContext } from "effect/http";
 
 /** A trace context as it is stored or sent: the W3C fields, `tracestate` when one came. */
@@ -20,14 +20,46 @@ export const carrierOf = (span: Tracer.AnySpan): TraceCarrier => ({
 });
 
 /**
- * The current span's context as a carrier, to send with work another process picks up (a queued
- * job, a boot config), or `undefined` outside any span.
+ * Whether `fiber`'s spans leave this process: tracing is on, propagation is allowed, and its tracer
+ * is not Effect's native one (which keeps spans in memory only). A process with telemetry off
+ * answers `false` everywhere ({@link observedLive} turns tracing off), so it sends no trace context.
  */
-export const currentTraceCarrier: Effect.Effect<TraceCarrier | undefined> =
-  Effect.currentParentSpan.pipe(
-    Effect.map(carrierOf),
-    Effect.orElseSucceed(() => undefined),
-  );
+export const fiberExportsSpans = (fiber: Fiber.Fiber<unknown, unknown>): boolean =>
+  fiber.getRef(References.TracerEnabled) &&
+  !fiber.getRef(Tracer.DisablePropagation) &&
+  fiber.getRef(Tracer.Tracer) !== Tracer.nativeTracer;
+
+/** `fiber`'s current span as a carrier, when that span is exported. */
+const exportedCarrierOf = (fiber: Fiber.Fiber<unknown, unknown>): TraceCarrier | undefined => {
+  if (!fiberExportsSpans(fiber)) return undefined;
+  const span = Context.getOrUndefined(fiber.context, Tracer.ParentSpan);
+  return span === undefined ? undefined : carrierOf(span);
+};
+
+/**
+ * The current span's context as a carrier, to send with work another process picks up (a queued
+ * job, a boot config), or `undefined` outside any span or when nothing exports it: another process
+ * handed a span that is never exported would hang its work off a parent that never arrives.
+ */
+export const currentTraceCarrier: Effect.Effect<TraceCarrier | undefined> = Effect.withFiber(
+  (fiber) => Effect.succeed(exportedCarrierOf(fiber)),
+);
+
+/**
+ * {@link currentTraceCarrier} for Promise code called from an Effect: the calling fiber's span, read
+ * synchronously. Call it in the callee's first synchronous step, while the calling fiber is current.
+ */
+export const callingFiberTraceCarrier = (): TraceCarrier | undefined => {
+  const fiber = Fiber.getCurrent();
+  return fiber === undefined ? undefined : exportedCarrierOf(fiber);
+};
+
+/**
+ * The calling fiber's exported span as a bare `traceparent`: the sealantd runtime client's
+ * `traceContext` hook, read when each control request is sent.
+ */
+export const callingFiberTraceparent = (): string | undefined =>
+  callingFiberTraceCarrier()?.traceparent;
 
 /** The remote parent a carrier names, or `undefined` when it names none validly. */
 export const parentOf = (carrier: TraceCarrier): Tracer.ExternalSpan | undefined =>

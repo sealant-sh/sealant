@@ -29,6 +29,7 @@ import {
   getRunTimelineOp,
 } from "./operations.js";
 import { retryRead } from "./read-retry.js";
+import type { CallerTrace } from "./trace.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 /**
@@ -185,10 +186,15 @@ const execWorkspaceEffect = (
     } satisfies WorkspaceExecResult;
   });
 
-/** The `workspace.exec()` implementation (Promise boundary over the Effect above). */
+/**
+ * The `workspace.exec()` implementation (Promise boundary over the Effect above), continuing
+ * `trace` when given, else the caller's trace captured now.
+ */
 export const execWorkspace = (
   ctx: SdkContext,
   init: WorkspaceInit,
   argv: readonly string[],
   options?: WorkspaceExecOptions,
-): Promise<WorkspaceExecResult> => ctx.runtime.run(execWorkspaceEffect(ctx, init, argv, options));
+  trace?: CallerTrace,
+): Promise<WorkspaceExecResult> =>
+  ctx.runtime.run(execWorkspaceEffect(ctx, init, argv, options), trace);

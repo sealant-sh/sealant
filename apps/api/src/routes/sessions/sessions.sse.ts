@@ -27,7 +27,7 @@ import {
   type WorkspaceSession,
 } from "@sealant/db";
 import { TelemetryQuery } from "@sealant/telemetry";
-import { Effect, Option, Stream } from "effect";
+import { Effect, Option, Stream, Tracer } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
 import { admitRawRequest } from "../../services/service-principals.js";
@@ -181,8 +181,15 @@ export const SessionOutputStreamRoute = HttpRouter.add(
         | WorkspaceRuntimeInstanceRepo
         | WorkspaceSessionRepo
       >();
-      // `paginate` emits each frame in the step's array as one stream element.
-      const body = Stream.paginate(initial, step).pipe(
+      // `paginate` emits each frame in the step's array as one stream element. A step runs every
+      // 250 ms for as long as the session lives, so its reads make no spans: the request's trace
+      // ends with the request, and the tail never hangs hours of polls beneath it.
+      const body = Stream.paginate(initial, (state) =>
+        step(state).pipe(
+          Effect.withTracerEnabled(false),
+          Effect.provideService(Tracer.DisablePropagation, true),
+        ),
+      ).pipe(
         Stream.provideContext(context),
         Stream.catchCause(() => Stream.empty),
       );

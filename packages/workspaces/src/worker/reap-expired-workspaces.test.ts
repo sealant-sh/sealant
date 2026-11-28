@@ -16,7 +16,7 @@ import {
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import { fakeService } from "@sealant/db/testing/fake-service";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option, Tracer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { removalPending, type RuntimeAdapter } from "../runtime/runtime-adapter.js";
@@ -48,6 +48,8 @@ const retainedRow: WorkspaceRuntimeInstance = {
   captureClaimedAt: null,
   hostVmRunnerEgress: null,
   controlScope: null,
+  launchTraceparent: null,
+  launchTracestate: null,
   daemonImage: null,
   daemonRecoveryBoot: null,
   removedAt: null,
@@ -56,7 +58,11 @@ const retainedRow: WorkspaceRuntimeInstance = {
   updatedAt: new Date("2026-09-27T00:00:00.000Z"),
 };
 
-const sweep = async (daemon: ReturnType<typeof fakeCaptureDaemon>) => {
+const sweep = async (
+  daemon: ReturnType<typeof fakeCaptureDaemon>,
+  row: WorkspaceRuntimeInstance = retainedRow,
+  tracer?: Tracer.Tracer,
+) => {
   const markStopped = vi.fn((input: { runId: string; stopReason: string }) =>
     Effect.succeed({
       ...retainedRow,
@@ -85,8 +91,8 @@ const sweep = async (daemon: ReturnType<typeof fakeCaptureDaemon>) => {
       WorkspaceRuntimeInstanceRepo,
       fakeService<WorkspaceRuntimeInstanceRepoService>({
         listRunningInstances: () => Effect.succeed([]),
-        listRetainedLaunches: () => Effect.succeed([retainedRow]),
-        getRuntimeInstanceByRunId: () => Effect.succeed(retainedRow),
+        listRetainedLaunches: () => Effect.succeed([row]),
+        getRuntimeInstanceByRunId: () => Effect.succeed(row),
         markStopped,
         markRemoved: () => Effect.void,
         markStopRequested: () => Effect.void,
@@ -114,7 +120,10 @@ const sweep = async (daemon: ReturnType<typeof fakeCaptureDaemon>) => {
           requestTimeoutMs: 1_000,
         },
       },
-    }).pipe(Effect.provide(layer)),
+    }).pipe(
+      Effect.provide(layer),
+      tracer === undefined ? (effect) => effect : Effect.withTracer(tracer),
+    ),
   );
   return { reaped, stop, markStopped, setWorkspaceStatus };
 };
@@ -135,6 +144,29 @@ describe("reapExpiredWorkspaces · retained launches", () => {
     });
     // The launch failed: the workspace's stored status (the API's intent anchor) is left alone.
     expect(result.setWorkspaceStatus).not.toHaveBeenCalled();
+  });
+
+  it("stops it in a trace of its own, linked to the launch that started it", async () => {
+    const spans: Tracer.NativeSpan[] = [];
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const row = {
+      ...retainedRow,
+      launchTraceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    };
+    await sweep(fakeCaptureDaemon([savedStatus()]), row, tracer);
+
+    const reap = spans.find((span) => span.name === "sealant.workspace.reap_runtime");
+    expect(reap?.attributes.get("sealant.reap.reason")).toBe("retained");
+    expect(reap !== undefined && Option.isNone(reap.parent)).toBe(true);
+    expect(reap?.links.map((link) => `${link.span.traceId}-${link.span.spanId}`)).toEqual([
+      "0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331",
+    ]);
   });
 
   it("keeps a retained launch whose daemon cannot confirm its work saved", async () => {

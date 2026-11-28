@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
 import { ControlPlaneAPI, type RequestRefusal, type RequestBudget } from "@sealant/api-contracts";
-import { Effect, Exit, Layer, Scope } from "effect";
+import { Effect, Exit, Layer, Scope, Tracer } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { type HttpApi, HttpApiBuilder, type HttpApiGroup } from "effect/http-api";
 
@@ -100,15 +100,21 @@ export const controlPlaneRoutes = controlPlane;
 export const gateControlPlane = async (
   routes: Layer.Layer<never, never, HttpRouter.HttpRouter | NodeServed>,
   serviceKey: string,
+  /** The server's tracer; absent, Effect's own, which exports nothing. */
+  tracer?: Tracer.Tracer,
 ) => {
   let server: Server | undefined;
-  const layer = HttpRouter.serve(routes, {
+  const served = HttpRouter.serve(routes, {
     middleware: servicePrincipalMiddleware(makeServicePrincipals(serviceKey)),
   }).pipe(
     Layer.provideMerge(
       NodeHttpServer.layer(() => (server = createServer()), { port: 0, host: "127.0.0.1" }),
     ),
   );
+  const layer =
+    tracer === undefined
+      ? served
+      : served.pipe(Layer.provide(Layer.succeed(Tracer.Tracer, tracer)));
   const scope = Effect.runSync(Scope.make());
   await Effect.runPromise(Layer.buildWithScope(layer, scope));
   const address = server?.address();

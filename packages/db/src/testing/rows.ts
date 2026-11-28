@@ -93,6 +93,8 @@ export const runtimeInstanceRow = (
   reference: "container-1",
   endpoint: null,
   controlScope: null,
+  launchTraceparent: null,
+  launchTracestate: null,
   imageScope: null,
   publication: null,
   publicationId: null,

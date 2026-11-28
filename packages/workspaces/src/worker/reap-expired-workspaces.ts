@@ -8,13 +8,16 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
+  type WorkspaceRuntimeInstance,
 } from "@sealant/db";
+import { withProcessObservers } from "@sealant/observability";
 import { Effect, Layer } from "effect";
 
 import type { RuntimeAdapterLifecycle } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import type { SealantTargetDerivationOptions } from "../sealantd/target.js";
 import type { CaptureDrainLedger, CaptureDrainSettings } from "./capture-drain.js";
+import { asLaunchFollowUp } from "./launch-trace.js";
 import { processWorkspaceStopEffect, type WorkspaceStopOutcome } from "./process-workspace-stop.js";
 
 export interface ReapExpiredWorkspacesOptions {
@@ -75,6 +78,16 @@ const countsAsReaped = (outcome: WorkspaceStopOutcome): boolean =>
  * Best-effort per item: one failure never aborts the sweep. No leader election — the adapter stop
  * and both status writes are idempotent, so concurrent reapers are safe.
  */
+/**
+ * A stop the reaper drives: a trace of its own, linked to the runtime's launch. The reaper's
+ * per-tick reads, which find nothing to do almost every time, start none.
+ */
+const reapTrace = (instance: WorkspaceRuntimeInstance, reason: string) =>
+  asLaunchFollowUp("sealant.workspace.reap_runtime", instance, {
+    "sealant.run_id": instance.runId,
+    "sealant.reap.reason": reason,
+  });
+
 export const reapExpiredWorkspacesEffect = (options: Omit<ReapExpiredWorkspacesOptions, "db">) => {
   const { maxReapsPerTick, runtimeAdapters, credentialCipher, targetOptions } = options;
   const maxReaps = maxReapsPerTick ?? DEFAULT_MAX_REAPS_PER_TICK;
@@ -117,7 +130,7 @@ export const reapExpiredWorkspacesEffect = (options: Omit<ReapExpiredWorkspacesO
             ...(credentialCipher === undefined ? {} : { credentialCipher }),
             ...(targetOptions === undefined ? {} : { targetOptions }),
             ...drainFor("orphan reaper"),
-          });
+          }).pipe(reapTrace(instance, "orphaned"));
           return countsAsReaped(outcome);
         }
 
@@ -142,7 +155,7 @@ export const reapExpiredWorkspacesEffect = (options: Omit<ReapExpiredWorkspacesO
           ...drainFor(
             expired ? "expiry reaper" : superseded ? "superseded reaper" : "stranded reaper",
           ),
-        });
+        }).pipe(reapTrace(instance, expired ? "expired" : superseded ? "superseded" : "stranded"));
         return countsAsReaped(outcome);
       }).pipe(
         Effect.catchCause((cause) =>
@@ -175,6 +188,7 @@ export const reapExpiredWorkspacesEffect = (options: Omit<ReapExpiredWorkspacesO
         ...(targetOptions === undefined ? {} : { targetOptions }),
         ...drainFor("retained launch"),
       }).pipe(
+        reapTrace(instance, "retained"),
         Effect.map(countsAsReaped),
         Effect.catchCause((cause) =>
           Effect.logWarning(
@@ -205,9 +219,13 @@ export const reapExpiredWorkspaces = async (
     ConnectedAccountRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
+  // Each executor the sweep acts on is a trace of its own, linked to its launch; the sweep's own
+  // reads start none (`mayStartTrace`).
   return Effect.runPromise(
-    reapExpiredWorkspacesEffect(effectOptions).pipe(
-      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+    withProcessObservers(
+      reapExpiredWorkspacesEffect(effectOptions).pipe(
+        Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+      ),
     ),
   );
 };

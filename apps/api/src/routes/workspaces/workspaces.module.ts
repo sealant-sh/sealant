@@ -160,6 +160,7 @@ import {
   resolveWorkspacePhase,
   resolveWorkspaceStatus,
   executorIsRetained as genericExecutorIsRetained,
+  linkToLaunch,
   withPinnedEgressPolicy,
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
@@ -3513,7 +3514,8 @@ export const loadRecordedSpec = Effect.fn("sealant.workspace.load_recorded_spec"
 });
 
 /** Load an owner-scoped workspace with the uniform-404 idiom (existence is not leaked). */
-export const requireOwnedWorkspace = Effect.fn("sealant.workspace.require_owned")(function* (
+// No span of its own: a sub-millisecond lookup whose one query sits directly under the request.
+export const requireOwnedWorkspace = Effect.fnUntraced(function* (
   workspaceId: string,
   ownerUserId: string,
 ) {
@@ -3901,6 +3903,8 @@ export const recoverWorkspace = Effect.fn("sealant.workspace.recover")(function*
       .pipe(Effect.flatMap(currentWorkspaceRuntime)),
     "Failed to load the workspace runtime.",
   );
+  // The recovery acts on an executor another trace launched: link to that launch.
+  yield* linkToLaunch(instance);
   const recoverable = runtimeRestartsRetainedExecutors(instance?.adapter);
   // Recorded, or read off the endpoint of an executor launched before it was recorded.
   const controlScope = recordedControlScope(instance);
@@ -4054,6 +4058,12 @@ export const restartWorkspace = Effect.fn("sealant.workspace.restart")(function*
     yield* requireLiveWorkspaceRoom(input.payload.ownerUserId);
   }
   yield* spendOwnerLaunch(input.payload.ownerUserId);
+
+  // The restart replaces an executor another trace launched: link to that launch.
+  const previousInstance = yield* (yield* WorkspaceRuntimeInstanceRepo)
+    .getRuntimeInstanceByRunId(previousRunId)
+    .pipe(Effect.orElseSucceed(() => undefined));
+  yield* linkToLaunch(previousInstance);
 
   // Stop the old runtime first (idempotent in the worker even if it already stopped/failed).
   const lifecyclePublisher = yield* WorkspaceLifecyclePublisherService;

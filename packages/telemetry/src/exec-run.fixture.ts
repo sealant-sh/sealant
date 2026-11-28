@@ -418,6 +418,8 @@ export const fakeWorkspaceRepos = (
     captureClaimedAt: null,
     hostVmRunnerEgress: null,
     controlScope: null,
+    launchTraceparent: null,
+    launchTracestate: null,
     createdAt: new Date(0),
     updatedAt: new Date(0),
   };

@@ -306,15 +306,15 @@ export const listRuns = Effect.fn("sealant.run.list")(function* (query: ListRuns
   return { items: items.map(mapRun) } satisfies ListRunsResponse;
 });
 
-export const getRun = Effect.fn("sealant.run.get")(function* (runId: string, ownerUserId?: string) {
+// A run read Mend polls several times a second: its one query sits directly under the request,
+// with no span of its own.
+export const getRun = Effect.fnUntraced(function* (runId: string, ownerUserId?: string) {
   const run = yield* requireRun(runId, ownerUserId);
   return mapRun(run);
 });
 
-export const getRunChanges = Effect.fn("sealant.run.get_changes")(function* (
-  runId: string,
-  ownerUserId?: string,
-) {
+// One query, polled after each exec: no span of its own, as for `getRun`.
+export const getRunChanges = Effect.fnUntraced(function* (runId: string, ownerUserId?: string) {
   const run = yield* requireRun(runId, ownerUserId);
   // A reading that succeeded records both, empty when nothing changed; a run that has not
   // ended, that no reading ran for (a workspace session's run, a run cancelled or failed

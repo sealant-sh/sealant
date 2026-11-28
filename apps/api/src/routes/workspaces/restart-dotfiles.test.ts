@@ -328,7 +328,10 @@ const makeLayer = (store: Store) => {
           tombstonesOf(store.egressPolicy?.revocationWatermark ?? 0, store.revocations),
         ),
     }),
-    Layer.mock(WorkspaceRuntimeInstanceRepo, {}),
+    // The restart reads the previous executor's row only to link to its launch.
+    Layer.mock(WorkspaceRuntimeInstanceRepo, {
+      getRuntimeInstanceByRunId: () => Effect.succeed(undefined),
+    }),
     // No idempotency key in these creates: no reservation; the transaction passes through.
     Layer.mock(WorkspaceCreateReservationRepo, {}),
     Layer.succeed(DatabaseTransaction, { run: (effect) => effect }),

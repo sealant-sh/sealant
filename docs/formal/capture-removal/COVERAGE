@@ -4,7 +4,7 @@
 # `sync` is the commit the model was last confirmed to describe. A pull request that changes a
 # covered path also changes the model or moves `sync` (CI's drift guard, `pnpm verify formal`).
 # Move it only after reading every covered hunk since it against the model.
-sync 66a93649ad69d0bc2b7271b6736af151e59f8d8b
+sync 393ff282a71805a465363322a2644996e5195d7d
 
 path packages/db/src/repositories/workspace-capture-drains.ts
 path packages/workspaces/src/worker/capture-drain-ledger.ts

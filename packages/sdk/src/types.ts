@@ -72,7 +72,9 @@ export interface SealantConfig {
   readonly fetch?: typeof fetch;
   /**
    * The trace a call continues, read when each call starts. A call made inside an Effect span
-   * continues that span without this; otherwise the SDK calls this and, when it answers nothing,
+   * that is exported (an exporting tracer's span, or an external span set as the parent)
+   * continues it without this; a span of Effect's native tracer is never exported, so it is not
+   * continued. Otherwise the SDK calls this and, when it answers nothing,
    * uses the active OpenTelemetry context if `@opentelemetry/api` is registered. With no parent
    * from any of them, requests carry no trace header. Read per call, so one client can serve
    * concurrent requests that belong to different traces.

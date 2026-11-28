@@ -67,6 +67,7 @@ import {
   type DB,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
+import { withProcessObservers } from "@sealant/observability";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import {
@@ -926,9 +927,13 @@ export const reconcileRuntimeExits = async (
     // A kept executor's retention and its terminal write commit together (`withRetention`).
     DatabaseTransactionLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
+  // A stranded launch it adopts is a trace of its own, linked to the launch; the sweep's own reads
+  // start none (`mayStartTrace`).
   return Effect.runPromise(
-    reconcileRuntimeExitsEffect(effectOptions).pipe(
-      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+    withProcessObservers(
+      reconcileRuntimeExitsEffect(effectOptions).pipe(
+        Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+      ),
     ),
   );
 };

@@ -11,7 +11,8 @@ import {
   type DB,
   type WorkspaceRuntimeInstanceStopReason,
 } from "@sealant/db";
-import { Effect, Layer, Schedule } from "effect";
+import { withProcessObservers } from "@sealant/observability";
+import { Effect, Layer, Schedule, type Tracer } from "effect";
 
 import {
   decideExecutorDeletion,
@@ -47,6 +48,7 @@ import {
 } from "./capture-drain.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
 import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js";
+import { linkToLaunch } from "./launch-trace.js";
 
 /**
  * Drain-before-stop for capture-sourced workspaces (`capture-drain.ts`). Absent = no drain (a
@@ -127,6 +129,12 @@ export interface ProcessWorkspaceStopEffectOptions {
 
 export interface ProcessWorkspaceStopOptions extends ProcessWorkspaceStopEffectOptions {
   readonly db: DB;
+  /**
+   * The delivery's span (`sealant.job.process`) when a stop job runs this: the stop is traced
+   * beneath it, so it joins the trace of the request that asked for it. Absent (a stop the worker
+   * decides on itself), the stop is a trace of its own, `sealant.workspace.stop`.
+   */
+  readonly parentSpan?: Tracer.AnySpan;
 }
 
 export class WorkspaceStopProcessingError extends Error {
@@ -392,6 +400,9 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
   const instance = yield* runtimeInstances
     .getRuntimeInstanceByRunId(options.runId)
     .pipe(Effect.mapError(toWorkspaceStopProcessingError));
+
+  // This stop acts on an executor another trace launched: point back at it.
+  yield* linkToLaunch(instance);
 
   if (instance === undefined) {
     // Nothing was ever launched for this run; still settle the workspace row (guarded above) so a
@@ -741,7 +752,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
 export const processWorkspaceStop = async (
   options: ProcessWorkspaceStopOptions,
 ): Promise<WorkspaceStopOutcome> => {
-  const { db, ...effectOptions } = options;
+  const { db, parentSpan, ...effectOptions } = options;
 
   const dataAccessLayer = Layer.mergeAll(
     WorkspaceRepoLive,
@@ -752,9 +763,19 @@ export const processWorkspaceStop = async (
     ConnectedAccountRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
+  const program = processWorkspaceStopEffect(effectOptions).pipe(
+    Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+  );
   return Effect.runPromise(
-    processWorkspaceStopEffect(effectOptions).pipe(
-      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+    withProcessObservers(
+      parentSpan === undefined
+        ? program.pipe(
+            Effect.withSpan("sealant.workspace.stop", {
+              root: true,
+              attributes: { "sealant.run_id": options.runId },
+            }),
+          )
+        : Effect.withParentSpan(program, parentSpan),
     ),
   );
 };

@@ -20,8 +20,10 @@ wallet on each request, below the models' one Boat, or is the `unreachable` abse
 covered". sealant#701 passes the attempt's control scope through the build job and the
 runtime-instance writes; SLNT-1377 runs the build job under its delivery's span with spans named for
 the build and the launch. Neither changes a guard, an order or a covered column; no model change.
-Run with tlx at the commit `docs/formal/tlx.sh` pins, which gives TLC's verdicts and counts on every
-case ("The checker" below).
+Read again at `393ff282` (SLNT-1387, 2026-11-28), with SLNT-1397's hunks: the launch records its
+span's trace context with its first runtime-row write, and the stop links to it; no model change
+("Covered hunks read without a model change"). Run with tlx at the commit `docs/formal/tlx.sh` pins,
+which gives TLC's verdicts and counts on every case ("The checker" below).
 
 ## The two promises
 
@@ -263,6 +265,15 @@ which gives P2-B its form without a stall.
   `runs.seen`'s `created_seen_at` still follows the state alone. The diagnostic's new fields and
   `BoatAdapterError`'s sentence are neither a statement nor a Boat call. No action moved, and `sync`
   stays.
+- SLNT-1387 (a launch's trace, linked from later work), `process-workspace-build-job.ts`,
+  `process-workspace-stop.ts` and `workspace-runtime-instances.ts`: the launch's first
+  `upsertRuntimeInstance` (the `pending` row with its lease) also writes the launching span's W3C
+  context (`launch_traceparent`, `launch_tracestate`), two columns no Boat step reads or writes. The
+  stop reads nothing new: after its `getRuntimeInstanceByRunId` it adds a span link from the row it
+  already read, and its Promise boundary runs under the delivery's span (or a span of its own) with
+  the process's observers. Spans and links are neither a statement nor a Boat call, and no guard,
+  order or Boat answer changed. No action moved. With SLNT-1397's hunks above, every covered hunk
+  since `e71c0dcd` is read, so `sync` moves to `393ff282`.
 
 ## Each property fails on a broken variant
 

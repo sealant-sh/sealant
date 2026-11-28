@@ -1552,6 +1552,70 @@ describe("processWorkspaceBuildJobEffect", () => {
     );
   });
 
+  it.effect(
+    "records the launch's span on its runtime instance row, for later work to link to",
+    () => {
+      const jobs = workspaceBuildJobRepoStub({
+        claimJobById: () =>
+          buildJobRow({
+            id: "job_launch_trace",
+            runId: "run_launch_trace",
+            repository: "sealant/workspaces/demo",
+            tag: "opencode",
+            requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+          }),
+      });
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      let launching: Tracer.AnySpan | undefined;
+      const runtimeAdapter = createRuntimeAdapterStub("docker", {
+        launch: vi.fn(async () => {
+          const fiber = Fiber.getCurrent();
+          launching =
+            fiber === undefined
+              ? undefined
+              : Context.getOrUndefined(fiber.context, Tracer.ParentSpan);
+          return {
+            adapter: "docker" as const,
+            resourceId: "resource_123",
+            reference: "sealant-resource",
+            status: "running" as const,
+          };
+        }),
+      });
+      // A tracer that exports (not Effect's native one): only an exported span is recorded.
+      const exporting = Tracer.make({ span: (options) => new Tracer.NativeSpan(options) });
+
+      return Effect.gen(function* () {
+        yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_launch_trace",
+            runtimeAdapters: [runtimeAdapter],
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          }),
+        ).pipe(Effect.withSpan("sealant.job.process"), Effect.withTracer(exporting));
+
+        const [first] = runtimeInstances.upsertRuntimeInstance.mock.calls.map(([input]) => input);
+        expect(spanName(launching)).toBe("sealant.workspace.launch");
+        expect(first).toMatchObject({
+          status: "pending",
+          launchTrace: {
+            traceparent: `00-${launching?.traceId ?? ""}-${launching?.spanId ?? ""}-01`,
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          provideRepos({
+            jobs,
+            runtimeInstances,
+            attempts: workspaceAttemptRepoStub(),
+            installations: githubInstallationRepoStub(),
+            installationRepositories: githubInstallationRepositoryCacheStub(),
+          }),
+        ),
+      );
+    },
+  );
+
   it.effect("hands the adapter the caller userEnv unchanged through the job payload parse", () => {
     const jobs = workspaceBuildJobRepoStub({
       claimJobById: () =>

@@ -29,6 +29,18 @@ const sessionWire = {
   createdAt: now,
 };
 
+const execRun = {
+  runId: "run_exec",
+  workspaceId: "ws_1",
+  ownerUserId: "alice",
+  harnessId: "exec",
+  mode: "one-shot",
+  status: "completed",
+  exitCode: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+
 const json = (response: ServerResponse, body: unknown, status = 200) => {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
@@ -53,6 +65,19 @@ const serve = async (config: Partial<SealantConfig> = {}, readyAfter = 0) => {
     received.push({ path, headers: request.headers });
     request.resume();
     request.on("end", () => {
+      if (path === "/")
+        return json(response, {
+          name: "sealant",
+          version: "0.0.0",
+          docsPath: "/docs",
+          openApiPath: "/openapi.json",
+          features: { processUser: false, processUserRoutes: true },
+        });
+      if (path === "/v1/sessions/as-user") return json(response, sessionWire, 201);
+      if (path === "/v1/workspaces/ws_1/exec-as-user") return json(response, execRun, 202);
+      if (path === "/v1/runs/run_exec") return json(response, execRun);
+      if (path === "/v1/runs/run_exec/timeline") return json(response, { items: [] });
+      if (path === "/v1/runs/run_exec/changes") return json(response, { files: [], diff: "" });
       if (path === "/v1/workspaces" && request.method === "POST")
         return json(
           response,
@@ -113,21 +138,22 @@ const traceparentOf = (received: Received | undefined) => {
   return { traceId, spanId };
 };
 
-/** Run `f` inside an Effect span, the way an Effect caller calls the Promise facade. */
-const inSpan = <A>(f: () => Promise<A>, tracer?: Tracer.Tracer) =>
+/**
+ * Run `f` inside an Effect span, the way an Effect caller calls the Promise facade. Without a
+ * `tracer`, the span is made by a tracer that exports nothing but is not Effect's native one, as a
+ * caller with telemetry on would have.
+ */
+const inSpan = <A>(f: () => Promise<A>, tracer: Tracer.Tracer = recordingTracer().tracer) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const span = yield* Effect.currentSpan;
       const value = yield* Effect.promise(f);
       return { span, value };
-    }).pipe(
-      Effect.withSpan("caller.operation"),
-      tracer === undefined ? (effect) => effect : Effect.provideService(Tracer.Tracer, tracer),
-    ),
+    }).pipe(Effect.withSpan("caller.operation"), Effect.provideService(Tracer.Tracer, tracer)),
   );
 
 /** A tracer that exports: it keeps every span it makes. */
-const recordingTracer = () => {
+function recordingTracer() {
   const spans: Tracer.NativeSpan[] = [];
   const tracer = Tracer.make({
     span(options) {
@@ -137,13 +163,71 @@ const recordingTracer = () => {
     },
   });
   return { tracer, spans };
-};
+}
 
 describe("SDK calls continue the caller's trace", () => {
-  it("a contract call inside an Effect span carries that span as its parent", async () => {
+  it("a contract call inside an Effect span continues that span's trace", async () => {
     const s = await serve();
     const { span } = await inSpan(() => s.client.workspaces.get("ws_1"));
-    expect(traceparentOf(s.received[0])).toEqual({ traceId: span.traceId, spanId: span.spanId });
+    expect(traceparentOf(s.received[0])?.traceId).toBe(span.traceId);
+  });
+
+  it("sends no trace header from a caller whose spans nothing exports", async () => {
+    const s = await serve();
+    // Effect's native tracer keeps spans in memory only: a process with telemetry off.
+    await inSpan(() => s.client.workspaces.get("ws_1"), Tracer.nativeTracer);
+    // Tracing turned off: the caller's spans are placeholders that belong to no trace.
+    await Effect.runPromise(
+      Effect.promise(() => s.client.workspaces.get("ws_1")).pipe(
+        Effect.withSpan("caller.operation"),
+        Effect.provideService(Tracer.Tracer, recordingTracer().tracer),
+        Effect.provideService(References.TracerEnabled, false),
+      ),
+    );
+    // The same call from a caller whose tracer exports does carry its trace.
+    await inSpan(() => s.client.workspaces.get("ws_1"));
+    const headers = s.received.map((request) => [request.headers.traceparent, request.headers.b3]);
+    expect(headers).toEqual([
+      [undefined, undefined],
+      [undefined, undefined],
+      [expect.any(String), expect.any(String)],
+    ]);
+  });
+
+  it("forwards an external parent the caller set, though nothing exports its own spans", async () => {
+    const s = await serve();
+    const parent = Tracer.externalSpan({
+      traceId: "0af7651916cd43dd8448eb211c80319c",
+      spanId: "b7ad6b7169203331",
+      sampled: true,
+    });
+    await Effect.runPromise(
+      Effect.promise(() => s.client.workspaces.get("ws_1")).pipe(Effect.withParentSpan(parent)),
+    );
+    expect(s.received[0]?.headers.traceparent).toBe(
+      "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    );
+  });
+
+  it("keeps the caller's trace on an as-user session open and exec", async () => {
+    const s = await serve();
+    const handle = await s.client.workspaces.get("ws_1");
+    const open = await inSpan(() => handle.sessions.open(["sh"], { user: "dev" }));
+    const exec = await inSpan(() => handle.exec(["true"], { user: "dev" }));
+    const opened = s.received.find((request) => request.path === "/v1/sessions/as-user");
+    expect(traceparentOf(opened)?.traceId).toBe(open.span.traceId);
+    // The exec and every run read it makes continue the exec's caller.
+    const execReads = s.received.filter(
+      (request) => request.path.endsWith("/exec-as-user") || request.path.startsWith("/v1/runs/"),
+    );
+    expect(execReads.map((request) => request.path)).toEqual([
+      "/v1/workspaces/ws_1/exec-as-user",
+      "/v1/runs/run_exec/timeline",
+      "/v1/runs/run_exec/changes",
+    ]);
+    expect(execReads.map((request) => traceparentOf(request)?.traceId)).toEqual(
+      execReads.map(() => exec.span.traceId),
+    );
   });
 
   it("with an exporting tracer, names the SDK's client span and parents the request under it", async () => {
@@ -270,7 +354,7 @@ describe("SDK calls continue the caller's trace", () => {
     expect(seen).toEqual([`${s.baseUrl}/v1/workspaces/ws_1?ownerUserId=alice`]);
   });
 
-  it("an Effect caller composing operations directly continues its own span", async () => {
+  it("an Effect caller composing operations directly continues its own trace", async () => {
     const s = await serve();
     const layer = sealantApiClientLayer(resolveInternalConfig({ baseUrl: s.baseUrl }));
     const span = await Effect.runPromise(
@@ -278,9 +362,13 @@ describe("SDK calls continue the caller's trace", () => {
         const current = yield* Effect.currentSpan;
         yield* getWorkspaceOp("ws_1");
         return current;
-      }).pipe(Effect.withSpan("caller.operation"), Effect.provide(layer)),
+      }).pipe(
+        Effect.withSpan("caller.operation"),
+        Effect.provide(layer),
+        Effect.provideService(Tracer.Tracer, recordingTracer().tracer),
+      ),
     );
-    expect(traceparentOf(s.received[0])).toEqual({ traceId: span.traceId, spanId: span.spanId });
+    expect(traceparentOf(s.received[0])?.traceId).toBe(span.traceId);
   });
 
   it("sends no trace header for a caller that turned tracing and propagation off", async () => {

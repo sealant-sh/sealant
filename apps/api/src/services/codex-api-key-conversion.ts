@@ -113,5 +113,7 @@ export const CodexApiKeyConversionLive: Layer.Layer<
     Effect.catchCause((cause) =>
       Effect.logWarning("[api] connected accounts: the Codex API key conversion failed", cause),
     ),
+    // A startup task: a trace of its own, named, rather than lone queries.
+    Effect.withSpan("sealant.credential.convert_codex_api_keys", { root: true }),
   ),
 );
