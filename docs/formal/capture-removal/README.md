@@ -15,7 +15,7 @@ own; no model change. Read again for SLNT-1387 (2026-11-28), whose hunks in
 trace: each recovery attempt and each stop runs in a span of its own linked to the executor's
 launch, from the runtime row the sweep already read, and the sweeps run with the process's
 observers. No ledger transaction, runtime call, guard or order changed; no model change, and `sync`
-moves to `3ed8653f`. Run with tlx at the commit `docs/formal/tlx.sh` pins ("The checker" below).
+moves to `393ff282`. Run with tlx at the commit `docs/formal/tlx.sh` pins ("The checker" below).
 
 ## The promise
 

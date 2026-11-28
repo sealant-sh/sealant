@@ -4,7 +4,7 @@
 # `sync` is the commit the models were last confirmed to describe. A pull request that changes a
 # covered path also changes the models or moves `sync` (CI's drift guard, `pnpm verify formal`).
 # Move it only after reading every covered hunk since it against the models.
-sync 3ed8653ff06bd136d0657e51859e88b93f0381be
+sync 393ff282a71805a465363322a2644996e5195d7d
 
 path packages/workspaces/src/runtime/boat/vm.ts
 path packages/workspaces/src/runtime/boat/api.ts
