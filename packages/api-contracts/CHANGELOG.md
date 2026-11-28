@@ -1,11 +1,574 @@
 # @sealant/api-contracts
 
+## 0.40.0
+
+### Minor Changes
+
+- 7dd7c9a: Add `"antigravity"` as a connected-account and workspace-home credential provider for personal
+  Google OAuth logins (`~/.gemini/antigravity-cli/antigravity-oauth-token`). Workspaces receive a
+  stripped access-token-only copy without `refresh_token`, while the worker keeps the stored login
+  fresh via `agy models` and pushes rotated copies to running workspaces and homes.
+- 4d306e5: A Claude or Codex connected account can be an API key. `connect()` takes an Anthropic API key from
+  the Console (a legacy key or one linked to a user), an OpenAI key (`sk-…`), or a Codex `auth.json`
+  whose login is a key, and stores an account of kind `api-key` holding the key alone. A key in an
+  `auth.json` is checked as a bare key is: an Admin key, a key pasted under the other provider, and a
+  broken or truncated key are refused with the reason, and so is an `auth.json` holding both a ChatGPT
+  login and a key without an `auth_mode` saying which. An `auth_mode` decides first.
+  `connect({ login: "subscription" | "api-key" })` refuses a secret of the other class before anything
+  is stored ("That is a Claude subscription login, not an API key."). Without `accountId` or `name`, a
+  connect replaces the only account of the secret's login class, read from each stored login, so a key
+  added beside a subscription never replaces it: with none of that class it makes one named `api-key`
+  or `subscription`, and with several it fails with `connected-account-ambiguous`. The default moves
+  only as before. `ConnectedAccount.login` is `{ kind: "subscription" }` or
+  `{ kind: "api-key", suffix }` for Claude and Codex accounts, and
+  `connectedAccounts.listWithHistory()` answers the accounts with `hasApiKeyHistory`: whether the
+  owner ever stored a key, which a later replace with a subscription or an archive does not forget. A
+  control plane reports all of this as `features().connectedAccountLoginClass`; the SDK sends `login`
+  only to one that does, and otherwise throws `connected-account-login-class-unsupported` before
+  sending anything.
+
+  A Codex key runs as the file `codex login --with-api-key` writes, at the Codex slot of a home, a
+  launch and inference, where a key-only `auth.json` went before; Codex accounts stored as such an
+  `auth.json` are stored again as the key when the control plane starts. Workspace create and a launch
+  refuse a Claude key with `connected-account-unsupported`; a profile bound to one skips it at create,
+  as it skips an account that needs reconnecting. `InferenceConflictError` now carries a `code`.
+  Nothing refreshes a key, writes a login read back from a workspace over one, or pushes a refreshed
+  subscription into a workspace that was launched with a key. The control plane's traces, logs and
+  error reports replace a provider key by its shape, in a request's URL too; the worker's logs are not
+  covered.
+
+- 62e3380: A personal Boat key is pinned when it is stored, to the wallet it bills then unless `organization`
+  names another, and can be pointed at another wallet afterwards without its key:
+  `boatAccounts.setOrganization(id, organization)` (`PUT /v1/boat-accounts/:id/organization`, an
+  organization's id or name, or `personal`; there is no unpin). Every object sealant makes in Boat is
+  recorded with the wallet it was made in, and every request about it names that wallet, so a change
+  waits for nothing and refuses no workspace: what the account makes next is made in the new wallet,
+  and what it made before stays in its own. An account connected before pins is pinned by the worker
+  to the wallet its key bills now; until then it starts nothing new (a workspace naming it is refused
+  with `code` `boat-account-wallet-unresolved`), its running sessions are not touched, and a rotation
+  pins it. The key report gains `wallets` (the wallets a personal key can bill, the active one marked)
+  and `billing` (`pinned` with its organization, `key-organization`, or `active-wallet` with
+  `walletChanged`). `BoatAccount.unreachable` and the new `BoatInstallKey.unreachable` name what a key
+  made before sealant recorded wallets that Boat has in none of its wallets: `savedImages`, and the
+  new optional `runs` and `builds`. New conflict code on the new route: `boat-key-organization`.
+  sealant now requires the key permission `account.read` (Boat's `/me`, limits and organization
+  discovery): without it sealant cannot see which wallet a key bills, and refuses to connect it
+  (`boat-key-missing-permissions`).
+- c23baae: `sealant.boatAccounts` keeps Boat API keys beside the control plane's default one (its env key), so
+  a product that serves several organizations can run each organization's Boat VMs in, and bill them
+  to, that organization's own Boat account. `create({ label, apiKey })` checks the key with Boat by
+  one read-only call and stores it sealed; `list()` returns
+  `{ boatAccountId, label, state, createdAt, keyRotatedAt }` and never a key;
+  `rotateKey(boatAccountId, apiKey)` refuses a key that cannot see the account's VMs and saved images
+  (`reason` `boat-key-cannot-see`); `remove(boatAccountId)` refuses while the account has workspaces
+  whose VMs Boat may still hold (`reason` `boat-account-in-use`), and otherwise answers
+  `state: "removing"` while the control plane deletes the saved images it built in the account. The
+  HTTP routes are `POST|GET /v1/boat-accounts`, `PUT /v1/boat-accounts/:boatAccountId/key` and
+  `DELETE /v1/boat-accounts/:boatAccountId`.
+
+  `workspaces.create({ runtime: "boat", boatAccountId })` (`spec.runtime.boatAccountId`) runs the
+  workspace in that account, restarts included. Omitted, it runs in the default account, as every
+  workspace did before. A control plane older than the option rejects a create that sends it (its spec
+  is strict).
+
+- 4fb31bb: A Boat workspace whose launch or image build failed because Boat refused, or did not answer, a call
+  now says why. `workspace.ready()` rejects with `SealantBoatError` (code still
+  `workspace_not_ready`), whose `boat` carries the kind from a closed set (`BOAT_FAILURE_KINDS`:
+  `key-refused`, `key-expired`, `permission-missing`, `sandbox-outside-key`, `organization-mismatch`,
+  `account-suspended`, `billing-required`, `running-limit`, `member-cap`, `rate-limited`,
+  `trial-restricted`, `no-machine`, `snapshot-allowance-full`, `no-answer`, `refused`), whether a
+  retry can succeed, and Boat's own code, message, request id, retry time and billing link. The
+  workspace's `error.boat` carries the same on the wire. A launch or build Boat refused for a reason
+  no retry can change is no longer retried.
+- ec1d2da: `boatAccounts.prove(boatAccountId)` runs a full check of a stored Boat account's key with a
+  throwaway VM: sealant starts the smallest VM, runs a command, publishes a port and saves a snapshot,
+  then deletes the snapshot and the VM, and answers each step as passed, refused (with Boat's reason),
+  not answered or not reached, with the VM starts it used and what Boat may still hold of it, which
+  sealant removes. It never leaves a VM or a snapshot behind for good, and a second check of the same
+  account while one runs is refused (`boat-proof-running`). `list()` carries each account's
+  `lastProof`.
+- 2af5257: A Boat key is checked against Boat when it is stored, rotated or re-checked, and the check is kept
+  as a report: who the key is, which wallet it bills (personal or which organization), its permissions
+  and which of the ones sealant needs are missing, when it expires, whether the wallet can start a VM
+  now and why not, its running and allowed VMs, and its saved snapshot slots. Each fact is observed,
+  or not observed with Boat's reason. `boatAccounts.create` takes `organization` (the Boat
+  organization a personal key bills, sent on every request for the account), a key that lacks a
+  permission sealant needs is refused with `boat-key-missing-permissions` and the permissions named,
+  `boatAccounts.check(id)` checks a key again, and `list()` returns each account's last report. The
+  install's own key is read with `boatAccounts.installKey()` and checked with
+  `boatAccounts.checkInstallKey()`; `rotateKey` and `remove` refuse it (`boat-account-environment`).
+  Whitespace around a pasted key is trimmed.
+- 12d5276: Boat snapshot parking is removed. Workspace details no longer carry `captureDrain.preservation`, and
+  `@sealant/api-contracts` no longer exports `workspacePreservationSchema` or `WorkspacePreservation`;
+  no tagged release carried them. Stopping a Boat workspace is the final drain, then the VM's removal.
+  A VM whose final drain is incomplete is kept until the drain completes or the owner discards it, and
+  resuming is a new workspace from the project snapshot and the captured worktree.
+  `captureDrain.retained`, with `retained.recoverable`, is unchanged for every runtime.
+- 1a0bf72: Run caller-owned services in organization or installation scopes. Add private server reach,
+  write-only secret env, retained storage budgets, observable health and stopped-volume tar backup.
+  Docker and Kubernetes support the same lifecycle, with no workspace reach or idle stopping.
+- b18cfe7: Add explicit irreversible purge for stopped or archived caller-owned scope instances. Delete
+  retained service data, sealed env and provider resources, release budgets, and protect replacement
+  instances from stale purge retries with the expected instance id.
+- 97076a8: A credentials put places a Claude API key into a home. The key is written alone, mode 0600 and owned
+  by the home's owner, at `<home>/.sealant/keys/<placementId>`, a directory reached through no
+  symbolic link, never into `.credentials.json` or anywhere under `.claude`. Any number of key files
+  sit beside a subscription's file, so a later put never changes the file a running Claude reads, and
+  a key file is never pinned. Prune, release, archive and the removal sweep remove a key file with its
+  placement. A put refuses a Claude key, in words, for `/root` and for a home whose key directory lies
+  in the run's working directory or a capture's harness home. A Claude key is still refused at `$HOME`
+  and in a launch.
+
+  A placement receipt's `login` says what it spends: `{ kind: "subscription" }`, or
+  `{ kind: "api-key", suffix, keyPath? }`. `keyPath` is the absolute path of a Claude key's file, for
+  an `apiKeyHelper` such as `cat <keyPath>`; a Codex key has no `keyPath`. A Codex key now reads as
+  `api-key` too. A refresh never writes into a key placement. The control plane reports
+  `features.connectedAccountApiKeys`, and the SDK reports it as `features().connectedAccountApiKeys`.
+
+- f51aa3c: A person's default connected account per provider is a choice, not the account named `default`.
+  `true` (`default` on the wire) resolves to it at workspace create, a credentials put, inference and
+  a profile binding; a person's first account for a provider is named `default` and becomes it, and
+  existing accounts named `default` already are.
+  `connectedAccounts.setDefault({ provider, accountId })`
+  (`PUT /v1/connected-accounts/defaults/:provider`) chooses another. Disconnecting the default leaves
+  none chosen (`connected-account-missing`); no other account is picked. `connect()` takes `accountId`
+  to replace one account and `makeDefault`, and `name: "default"` replaces the chosen default; without
+  a target it replaces the only account, and with several it fails with `reason`
+  `connected-account-ambiguous` and `candidateAccountIds`. `ConnectedAccount` carries `isDefault` and
+  `credentialRevision`, and `connectedAccounts.markInvalid(id, { revision })` marks nothing once the
+  credential has moved on (`outcome: "superseded"`). The SDK sends `accountId`, `makeDefault`,
+  `setDefault` and a `revision` only to a control plane that reports
+  `features().connectedAccountDefaults`, and otherwise throws `connected-account-defaults-unsupported`
+  before sending anything. `@sealant/api-contracts` exports `providerLoginEnvNames`, the environment
+  names each provider's CLI reads as a login (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `CLAUDE_CODE_OAUTH_TOKEN`; `OPENAI_API_KEY`, `CODEX_API_KEY`), and `DEFAULT_ACCOUNT_SELECTOR`
+  (`"default"`), also from the dependency-free `@sealant/api-contracts/connected-account-selector`.
+- 7c62e60: A Claude or Codex API key can send this login's requests to a compatible endpoint, such as a company
+  gateway. `connect({ endpoint })` takes the endpoint's base URL: an absolute `http:` or `https:` URL
+  with a host, and no user name, password, query string or fragment. A trailing slash is dropped.
+  `EndpointUrl` in `@sealant/api-contracts` is that parse, and `parseEndpointUrl` answers the reason a
+  URL is refused. The endpoint is stored sealed with the key. With an endpoint, the key may be any
+  value without spaces, for an endpoint that takes no real key; an Admin key is still refused. An
+  endpoint with any other login is refused with a `400`, and a reconnect without one removes it.
+
+  `ConnectedAccount.login` names the endpoint's host as `endpointHost`, never its URL. A placement
+  receipt's `login` carries the URL as `baseUrl`; nothing in the home holds it, so the harness's
+  launch sets it. The placement's own record keeps the URL sealed, beside its host. A launch refuses a
+  Codex key with an endpoint with `connected-account-unsupported`, since it would write the key alone,
+  and workspace create skips one a profile binds. Inference sends an exchange on such a key to its
+  endpoint and nowhere else, and a key the endpoint refuses is reported as refused by the endpoint at
+  its host. No answer or refusal of an exchange shows the endpoint's URL or its path; its host stays.
+  A control plane reports all of this as `features().connectedAccountEndpoints`; the SDK sends
+  `endpoint` only to one that does, and otherwise throws `connected-account-endpoints-unsupported`
+  before sending anything.
+
+- 9802ef3: A home's logins carry placement receipts. Each credentials home a put or a list answers has
+  `placements`: one receipt per login written there, with `placementId` (stable while a refresh moves
+  the login's revision), `accountId`, the `revision` of the account whose bytes were written, `login`
+  and `pinned`. A put takes `live`, the placement ids its running processes hold in that home; a
+  selection that differs from a live placement's leaves that file in place and answers it with
+  `pinned: true`. A receipt whose placement is no longer ready (archived, pruned, released) protects
+  nothing. `credentials.prune(home, live)` (`POST /v1/workspaces/:workspaceId/credentials/prune`)
+  removes every login of the home that is neither live nor the person's default, and answers no home
+  for one that holds nothing. The SDK sends `live` and calls prune only on a control plane that
+  reports `features().credentialPlacements`, and otherwise throws `credential-placements-unsupported`
+  before sending anything. A put without `live` behaves as before.
+- ce04b91: A caller can now serve each executor's capture and session sockets. `workspaces.create()` takes
+  `controlScope`, the directory of the deployment's control root the executor mounts at
+  `/run/sealant`, so you can bind `capture.sock` and `session.sock` there before the create. It is one
+  path segment that never starts with `sealant`, and unique for all time: a scope any executor has
+  held is refused (`409` `WorkspaceConflictError`, `reason` `control-scope-taken` on the SDK's
+  `SealantApiError`). Launch and recovery never remove the two sockets. Omitted, the scope is the
+  container name, as before.
+
+  `create()` also takes `executorSockets: { capture, session }` for Docker workspaces: `capture` makes
+  sealantd send captures and presigned object requests to `/run/sealant/capture.sock`, and `session`
+  lets the workspace's non-root processes reach `/run/sealant/session.sock`. `host-vm` workspaces
+  relay both sockets on their own. Both options are refused on runtimes with no control scope.
+
+  The scope is reported as `runtime.controlScope` on every read, as `controlScope` on the create
+  answer, and on `capture.replan()` (a standby claim) and `recover()`. `@sealant/api-contracts`
+  exports the rule (`controlScopeProblem`, `CONTROL_SCOPE_PATTERN`;
+  `@sealant/api-contracts/control-scope`).
+
+- c741e10: A bounded workspace forward can be bound to a session.
+  `workspace.forward(port, { flow: "bounded", session })` opens only when a process of that session
+  holds the accepted connection on the workspace's loopback, and its `binding` is
+  `{ kind: "session", session }`: sealant states the binding the workspace runtime verified, never the
+  one it asked for. A bound forward cannot target the Docker sidecar: `host: "docker"` with `session`
+  is a type error, also from an options object. Only a bounded forward takes a `session`: the old
+  overload's options cannot carry one, and a call that passes one anyway rejects with a `SealantError`
+  (`invalid_options`) and opens nothing.
+
+  The open rejects with a `ForwardDialError` whose reason is `owner-exited` (the session is not
+  running, or has not started yet), `peer-mismatch` (a process outside the session holds the port),
+  `binding-unverifiable` (the runtime could not tell who holds it) or `binding-unsupported` (the
+  workspace runtime or the control plane cannot bind forwards; sealant asks the runtime before it
+  connects to anything). Once the session's leader exits, the forward resets with `owner-exited`,
+  ahead of data sealant holds that the caller has not read. The SDK never resolves a forward that
+  asked for a session without that binding.
+
+  `forwardBindingSchema` gains `{ kind: "session", session }`.
+
+- 0992d5b: A workspace forward can now hold back a fast producer.
+  `workspace.forward(port, { flow: "bounded" })` opens a TCP forward on `/forward/v2` and resolves
+  with a `BoundedWorkspaceForward`: a `readable` and a `writable` web stream, the `binding`, a
+  `closed` promise and `close()`. The workspace sends only as fast as `readable` is read: while
+  nothing reads it, sealant stops reading the workspace runtime, and the runtime stops reading the
+  program. `writer.ready` waits, and `writer.desiredSize` is 0, while sealant has granted no more
+  upload credit, so a producer that awaits `writer.ready` pulls nothing it cannot send. The forward
+  resolves once sealant has granted the first credit. `writable.close()` half-closes toward the
+  workspace, and `readable` keeps delivering until the workspace closes its side.
+  `Duplex.fromWeb(forward)` makes it a Node stream. It accepts `host`, `signal` and `deadlineMs`, and
+  rejects with a `ForwardDialError` when the forward does not open. The old overload is unchanged, and
+  its options cannot carry a `flow`.
+
+  `closed` resolves with `{ kind: "end" }` when the workspace closed its side after it took everything
+  written to it. Otherwise it resolves with `{ kind: "reset", reason }`, and both streams fail at once
+  with a `ForwardResetError`, also while the caller is not reading: `writer.ready`, `writer.closed`
+  and `writable.close()` reject. A reset that sealant sends, such as `runtime-lost` when the workspace
+  runtime fails, reaches the caller ahead of data it has not read. When the workspace ends the forward
+  before it took everything written, the reason is `workspace-ended`: `readable` still yields all that
+  the workspace sent, and the writer fails. A write after the workspace ended fails with the same
+  reason. `writer.abort()` and `close()` release a write that waits for credit.
+
+  The contracts add the frames that bound each direction after `ready`: `progress { bytes, frames }`
+  (cumulative bytes and frames consumed, as decimal strings), `fin { bytes, frames }` and
+  `reset { reason }`. Each direction has a window of `FORWARD_V2_WINDOW` (256 KiB and 32 frames) past
+  what its receiver consumed. A side sends no data before the other's first `progress`, and resets a
+  peer that sends past its window. sealant sends a `progress` naming exactly what reached the
+  workspace before its `fin`. `ForwardFlow` keeps that account for either side, with no I/O, and
+  grants credit only when a `progress` is sent, so a side that holds acknowledgements back while its
+  socket is backed up holds its peer back too.
+
+- 30986c2: A workspace forward can now say why it did not open. The contracts describe a v2 forward route,
+  `GET /v1/workspaces/:workspaceId/forward/v2` with the subprotocol `sealant.forward.v2`: the server
+  accepts the WebSocket upgrade, then sends one text frame, either `ready` or `refused` with a
+  `reason`, a `message` and the HTTP `status` the refusal stands for. The reasons and their statuses
+  are one table, `FORWARD_REFUSAL_STATUS`. A browser or Node `WebSocket` can read this answer, which
+  it could not read from a refused upgrade. A client decodes any `reason`, so a refusal from a newer
+  sealant keeps its status and message.
+
+  The SDK exports `ForwardDialError`, a `SealantApiError` whose `reason` is one of those reasons,
+  `unrecognized-refusal` (a reason newer than the SDK, kept in `wireReason`), `protocol-unsupported`
+  (the control plane predates the v2 route) or `transport-unavailable` (no answer could be read). Its
+  `status` is the one sealant sent. `SealantApiError.name` is now typed `string`, so a subclass can
+  name itself. `workspace.forward` and its errors are unchanged; the v2 open is not public yet.
+
+- fcc1174: Inference runs on a Claude API key. The control plane writes the key to a private file and the
+  official Claude Code CLI reads it through an `apiKeyHelper`; the key is never in the CLI's
+  environment or arguments. Workspace create and a launch still refuse a Claude key with
+  `connected-account-unsupported`.
+
+  `inference.respond()` takes `allowedLogin: "subscription" | "any"` (default `any`). With
+  `subscription`, an account holding an API key is refused before the provider is asked: a
+  `SealantApiError` with `reason` `login-not-allowed`. The check reads the account the selection
+  resolved to, so `claude: true` pointing at a key is refused too, and so is a Codex auth.json that
+  holds a key. A refusal spends no launch. The SDK sends `allowedLogin: "subscription"` only to a
+  control plane that reports `features().inferenceAllowedLogin`, and otherwise throws
+  `inference-allowed-login-unsupported` before sending anything; `any` is what an older control plane
+  does anyway.
+
+  An exchange keeps one `receipt`, `{ accountId, revision, login }`, from its start. Every
+  continuation runs on it, even after the account is reconnected. `InferenceResponse.receipt` carries
+  it, and so does `SealantApiError.receipt` on an error after the account was resolved, the owner's
+  launch budget's 429 (`SealantBudgetExceededError`) included.
+
+  A key turns invalid only when the provider answers with an HTTP 401 status, never on an error's
+  words: `reason` `connected-account-refused` ("Your Claude API key ····a1b2 was refused by Anthropic.
+  It is marked invalid; connect a new key."). A 401 from a key replaced after the exchange started
+  marks nothing and answers `connected-account-superseded`. Subscriptions keep their behaviour.
+
+  Inference does not mark a refused key invalid in two cases. The Codex CLI reports a failed turn only
+  in words, so a refused Codex key is never marked invalid. A Claude key is not marked when the CLI
+  reports the refusal without Anthropic's 401 status. In both cases the error says the key "was not
+  accepted" and "is not marked invalid", followed by the CLI's own words: if you revoked the key,
+  connect a new one; otherwise check the key with the provider.
+
+  Every Claude exchange runs with a private home of its own that holds only that exchange's login,
+  removed when the CLI exits, so a refused setup token no longer falls back to the login of the user
+  running the control plane. The Claude and Codex CLIs get an environment built from nothing but the
+  host's path, temp dir, locale and proxy settings: a cloud-provider switch, a base URL, custom
+  headers or a secret in the control plane's environment no longer reaches them. A failed Codex turn
+  now answers with the CLI's own error words, redacted, where it answered with the CLI's log lines.
+
+  Inference redacts the login's secrets and key-shaped values from everything it returns, property
+  names and tool names included, and from every error, an account name or selection included. A
+  continuation that names an unknown or repeated `toolCallId` delivers none of its results and keeps
+  the exchange, so the same batch with the right ids continues it.
+
+- eb43ab8: A capture source's `ownerMap` now runs on Kubernetes under runc, where each person's `sudo` works
+  and the image builder records the image probe the launch checks
+  (`features().kubernetesPersonLayout`). A per-person launch on an image with no readable probe now
+  fails with `owner-map-unverified` instead of `owner-map-unsupported`.
+- 697e8d5: Resource domain budgets. A domain's budget caps CPU (millicores), memory and storage (bytes). The
+  caps are ceilings on what the domain's objects hold, not measurements, and zero allows nothing.
+  `POST /v1/resource-domains` takes an optional `budget` that a new domain starts with. It never
+  changes an existing domain's: naming another one gets `409` `ResourceDomainBudgetDiffersError`,
+  which carries the domain's `resourceDomainId` and its budget's `revision`.
+  `GET /v1/resource-domains/:resourceDomainId/budget` reads the budget and what the domain holds of
+  it, in one snapshot: per dimension, the `limit`, what is `used` (confirmed to exist) and `reserved`
+  (not yet confirmed), and a `warning` of `80-percent`, `95-percent` or `full` once `used + reserved`
+  reaches that share of the limit. Storage also reports what archived volumes (`archived`) and backups
+  and snapshots (`protection`) hold; both count against the one storage allowance. Nothing creates a
+  domain's objects yet, so `used` and `reserved` read zero. `PUT …/budget` replaces the budget, given
+  the `revision` the caller read, and answers the budget it wrote; a change made since gets `409`
+  `ResourceDomainBudgetRevisionConflictError` and changes nothing. `RESOURCE_DOMAIN_BUDGET_DIMENSIONS`
+  names the dimensions.
+
+  The SDK reaches the budget as `sealant.scopes.actAs(id).budget.get()` and
+  `.budget.set({ cpuMillicores, memoryBytes, storageBytes, revision })`, and
+  `sealant.scopes.ensure({ key, budget })` takes the starting budget.
+
+- 1e8b4f1: Resource domain members. `POST /v1/resource-domains/:resourceDomainId/members/:userId/grant` and
+  `/revoke` record the application's decision about one person, and
+  `GET /v1/resource-domains/:resourceDomainId/members/:userId` reads one, and
+  `GET /v1/resource-domains/:resourceDomainId/members` pages every decision by user id, revoked ones
+  included: `limit` (100 unless named, at most 500), and the previous page's `nextCursor` as `cursor`.
+  A person with no decision reads as `404` `ResourceDomainMemberNotFoundError`. Each decision carries
+  `version`, the application's own number for its decision about this person, rising with each
+  decision it makes. sealant writes it only over a lower version. The same version with the same state
+  is a repeat and answers the member unchanged. The same version with the other state, or a lower one,
+  gets `409` `ResourceDomainMemberVersionConflictError`, which quotes nothing the request sent and
+  carries the decision that stands as `current`. So a delayed grant never undoes a newer revoke,
+  whatever order decisions arrive in, and the application never reads before it writes. A person who
+  does not exist gets `404` `ResourceDomainPersonNotFoundError`, apart from a domain that does not
+  exist (`ResourceDomainNotFoundError`), whatever the version, even when deleted while the decision is
+  written. The routes take a service key, as ensure and get do, and `userId` is a `PersonId`.
+
+  The SDK reaches these routes as `sealant.scopes`: `ensure({ key })`, `get(id)` and `actAs(id)`.
+  `actAs(id)` returns a `ScopeClient` for one scope, and its `members` are the only way to a scope's
+  members. It has no workspace, run, inference, credential, SSH key, access token or user method, so
+  calling one does not compile.
+
+- ab6f8d9: Resource domains: an owner that is a project, not a person. It never holds a login or a provider
+  credential and never runs a harness. `POST /v1/resource-domains` with `{ key }` ensures one, and
+  `GET /v1/resource-domains/:resourceDomainId` reads it. The key is `<application>:<name>` and global,
+  and a repeated or concurrent ensure answers the same domain (`created` is true once). Only a service
+  key reaches these routes: any other bearer gets the transport's `401`, and a deployment served
+  without authentication serves them as it serves every route. A body field the contract does not
+  declare is refused with `400` instead of being dropped. A domain id is `rdm:<uuid>`, and every
+  person field of the API (`ownerUserId`, `onBehalfOfUserId`, `userId`, and the SSH gateway's
+  `x-sealant-principal-id` and `principalId`) is now a `PersonId`, which refuses one with `400`
+  `RequestRefusedError` before any handler runs. A forward refused because its asserted owner is a
+  domain says `not-a-person` (`400`). `@sealant/api-contracts` exports `PersonId`,
+  `isResourceDomainId`, `RESOURCE_DOMAIN_ID_PREFIX` and the resource domain schemas. The SDK does not
+  call these routes yet.
+- 75bca57: Resource instances: a scope (resource domain) runs long-running containers, such as a project's
+  Postgres or Redis, that its linked workspaces reach by name, with named volumes that outlive every
+  stop and archive.
+
+  The routes are under `/v1/resource-domains/:resourceDomainId` and take a service key, as the other
+  resource domain routes do. `POST …/instances/:key/up` takes `{ spec, cause }`, creates or updates
+  the instance by key, starts it and answers it once its ready check passed or its start failed
+  (`state.kind` `running` or `failed`). `cause: "use"` leaves an instance a person stopped stopped;
+  `cause: "person"` starts it. `GET …/instances` (`?archived=true` for archived ones) and
+  `GET …/instances/:key` read them. `POST …/instances/:key/stop` takes `{ by }`, and
+  `POST …/instances/:key/archive` removes the container and answers every kept volume with its size.
+  `PUT …/workspace-links/:workspaceId` takes `{ worktreeKey }`: the workspace then reaches the
+  domain's instances with no worktree key and those with its own, under each instance's alias, across
+  executor replacements. `POST …/archive` archives every instance and unlinks every workspace.
+
+  `POST …/instances/:key/exec` is a raw route: its body is one JSON line (`{ argv, user, timeoutMs }`)
+  and then the command's stdin, streamed. It answers the exit code and the last 1 MiB of stdout and
+  stderr. Nothing of the argv or stdin is logged, recorded or carried in a header or query.
+
+  A spec has no field for privileged mode, capabilities, host networking, host paths, devices, the
+  Docker socket or shared namespaces: `400` `ResourceInstanceSpecRefusedError` names each one it is
+  sent (`decodeResourceInstanceSpec`). Its image must be pinned by digest. A Sealant whose workspaces
+  do not run on Docker refuses every instance route with `409` `ResourceRuntimeUnsupportedError`
+  (`resources run on Docker; this Sealant runs <runtime>`).
+
+  The SDK reaches them on `sealant.scopes.actAs(id)`: `instances.up(key, spec, { cause })`,
+  `instances.get`, `instances.list({ archived })`, `instances.stop(key, { kind: "person", by })`,
+  `instances.exec(key, { argv, user, stdin, timeoutMs })`, `instances.archive(key)`,
+  `workspaces.link(workspaceId, { worktreeKey })` and `archive()`. Their types are the SDK's own
+  (`ScopeInstance`, `ScopeInstanceSpec`, `ScopeExecResult`), with dates as `Date`.
+
+- 7a1ab24: `scope.workspaces.link(workspaceId, { worktreeKey, aliases })` takes a map from alias to the level
+  the workspace reaches it at, `"project"` or `"worktree"`. With a map, the workspace reaches only
+  what it names: `{ mail: "worktree", db: "project" }` reaches the worktree's own `mail` and the
+  project's `db`, so a project and a worktree instance can share an alias without both answering to
+  it, and an alias left out is not reached at all. Without a map, a link reaches every project
+  instance and its worktree's own, as before. Each call replaces the previous map, and an attachment
+  the new map leaves out is removed in the same call. The answer carries the map, or null.
+- c8c4bd5: SDK calls now continue the caller's trace instead of starting a new one. A Promise call made inside
+  an Effect span continues that span; otherwise the new `traceContext` option (a function returning
+  `{ traceparent, tracestate? }`, read per call) or the active OpenTelemetry context is used, with no
+  dependency on any tracing package. With none of them, requests carry no trace header. Polling that
+  one call starts (`workspaces.create` waiting for ready, `ready()`, `events()`, `run.wait()`, record
+  and session output streams, `stop()`) stays in the trace the call started in, and session output
+  streams and resource `exec`/`backup` send `traceparent`/`tracestate` too. Each contract call runs in
+  a client span named `sealant.sdk.<group>.<endpoint>` whose only attributes are the IDs in its path;
+  when the caller's Effect tracer exports spans, these spans are made on it. The `fetch` option now
+  reaches every request, contract calls included (it only reached streams and resource calls before).
+- 1c95b9b: Declare typed request budget errors on every control-plane endpoint and preserve optional admission
+  refusal metadata. Service-key requests now have independent owner and ownerless allowances under a
+  fixed key ceiling, with reserved capacity for interactive requests.
+
+  Default each service-key owner's allowance to 6,000 requests per minute, with 4,800 available to
+  normal traffic under the existing 20% interactive reserve. Keep the ownerless allowance at 6,000 and
+  the fixed whole-key ceiling at 12,000. Request counters remain in memory per API process.
+
+  Expose `SealantBudgetExceededError` with the budget, threshold, retry delay and optional refusal
+  fields. Send request-local priority for session input and workspace control. Preserve budget
+  metadata on forward refusals and avoid polling immediately after a session stream budget refusal.
+  Admission metadata covers only the refused HTTP request, including when a composite operation
+  already completed an earlier write.
+
+- 4e2e3b6: Add `CreateOptions.imageScopeId` for image reuse within an existing authorized resource domain.
+  Omitting it selects the authenticated owner. Workspace reads and image inspection now report tagged
+  OCI, MicroVM, or native snapshot publications. The SDK exposes these through `publication()` and
+  launch and inspection results. Unsupported Boat inputs return stable refusal codes. Boat execution
+  remains unavailable until its production capability is verified.
+- 692011a: A workspace can now carry a network policy and brokered secrets. `workspaces.create()` takes
+  `networkPolicy` (`standard`: the public internet without private, metadata and host addresses;
+  `restricted`: only the hosts, mirrors and resources it lists), `brokeredSecrets` and
+  `brokeredSecretValues`. A brokered secret is one the workspace uses without holding it: the
+  workspace reads a placeholder from an environment variable, and its egress proxy puts the real value
+  in a named header only on HTTPS requests to the secret's bind hosts. Values are sealed, handed only
+  to the proxy, and never appear in the spec, the environment or any read.
+
+  A runtime that cannot enforce the policy refuses the create (`422`,
+  `runtime-requirement-unsupported`) instead of running with less; `workspaces.runtimes()` reports
+  what each runtime enforces under `networkPolicy`. Docker runs a `restricted` workspace, or one with
+  a brokered secret, behind an egress proxy of its own. `restricted` with Docker inside, and
+  `requireVmIsolation`, need a VM runtime: the new `host-vm` runtime (each workspace in its own VM on
+  the deployment's KVM host), Boat or MicroVM. `runtime: "host-vm"` is accepted by `create()`.
+
+  A workspace handle gains `applyNetworkPolicy()`, `revokeAccess()` and `networkPolicy()`
+  (`PUT`/`GET /v1/workspaces/:workspaceId/network-policy`,
+  `POST /v1/workspaces/:workspaceId/network-policy/revocations`). Each change answers its
+  `enforcement`: `enforced`, `pending` or `next-start`. Revocations are durable, survive restarts and
+  win over every later policy, so a revoked secret id stays revoked; grant it again under a new
+  `secretId`.
+
+  The SDK checks policies, secrets and values before sending anything, with the control plane's rules
+  and words (`invalid_network_policy`, `invalid_revocation`). The rules are exported from both
+  packages (`networkPolicyProblems`, `brokeredSecretsProblems`, `brokeredSecretValuesProblems`,
+  `needsEgressProxy`, `FORBIDDEN_BROKERED_HEADER_NAMES`; `@sealant/api-contracts/network-policy`),
+  with the `NetworkPolicy` and `BrokeredSecret` types. New SDK types: `ApplyNetworkPolicyOptions`,
+  `NetworkPolicyApplied`, `RevokeAccessOptions`, `AccessRevoked`, `NetworkPolicyEnforcement`,
+  `WorkspaceNetworkPolicy`, `WorkspaceAccessRevocation`. `@sealant/sdk/effect` adds
+  `applyWorkspaceNetworkPolicyOp`, `revokeWorkspaceAccessOp`, `getWorkspaceNetworkPolicyOp` and
+  re-exports `WorkspaceRuntimeRequirementUnsupportedError`.
+
+- 1bfed31: `sealant.workspaces.runtimes()` (`GET /v1/workspaces/runtimes`) answers, before any create, which
+  runtimes the control plane launches workspaces on (`default` first, Boat only where it is
+  configured) and what each supports: `os` per family (`ubuntu`, `nix`, `arch`, `fedora`),
+  `customImage`, `hostDirectories`, `docker`, `gvisor`, `clusterEnv`, `gitSource`, `dotfilesArchives`,
+  `screen` with its CPU `architectures`, `reservedPorts` (Boat's guest agent holds 8080), `resources`
+  with `attach` (`live` or `next-start`), and `idleCost` (`{ charged, message }`). Each item is
+  `{ supported: true }` or `{ supported: false, message }`, with the sentence to show a person. New
+  types: `WorkspaceRuntimes`, `RuntimeSupport`, `RuntimeCapability`, `RuntimeUnsupported`,
+  `RuntimeArchitecture`, `WorkspaceRuntimeKind`.
+
+  The report and the create's refusals come from one table, so a create that asks a runtime for an
+  item the report marks unsupported is refused (`422`) with that item's sentence, before anything is
+  reserved. The refusal codes are unchanged. What changes:
+
+  - Boat refuses a `git` source (a `sourceSelection` included) and dotfiles archives at create
+    (`runtime-requirement-unsupported`). Until now its worker refused them after the create was
+    accepted.
+  - MicroVM and Cloudflare refuse host directories (a `mount` or `standby` source, `sources.mounts`)
+    and gVisor (`runsc`) at create (`runtime-requirement-unsupported`), which their workers refused
+    before.
+  - A restart checks the workspace's recorded spec against its runtime the same way, so it can also
+    answer `WorkspaceRuntimeEnvReferencesUnsupportedError` and
+    `WorkspaceDockerServiceUnsupportedError`.
+  - Messages: Boat names an OS family capitalized ("Boat supports Ubuntu and Nix; Fedora is
+    unsupported.") and its host-directory refusal reads "Boat cannot bind directories from this
+    deployment's own servers."; Docker refusals on Kubernetes, MicroVM and Cloudflare, and the
+    Kubernetes-references refusal, are reworded in plain words without settings names.
+
+- 3bc545a: `workspaces.create({ resources: "none" })` (`spec.runtime.resources: "none"`) says a workspace will
+  never be linked to project resources. It is stored with the workspace and read again by every
+  restart. Omitted, a workspace may be linked, as before, on every runtime.
+
+  On Boat a workspace created with it is launched with no resource gateway, tunnel or in-VM resolver:
+  it is ready without the tunnel's handshake and DNS wait, and a Boat deployment that has no resource
+  gateway can run it. `scope.workspaces.link()` on such a workspace rejects with the new
+  `ResourceWorkspaceWithoutResourcesError` (409, `reason` `workspace-without-resources`) and changes
+  nothing; create the workspace again without the option and link that one, and it reaches the
+  resources from its next start. Docker and Kubernetes attach resources to a running workspace, so
+  they do not enforce the option: a later link works there as it does without it.
+
+  A Boat deployment with no resource gateway refuses a Boat workspace created without the option
+  before it is built: the workspace fails with `error.code` `gateway-unavailable`
+  (`WORKSPACE_GATEWAY_UNAVAILABLE_CODE`), and `ready()` rejects with that code.
+
+  A control plane older than the option rejects a create that sends it (its spec is strict).
+
+### Patch Changes
+
+- f6d8080: Add Antigravity (`antigravity()`, harness id `"antigravity"`, executable `agy`) as a built-in
+  harness baked into every workspace image. The `agy` release binary for `x86_64` and `aarch64` is
+  pinned by version and verified against its SHA-512 checksum on its own image layer.
+- 2b3c13d: `unreachable` (on `BoatAccount` and `BoatInstallKey`) now names only what Boat did not find where
+  the miss does not prove it gone: under a key without `account.read`, which cannot list its wallets.
+  Boat answers a personal key's read of a VM or a saved image whichever wallet a request names, so
+  under a key that can list its wallets a miss under every wallet is Boat's word that the object is
+  gone: such an image is recorded removed, and what was listed before is read again and leaves the
+  list. The field and its shape are unchanged, and it is `null` when nothing is listed. A saved image
+  made before sealant recorded wallets that Boat still holds is recorded in the wallet the account
+  creates in now, and image retention removes it once nothing uses it.
+- fe2928e: With per-workspace Docker egress on (`SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS`), a resource such as
+  a project's database can join a workspace that is already running. It used to fail with
+  `cannot program address … because it conflicts with existing route`. The workspace now reaches that
+  one resource's network and still refuses every other private address, including other workspaces'
+  resource networks. When the resource network goes while the workspace is still running, the
+  workspace refuses its subnet again before the subnet is handed to anyone else. A workspace behind
+  its own egress proxy that runs Docker inside also launches again: its Docker service now joins the
+  workspace's isolated network before that service's guard runs.
+- a4983c4: Docker workspaces can now each run on a network of their own instead of a shared one, so a workspace
+  no longer reaches the database, the object store or another workspace beside it. Set
+  `SEALANT_DOCKER_WORKSPACE_EGRESS_SUBNETS` to a range (each workspace takes a `/28` of it). Every
+  workspace then also refuses private, Tailscale, link-local, NAT64, cloud metadata and Azure
+  wireserver addresses, the host behind its own network's gateway, and the host's public addresses
+  (read from its interfaces by default; list a NAT'd one in `SEALANT_HOST_PUBLIC_IPS`). None of its
+  code runs before those routes are in. Operators open specific private destinations with
+  `SEALANT_OPERATOR_ALLOWED_PRIVATE_EGRESS` and join their npm and Docker mirrors to each workspace's
+  network with `SEALANT_DOCKER_WORKSPACE_MIRROR_CONTAINERS`. Unset, nothing changes.
+- 9ce7131: Docker workspaces now run with a memory limit, so one workspace can no longer use all of the host's
+  memory and stop everything on it. A workspace container gets half of the Docker host's memory (at
+  least 2 GiB, at most 16 GiB) and its Docker service a quarter (at least 1 GiB, at most 8 GiB), with
+  swap held at the same figure; at the limit the kernel stops a process inside that workspace.
+  Workspace containers are also the host's first choice when the host as a whole runs out. Operators
+  set `SEALANT_DOCKER_WORKSPACE_MEMORY_LIMIT` and `SEALANT_DOCKER_SERVICE_MEMORY_LIMIT` to `auto`,
+  `none` or a size such as `4g`.
+- 89ae8a9: `workspace.exec()` returns the output of the command it started, and no other. Before, when two
+  execs overlapped in one workspace, one of them could be handed the output of sealant's own reading
+  of the other's changes instead of its own, with the right exit code (SLNT-956). `workspace.exec()`
+  now picks the process the run started: the one whose timeline entry carries the run's id. A run's
+  timeline entries carry `executionId` on the wire (`timelineEntrySchema`), the execution the daemon
+  stamped on the event; it is optional, and a client that does not know it ignores it.
+- e55b81f: A refusal never quotes the value it refused (SLNT-960). `describeRequestIssue`, behind every
+  `400 RequestRefusedError`, now says only words that existed before the request did: declared field
+  names, array positions, a check's `expected` and `message` annotations, and its own wording. Text a
+  check returns while decoding is said only when the check declares it with the new
+  `refusalWords(...)` annotation, as one of those strings exactly or matching one of those patterns
+  whole; anything else reads "is invalid". Since 0.39.0 the old guard, which looked for the value in
+  the check's words, had not worked: on Effect 4 an issue holds the value only when the parse asks for
+  it. No check in the contract quoted its input, so no refusal did. `RequestRefusedError` keeps its
+  tag, status and shape.
+- 86d7a0b: A caller with Effect's tracer off (`References.TracerEnabled`) or propagation off
+  (`Tracer.DisablePropagation`) sends no `traceparent` or `b3` on any SDK request, and the SDK never
+  forwards a disabled span (IDs `noop`) as a parent. Before, a process with telemetry off still sent
+  its in-memory spans' context, or a malformed `traceparent` of `noop` IDs.
+- f1e27d7: The workspace package catalog knows what a screen needs: `tigervnc` (`Xvnc` and `vncpasswd`),
+  `xauth`, `xdpyinfo`, `openbox`, `chromium` and `fonts-dejavu`, under each family's own names. Fedora
+  installs `chromium` as `chromium-browser`, and the build links `chromium` to it. A catalog entry may
+  now name a family it cannot run on: `chromium` on Ubuntu 24.04 is a stub for the chromium snap, and
+  a workspace image runs no snapd, so creating an Ubuntu workspace that asks for it is refused with a
+  `400` that names the id, the family and the reason, and the image planner refuses it the same way.
+
 ## 0.39.0
 
 ### Minor Changes
 
 - 55326dd: A capture source takes an owner map, for executors where each person is a Linux user of
   their own (Mend's per-person layout):
+
   - `create({ source: { kind: "capture", …, ownerMap: { gid, worktreeUid, people: [{ id, uid }] } } })`
     reaches the workspace daemon as `SEALANT_CAPTURE_OWNER_MAP`. Its restore gives each listed
     person's saved directory (`<harnessHome>/people/<id>/`) to their uid and the worktree to the
@@ -34,6 +597,7 @@
   really outside it) is left out the same way, with `reason` `login-file-unusable`, and everything
   else is still written and removed.
 - a3f65d9: pi's and opencode's ChatGPT logins are providers of `workspace.credentials`:
+
   - `put({ …, pi, opencode })` names one of the person's Codex accounts (`true` is their default)
     and writes its ChatGPT login, with no refresh token, as one entry of each tool's own
     `auth.json`: `openai-codex` in `<home>/.pi/agent/auth.json`, `openai` in
@@ -53,6 +617,7 @@
     be written, or really is outside the home, is refused naming the file.
 
 - a4522bd: A refused connected account says which provider it is about, in a stable code:
+
   - `workspace.credentials.put()` and a create that names an account answer `404` with
     `code: "connected-account-missing"` for an account the person cannot name, and `409` with
     `code: "connected-account-invalid"` for one marked invalid or holding an unusable credential,
@@ -75,6 +640,7 @@
   contract errors and the wire format are unchanged.
 
 - 856412f: The SDK surface for per-person homes (Mend ADR 0016):
+
   - `create({ credentialsHome: { path, uid, gid } })` writes the launch's logins into that home
     instead of `$HOME` and the environment: Claude (a setup token too) and Codex as their files,
     GitHub as `.config/gh/hosts.yml`, all in one write, every file owned by `uid`:`gid`, the home
@@ -98,6 +664,7 @@
   started with. Arguments can carry secrets (a token a script writes, a file's bytes in base64,
   `env KEY=value`), and redaction covers output and terminal input, never arguments. What is kept is
   the executable, the argument count and each argument's length in UTF-8 bytes:
+
   - A record's `processStarted` event keeps its executable, working directory and pid, adds
     `argCount` and `argLengths`, and its `args` is always empty. The timeline summary reads
     `exec sh (2 arguments not recorded)`.
@@ -114,6 +681,7 @@
   the rows cannot recall a copy already taken.
 
 - 720a38b: A process runs as a person's Linux user (Mend ADR 0016):
+
   - `exec(argv, { user })` and `sessions.open(argv, { user })` now start the process as that user,
     through the workspace's sealantd (`exec.user`, 0.20.0 and later): their uid, groups, `HOME`,
     umask 0002, a private `TMPDIR` and `XDG_RUNTIME_DIR`, the image's person environment, and none
@@ -140,6 +708,7 @@
 - 4cfff68: `ready()` no longer spends its readiness bound on an image build. A first launch on a new
   image whose `apt-get install` took eight minutes on a slow mirror used to fail at the 10-minute
   bound even though the workspace would have come up.
+
   - A launch reports its phase while the workspace is not ready: `queued`, `image-build` (with the
     build's `step`/`steps`/`stepName` and `progressAt`, when it last wrote output) or `boot`. Read
     it with `workspace.phase()`; on the wire it is `phase` on a workspace read. `events()` (and
@@ -176,6 +745,7 @@
   `["git", "commit", "-m", ""]` now open a session where both were refused. This applies to
   `POST /v1/sessions`, `POST /v1/sessions/as-user` and the SDK's `sessions.open(argv)`, which checks
   the same rule before it sends.
+
   - Limits: at most 64 words (as before), 131,071 bytes per word and 1 MiB in all, counted in UTF-8
     bytes. 131,071 is the longest word `execve` takes on Linux with 4 KiB pages (`MAX_ARG_STRLEN` is
     128 KiB and counts the terminating NUL). A word with a NUL byte is refused, since no process
@@ -220,6 +790,7 @@
   too long answers `409 home-busy` (retryable). Only a service key may call these.
 - 2f3ddc3: A person's dotfiles applied into their home of a running workspace (Mend's per-person
   layout):
+
   - `workspace.dotfiles.apply({ onBehalfOf, user, home, repository?, archives? })` and
     `POST /v1/workspaces/:id/dotfiles` (service key only) take a create's dotfiles sources (a
     repository cloned with no credential, `https://` only and never with a credential in its URL,
@@ -423,6 +994,7 @@
 
 - c8c9c7b: A retained executor reads `retained`, and the drain and retention can be read without a
   stop.
+
   - Workspace status and runtime status gain `retained` (`workspaceStatusSchema`,
     `workspaceRuntimeSchema.status`; SDK `WorkspaceStatus`, `WorkspaceRuntimeInfo.status`): the
     executor ended — or its capture launch failed after it started — with work on its disk not
@@ -450,6 +1022,7 @@
 - 206abab: `workspace.capture.flush()` takes options:
   `flush({ kind: "final", deadlineMs, graceMs })`. `POST /v1/workspaces/:id/capture/flush` accepts
   the same fields beside `ownerUserId`. The public type is `WorkspaceCaptureFlushOptions`.
+
   - `kind: "final"` says the executor is ending. sealantd stops its managed processes, snapshots
     both capture classes, ships, and reports `complete`. After it, the daemon refuses new work.
     `kind: "suspend"` is a checkpoint and stays the default, so `flush()` with no options is
@@ -465,6 +1038,7 @@
   to the release that accepts them.
 
   Server-side (the packages ride the release train):
+
   - A drain's FINAL flush asks for a deadline and a grace. The deadline is
     `WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS`, capped at the round trip's bound
     (`WORKSPACE_CAPTURE_DRAIN_REQUEST_TIMEOUT_MS`, 60 s) less 5 s. The grace is
@@ -476,6 +1050,7 @@
   `workspace.stop({ completion: { captureN, epoch, executorId } })` attests that your capture store
   holds a sealed final capture of the workspace's current executor. `POST /v1/workspaces/:id/stop`
   takes the same `completion` beside `ownerUserId`.
+
   - `executorId` names the executor. Send the runtime's `resourceId` from
     `workspace.details().runtime`. Its `reference`, or the run id, are accepted too.
   - `epoch` is the capture lease epoch the seal was made under. `captureN` is the sealed capture's
@@ -493,11 +1068,13 @@
   `not-retained` when nothing is kept.
 
   `WorkspaceCaptureDrain` (`workspace.details().captureDrain`) gains two optional fields:
+
   - `retained`: the executor is kept because its disk holds work not confirmed saved. It has
     `since`, `reason`, `recoverable`, `recoveryAttempts`, `nextRecoveryAt` and `lastRecoveryError`.
   - `completion`: the latest accepted attestation.
 
   A caller can record the executor it launched and find it again:
+
   - `workspace.runtime()` reads the current executor:
     `{ kind, resourceId, reference, status, runId?, deadline }`, or `null` before one is launched.
     `WorkspaceRuntime` on the wire gains `runId`.
@@ -515,6 +1092,7 @@
     workspace after a lost answer, or returns `null`.
 
   Server-side (the packages ride the release train):
+
   - Every path that can remove an executor or its disk now asks one preservation policy first: the
     planned stop, the exit reconciler, the Kubernetes orphan sweep, launch adoption and redelivery,
     launch readiness cleanup, the deadline sweep and recovery. A capture-sourced executor, or one
@@ -559,6 +1137,7 @@
     A daemon without `--final` gets the ordinary flush, and the hook answers 500.
 
 - dd4e856: An idempotent create can be cancelled by its key, and a create names the launch it makes.
+
   - `workspaces.cancelCreate(key)` (`POST /v1/workspaces/idempotency-keys/:key/cancel`) makes sure
     the create with that key never launches. A key that is pending, or that no create has reached
     yet, is cancelled for good: a later create with it, a delayed original request included, is
@@ -577,6 +1156,7 @@
     never transfers between executors). `captureDrain.completion` carries the accepted `launchId`.
 
   Server-side (the packages ride the release train):
+
   - A create's writes (workspace, attempt, link, snapshot, launch job, and its key's commit) are one
     transaction. A repeat that finds a workspace an older create left half-made finishes it instead
     of replaying it forever, and a repeat that finds its launch job still queued publishes it again.
@@ -603,6 +1183,7 @@
 
 - 0e31ee0: A completion attestation carries the seal's time, and a newer observation that the work
   is not saved revokes an older seal.
+
   - `stop({ completion: { sealedAt } })` (`StopWorkspaceRequest.completion.sealedAt`, ISO 8601,
     optional): when the store recorded the seal. The control plane weighs the attestation against
     its own observations of the executor, when it is accepted and again whenever it is used: an
@@ -633,6 +1214,7 @@
   with the daemon's words recorded.
 
 - 6219580: Capture evidence is ordered by the executor's own history, never by clocks.
+
   - `WorkspaceCaptureStatus.origin` (optional, from `capture.status()` and `capture.flush()`): where
     in the executor's own history the answer was made —
     `{ epoch, launch, bootId, bootGeneration, observation, headN? }`, sealantd's stamp (wire fields
@@ -657,6 +1239,7 @@
   a caller can show a session whose captures are failing. The fields are optional on
   `GET /v1/workspaces/:id/capture`, on the `POST /v1/workspaces/:id/capture/flush` answer, and on
   `WorkspaceCaptureStatus` from `workspace.capture.status()` and `workspace.capture.flush()`:
+
   - `snaps`: one entry per captured class, with `class` (`small` or `bulk`), `snapsFailed` (failed
     snaps since the daemon started), and, while that class's last snap failed, `lastSnapError` and
     `snapFailingSinceUnixMs`. A snap that fails stages nothing, so the changes since the last
@@ -712,6 +1295,7 @@
   lifecycle stop, and before the expired, stranded, superseded and orphaned reapers tear a runtime
   down (what counts as drained: see the drain-ownership changeset). A queue still moving defers the
   stop to the next sweep. The workspace is kept running, and every sweep asks again, when:
+
   - the daemon answers but its queue does not move for `WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS` (10
     min), logged `not saved · kept`;
   - the daemon reports a refused capture class, logged `not saved · refused · kept`;
@@ -738,6 +1322,7 @@
   removed after its drain.
 
   Server-side (the packages ride the release train):
+
   - Every Docker workspace container is created with its own stop timeout (`--stop-timeout`), so a
     plain `docker stop` from an operator, a host restart or Docker Desktop quitting waits for
     sealantd's final flush instead of killing it after 10 s. The timeout is
@@ -771,6 +1356,7 @@
   them; read absent as not complete.
 
   Server-side (the packages ride the release train):
+
   - A drain sends a FINAL flush and lets a runtime go only when the daemon reports it `complete`. An
     empty queue is not enough. Until the pinned sealantd reports `complete`, capture-sourced
     workspaces are kept, logged `not saved · not confirmed · kept`, instead of stopped.
@@ -1080,6 +1666,7 @@
   handler refusals carry `retryAfterSeconds` in the body). A budget refuses new work and never stops
   running work. A ceiling is checked before the work is created, so creates that race can overshoot
   it by the number in flight.
+
   - `SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE` (12000: one service key is a whole product) and
     `SEALANT_BUDGET_OWNER_LAUNCHES_PER_MINUTE` (120), counted per API process.
   - `SEALANT_BUDGET_OWNER_LIVE_WORKSPACES` (100) and `SEALANT_BUDGET_OWNER_ACTIVE_RUNS` (100), read
@@ -1093,6 +1680,7 @@
   `0` turns a budget off, and the API logs at start which are off.
 
 - 613376c: Credentials are bound to the destination they were issued for.
+
   - A client-supplied `authRef` is now checked against its source URL: the installation token is
     minted only for `https://<GitHub host>/<owner>/<name>[.git]` of the repository the ref stands
     for. A grant on one installation could previously attach its token to a clone of any URL. A
@@ -1748,6 +2336,7 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
+
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
