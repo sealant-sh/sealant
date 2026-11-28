@@ -28,8 +28,11 @@ span; `vm.ts`, `removal.ts` and `convergence.ts` name theirs `sealant.boat.*`) a
 them changed; no model change. Read again at `f86ab004` (SLNT-1414, 2026-11-28): `boat-assembly.ts`
 passes the worker's `daemonTelemetry` config to `BoatRuntimeAdapter` and `BoatAccountRouterAdapter`,
 and `adapter.ts` calls `withLaunchTelemetry` on launch input before building `bootEnv`; no guard,
-order or covered column changed, so no model change. Run with tlx at the commit `docs/formal/tlx.sh`
-pins, which gives TLC's verdicts and counts on every case ("The checker" below).
+order or covered column changed, so no model change. `f86ab004` was a commit of that pull request's
+own branch, gone with the branch at its squash merge, so `sync` names the squash commit on main,
+`99e025de`, whose covered files are the same byte for byte (SLNT-1424). Run with tlx at the commit
+`docs/formal/tlx.sh` pins, which gives TLC's verdicts and counts on every case ("The checker"
+below).
 
 ## The two promises
 
