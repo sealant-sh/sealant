@@ -105,7 +105,10 @@ const make: Effect.Effect<BoatControlMaterial["Service"], never, Dependencies> =
           return yield* Effect.fail(refused());
         return target;
       });
-    /** Unseals the run's bearer, checks Boat's labels on the VM and asks Boat for a hosted cookie. */
+    /**
+     * Unseals the run's bearer, and uses the hosted cookie Boat gave the run in the last minute, or
+     * checks Boat's labels on the VM and asks Boat for one (`BoatExecution.control`).
+     */
     const open = (target: BoatExecutionTarget) =>
       Effect.gen(function* () {
         const control = Redacted.value(
