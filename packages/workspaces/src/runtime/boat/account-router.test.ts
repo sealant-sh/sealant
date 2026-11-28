@@ -32,7 +32,7 @@ const BUILD_ID = "44444444-4444-4444-8444-444444444444";
 const BOOT_ID = "55555555-5555-4555-8555-555555555555";
 
 const runtimeIdentity = {
-  source: `ghcr.io/sealant-sh/sealantd-next:0.21.0-next.223@sha256:${HASH}`,
+  source: `ghcr.io/sealant-sh/sealantd-next:0.21.0-next.224@sha256:${HASH}`,
   platform: "linux/amd64" as const,
   manifest: HASH,
   sealantd: HASH,
@@ -213,7 +213,7 @@ describe("Boat daemon telemetry propagation", () => {
   const daemonTelemetry = daemonSentryConfigFromEnv({
     SEALANTD_SENTRY_DSN: DSN,
     SEALANTD_SENTRY_ENVIRONMENT: "check-vm",
-    SEALANTD_SENTRY_RELEASE: "sealantd@0.21.0-next.223",
+    SEALANTD_SENTRY_RELEASE: "sealantd@0.21.0-next.224",
   });
 
   it("captures the launching fiber trace and daemon Sentry config before BoatAccountRouterAdapter awaits account lookup", async () => {
@@ -250,7 +250,7 @@ describe("Boat daemon telemetry propagation", () => {
         SEALANT_TRACEPARENT: `00-${span.traceId}-${span.spanId}-01`,
         SEALANT_SENTRY_DSN: DSN,
         SEALANT_SENTRY_ENVIRONMENT: "check-vm",
-        SEALANT_SENTRY_RELEASE: "sealantd@0.21.0-next.223",
+        SEALANT_SENTRY_RELEASE: "sealantd@0.21.0-next.224",
       });
     } finally {
       await runtime.dispose();
@@ -285,7 +285,7 @@ describe("Boat daemon telemetry propagation", () => {
         SEALANT_TRACEPARENT: `00-${span.traceId}-${span.spanId}-01`,
         SEALANT_SENTRY_DSN: DSN,
         SEALANT_SENTRY_ENVIRONMENT: "check-vm",
-        SEALANT_SENTRY_RELEASE: "sealantd@0.21.0-next.223",
+        SEALANT_SENTRY_RELEASE: "sealantd@0.21.0-next.224",
       });
     } finally {
       await runtime.dispose();
