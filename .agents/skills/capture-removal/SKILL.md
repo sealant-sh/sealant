@@ -105,7 +105,9 @@ schedule: find out why before you change its expectation.
 Once the model describes the code at your commit and `check.sh --deep` gives every expected verdict,
 update the `states` pins your change moved, the coverage record below and the README. Then move
 `sync` in `COVERAGE`, and the README's "Confirmed against" line, to that commit, only after reading
-every covered hunk since the old one.
+every covered hunk since the old one. Name it by its full SHA: a commit on main, or your branch's
+commit as pushed, and re-point it after every rebase; a commit a rebase replaced is gone once the
+branch is, and the drift guard fails it.
 
 ## Coverage record
 
