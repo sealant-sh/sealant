@@ -81,17 +81,74 @@ function syncAt(root, commit, area) {
   }
 }
 
+function gitOk(root, args) {
+  try {
+    execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+// Why a sync commit can be missing. CI clones every branch and tag (`fetch-depth: 0`) but no pull
+// request ref, and a squash merge puts none of a pull request's own commits on main.
+const WHY_SYNC_VANISHES =
+  "A squash merge puts none of a pull request's own commits on main. Once its branch is deleted, only GitHub's pull request ref holds its last pushed head and the commits under it, and `verify formal` fetches those by SHA. A commit that a rebase or force-push replaced before the merge, or one never pushed, is held by nothing";
+
+/** Whether this clone has `sha`, fetching it from origin by SHA when it does not. */
+export function fetchCommit(root, sha) {
+  if (gitOk(root, ["cat-file", "-e", `${sha}^{commit}`])) return true;
+  if (!FULL_SHA.test(sha)) return false;
+  try {
+    execFileSync("git", ["fetch", "--quiet", "--no-tags", "origin", sha], {
+      cwd: root,
+      stdio: "ignore",
+      timeout: 120_000,
+    });
+  } catch {
+    return false;
+  }
+  return gitOk(root, ["cat-file", "-e", `${sha}^{commit}`]);
+}
+
+/**
+ * The guard on a moved sync commit: it must be a full SHA that HEAD reaches, so that after the
+ * squash merge main or the pull request's last head still holds it. Null when it may land.
+ */
+export function syncWillLast({ root, area }) {
+  const { sync } = area.coverage;
+  const where = `${area.directory}/COVERAGE`;
+  if (!FULL_SHA.test(sync)) {
+    return `${where} names sync \`${sync}\`; write the commit's full 40-character SHA (\`git rev-parse ${sync}\`)`;
+  }
+  if (gitOk(root, ["merge-base", "--is-ancestor", sync, "HEAD"])) return null;
+  return `${where} moves sync to ${sync.slice(0, 10)}, which this branch does not reach: a commit that a rebase or force-push replaced, one from another branch, or one never pushed. After the squash merge, GitHub keeps only main and this pull request's last pushed head, so the commit would vanish. Name a commit on main, or this branch's commit that holds the code you read (\`git log --format=%H HEAD -- ${area.coverage.paths[0]}\`), full SHA, and re-point it after every rebase`;
+}
+
 /**
  * The drift guard: a diff that changes covered code must also change the model (any file under the
- * area but COVERAGE) or move the sync commit. Passes when the diff touches no covered code.
+ * area but COVERAGE) or move the sync commit. Passes when the diff touches no covered code. A sync
+ * commit the diff moves must be one that will outlast the squash merge (`syncWillLast`).
  */
 export function driftGuard({ root, area, mergeBase, files }) {
+  const syncMoved = mergeBase === null || syncAt(root, mergeBase, area) !== area.coverage.sync;
+  if (mergeBase !== null && syncMoved) {
+    const refusal = syncWillLast({ root, area });
+    if (refusal !== null) {
+      return {
+        status: "failed",
+        detail: refusal,
+        next: `point \`sync\` in ${area.directory}/COVERAGE at a full SHA on main or on this branch, as pushed`,
+      };
+    }
+  }
   const covered = files.filter((file) => area.coverage.paths.includes(file));
   if (covered.length === 0) return { status: "passed", detail: "the diff changes no covered file" };
   const modelChanged = files.some(
     (file) => file.startsWith(`${area.directory}/`) && file !== `${area.directory}/COVERAGE`,
   );
-  const syncMoved = mergeBase === null || syncAt(root, mergeBase, area) !== area.coverage.sync;
   if (modelChanged || syncMoved) {
     return {
       status: "passed",
@@ -104,14 +161,23 @@ export function driftGuard({ root, area, mergeBase, files }) {
   };
 }
 
-/** Covered files that differ from the sync commit, the working tree included. */
-export function driftSinceSync(root, area) {
-  const out = execFileSync(
-    "git",
-    ["diff", "--name-only", area.coverage.sync, "--", ...area.coverage.paths],
-    { cwd: root, encoding: "utf8" },
-  );
-  return out.split("\n").filter((line) => line !== "");
+/**
+ * Covered files that differ from the sync commit, the working tree included. `files` is null, with
+ * `detail` saying why and what to do, when neither this clone nor origin has the sync commit.
+ */
+export function driftSinceSync(root, area, { fetch = fetchCommit } = {}) {
+  const { sync } = area.coverage;
+  if (!fetch(root, sync)) {
+    return {
+      files: null,
+      detail: `${area.area}'s sync commit ${sync} is not in this clone, and origin does not serve it. ${WHY_SYNC_VANISHES}. Point \`sync\` in ${area.directory}/COVERAGE at the commit on main that holds the code the model was last read against (usually the squash commit of the pull request that set it: \`git log origin/main --format=%H -- ${area.directory}/COVERAGE\`), and read any covered hunk between the two against the model as the ${area.area} skill says`,
+    };
+  }
+  const out = execFileSync("git", ["diff", "--name-only", sync, "--", ...area.coverage.paths], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  return { files: out.split("\n").filter((line) => line !== ""), detail: null };
 }
 
 const CHECK_STATUS = { 0: "passed", 1: "failed", 2: "blocked_by_prerequisite" };
@@ -150,17 +216,33 @@ export async function runFormal({
   const steps = [];
   const next = [];
   for (const area of chosen) {
-    const guard = driftGuard({ root, area, mergeBase, files });
     const behind = driftSinceSync(root, area);
+    const guard = driftGuard({ root, area, mergeBase, files });
+    if (behind.files === null) {
+      steps.push({
+        id: `sync:${area.area}`,
+        title: `${area.area}: the sync commit in its COVERAGE can be read`,
+        status: "failed",
+        detail: behind.detail,
+      });
+      next.push(
+        `point \`sync\` in ${area.directory}/COVERAGE at a commit on main whose covered files the model was read against (the ${area.area} skill)`,
+      );
+    }
+    const drift =
+      behind.files === null
+        ? `its sync commit ${area.coverage.sync.slice(0, 8)} cannot be read, so drift is unknown`
+        : `${behind.files.length} covered file(s) differ from sync ${area.coverage.sync.slice(0, 8)}${behind.files.length === 0 ? "" : `: ${behind.files.join(", ")}`}`;
     steps.push({
       id: `drift:${area.area}`,
       title: `${area.area}: covered code changed with its model or sync commit`,
       status: guard.status,
-      detail: `${guard.detail}. ${behind.length} covered file(s) differ from sync ${area.coverage.sync.slice(0, 8)}${behind.length === 0 ? "" : `: ${behind.join(", ")}`}`,
+      detail: `${guard.detail}. ${drift}`,
     });
     if (guard.status !== "passed") {
       next.push(
-        `read the changed hunks against ${area.directory}, then update the model or move \`sync\` in its COVERAGE (the ${area.area} skill)`,
+        guard.next ??
+          `read the changed hunks against ${area.directory}, then update the model or move \`sync\` in its COVERAGE (the ${area.area} skill)`,
       );
     }
     const started = Date.now();

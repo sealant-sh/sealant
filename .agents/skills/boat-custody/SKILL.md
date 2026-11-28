@@ -133,7 +133,9 @@ schedule: find out why before you flip its expectation.
 Once the models describe the code at your commit and `check.sh` (and `--deep`) give their expected
 verdicts, update each `states` pin your change moved to the count the checker reached, the coverage
 record below and the record's findings. Then move `sync` in `COVERAGE`, and the record's "Confirmed
-against" line, to that commit. Move it only after reading every covered hunk since the old one.
+against" line, to that commit. Move it only after reading every covered hunk since the old one. Name
+it by its full SHA: a commit on main, or your branch's commit as pushed, and re-point it after every
+rebase; a commit a rebase replaced is gone once the branch is, and the drift guard fails it.
 
 ## Coverage record
 
