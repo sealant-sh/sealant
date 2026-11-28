@@ -17,8 +17,10 @@ launch, from the runtime row the sweep already read, and the sweeps run with the
 observers. No ledger transaction, runtime call, guard or order changed; no model change, and `sync`
 moves to `393ff282`. Read again at `eeafaddb` (SLNT-1406, 2026-11-28): the drain, the stop path and
 the recovery and exit sweeps only had their spans renamed (`sealant.capture.drain`,
-`sealant.workspace.remove_runtime`, `sealant.runtime.*`); no model change. Run with tlx at the
-commit `docs/formal/tlx.sh` pins ("The checker" below).
+`sealant.workspace.remove_runtime`, `sealant.runtime.*`); no model change. `eeafaddb` was a commit
+of that pull request's own branch, gone with the branch at its squash merge, so `sync` names the
+squash commit on main, `718125f7`, whose covered files are the same byte for byte (SLNT-1424). Run
+with tlx at the commit `docs/formal/tlx.sh` pins ("The checker" below).
 
 ## The promise
 
