@@ -83,6 +83,7 @@ import {
   type BoatResourcesSweep,
   type BoatSharedStop,
   type BoatVmSweep,
+  type DaemonSentryConfig,
   type NativeCatalogSweep,
   type ResourceRuntime,
   type ResourceSubnets,
@@ -282,6 +283,8 @@ export const assembleBoat = async (input: {
   readonly credentialCipher: CredentialCipherService | undefined;
   /** The worker's Docker resource host, where it has one. */
   readonly docker: BoatResourceDockerHost | undefined;
+  /** Where workspace daemons report telemetry, when configured on the worker. */
+  readonly daemonTelemetry?: DaemonSentryConfig;
   /**
    * The builder of Boat images. Absent, it is built on the packaged sealantd runtime, whose exact
    * pinned bytes only a staged release carries; a test supplies its own.
@@ -479,6 +482,7 @@ export const assembleBoat = async (input: {
       ...(accountId === null ? {} : { accountId }),
       runtime,
       resourceGateway: gateway !== undefined,
+      ...(input.daemonTelemetry === undefined ? {} : { daemonTelemetry: input.daemonTelemetry }),
     });
     const control = await runtime.runPromise(BoatControlMaterial);
     // The account's image catalog and builder, made on first use: a stored account builds its
@@ -719,7 +723,11 @@ export const assembleBoat = async (input: {
     return [fallback, ...built].filter((stack): stack is Stack => stack !== undefined);
   };
 
-  const router = new BoatAccountRouterAdapter({ stacks, resourceGateway: gateway !== undefined });
+  const router = new BoatAccountRouterAdapter({
+    stacks,
+    resourceGateway: gateway !== undefined,
+    ...(input.daemonTelemetry === undefined ? {} : { daemonTelemetry: input.daemonTelemetry }),
+  });
   // The default account's catalog is made at start, as it always was: its builder's runtime is
   // checked before the worker serves anything. Pins are the catalog repository's, any account's.
 

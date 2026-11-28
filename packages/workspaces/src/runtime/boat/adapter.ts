@@ -15,6 +15,7 @@ import { safeCommandTail } from "../../images/boat/command-diagnostics.js";
 import { nativeLaunchBootEntries } from "../../images/boat/recipe.js";
 import { SealantControlError } from "../../sealantd/runtime.js";
 import { BoatReadiness } from "../../worker/boat-readiness.js";
+import { withLaunchTelemetry, type DaemonSentryConfig } from "../daemon-telemetry.js";
 import { liveControlChannel, type ControlChannel } from "../kubernetes/adapter.js";
 import {
   completeReadyLaunch,
@@ -183,6 +184,8 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
       readonly inspectBoundMs?: number;
       /** The bound on one `stop`. Default `BOAT_STOP_BOUND_MS`. */
       readonly stopBoundMs?: number;
+      /** Where workspace daemons report telemetry, when configured on the worker. */
+      readonly daemonTelemetry?: DaemonSentryConfig;
     },
   ) {}
 
@@ -199,7 +202,11 @@ export class BoatRuntimeAdapter implements RuntimeAdapter<NativePublication> {
     let identity: RuntimeLaunchIdentity | undefined;
     let step: BoatLaunchDiagnostic["step"] = "prepare-launch";
     try {
-      const input = boatLaunchInputSchema.parse(raw);
+      // Before the first await: the launching fiber is still current (`withLaunchTelemetry`).
+      const input = withLaunchTelemetry(
+        boatLaunchInputSchema.parse(raw),
+        this.options.daemonTelemetry,
+      );
       const { runId, workspaceId, principalId } = input;
       const support = this.supports(input);
       // Refused before allocation: no VM exists, and nothing is asked of a gateway host.
