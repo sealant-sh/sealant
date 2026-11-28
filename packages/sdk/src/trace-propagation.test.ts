@@ -1,6 +1,6 @@
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 
-import { Effect, Option, Tracer } from "effect";
+import { Effect, Layer, Option, References, Tracer } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { getWorkspaceOp, resolveInternalConfig, sealantApiClientLayer } from "./effect/index.js";
@@ -281,5 +281,48 @@ describe("SDK calls continue the caller's trace", () => {
       }).pipe(Effect.withSpan("caller.operation"), Effect.provide(layer)),
     );
     expect(traceparentOf(s.received[0])).toEqual({ traceId: span.traceId, spanId: span.spanId });
+  });
+
+  it("sends no trace header for a caller that turned tracing and propagation off", async () => {
+    const s = await serve();
+    const layer = sealantApiClientLayer(resolveInternalConfig({ baseUrl: s.baseUrl }));
+    // How Mend runs with telemetry off: every span is disabled, its IDs `noop`.
+    const off = Layer.mergeAll(
+      Layer.succeed(References.TracerEnabled, false),
+      Layer.succeed(Tracer.DisablePropagation, true),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.promise(() => s.client.workspaces.get("ws_1"));
+        yield* getWorkspaceOp("ws_1");
+      }).pipe(Effect.withSpan("caller.operation"), Effect.provide(layer), Effect.provide(off)),
+    );
+    expect(s.received).toHaveLength(2);
+    for (const received of s.received) {
+      expect(received.headers.traceparent).toBeUndefined();
+      expect(received.headers.b3).toBeUndefined();
+    }
+  });
+
+  it("never sends a disabled span as a parent, even with propagation left on", async () => {
+    const s = await serve();
+    const layer = sealantApiClientLayer(resolveInternalConfig({ baseUrl: s.baseUrl }));
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.promise(() => s.client.workspaces.get("ws_1"));
+        yield* getWorkspaceOp("ws_1");
+      }).pipe(
+        // Tracing on, the caller's parent a disabled span (what a disabled region leaves behind).
+        Effect.withParentSpan(
+          Tracer.externalSpan({ traceId: "noop", spanId: "noop", sampled: false }),
+        ),
+        Effect.provide(layer),
+      ),
+    );
+    expect(s.received).toHaveLength(2);
+    for (const received of s.received) {
+      expect(received.headers.traceparent).toBeUndefined();
+      expect(received.headers.b3).toBeUndefined();
+    }
   });
 });

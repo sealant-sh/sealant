@@ -14,8 +14,12 @@
  * tracer and the request carries the SDK's HTTP span. When nothing exports them, the request carries
  * the parent's own `traceparent`, so the server's span hangs off a span that exists. With no parent
  * and no exporting tracer the request carries no trace header at all.
+ *
+ * A caller that turned tracing off (`References.TracerEnabled`) or propagation off
+ * (`Tracer.DisablePropagation`) is continued by nothing: its requests carry no trace header, and a
+ * disabled span, whose IDs read `noop`, is never sent as a parent.
  */
-import { Context, Effect, Fiber, Option, Tracer } from "effect";
+import { Context, Effect, Fiber, Option, References, Tracer } from "effect";
 import { HttpClient } from "effect/http";
 
 import type { SealantTraceContext } from "../types.js";
@@ -112,17 +116,33 @@ export function activeOpenTelemetryContext(): SealantTraceContext | undefined {
   }
 }
 
-/** The calling Effect fiber's span and exporting tracer, when a fiber is running this call. */
+/** Whether `span` names a span a `traceparent` can carry: not a disabled one (`noop`). */
+const isPropagatable = (span: Tracer.AnySpan): boolean =>
+  parseTraceparent(formatTraceparent(span)) !== undefined;
+
+/**
+ * The calling Effect fiber's span and exporting tracer, when a fiber is running this call, and
+ * whether that fiber turned propagation off.
+ */
 const fromCallingFiber = ():
-  | { readonly parent: Tracer.AnySpan | undefined; readonly tracer: Tracer.Tracer | undefined }
+  | {
+      readonly parent: Tracer.AnySpan | undefined;
+      readonly tracer: Tracer.Tracer | undefined;
+      readonly propagationOff: boolean;
+    }
   | undefined => {
   try {
     const fiber = Fiber.getCurrent();
     if (fiber === undefined) return undefined;
+    if (!fiber.getRef(References.TracerEnabled) || fiber.getRef(Tracer.DisablePropagation)) {
+      return { parent: undefined, tracer: undefined, propagationOff: true };
+    }
     const tracer = fiber.getRef(Tracer.Tracer);
+    const parent = Option.getOrUndefined(Context.getOption(fiber.context, Tracer.ParentSpan));
     return {
-      parent: Option.getOrUndefined(Context.getOption(fiber.context, Tracer.ParentSpan)),
+      parent: parent !== undefined && isPropagatable(parent) ? parent : undefined,
       tracer: tracer === Tracer.nativeTracer ? undefined : tracer,
+      propagationOff: false,
     };
   } catch {
     return undefined;
@@ -181,6 +201,8 @@ export function captureCallerTrace(
 ): CallerTrace | undefined {
   if (handedTrace !== undefined) return handedTrace.trace;
   const fiber = fromCallingFiber();
+  // A caller that turned propagation off is continued by nothing, not by a fallback.
+  if (fiber?.propagationOff === true) return undefined;
   if (fiber?.parent !== undefined) {
     return { parent: fiber.parent, tracer: fiber.tracer, tracestate: undefined };
   }
@@ -210,7 +232,7 @@ export const continueCallerTrace =
 
 /** The trace headers a raw `fetch` made for a captured caller trace carries. */
 export function traceHeaders(trace: CallerTrace | undefined): Readonly<Record<string, string>> {
-  if (trace?.parent === undefined) return {};
+  if (trace?.parent === undefined || !isPropagatable(trace.parent)) return {};
   const traceparent = formatTraceparent(trace.parent);
   return trace.tracestate === undefined
     ? { traceparent }
@@ -269,6 +291,10 @@ export const traceCall = <A, E, R>(
   route?: EndpointRoute,
 ): Effect.Effect<A, E, R> =>
   Effect.gen(function* () {
+    // A caller with tracing or propagation off: no span of the SDK's, and no trace header.
+    if (!(yield* References.TracerEnabled) || (yield* Tracer.DisablePropagation)) {
+      return yield* Effect.provideService(effect, HttpClient.TracerPropagationEnabled, false);
+    }
     const parent = yield* Effect.serviceOption(Tracer.ParentSpan);
     const tracer = yield* Effect.tracer;
     const templated =
@@ -286,7 +312,7 @@ export const traceCall = <A, E, R>(
     });
     if (tracer !== Tracer.nativeTracer) return yield* spanned;
     const unpropagated = Effect.provideService(spanned, HttpClient.TracerPropagationEnabled, false);
-    if (Option.isNone(parent)) return yield* unpropagated;
+    if (Option.isNone(parent) || !isPropagatable(parent.value)) return yield* unpropagated;
     return yield* Effect.provideService(
       unpropagated,
       DirectTraceparent,
